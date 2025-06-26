@@ -1,0 +1,563 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		9444646A2E0D2D0300F0E904 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 944464542E0D2D0100F0E904 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9444645B2E0D2D0100F0E904;
+			remoteInfo = "Aesdetic-Control";
+		};
+		944464742E0D2D0300F0E904 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 944464542E0D2D0100F0E904 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9444645B2E0D2D0100F0E904;
+			remoteInfo = "Aesdetic-Control";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		9444645C2E0D2D0100F0E904 /* Aesdetic-Control.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Aesdetic-Control.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		944464692E0D2D0300F0E904 /* Aesdetic-ControlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Aesdetic-ControlTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		944464732E0D2D0300F0E904 /* Aesdetic-ControlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Aesdetic-ControlUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		9444645E2E0D2D0100F0E904 /* Aesdetic-Control */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Aesdetic-Control";
+			sourceTree = "<group>";
+		};
+		9444646C2E0D2D0300F0E904 /* Aesdetic-ControlTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Aesdetic-ControlTests";
+			sourceTree = "<group>";
+		};
+		944464762E0D2D0300F0E904 /* Aesdetic-ControlUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Aesdetic-ControlUITests";
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		944464592E0D2D0100F0E904 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		944464662E0D2D0300F0E904 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		944464702E0D2D0300F0E904 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		944464532E0D2D0100F0E904 = {
+			isa = PBXGroup;
+			children = (
+				9444645E2E0D2D0100F0E904 /* Aesdetic-Control */,
+				9444646C2E0D2D0300F0E904 /* Aesdetic-ControlTests */,
+				944464762E0D2D0300F0E904 /* Aesdetic-ControlUITests */,
+				9444645D2E0D2D0100F0E904 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9444645D2E0D2D0100F0E904 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9444645C2E0D2D0100F0E904 /* Aesdetic-Control.app */,
+				944464692E0D2D0300F0E904 /* Aesdetic-ControlTests.xctest */,
+				944464732E0D2D0300F0E904 /* Aesdetic-ControlUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9444645B2E0D2D0100F0E904 /* Aesdetic-Control */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9444647D2E0D2D0300F0E904 /* Build configuration list for PBXNativeTarget "Aesdetic-Control" */;
+			buildPhases = (
+				944464582E0D2D0100F0E904 /* Sources */,
+				944464592E0D2D0100F0E904 /* Frameworks */,
+				9444645A2E0D2D0100F0E904 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				9444645E2E0D2D0100F0E904 /* Aesdetic-Control */,
+			);
+			name = "Aesdetic-Control";
+			packageProductDependencies = (
+			);
+			productName = "Aesdetic-Control";
+			productReference = 9444645C2E0D2D0100F0E904 /* Aesdetic-Control.app */;
+			productType = "com.apple.product-type.application";
+		};
+		944464682E0D2D0300F0E904 /* Aesdetic-ControlTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 944464802E0D2D0300F0E904 /* Build configuration list for PBXNativeTarget "Aesdetic-ControlTests" */;
+			buildPhases = (
+				944464652E0D2D0300F0E904 /* Sources */,
+				944464662E0D2D0300F0E904 /* Frameworks */,
+				944464672E0D2D0300F0E904 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9444646B2E0D2D0300F0E904 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				9444646C2E0D2D0300F0E904 /* Aesdetic-ControlTests */,
+			);
+			name = "Aesdetic-ControlTests";
+			packageProductDependencies = (
+			);
+			productName = "Aesdetic-ControlTests";
+			productReference = 944464692E0D2D0300F0E904 /* Aesdetic-ControlTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		944464722E0D2D0300F0E904 /* Aesdetic-ControlUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 944464832E0D2D0300F0E904 /* Build configuration list for PBXNativeTarget "Aesdetic-ControlUITests" */;
+			buildPhases = (
+				9444646F2E0D2D0300F0E904 /* Sources */,
+				944464702E0D2D0300F0E904 /* Frameworks */,
+				944464712E0D2D0300F0E904 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				944464752E0D2D0300F0E904 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				944464762E0D2D0300F0E904 /* Aesdetic-ControlUITests */,
+			);
+			name = "Aesdetic-ControlUITests";
+			packageProductDependencies = (
+			);
+			productName = "Aesdetic-ControlUITests";
+			productReference = 944464732E0D2D0300F0E904 /* Aesdetic-ControlUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		944464542E0D2D0100F0E904 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1640;
+				LastUpgradeCheck = 1640;
+				TargetAttributes = {
+					9444645B2E0D2D0100F0E904 = {
+						CreatedOnToolsVersion = 16.4;
+					};
+					944464682E0D2D0300F0E904 = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = 9444645B2E0D2D0100F0E904;
+					};
+					944464722E0D2D0300F0E904 = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = 9444645B2E0D2D0100F0E904;
+					};
+				};
+			};
+			buildConfigurationList = 944464572E0D2D0100F0E904 /* Build configuration list for PBXProject "Aesdetic-Control" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 944464532E0D2D0100F0E904;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 9444645D2E0D2D0100F0E904 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				9444645B2E0D2D0100F0E904 /* Aesdetic-Control */,
+				944464682E0D2D0300F0E904 /* Aesdetic-ControlTests */,
+				944464722E0D2D0300F0E904 /* Aesdetic-ControlUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		9444645A2E0D2D0100F0E904 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		944464672E0D2D0300F0E904 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		944464712E0D2D0300F0E904 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		944464582E0D2D0100F0E904 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		944464652E0D2D0300F0E904 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9444646F2E0D2D0300F0E904 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		9444646B2E0D2D0300F0E904 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9444645B2E0D2D0100F0E904 /* Aesdetic-Control */;
+			targetProxy = 9444646A2E0D2D0300F0E904 /* PBXContainerItemProxy */;
+		};
+		944464752E0D2D0300F0E904 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9444645B2E0D2D0100F0E904 /* Aesdetic-Control */;
+			targetProxy = 944464742E0D2D0300F0E904 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		9444647B2E0D2D0300F0E904 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		9444647C2E0D2D0300F0E904 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		9444647E2E0D2D0300F0E904 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-Control";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9444647F2E0D2D0300F0E904 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-Control";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		944464812E0D2D0300F0E904 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-ControlTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Aesdetic-Control.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Aesdetic-Control";
+			};
+			name = Debug;
+		};
+		944464822E0D2D0300F0E904 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-ControlTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Aesdetic-Control.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Aesdetic-Control";
+			};
+			name = Release;
+		};
+		944464842E0D2D0300F0E904 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-ControlUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Aesdetic-Control";
+			};
+			name = Debug;
+		};
+		944464852E0D2D0300F0E904 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-ControlUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Aesdetic-Control";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		944464572E0D2D0100F0E904 /* Build configuration list for PBXProject "Aesdetic-Control" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9444647B2E0D2D0300F0E904 /* Debug */,
+				9444647C2E0D2D0300F0E904 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9444647D2E0D2D0300F0E904 /* Build configuration list for PBXNativeTarget "Aesdetic-Control" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9444647E2E0D2D0300F0E904 /* Debug */,
+				9444647F2E0D2D0300F0E904 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		944464802E0D2D0300F0E904 /* Build configuration list for PBXNativeTarget "Aesdetic-ControlTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				944464812E0D2D0300F0E904 /* Debug */,
+				944464822E0D2D0300F0E904 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		944464832E0D2D0300F0E904 /* Build configuration list for PBXNativeTarget "Aesdetic-ControlUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				944464842E0D2D0300F0E904 /* Debug */,
+				944464852E0D2D0300F0E904 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 944464542E0D2D0100F0E904 /* Project object */;
+}
