@@ -1,0 +1,79 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+- **The Problem: Brittle UI**
+  - When you use the same `Codable` model for both decoding an API response and for populating your SwiftUI views, your UI becomes brittle.
+  - If the API developer adds, removes, or renames a field in their JSON response, it can break your `Codable` decoding and immediately crash your app or break your UI build, even if you don't use that new field in the UI.
+
+- **The Solution: Create a "Firewall" with API-Specific Models**
+  - For every API endpoint you consume, create a set of `Codable` structs that are designed *only* to match that endpoint's JSON structure. Think of these as your raw "API Models."
+  - Your UI should depend on a separate set of "UI Models" (or "Domain Models") that you design specifically for your app's needs.
+  - The "firewall" is your service layer (e.g., `WLEDDiscoveryService`), which is responsible for decoding the raw API Models and then *mapping* them to your clean, stable UI models.
+
+- **Benefits of This Approach**
+  - **Resilience:** If the API adds a new field, you don't have to change anything. If it renames a field, you only have to update the `CodingKeys` in your isolated API Model. Your UI code, which depends on the UI model, doesn't break.
+  - **Clarity:** It's very clear what data comes directly from the network versus what data your app has processed and prepared for display.
+  - **Flexibility:** Your UI Model can be a `class` with methods and computed properties, while your API model can remain a simple `struct`. You can combine data from multiple API calls into a single, rich UI model.
+
+- **Example: `WLEDDevice` vs. `WLEDResponse`**
+  - This is the exact pattern that fixed the `WLEDDevice` issues.
+
+    ```swift
+    // In Models/WLEDDevice.swift
+
+    // 1. THE UI MODEL
+    // This is the model the UI uses. It has properties the UI needs, like
+    // `isOnline`, `currentColor`, and can have its own initializer with default values.
+    struct WLEDDevice: Identifiable, Hashable {
+        let id: String // mac address
+        var name: String
+        var ipAddress: String
+        var isOnline: Bool
+        var brightness: Int
+        var currentColor: Color
+        // ...
+    }
+
+
+    // 2. THE API MODELS
+    // These structs exist *only* to decode the `/json` response.
+    // They exactly match the JSON structure from the WLED documentation.
+    struct WLEDResponse: Codable {
+        let info: Info
+        let state: WLEDState
+    }
+
+    struct Info: Codable {
+        let name: String
+        let mac: String
+        // ...
+    }
+    // ... and so on for State, Segment, etc.
+    ```
+
+    ```swift
+    // In Services/WLEDDiscoveryService.swift
+
+    // 3. THE "FIREWALL" / MAPPING LOGIC
+    // This function takes the raw API data, decodes it into the API Model (`WLEDResponse`),
+    // and then maps that data into the clean UI Model (`WLEDDevice`).
+    private func parseWLED(from data: Data, ipAddress: String, completion: @escaping (Result<WLEDDevice, Error>) -> Void) {
+        do {
+            let wledData = try JSONDecoder().decode(WLEDResponse.self, from: data)
+            
+            let wledDevice = WLEDDevice(
+                id: wledData.info.mac,
+                name: wledData.info.name,
+                ipAddress: ipAddress,
+                isOnline: true,
+                brightness: wledData.state.brightness,
+                // ...
+            )
+            completion(.success(wledDevice))
+        } catch {
+            completion(.failure(error))
+        }
+    }
+    ```

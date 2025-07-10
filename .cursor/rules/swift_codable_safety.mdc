@@ -1,0 +1,65 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# `Codable` Implementation Best Practices
+
+To prevent crashes and ensure reliable data parsing, Swift `Codable` structs must be a perfect match for the JSON data they represent.
+
+## **❌ Anti-Pattern: Assuming JSON Structure**
+
+Never write `Codable` models from memory or documentation alone. Real-world API responses can have subtle differences (e.g., missing keys, different nesting) that will cause a crash.
+
+```swift
+// JSON from API: { "data": { "user_id": 123, "name": "Alex" } }
+
+// ❌ DON'T: This model is incorrect and will crash
+// It assumes "user_id" is at the top level.
+struct User: Codable {
+    let user_id: Int // Wrong nesting level
+    let name: String
+}
+
+// let user = try JSONDecoder().decode(User.self, from: data) // This will throw an error
+```
+
+## **✅ Best Practice: Validate and Match**
+
+1.  **Get Real Data**: Always start with a sample of the actual JSON response from the live API.
+2.  **Model the Structure**: Create your Swift structs to mirror the exact hierarchy and key names. Use nested structs for nested JSON objects.
+3.  **Use `CodingKeys`**: If Swift property names don't match the JSON keys (e.g., `snake_case` vs. `camelCase`), use a `CodingKeys` enum to map them correctly.
+
+```swift
+// JSON from API: { "data": { "user_id": 123, "name": "Alex" } }
+
+// ✅ DO: Model the exact structure with nesting
+
+struct APIResponse: Codable {
+    let data: UserData
+}
+
+struct UserData: Codable {
+    let userId: Int
+    let name: String
+    
+    // Map snake_case JSON keys to camelCase Swift properties
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case name
+    }
+}
+
+// let response = try JSONDecoder().decode(APIResponse.self, from: data) // This will succeed
+// let user = response.data
+```
+
+## **Implementation Checklist**
+
+- **[ ] Obtain a real JSON sample** before writing any `Codable` code.
+- **[ ] Match the JSON nesting structure** exactly with nested Swift structs.
+- **[ ] Use `CodingKeys`** to map between `snake_case` in JSON and `camelCase` in Swift.
+- **[ ] Mark properties as optional (`?`)** in your struct if they might be missing from the JSON response.
+- **[ ] Wrap your `JSONDecoder().decode(...)` call in a `do-catch` block** to gracefully handle parsing errors.
+
+**Key Takeaway**: Your `Codable` models are a contract with the API. Always verify the contract with a real response before signing it with code.

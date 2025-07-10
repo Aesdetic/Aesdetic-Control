@@ -1,0 +1,77 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+- **Prioritize Optional Properties for API Models**
+    - When creating `Codable` structs to decode external API responses, all properties that are not guaranteed to be present in the JSON payload should be declared as optional (e.g., `String?`, `Int?`, `[String]?`).
+    - This is the single most important step to prevent crashes from `keyNotFound` or `valueNotFound` decoding errors when an API response is missing an expected field.
+
+    ```swift
+    // ❌ DON'T: This will crash if "description" is null or missing from the JSON.
+    struct BlogPost: Codable {
+        let id: Int
+        let title: String
+        let description: String 
+    }
+
+    // ✅ DO: This safely decodes the JSON even if "description" is missing.
+    struct BlogPostAPIModel: Codable {
+        let id: Int
+        let title: String
+        let description: String? // Optional
+    }
+    ```
+
+- **Isolate API Models from UI/Domain Models**
+    - Create dedicated `Codable` structs that *exactly* mirror the structure of the API response. These are your "API Models."
+    - Create separate structs or classes that represent the data your app's UI and business logic will use. These are your "UI Models" or "Domain Models."
+    - In your networking or service layer, perform the mapping from the raw API model to your clean UI model. This creates a strong boundary, so changes in the API don't automatically break your UI.
+
+    ```swift
+    // In WLEDDiscoveryService.swift
+    
+    // The "API Model" that matches the /json endpoint
+    struct WLEDResponse: Codable {
+        let info: Info
+        let state: WLEDState
+    }
+
+    // The mapping function that translates the API Model to the UI Model
+    private func parseWLED(from data: Data, ipAddress: String, completion: @escaping (Result<WLEDDevice, Error>) -> Void) {
+        do {
+            // 1. Decode into the raw API model
+            let wledData = try JSONDecoder().decode(WLEDResponse.self, from: data)
+            
+            // 2. Map the raw data to the clean UI model
+            let wledDevice = WLEDDevice(
+                id: wledData.info.mac,
+                name: wledData.info.name,
+                ipAddress: ipAddress,
+                isOnline: true,
+                brightness: wledData.state.brightness,
+                // ... etc
+            )
+            completion(.success(wledDevice))
+        } catch {
+            completion(.failure(error))
+        }
+    }
+    ```
+
+- **Always Use `CodingKeys` for Snake Case APIs**
+    - JSON APIs typically use `snake_case` for keys, while Swift convention is `camelCase`. Use a `CodingKeys` enum to explicitly map these, rather than relying on a decoder's key decoding strategy, for maximum clarity and safety.
+
+    ```swift
+    struct UserInfo: Codable {
+        let userId: String
+        let firstName: String
+        let isPremiumUser: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case userId = "user_id"
+            case firstName = "first_name"
+            case isPremiumUser = "is_premium_user"
+        }
+    }
+    ```

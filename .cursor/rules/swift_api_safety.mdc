@@ -1,0 +1,168 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Swift API Safety & Foundation Framework Rules
+
+This rule prevents common Swift API usage errors, especially with Foundation framework components like Calendar, Date, and URL APIs.
+
+## **Calendar API Usage**
+
+- **✅ DO: Use Correct Calendar Methods**
+  ```swift
+  // ✅ CORRECT - Setting time components
+  let calendar = Calendar.current
+  let date = calendar.date(bySettingHour: 9, minute: 30, second: 0, of: Date())
+  
+  // ✅ CORRECT - Adding time components  
+  let tomorrow = calendar.date(byAdding: .day, value: 1, to: Date())
+  
+  // ✅ CORRECT - Date components
+  let components = calendar.dateComponents([.hour, .minute], from: Date())
+  ```
+
+- **❌ DON'T: Use Non-Existent Methods**
+  ```swift
+  // ❌ WRONG - This method doesn't exist
+  let date = calendar.dateBySettingHour(9, minute: 30, second: 0, of: Date())
+  
+  // ❌ WRONG - Incorrect parameter names
+  let date = calendar.date(hour: 9, minute: 30, of: Date())
+  ```
+
+## **API Verification Requirements**
+
+- **ALWAYS verify method signatures** before implementation
+- **Check parameter labels** - Swift is strict about argument labels
+- **Use Xcode autocomplete** or Apple documentation as source of truth
+- **Test Calendar/Date operations** with edge cases (timezone changes, DST)
+
+## **Foundation Framework Common Pitfalls**
+
+### **Date & Calendar APIs**
+- Use `Calendar.current` for user's calendar settings
+- Always handle optional returns from date calculations
+- Consider timezone implications for scheduled operations
+- Use `DateComponents` for complex date arithmetic
+
+### **URL APIs**
+```swift
+// ✅ CORRECT - Proper URL validation
+guard let url = URL(string: urlString) else { return }
+
+// ✅ CORRECT - URL components for query parameters
+var components = URLComponents(string: baseURL)
+components?.queryItems = [URLQueryItem(name: "key", value: "value")]
+```
+
+### **UserDefaults & Persistence**
+```swift
+// ✅ CORRECT - Safe UserDefaults usage
+let value = UserDefaults.standard.object(forKey: "key") as? String
+UserDefaults.standard.set(value, forKey: "key")
+```
+
+## **Type Safety & Placeholder Prevention**
+
+- **NEVER reference undefined types** in production code
+- **Create placeholder types** in the same file if needed temporarily
+- **Use TODO comments** for incomplete implementations
+- **Build frequently** to catch compilation errors early
+
+### **Placeholder Pattern**
+```swift
+// ✅ CORRECT - Define placeholder types
+struct WellnessHabit: Identifiable {
+    let id = UUID()
+    let name: String
+    let isCompleted: Bool
+    
+    // TODO: Expand with full wellness habit features
+}
+
+// ✅ CORRECT - Mark incomplete features
+func complexFeature() {
+    // TODO: Implement full feature in next iteration
+    fatalError("Not yet implemented")
+}
+```
+
+## **Error Handling Patterns**
+
+### **Async Operations**
+```swift
+// ✅ CORRECT - Proper async error handling
+func loadData() async throws {
+    do {
+        let result = try await networkCall()
+        await MainActor.run {
+            self.data = result
+        }
+    } catch {
+        await MainActor.run {
+            self.errorMessage = error.localizedDescription
+        }
+    }
+}
+```
+
+### **Optional Handling**
+```swift
+// ✅ CORRECT - Safe optional unwrapping
+guard let hour = dateComponents.hour,
+      let minute = dateComponents.minute else {
+    return nil
+}
+```
+
+## **Testing & Validation Requirements**
+
+- **Build after every significant change** (max 5 new files)
+- **Test on iOS Simulator** before marking tasks complete
+- **Verify API calls work** with sample data
+- **Check memory management** for @StateObject and @ObservedObject usage
+
+## **SwiftUI Specific Safety**
+
+### **State Management**
+```swift
+// ✅ CORRECT - Proper state object usage
+@StateObject private var viewModel = SomeViewModel()
+
+// ✅ CORRECT - Published properties for UI updates
+@Published var isLoading: Bool = false
+```
+
+### **Navigation & Lifecycle**
+```swift
+// ✅ CORRECT - NavigationStack for iOS 16+
+NavigationStack {
+    // content
+}
+
+// ✅ CORRECT - Task lifecycle management
+.task {
+    await viewModel.loadData()
+}
+```
+
+## **Code Review Checklist**
+
+Before marking any Swift implementation as complete:
+
+1. ✅ **API Methods Verified** - All Foundation/UIKit methods exist and use correct signatures
+2. ✅ **No Undefined Types** - All referenced types are defined or imported
+3. ✅ **Builds Successfully** - Code compiles without errors or warnings
+4. ✅ **Async Patterns Correct** - Proper async/await and MainActor usage
+5. ✅ **Memory Safety** - No retain cycles or memory leaks in @StateObject usage
+6. ✅ **Error Handling** - Proper guard statements and error propagation
+
+## **References**
+
+- **Apple Developer Documentation**: Always the source of truth
+- **Swift.org Language Guide**: For language-specific features
+- **SwiftUI Documentation**: For UI framework best practices
+- **Foundation Framework Guide**: For system API usage
+
+**Remember**: When in doubt, verify in Xcode's autocomplete or Apple's official documentation before implementing any API calls.

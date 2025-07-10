@@ -1,0 +1,59 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+- **Identify Shared Mutable State**
+    - A "race condition" occurs when multiple threads try to access and modify the same piece of data (`var`) at the same time. This leads to unpredictable behavior, hangs, and crashes.
+    - Any `var` property on a class that is accessed from a background context (like `DispatchQueue.global`, `URLSession` data task completions, Combine subscribers on a background scheduler, etc.) is a potential race condition and **must be protected**.
+
+- **Use a Serial Queue for Synchronization**
+    - The most straightforward way to prevent race conditions is to create a dedicated serial `DispatchQueue` to act as a lock for your shared property.
+    - All reads and writes to the shared property must be performed by dispatching work to this serial queue. Because the queue is serial, it guarantees that only one operation can execute at a time, in the order it was received.
+
+- **Example: Fixing the `WLEDDiscoveryService` Race Condition**
+
+    ```swift
+    // ❌ DON'T: This will crash or hang. The `scannedIPs` Set is being modified 
+    // by many concurrent URLSession completion handlers at once.
+    class UnsafeDiscoveryService: ObservableObject {
+        private var scannedIPs = Set<String>()
+
+        func checkDevice(at ipAddress: String) {
+            // This completion handler is on a background thread
+            URLSession.shared.dataTask(with: url) { _, _, _ in
+                self.scannedIPs.insert(ipAddress) // Unsafe write!
+            }.resume()
+        }
+    }
+
+    // ✅ DO: All access to `scannedIPs` is safely routed through the `syncQueue`.
+    class WLEDDiscoveryService: ObservableObject {
+        private var scannedIPs = Set<String>()
+        // A dedicated serial queue to act as a lock.
+        private let syncQueue = DispatchQueue(label: "wled.discovery.sync")
+
+        func checkWLEDDevice(at ipAddress: String, completion: @escaping (Result<WLEDDevice, Error>) -> Void) {
+            var alreadyScanned = false
+            // sync() is used for a quick, blocking check.
+            syncQueue.sync {
+                alreadyScanned = !scannedIPs.insert(ipAddress).inserted
+            }
+            
+            if alreadyScanned {
+                // ...
+                return
+            }
+            // ...
+        }
+
+        func startDiscovery() {
+            // ...
+            // async() is used for non-blocking writes.
+            self.syncQueue.async {
+                self.scannedIPs.removeAll()
+            }
+            // ...
+        }
+    }
+    ```

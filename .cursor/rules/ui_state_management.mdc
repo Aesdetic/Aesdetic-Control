@@ -1,0 +1,168 @@
+# UI State Management & Real-Time Controls
+
+## **Critical Principle: Always Debounce Device State Sync After User Input**
+
+When building real-time controls (sliders, toggles, etc.) that sync with external devices, ALWAYS implement protection against state sync conflicts.
+
+## **Required Patterns**
+
+### **1. User Input Protection Pattern**
+```swift
+// ✅ DO: Implement timing-based protection
+@State private var lastUserInput: Date? = nil
+@State private var isUserControlling: Bool = false
+
+private func syncWithDeviceState() {
+    let now = Date()
+    let canSync = !isUserControlling && 
+                  (lastUserInput == nil || now.timeIntervalSince(lastUserInput!) > 1.0)
+    
+    if canSync {
+        // Only sync if change is significant to prevent UI jitter
+        if abs(localValue - deviceValue) > threshold {
+            localValue = deviceValue
+        }
+    }
+}
+
+private func onUserInput() {
+    isUserControlling = true
+    lastUserInput = Date()
+    
+    // Schedule API update with debouncing
+    timer?.invalidate()
+    timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+        Task { await sendToDevice() }
+    }
+}
+
+private func sendToDevice() async {
+    await apiCall()
+    await MainActor.run {
+        isUserControlling = false
+    }
+}
+```
+
+### **2. State Sync Threshold Pattern**
+```swift
+// ✅ DO: Use meaningful thresholds to prevent unnecessary updates
+private let syncThreshold: Double = 15.0  // Prevent sync for small differences
+private let inputThreshold: Double = 5.0  // Only send API calls for significant changes
+
+if abs(localValue - deviceValue) > syncThreshold {
+    localValue = deviceValue
+}
+```
+
+### **3. Timer Management Pattern**
+```swift
+// ✅ DO: Proper timer cleanup and non-blocking updates
+@State private var updateTimer: Timer?
+
+private func scheduleUpdate() {
+    updateTimer?.invalidate()
+    updateTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+        Task { await performUpdate() }
+    }
+}
+
+// In onDisappear or deinit
+updateTimer?.invalidate()
+updateTimer = nil
+```
+
+## **Common Anti-Patterns to Avoid**
+
+### **❌ DON'T: Sync device state immediately after user input**
+```swift
+// BAD: This causes UI to jump back to old values
+func onUserInput() {
+    localValue = newValue
+    Task { await sendToDevice() }
+    // Device state sync happens immediately, overwriting user input
+}
+```
+
+### **❌ DON'T: Use blocking calls in UI update paths**
+```swift
+// BAD: This freezes the UI
+func updateValue() {
+    Task.sleep(nanoseconds: 500_000_000) // Blocks main thread
+    await apiCall()
+}
+```
+
+### **❌ DON'T: Ignore state management in gesture handlers**
+```swift
+// BAD: No protection against conflicting updates
+.onChanged { value in
+    localValue = value.x // Immediate update without debouncing
+}
+```
+
+## **Real-Time Control Checklist**
+
+When implementing any real-time control (brightness, color, position, etc.):
+
+- [ ] **Debounce API calls** (300ms minimum)
+- [ ] **Protect against state sync** during user interaction
+- [ ] **Use meaningful thresholds** for both sync and input
+- [ ] **Implement proper timer cleanup**
+- [ ] **Handle offline/error states** gracefully
+- [ ] **Test rapid user input** scenarios
+- [ ] **Verify no UI freezing** during updates
+
+## **Layout Consistency Requirements**
+
+### **Margin Consistency**
+```swift
+// ✅ DO: Use consistent margins across views
+.padding(.horizontal, 16) // Standard app margin
+
+// ✅ DO: Check existing views for margin patterns
+// Look at DashboardView, DeviceListView for reference
+```
+
+### **ZStack Layout Pattern**
+```swift
+// ✅ DO: When layering content, ensure proper clipping
+ZStack {
+    backgroundElement
+    contentElement
+}
+.clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+```
+
+## **Error Recovery Patterns**
+
+### **Code Regression Protection**
+When restoring lost functionality:
+- [ ] **Restore all related features** in one change
+- [ ] **Verify dependent functionality** (timers, state sync, layout)
+- [ ] **Test the complete user flow** before marking complete
+- [ ] **Document breaking changes** in commit messages
+
+## **Testing Requirements**
+
+For any real-time control implementation:
+- [ ] **Rapid input test**: Drag slider quickly back and forth
+- [ ] **Network delay test**: Simulate slow API responses
+- [ ] **Device offline test**: Ensure graceful degradation
+- [ ] **Memory leak test**: Verify timer cleanup on view dismissal
+- [ ] **State sync test**: Change device externally, verify UI updates correctly
+
+## **Performance Considerations**
+
+- **Rate limiting**: Minimum 5-point difference for brightness, 1-second for state sync
+- **Background processing**: API calls should never block main thread
+- **Memory management**: Always clean up timers and observers
+- **Animation smoothness**: Use appropriate animation durations (0.2-0.4s)
+
+---
+
+**Remember**: The user experience should always feel instant and responsive, even when dealing with network delays and external device state changes.
+description:
+globs:
+alwaysApply: false
+---

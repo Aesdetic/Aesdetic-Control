@@ -1,0 +1,66 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# SwiftUI Performance: Offload Heavy Work from Main Thread
+
+To prevent a sluggish UI and "hangs," any work that could block the UI must be moved off the main thread. This includes network requests, complex calculations, and large loops.
+
+## **❌ Anti-Pattern: Blocking the Main Thread**
+
+Never run intensive loops or network requests directly in `onAppear` or an `init` method without dispatching to a background queue.
+
+```swift
+// ❌ DON'T: This blocks the UI and causes hangs
+struct MyView: View {
+    var body: some View {
+        Text("Hello")
+            .onAppear {
+                // This entire loop runs on the main thread, freezing the app
+                for i in 0..<1000 {
+                    // Simulating a slow network call
+                    let result = URLSession.shared.dataTask(with: url) { ... }.resume()
+                }
+            }
+    }
+}
+```
+
+## **✅ Best Practice: Use Background Queues**
+
+Dispatch heavy work to a background queue (`DispatchQueue.global()` or a custom queue) and only dispatch the final UI update back to the main thread.
+
+```swift
+// ✅ DO: Perform work on a background thread
+class MyService: ObservableObject {
+    @Published var items: [String] = []
+    
+    func fetchData() {
+        // Switch to a background thread for the heavy lifting
+        DispatchQueue.global(qos: .userInitiated).async {
+            var newItems: [String] = []
+            // The loop and network calls are now off the main thread
+            for i in 0..<1000 {
+                // ... perform network request ...
+                newItems.append("Item \(i)")
+            }
+            
+            // When work is done, update the UI on the main thread
+            DispatchQueue.main.async {
+                self.items = newItems
+            }
+        }
+    }
+}
+```
+
+## **Implementation Checklist**
+
+- **[ ] `init()` methods should be lightweight.** Avoid any long-running tasks or network calls.
+- **[ ] `onAppear()` should not block.** If you need to fetch data, immediately dispatch it to a background task.
+- **[ ] Network requests must be asynchronous** and handled on a background thread.
+- **[ ] Large loops** or complex data processing must be on a background thread.
+- **[ ] All `@Published` property updates** that affect the UI must be dispatched back to `DispatchQueue.main`.
+
+**Key Takeaway**: A responsive UI is critical for a good user experience. Always assume a task is "heavy" and move it to the background unless you are certain it is trivial.

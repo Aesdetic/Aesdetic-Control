@@ -1,0 +1,288 @@
+# Aesdetic Control - Premium WLED iOS Control App
+
+# Overview  
+Aesdetic Control is a premium iOS app that provides intuitive control over WLED-powered lighting products, specifically designed for wellness-focused lighting experiences like sunrise lamps. The app combines comprehensive WLED functionality with a modern, minimal UI and automation features that support daily wellness routines. Unlike generic WLED controllers, this app focuses on creating a premium customer experience with custom product presets, gradient-based color control, and wellness integration.
+
+**Target Users:** Customers who have purchased Aesdetic's WLED-powered lighting products (sunrise lamps, ambient lighting) and want sophisticated control over their lighting environment for wellness, productivity, and aesthetic purposes.
+
+**Core Value Proposition:** Transform technical WLED control into an intuitive, wellness-focused lighting experience that customers love to use daily.
+
+# Core Features  
+
+## 1. Dashboard/Home Page
+**What it does:** Central hub showing daily greeting, device overview, and automation status
+- Daily motivational greeting with rotating messages (wellness-focused, coastal aesthetic)
+- Device overview cards showing all user's WLED products with real-time status
+- Automation cards displaying active routines with quick toggle controls
+- Visual feedback showing actual device brightness and colors in real-time
+
+**Why it's important:** Creates a welcoming, informative entry point that encourages daily engagement and provides instant status awareness.
+
+**How it works:** Combines local app state with real-time WLED device status via WebSocket connections and REST API calls.
+
+## 2. Advanced Device Control
+**What it does:** Comprehensive WLED control with premium UI enhancements. This includes a main device card for quick access and a detailed control view for in-depth adjustments.
+- **Detailed Control View:** A dedicated screen per device, accessible by tapping the device card. Allows for fine-tuned control over all WLED settings, including effects, color palettes, presets, and device information.
+- Visual gradient bar controls (not segments) for smooth color transitions.
+- Full WLED feature set: power, brightness, color temperature, effects, presets
+- Real-time preview of all changes before applying
+- Multi-device grouping and synchronized control
+- Custom product-specific presets optimized for each lamp type
+
+**Why it's important:** Differentiates from basic WLED apps by providing intuitive, visual control that matches the premium product experience.
+
+**How it works:** Uses WLED JSON API for individual LED control, creating smooth gradients by calculating intermediate colors between user-selected points.
+
+## 3. Automation & Preset System
+**What it does:** Intelligent automation for wellness routines.
+- **Detailed Automation Configuration:** Users can customize automations with specific start/end times, select start/end colors (solid or gradient), and choose which devices or groups to include.
+- Sunrise/sunset automations with smooth gradient transitions over time.
+- Custom scene creation and scheduling.
+- Timer-based gradual transitions (e.g., 30-minute sunrise from red→orange→yellow)
+- Automation overview with quick toggle and edit access
+- Multi-device coordination for room-wide lighting scenes
+
+**Why it's important:** Automates wellness lighting routines, reducing daily setup while supporting circadian health.
+
+**How it works:** Combines local scheduling with WLED API calls, using gradual transitions over time periods.
+
+## 4. Device Discovery & Management
+**What it does:** Seamless device setup and organization
+- Automatic WLED device discovery via mDNS/Bonjour
+- Custom device naming and product type assignment
+- Network management (AP setup mode, station mode switching)
+- Connection health monitoring and auto-reconnection
+- Firmware update notifications
+
+**Why it's important:** Eliminates technical complexity of WLED setup, creating a plug-and-play experience.
+
+**How it works:** iOS Bonjour framework for discovery, WLED REST API for configuration and management.
+
+## 5. Premium Visual Design
+**What it does:** Modern, coastal-inspired UI with smooth animations
+- Minimalist design with coastal color palette
+- Product images reflecting real-time customization and brightness
+- Smooth SwiftUI animations and transitions
+- Real-time visual feedback matching physical device state
+- Intuitive gesture-based controls
+
+**Why it's important:** Creates premium brand experience that justifies product price point and encourages daily use.
+
+**How it works:** SwiftUI with real-time data binding to WLED device states via WebSocket connections.
+
+## 6. Wellness Hub
+**What it does:** An integrated suite of tools to support daily well-being and productivity.
+- **Habit Tracker:** Users can define and track daily habits.
+- **Daily Journal:** A space for users to write daily entries.
+- **Productivity Log:** A daily to-do list with sections for "Important Tasks" and "Secondary Tasks," along with a rating system to track daily productivity.
+- **Historical View:** Users can look back at journal entries, habits, and productivity ratings from previous dates.
+
+**Why it's important:** Extends the app beyond lighting control into a holistic wellness tool, increasing daily engagement and value.
+
+**How it works:** Utilizes Core Data to store and manage user-generated wellness data locally and securely.
+
+## 7. Apple HomeKit & Siri Integration
+**What it does:** Seamlessly integrates WLED devices with Apple's smart home ecosystem.
+- **Home App Control:** Users can control device power and brightness directly from the Apple Home app.
+- **Siri Voice Commands:** Enable voice control for key actions like turning devices on/off or activating presets.
+
+**Why it's important:** Provides a native, integrated experience for iOS users, adding significant convenience and aligning with smart home standards.
+
+**How it works:** Implements the HomeKit Accessory Protocol to bridge WLED devices as HomeKit-compatible accessories.
+
+# User Experience  
+
+## User Personas
+**Primary:** Wellness-conscious professionals (25-45) who value quality lighting for productivity and relaxation
+**Secondary:** Tech-savvy homeowners interested in smart home automation with aesthetic focus
+
+## Key User Flows
+1. **First-time Setup:** App launch → Device discovery → Product identification → Initial automation setup
+2. **Daily Use:** Open app → Quick status check → Adjust lighting or trigger automation
+3. **Custom Scene Creation:** Navigate to automation → Create new scene → Set gradient colors → Configure timing → Save
+4. **Multi-device Control:** Select multiple devices → Apply coordinated settings → Save as group preset
+
+## UI/UX Considerations
+- Minimize taps to common actions (brightness, on/off)
+- Visual feedback should match physical device state within 100ms
+- Gradient controls should feel natural and responsive
+- Error states should be helpful and recovery-focused
+- Offline mode should cache last known device states
+
+# Technical Architecture  
+
+## System Components
+- **iOS App (SwiftUI):** Main user interface and local logic
+- **WLED Devices:** WiFi-connected LED controllers running WLED firmware
+- **Local Network:** mDNS discovery and HTTP/WebSocket communication
+- **Device State Management:** Core Data for persistence, Combine for reactive updates
+
+## Data Models
+```swift
+// Core device representation
+Device: id, name, ipAddress, productType, isOnline, currentBrightness, currentColors
+
+// Automation configuration
+Automation: id, name, isActive, schedule, startTime, endTime, gradientStart, gradientEnd, duration, assignedDevices
+
+// Product-specific presets
+ProductPreset: productType, presetName, colorConfiguration, brightness, effectSettings
+
+// Wellness Hub Models
+Habit: id, name, isCompleted, date
+JournalEntry: id, date, content
+TodoItem: id, title, isImportant, isCompleted, date
+ProductivityLog: id, date, rating (1-5)
+```
+
+## APIs and Integrations
+- **WLED JSON API:** Device control, state management, individual LED control
+- **WLED WebSocket:** Real-time state updates and live preview
+- **Apple HomeKit:** Bridge WLED devices into the Apple Home ecosystem for control via Home app and Siri.
+- **iOS Bonjour:** Automatic device discovery
+- **Core Data:** Local persistence of user settings, automation, and wellness data.
+- **Network Framework:** Connection health monitoring
+
+## Infrastructure Requirements
+- Local WiFi network for device communication
+- iOS 15+ for SwiftUI features and network improvements
+- Xcode 14+ for development
+- WLED firmware 0.13+ for optimal API compatibility
+
+# Development Roadmap  
+
+## Phase 1: Core Foundation (MVP)
+**Goal:** Basic but polished WLED control that customers can immediately use
+
+### MVP Requirements:
+- Device discovery and basic connection management
+- Simple device control page with power, brightness, and basic color selection
+- Basic dashboard showing discovered devices
+- Essential WLED API integration (power, brightness, solid colors)
+- Core SwiftUI navigation structure
+- Basic error handling and offline states
+
+### Deliverable:
+A functional app that can discover, connect to, and control WLED devices with a clean UI.
+
+## Phase 2: Premium Control Experience
+**Goal:** Differentiate from basic WLED apps with gradient controls and premium UI
+
+### Features:
+- Visual gradient bar controls for smooth color transitions
+- Real-time preview of changes
+- Product-specific UI customization
+- Enhanced device cards with product images
+- Improved animations and transitions
+- Full WLED feature parity (effects, presets, segments)
+
+### Deliverable:
+Premium control experience that justifies brand positioning. This includes the detailed device control view.
+
+## Phase 3: Automation & Wellness Features
+**Goal:** Add automation and wellness capabilities that support holistic daily routines.
+
+### Features:
+- **Wellness Hub (V1):** Implement the Habit Tracker, Daily Journal, and Productivity Log.
+- Detailed automation configuration (start/end times, colors, gradients).
+- Sunrise/sunset automation creation and scheduling.
+- Timer-based gradual transitions.
+- Automation overview and management
+- Multi-device coordination
+- Daily motivational greetings
+- Custom scene creation and storage
+
+### Deliverable:
+Comprehensive automation and wellness system supporting wellness-focused lighting routines.
+
+## Phase 4: Advanced Features & Polish
+**Goal:** Add sophisticated integrations and perfect the user experience.
+
+### Features:
+- **Apple HomeKit & Siri Integration:** Bridge devices to HomeKit for native control.
+- **Final UI Polish:** Refine navigation patterns and add a subtle, aesthetically pleasing background image to the app.
+- Advanced scheduling and calendar integration.
+- Smart home integration groundwork.
+- Advanced error recovery and network management
+- Performance optimization
+- Accessibility features
+- Beta testing and feedback integration
+
+### Deliverable:
+Production-ready app with advanced features and exceptional polish.
+
+# Logical Dependency Chain
+
+## Foundation Layer (Build First)
+1. **Basic iOS Project Setup** - SwiftUI app structure, navigation, basic UI components
+2. **WLED API Integration** - HTTP client, basic JSON API communication, error handling
+3. **Device Discovery** - mDNS/Bonjour implementation for finding WLED devices
+4. **Device Connection Management** - Connection state tracking, reconnection logic
+
+## Core Functionality Layer (Build Next)
+5. **Basic Device Control** - Power, brightness, basic color control
+6. **Device State Management** - Real-time updates, data persistence with Core Data
+7. **Dashboard Foundation** - Device list, basic status display
+8. **Navigation Structure** - Main tabs, device detail views, basic transitions
+
+## Premium Experience Layer (Build After Core Works)
+9. **Gradient Control System** - Visual gradient controls, color interpolation, individual LED control
+10. **Real-time Preview** - WebSocket integration, live color updates
+11. **Product-Specific UI** - Custom device cards, product images, branding
+12. **Advanced WLED Features** - Effects, presets, segments, full API parity
+
+## Automation Layer (Build Last)
+13. **Automation Engine** - Scheduling system, timer-based transitions
+14. **Scene Management** - Custom scene creation, storage, sharing across devices
+15. **Wellness Features** - Daily greetings, sunrise/sunset automations
+16. **Multi-device Coordination** - Device grouping, synchronized control
+
+**Pacing Strategy:** Each layer should be fully functional before moving to the next. This ensures we always have a working app that can be tested with real devices.
+
+# Risks and Mitigations  
+
+## Technical Challenges
+**Risk:** WLED API limitations or inconsistencies across firmware versions
+**Mitigation:** Test with multiple WLED firmware versions, implement graceful degradation for missing features
+
+**Risk:** Network connectivity issues affecting real-time updates
+**Mitigation:** Implement robust offline mode, connection retry logic, and cached state management
+
+**Risk:** Complex gradient calculations affecting performance
+**Mitigation:** Optimize color interpolation algorithms, implement background processing, test on older devices
+
+## MVP Scope Management
+**Risk:** Feature creep delaying core functionality
+**Mitigation:** Strictly prioritize basic WLED control first, resist adding automation until Phase 3
+
+**Risk:** Over-engineering the UI before core functionality works
+**Mitigation:** Start with functional but basic UI, enhance visual design in Phase 2
+
+## Resource Constraints
+**Risk:** Underestimating WLED API integration complexity
+**Mitigation:** Allocate extra time for API testing, use existing WLED apps as reference for edge cases
+
+**Risk:** iOS development learning curve
+**Mitigation:** Start with simple SwiftUI patterns, gradually introduce advanced features
+
+# Appendix  
+
+## Research Findings
+- WLED supports individual LED control via JSON API: `{"seg":{"i":["color1","color2","color3"]}}`
+- WebSocket connections provide real-time updates for live preview functionality
+- mDNS discovery works reliably on iOS for finding WLED devices automatically
+- WLED firmware 0.13+ provides the most stable API experience
+- Gradient effects can be achieved by calculating intermediate colors and mapping to LED positions
+
+## Technical Specifications
+- **Minimum iOS Version:** 15.0 (for SwiftUI improvements and network framework enhancements)
+- **WLED Firmware:** 0.13+ recommended for optimal compatibility
+- **Network Requirements:** Local WiFi network, mDNS support
+- **Device Requirements:** iPhone/iPad with iOS 15+, sufficient storage for Core Data persistence
+
+## Integration Requirements
+- **WLED JSON API:** Full REST API integration for device control
+- **WebSocket API:** Real-time updates and live preview
+- **Bonjour Framework:** Device discovery via mDNS
+- **Core Data:** Local persistence of user settings and automation
+- **Network Framework:** Connection monitoring and health management 

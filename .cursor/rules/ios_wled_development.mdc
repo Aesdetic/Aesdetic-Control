@@ -1,0 +1,340 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# iOS WLED App Development Rules
+
+Specific development patterns and best practices for building the Aesdetic Control iOS app that interfaces with WLED devices.
+
+## **WLED Integration Patterns**
+
+### **Network Communication**
+```swift
+// ✅ CORRECT - WLED JSON API structure
+struct WLEDStateRequest: Codable {
+    let on: Bool?
+    let bri: Int?           // 0-255 brightness
+    let seg: [Segment]?     // Segments array
+}
+
+struct WLEDResponse: Codable {
+    let state: WLEDState
+    let info: WLEDInfo
+}
+
+// ✅ CORRECT - Proper URL construction for WLED
+func buildWLEDURL(deviceIP: String, endpoint: String) -> URL? {
+    return URL(string: "http://\(deviceIP)/json/\(endpoint)")
+}
+```
+
+### **Color Handling**
+```swift
+// ✅ CORRECT - WLED color format (RGB as array or hex)
+struct WLEDColor {
+    let red: Int     // 0-255
+    let green: Int   // 0-255  
+    let blue: Int    // 0-255
+    
+    var wledArray: [Int] { [red, green, blue] }
+    var hexString: String { String(format: "%02X%02X%02X", red, green, blue) }
+}
+
+// ✅ CORRECT - SwiftUI Color to WLED conversion
+extension Color {
+    func toWLEDColor() -> WLEDColor {
+        let components = self.cgColor?.components ?? [0, 0, 0, 1]
+        return WLEDColor(
+            red: Int(components[0] * 255),
+            green: Int(components[1] * 255), 
+            blue: Int(components[2] * 255)
+        )
+    }
+}
+```
+
+### **Device Discovery**
+```swift
+// ✅ CORRECT - Bonjour/mDNS discovery pattern
+import Network
+
+class WLEDDeviceDiscovery: ObservableObject {
+    @Published var discoveredDevices: [WLEDDevice] = []
+    private var browser: NWBrowser?
+    
+    func startDiscovery() {
+        let parameters = NWParameters()
+        browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_http._tcp", domain: nil), using: parameters)
+        // Implementation...
+    }
+}
+```
+
+## **iOS Architecture Patterns**
+
+### **MVVM Implementation**
+```swift
+// ✅ CORRECT - ViewModel with @MainActor
+@MainActor
+class DeviceControlViewModel: ObservableObject {
+    @Published var devices: [WLEDDevice] = []
+    @Published var isLoading = false
+    @Published var errorMessage: String?
+    
+    func updateDevice(_ device: WLEDDevice, brightness: Int) async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            try await wledService.setBrightness(device: device, brightness: brightness)
+            // Update local state
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+```
+
+### **State Management**
+```swift
+// ✅ CORRECT - Centralized device state
+class WLEDDeviceManager: ObservableObject {
+    @Published var devices: [String: WLEDDevice] = [:]
+    @Published var connectionStates: [String: Bool] = [:]
+    
+    func updateDeviceState(_ deviceId: String, state: WLEDState) {
+        devices[deviceId]?.brightness = state.brightness
+        devices[deviceId]?.isOnline = true
+        connectionStates[deviceId] = true
+    }
+}
+```
+
+## **UI/UX Patterns**
+
+### **Gradient Control Implementation**
+```swift
+// ✅ CORRECT - Interactive gradient bar
+struct GradientControlBar: View {
+    @Binding var gradientStops: [GradientStop]
+    @State private var dragLocation: CGPoint = .zero
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Gradient background
+                LinearGradient(stops: gradientStops.map { 
+                    Gradient.Stop(color: $0.color, location: $0.position) 
+                }, startPoint: .leading, endPoint: .trailing)
+                
+                // Draggable stop indicators
+                ForEach(gradientStops.indices, id: \.self) { index in
+                    GradientStopIndicator(
+                        stop: $gradientStops[index],
+                        geometry: geometry
+                    )
+                }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        handleGradientDrag(value, geometry: geometry)
+                    }
+            )
+        }
+    }
+}
+```
+
+### **Real-time Updates**
+```swift
+// ✅ CORRECT - WebSocket connection for live updates
+class WLEDWebSocketManager: ObservableObject {
+    @Published var liveState: WLEDState?
+    private var webSocketTask: URLSessionWebSocketTask?
+    
+    func connect(to device: WLEDDevice) {
+        guard let url = URL(string: "ws://\(device.ipAddress)/ws") else { return }
+        webSocketTask = URLSession.shared.webSocketTask(with: url)
+        webSocketTask?.resume()
+        receiveMessage()
+    }
+    
+    private func receiveMessage() {
+        webSocketTask?.receive { [weak self] result in
+            switch result {
+            case .success(let message):
+                self?.handleMessage(message)
+                self?.receiveMessage() // Continue listening
+            case .failure(let error):
+                print("WebSocket error: \(error)")
+            }
+        }
+    }
+}
+```
+
+## **Data Persistence**
+
+### **UserDefaults for Settings**
+```swift
+// ✅ CORRECT - Type-safe UserDefaults
+enum UserDefaultsKeys: String {
+    case discoveredDevices = "aesdetic.discoveredDevices"
+    case automationPresets = "aesdetic.automationPresets"
+    case userPreferences = "aesdetic.userPreferences"
+}
+
+extension UserDefaults {
+    func setDevices(_ devices: [WLEDDevice]) {
+        if let data = try? JSONEncoder().encode(devices) {
+            set(data, forKey: UserDefaultsKeys.discoveredDevices.rawValue)
+        }
+    }
+    
+    func getDevices() -> [WLEDDevice] {
+        guard let data = data(forKey: UserDefaultsKeys.discoveredDevices.rawValue),
+              let devices = try? JSONDecoder().decode([WLEDDevice].self, from: data) else {
+            return []
+        }
+        return devices
+    }
+}
+```
+
+## **Error Handling & Reliability**
+
+### **Network Error Handling**
+```swift
+// ✅ CORRECT - Comprehensive WLED error handling
+enum WLEDError: LocalizedError {
+    case deviceOffline
+    case invalidResponse
+    case networkTimeout
+    case invalidColorFormat
+    
+    var errorDescription: String? {
+        switch self {
+        case .deviceOffline:
+            return "Device is offline or unreachable"
+        case .invalidResponse:
+            return "Invalid response from WLED device"
+        case .networkTimeout:
+            return "Network request timed out"
+        case .invalidColorFormat:
+            return "Invalid color format for WLED"
+        }
+    }
+}
+```
+
+### **Retry Logic**
+```swift
+// ✅ CORRECT - Exponential backoff for device communication
+func sendCommand(to device: WLEDDevice, maxRetries: Int = 3) async throws {
+    var attempt = 0
+    var delay: TimeInterval = 1.0
+    
+    while attempt < maxRetries {
+        do {
+            try await performNetworkCall(device)
+            return // Success
+        } catch {
+            attempt += 1
+            if attempt >= maxRetries { throw error }
+            
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            delay *= 2 // Exponential backoff
+        }
+    }
+}
+```
+
+## **Testing Patterns**
+
+### **Mock WLED Service**
+```swift
+// ✅ CORRECT - Testable WLED service protocol
+protocol WLEDServiceProtocol {
+    func getDeviceState(_ device: WLEDDevice) async throws -> WLEDState
+    func setDeviceState(_ device: WLEDDevice, state: WLEDState) async throws
+}
+
+class MockWLEDService: WLEDServiceProtocol {
+    var mockDeviceStates: [String: WLEDState] = [:]
+    
+    func getDeviceState(_ device: WLEDDevice) async throws -> WLEDState {
+        return mockDeviceStates[device.id] ?? WLEDState.default
+    }
+}
+```
+
+## **Performance Optimization**
+
+### **Efficient UI Updates**
+```swift
+// ✅ CORRECT - Debounced slider updates
+struct BrightnessSlider: View {
+    @Binding var brightness: Double
+    @State private var localBrightness: Double = 0
+    @State private var updateTask: Task<Void, Never>?
+    
+    var body: some View {
+        Slider(value: $localBrightness, in: 0...255)
+            .onChange(of: localBrightness) { newValue in
+                updateTask?.cancel()
+                updateTask = Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce
+                    brightness = newValue
+                }
+            }
+    }
+}
+```
+
+## **Security & Privacy**
+
+### **Local Network Access**
+```swift
+// ✅ CORRECT - Proper network permissions handling
+// Add to Info.plist:
+// <key>NSLocalNetworkUsageDescription</key>
+// <string>This app needs local network access to discover and control your WLED devices.</string>
+
+// ✅ CORRECT - Validate device responses
+func validateWLEDResponse(_ data: Data) throws -> WLEDResponse {
+    let response = try JSONDecoder().decode(WLEDResponse.self, from: data)
+    
+    // Validate response structure
+    guard response.state.brightness >= 0 && response.state.brightness <= 255 else {
+        throw WLEDError.invalidResponse
+    }
+    
+    return response
+}
+```
+
+## **Code Organization**
+
+### **File Structure**
+```
+Views/
+├── Dashboard/
+│   ├── DashboardView.swift
+│   └── Components/
+├── DeviceControl/
+│   ├── DeviceControlView.swift
+│   ├── DeviceDetailView.swift
+│   └── Components/
+Services/
+├── WLEDService.swift
+├── DeviceDiscoveryService.swift
+└── NetworkManager.swift
+Models/
+├── WLEDDevice.swift
+├── WLEDState.swift
+└── Automation.swift
+```
+
+**Remember**: Always validate WLED API responses, handle network failures gracefully, and provide immediate UI feedback for user interactions.

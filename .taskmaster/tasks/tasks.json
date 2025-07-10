@@ -1,0 +1,786 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 8,
+        "title": "Initialize SwiftUI Project and Core Navigation",
+        "description": "Set up the foundational SwiftUI project structure, including navigation, main tabs, and basic transitions to support future features.",
+        "details": "Create a new SwiftUI project targeting iOS 15+. Implement main navigation using TabView for Dashboard, Device Control, Automation, and Wellness Hub. Scaffold basic views for each section. Ensure navigation is modular for future expansion. Integrate basic error handling and offline state placeholders.",
+        "testStrategy": "Run the app on iOS Simulator and physical devices. Verify navigation between tabs and transitions work smoothly. Confirm that placeholder views load without crashes. Test on iOS 15 and above.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design Gradient Color Control UI Component",
+            "description": "Create a user interface component that allows users to define and adjust gradient colors for LED control.",
+            "dependencies": [],
+            "details": "Design should include color pickers, gradient stops, and a visual preview. Ensure responsiveness and accessibility.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Color Interpolation Algorithms",
+            "description": "Develop algorithms to interpolate between selected gradient colors for smooth transitions across LEDs.",
+            "dependencies": [
+              1
+            ],
+            "details": "Support multiple interpolation methods (e.g., linear, cubic) and handle color spaces (RGB, HSV).",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Integrate with WLED API",
+            "description": "Connect the gradient control system to the WLED API for real-time LED updates.",
+            "dependencies": [
+              2
+            ],
+            "details": "Map gradient data to WLED's API format and ensure reliable communication.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Optimize Performance for Real-Time Updates",
+            "description": "Ensure the system can handle real-time updates without lag, even with large LED arrays.",
+            "dependencies": [
+              3
+            ],
+            "details": "Profile and optimize data processing, API calls, and UI rendering.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Individual LED Control",
+            "description": "Allow users to adjust colors for individual LEDs within the gradient system.",
+            "dependencies": [
+              4
+            ],
+            "details": "Provide UI affordances and backend logic for per-LED color overrides.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Handle User Interaction and Feedback",
+            "description": "Manage user actions such as dragging gradient stops, undo/redo, and provide immediate feedback.",
+            "dependencies": [
+              5
+            ],
+            "details": "Implement event handling, state management, and visual cues for user interactions.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Manage Edge Cases and Error Handling",
+            "description": "Address edge cases such as overlapping stops, invalid color values, and API failures.",
+            "dependencies": [
+              6
+            ],
+            "details": "Implement validation, error messages, and fallback behaviors.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 8,
+            "title": "Test and Validate Gradient Control System",
+            "description": "Conduct comprehensive testing of the UI, algorithms, API integration, and performance.",
+            "dependencies": [
+              7
+            ],
+            "details": "Include unit, integration, and user acceptance tests to ensure reliability and usability.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Implement WLED Device Discovery via Bonjour (mDNS)",
+        "description": "Enable automatic discovery of WLED devices on the local network using Apple's Bonjour framework (mDNS).",
+        "details": "Use NetServiceBrowser to scan for WLED devices advertising via mDNS. Parse discovered services to extract device IP, name, and type. Display discovered devices in the Dashboard. Handle device addition and removal in real-time.",
+        "testStrategy": "Connect multiple WLED devices to the same WiFi network. Verify that all devices appear in the app's device list. Test device addition/removal and ensure the UI updates accordingly. Simulate network changes to test robustness.",
+        "priority": "high",
+        "dependencies": [
+          8
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design Core Data Model for Automations and Presets",
+            "description": "Define and implement the Core Data schema to store automations, presets, schedules, and related entities.",
+            "dependencies": [],
+            "details": "Identify entities, attributes, and relationships required to support automations, presets, triggers, and device associations.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Develop UI for Automation and Preset Creation/Editing",
+            "description": "Create user interfaces for creating, editing, and managing automations and presets.",
+            "dependencies": [
+              1
+            ],
+            "details": "Design forms and views for users to define triggers, actions, schedules, and select devices or scenes.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement Scheduling Engine",
+            "description": "Build the engine responsible for evaluating and executing scheduled automations.",
+            "dependencies": [
+              1
+            ],
+            "details": "Handle time-based triggers, recurring schedules, and ensure reliable execution of automation actions.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Integrate Sunrise/Sunset Calculations",
+            "description": "Add logic to calculate sunrise and sunset times for use in automation triggers.",
+            "dependencies": [
+              3
+            ],
+            "details": "Use location data and astronomical algorithms to provide accurate sunrise/sunset times for scheduling.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Integrate WLED API for Device Control",
+            "description": "Implement communication with WLED devices via their API to control lights and apply presets.",
+            "dependencies": [
+              1
+            ],
+            "details": "Develop networking code to send commands, retrieve device states, and handle errors.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Implement Scene and Preset Management",
+            "description": "Enable creation, storage, and application of scenes and presets across devices.",
+            "dependencies": [
+              1,
+              5
+            ],
+            "details": "Allow users to define scenes, save presets, and apply them to one or multiple devices.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Develop Multi-Device Coordination Logic",
+            "description": "Ensure automations can coordinate actions across multiple devices simultaneously.",
+            "dependencies": [
+              5,
+              6
+            ],
+            "details": "Handle synchronization, error handling, and fallback strategies for multi-device actions.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 8,
+            "title": "Implement Background Handling for Automations",
+            "description": "Ensure automations and scheduled actions work reliably when the app is in the background.",
+            "dependencies": [
+              3,
+              7
+            ],
+            "details": "Use background tasks, notifications, and system APIs to maintain automation reliability.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 9,
+            "title": "Testing and Quality Assurance",
+            "description": "Thoroughly test all components, including data model, UI, scheduling, device integration, and background execution.",
+            "dependencies": [
+              2,
+              4,
+              8
+            ],
+            "details": "Write unit, integration, and UI tests; perform manual QA to ensure robustness and usability.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Integrate Basic WLED JSON API for Device Control",
+        "description": "Implement HTTP client to communicate with WLED devices for power, brightness, and solid color control.",
+        "details": "Create a network layer using URLSession for RESTful communication with WLED JSON API. Implement endpoints for power toggle, brightness adjustment, and solid color changes. Map responses to Device model. Handle API errors gracefully.",
+        "testStrategy": "Send API requests to real WLED devices and verify correct state changes. Test error handling by disconnecting devices or sending malformed requests. Confirm UI reflects device state accurately.",
+        "priority": "high",
+        "dependencies": [
+          9
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define Visual Theme",
+            "description": "Establish the overall visual theme, including color palette, typography, iconography, and style guidelines for premium design.",
+            "dependencies": [],
+            "details": "Document theme specifications and ensure alignment with brand identity.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Integrate Design Assets",
+            "description": "Import and organize all necessary visual assets such as icons, images, and illustrations according to the defined theme.",
+            "dependencies": [
+              1
+            ],
+            "details": "Ensure assets are optimized for various screen sizes and resolutions.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement Animations",
+            "description": "Develop and integrate smooth, theme-consistent animations for transitions, interactions, and feedback.",
+            "dependencies": [
+              2
+            ],
+            "details": "Use animation libraries or custom code to achieve desired effects while maintaining performance.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Add Gesture Controls",
+            "description": "Enable gesture-based interactions (e.g., swipes, pinches) that align with the premium design experience.",
+            "dependencies": [
+              3
+            ],
+            "details": "Ensure gestures are intuitive and do not conflict with standard navigation.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Real-Time Visual Feedback",
+            "description": "Provide immediate visual responses to user actions, such as button presses or drag-and-drop, to enhance interactivity.",
+            "dependencies": [
+              4
+            ],
+            "details": "Feedback should be visually consistent with the theme and animations.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Ensure Accessibility Compliance",
+            "description": "Review and adjust visual elements to meet accessibility standards, including color contrast, text size, and screen reader support.",
+            "dependencies": [
+              5
+            ],
+            "details": "Test with accessibility tools and address any issues found.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Conduct Performance Testing",
+            "description": "Test the visual design implementation for smooth performance across devices, optimizing for load times and animation smoothness.",
+            "dependencies": [
+              6
+            ],
+            "details": "Identify and resolve any bottlenecks or rendering issues.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Develop Device State Management with Core Data and Combine",
+        "description": "Persist device information and state locally using Core Data, and update UI reactively with Combine.",
+        "details": "Define Core Data entities for Device, Automation, and Preset as per PRD models. Use Combine publishers to observe and react to state changes. Implement caching of last known device states for offline mode. Ensure data consistency across app restarts.",
+        "testStrategy": "Add, update, and remove devices; verify persistence and real-time UI updates. Test offline mode by disabling WiFi and confirming cached states are shown. Validate data integrity after app relaunch.",
+        "priority": "high",
+        "dependencies": [
+          10
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define Core Data Model for Device, Automation, and Preset",
+            "description": "Design and implement Core Data entities for Device, Automation, and Preset based on PRD models, including attributes and relationships.",
+            "dependencies": [],
+            "details": "Use Xcode's data model editor to create entities matching the PRD specifications. Define attributes (e.g., deviceId, name, state) and set up relationships (e.g., Device has many Automations). Generate NSManagedObject subclasses for each entity.",
+            "status": "done",
+            "testStrategy": "Verify that entities and relationships are correctly created in the .xcdatamodeld file and that objects can be instantiated and saved in a test context."
+          },
+          {
+            "id": 2,
+            "title": "Implement Core Data Stack and Persistence Layer",
+            "description": "Set up the Core Data stack and create a persistence layer to manage CRUD operations for Device, Automation, and Preset entities.",
+            "dependencies": [
+              1
+            ],
+            "details": "Configure NSPersistentContainer, context management, and error handling. Implement repository or service classes to encapsulate fetch, insert, update, and delete operations for each entity.",
+            "status": "done",
+            "testStrategy": "Write unit tests to ensure data can be saved, fetched, updated, and deleted reliably for all entities."
+          },
+          {
+            "id": 3,
+            "title": "Integrate Combine Publishers for Reactive State Updates",
+            "description": "Create Combine publishers that emit updates when device state or related data changes in Core Data, enabling reactive UI updates.",
+            "dependencies": [
+              2
+            ],
+            "details": "Use NSFetchedResultsController or custom Combine publishers to observe changes in the managed object context. Expose these publishers to the UI layer for subscription.",
+            "status": "done",
+            "testStrategy": "Test that changes to Core Data entities trigger publisher emissions and that subscribers receive correct, timely updates."
+          },
+          {
+            "id": 4,
+            "title": "Implement Caching of Last Known Device States for Offline Mode",
+            "description": "Store and retrieve the last known device states to support offline access and ensure state persistence across app restarts.",
+            "dependencies": [
+              2
+            ],
+            "details": "On state changes, persist the latest device states in Core Data. On app launch, load cached states and provide them to the UI and business logic. Handle data migration or schema changes gracefully.",
+            "status": "done",
+            "testStrategy": "Simulate offline scenarios and app restarts to confirm that device states are correctly cached and restored."
+          },
+          {
+            "id": 5,
+            "title": "Ensure Data Consistency and Synchronization Across App Restarts",
+            "description": "Implement mechanisms to maintain data consistency and synchronize state between Core Data and the UI, especially after app restarts.",
+            "dependencies": [
+              3,
+              4
+            ],
+            "details": "Ensure that Combine publishers are re-established on app launch and that the UI reflects the latest persisted state. Handle potential conflicts or stale data by validating and reconciling state as needed.",
+            "status": "done",
+            "testStrategy": "Perform end-to-end tests involving app restarts, state changes, and UI updates to verify consistent behavior and data integrity."
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Build Dashboard with Real-Time Device Overview and Automation Status",
+        "description": "Create the main dashboard displaying daily greetings, device overview cards, and automation status with real-time updates.",
+        "details": "Design a SwiftUI dashboard with a rotating motivational greeting. Display device cards with real-time status (power, brightness, color). Show automation cards with quick toggles. Use WebSocket for live updates from WLED devices. Ensure visual feedback matches device state within 100ms.",
+        "testStrategy": "Verify dashboard loads with correct greeting and device/automation cards. Simulate device state changes and confirm real-time UI updates. Test quick toggles for automations. Measure update latency to ensure <100ms feedback.",
+        "priority": "high",
+        "dependencies": [
+          11
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design SwiftUI Dashboard Layout",
+            "description": "Create the main dashboard layout in SwiftUI, including sections for daily greetings, device overview cards, and automation status cards.",
+            "dependencies": [],
+            "details": "Define the overall structure using SwiftUI views. Reserve space for a rotating greeting at the top, a scrollable list/grid for device cards, and a section for automation status cards with quick toggles. Use placeholder data for now.",
+            "status": "done",
+            "testStrategy": "Verify layout visually in the simulator and ensure all sections are present and responsive."
+          },
+          {
+            "id": 2,
+            "title": "Implement Rotating Motivational Greeting",
+            "description": "Develop a component to display a daily or rotating motivational greeting at the top of the dashboard.",
+            "dependencies": [
+              1
+            ],
+            "details": "Create a SwiftUI view that selects and displays a greeting based on the current day or time. Optionally, animate transitions between greetings. Integrate this component into the dashboard layout.",
+            "status": "done",
+            "testStrategy": "Check that the greeting updates as expected and transitions smoothly."
+          },
+          {
+            "id": 3,
+            "title": "Develop Device Overview Cards with Real-Time State",
+            "description": "Build device overview cards showing power, brightness, and color, updating in real time based on device state.",
+            "dependencies": [
+              1
+            ],
+            "details": "Design reusable SwiftUI cards for each device. Display power status, brightness slider, and color indicator. Prepare bindings for real-time updates. Use mock data initially.",
+            "status": "done",
+            "testStrategy": "Ensure cards display correct data and UI elements respond to state changes."
+          },
+          {
+            "id": 4,
+            "title": "Integrate WebSocket for Real-Time Device Updates",
+            "description": "Set up a WebSocket connection to receive live updates from WLED devices and update the UI within 100ms.",
+            "dependencies": [
+              3
+            ],
+            "details": "Implement a WebSocket client in Swift that subscribes to device state changes. Parse incoming messages and update the corresponding device card states. Ensure UI updates are performed on the main thread and within the required latency.",
+            "status": "done",
+            "testStrategy": "Simulate device state changes and verify UI updates occur within 100ms."
+          },
+          {
+            "id": 5,
+            "title": "Implement Automation Status Cards with Quick Toggles",
+            "description": "Create automation status cards showing current automation states and provide quick toggle controls.",
+            "dependencies": [
+              1
+            ],
+            "details": "Design SwiftUI cards for each automation. Display current status and add toggle buttons for quick enable/disable actions. Connect toggles to backend or mock logic for now. Provide immediate visual feedback on toggle action.",
+            "status": "done",
+            "testStrategy": "Test toggling automations and verify status updates and visual feedback."
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Implement Advanced Device Control with Gradient and Group Features",
+        "description": "Enable detailed device control, including gradient-based color selection, real-time preview, and multi-device grouping.",
+        "details": "Develop a detailed device view with visual gradient bar controls. Calculate intermediate colors for smooth transitions using color interpolation algorithms. Allow users to group devices and apply synchronized settings. Integrate real-time preview using WebSocket. Support product-specific presets and effects.",
+        "testStrategy": "Test gradient controls for smoothness and accuracy. Apply settings to single and grouped devices, verifying synchronized changes. Confirm real-time preview reflects adjustments instantly. Validate preset application per product type.",
+        "priority": "high",
+        "dependencies": [
+          12
+        ],
+        "status": "in-progress",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Develop Device Detail View with Gradient Bar Controls",
+            "description": "Create a detailed device control UI that includes a visual gradient bar for color selection and adjustment.",
+            "dependencies": [],
+            "details": "Design and implement a device detail page/component. Integrate a gradient bar UI element that allows users to select and adjust colors visually. Ensure the UI is responsive and accessible. Use a color picker or custom gradient slider as appropriate.",
+            "status": "pending",
+            "testStrategy": "Verify the UI renders correctly for different devices. Test user interactions with the gradient bar for selecting and adjusting colors."
+          },
+          {
+            "id": 2,
+            "title": "Implement Color Interpolation Algorithms for Smooth Transitions",
+            "description": "Calculate intermediate colors for smooth gradient transitions using color interpolation algorithms.",
+            "dependencies": [
+              1
+            ],
+            "details": "Develop or integrate color interpolation logic (e.g., linear RGB or HSV interpolation) to compute intermediate colors between selected points on the gradient bar. Ensure the algorithm supports smooth and accurate color transitions.",
+            "status": "pending",
+            "testStrategy": "Unit test the interpolation function with various color inputs. Visually inspect the gradient bar for smoothness."
+          },
+          {
+            "id": 3,
+            "title": "Enable Real-Time Preview via WebSocket Integration",
+            "description": "Integrate WebSocket communication to provide real-time preview of color and effect changes on devices.",
+            "dependencies": [
+              2
+            ],
+            "details": "Set up WebSocket connections between the client and backend/device. On color or effect changes, send updates via WebSocket and reflect changes instantly on the device. Handle connection errors and reconnections gracefully.",
+            "status": "pending",
+            "testStrategy": "Test real-time updates by adjusting controls and observing immediate device response. Simulate network interruptions to ensure robust handling."
+          },
+          {
+            "id": 4,
+            "title": "Implement Device Grouping and Synchronized Control",
+            "description": "Allow users to group multiple devices and apply synchronized settings, including gradients and effects.",
+            "dependencies": [
+              3
+            ],
+            "details": "Add UI and backend logic for creating, editing, and managing device groups. When a group is selected, ensure that color, gradient, and effect changes are applied to all devices in the group simultaneously. Update WebSocket logic to support group commands.",
+            "status": "pending",
+            "testStrategy": "Create groups and verify that settings are applied to all grouped devices. Test edge cases such as adding/removing devices from groups."
+          },
+          {
+            "id": 5,
+            "title": "Support Product-Specific Presets and Effects",
+            "description": "Integrate support for device-specific presets and effects, allowing users to quickly apply predefined settings.",
+            "dependencies": [
+              4
+            ],
+            "details": "Fetch and display available presets/effects for each device type. Allow users to select and apply these presets, updating the device(s) in real time. Ensure compatibility with both individual and grouped devices.",
+            "status": "pending",
+            "testStrategy": "Test preset/effect application on various device types and groups. Validate that the correct settings are applied and previewed in real time."
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Create Automation & Preset System with Scheduling and Scene Management",
+        "description": "Develop automation engine for sunrise/sunset routines, custom scenes, and timer-based transitions across devices.",
+        "details": "Implement automation configuration UI for start/end times, gradients, and device selection. Use local notifications and timers to trigger WLED API calls for gradual transitions. Store automations and scenes in Core Data. Enable multi-device coordination for room-wide scenes. Provide overview and quick toggle/edit access.",
+        "testStrategy": "Configure various automations and scenes; verify correct scheduling and execution. Test sunrise/sunset routines for smooth gradient transitions. Simulate app in background and confirm automations trigger reliably. Edit and delete automations, ensuring data consistency.",
+        "priority": "high",
+        "dependencies": [
+          13
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design and Implement Core Data Models for Automations and Scenes",
+            "description": "Create Core Data entities and relationships to represent automations, scenes, device selections, scheduling parameters, and transition gradients.",
+            "dependencies": [],
+            "details": "Define Core Data entities for Automation, Scene, Device, and Transition. Ensure each automation can reference multiple devices and scenes, and store parameters such as start/end times, gradients, and triggers. Implement migration logic if existing data models are present.",
+            "status": "pending",
+            "testStrategy": "Unit test model creation, saving, fetching, and relationship integrity. Validate data persistence and retrieval for complex automations."
+          },
+          {
+            "id": 2,
+            "title": "Develop Automation Configuration UI for Scheduling and Scene Management",
+            "description": "Build user interfaces for creating, editing, and deleting automations and scenes, including selection of devices, scheduling (start/end times, sunrise/sunset), gradients, and scene presets.",
+            "dependencies": [
+              1
+            ],
+            "details": "Use SwiftUI or UIKit to create forms and pickers for automation parameters. Integrate device and scene selection, time pickers, and gradient editors. Ensure UI updates Core Data models and supports validation.",
+            "status": "pending",
+            "testStrategy": "UI tests for creating and editing automations. Verify correct data is saved and displayed. Test edge cases (e.g., overlapping schedules, invalid input)."
+          },
+          {
+            "id": 3,
+            "title": "Implement Automation Engine with Local Notifications and Timers",
+            "description": "Create the backend logic to schedule and trigger automations based on user configuration, using local notifications and timers to initiate WLED API calls for transitions.",
+            "dependencies": [
+              2
+            ],
+            "details": "Set up background tasks and local notifications for scheduled automations. Use system timers to handle gradual transitions. Integrate with WLED API to send commands at appropriate times. Handle sunrise/sunset calculations using location data.",
+            "status": "pending",
+            "testStrategy": "Simulate scheduled events and verify correct API calls are made. Test notification delivery and timer accuracy. Validate sunrise/sunset triggers."
+          },
+          {
+            "id": 4,
+            "title": "Enable Multi-Device Coordination for Room-Wide Scenes and Transitions",
+            "description": "Implement logic to coordinate transitions and scene activations across multiple devices, ensuring synchronized behavior for room-wide effects.",
+            "dependencies": [
+              3
+            ],
+            "details": "Develop orchestration logic to group devices and send synchronized WLED API commands. Handle network latency and device availability. Provide fallback or retry mechanisms for partial failures.",
+            "status": "pending",
+            "testStrategy": "Integration tests with multiple devices. Measure synchronization accuracy and handle device offline scenarios."
+          },
+          {
+            "id": 5,
+            "title": "Create Automation Overview, Quick Toggle, and Edit Access UI",
+            "description": "Develop an overview screen listing all automations and scenes, with quick toggle switches and edit/delete options for user convenience.",
+            "dependencies": [
+              4
+            ],
+            "details": "Design a dashboard-style UI showing automation status, next trigger times, and quick actions. Implement edit and delete flows. Ensure UI reflects real-time automation state and updates responsively.",
+            "status": "pending",
+            "testStrategy": "UI tests for toggling, editing, and deleting automations. Verify state consistency and user feedback for actions."
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "title": "Design and Polish Premium Visual UI/UX",
+        "description": "Apply modern, coastal-inspired design with smooth SwiftUI animations, real-time product images, and gesture-based controls.",
+        "details": "Refine all UI components with minimalist coastal color palette. Integrate product images that reflect real-time device customization. Implement smooth animations for transitions and feedback. Add gesture controls for common actions. Ensure accessibility and performance optimizations.",
+        "testStrategy": "Conduct UI/UX reviews for visual consistency and responsiveness. Test animations and gestures on various devices. Validate accessibility features (VoiceOver, Dynamic Type). Measure app performance and optimize as needed.",
+        "priority": "medium",
+        "dependencies": [
+          14
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Apply Coastal-Inspired Color Palette and Typography",
+            "description": "Redesign all UI components to use a minimalist, coastal-inspired color palette and modern typography for a premium look.",
+            "dependencies": [],
+            "details": "Define a color system based on coastal tones (e.g., soft blues, sandy beiges, whites). Update SwiftUI views to use these colors consistently. Select and apply a modern, readable font family across the app. Ensure color contrast meets accessibility standards.",
+            "status": "pending",
+            "testStrategy": "Review all screens for consistent color and typography. Use accessibility tools to verify color contrast and readability."
+          },
+          {
+            "id": 2,
+            "title": "Integrate Real-Time Product Images for Customization",
+            "description": "Implement dynamic product image rendering that reflects real-time device customization options selected by the user.",
+            "dependencies": [
+              1
+            ],
+            "details": "Set up a data model to represent customizable product attributes. Connect UI controls to update the product image in real time using SwiftUI's reactive bindings. Ensure images are high-resolution and optimized for performance.",
+            "status": "pending",
+            "testStrategy": "Test customization flows to confirm images update instantly and accurately with user selections."
+          },
+          {
+            "id": 3,
+            "title": "Implement Smooth SwiftUI Animations for Transitions and Feedback",
+            "description": "Add smooth, modern animations to UI transitions and user feedback elements to enhance the premium feel.",
+            "dependencies": [
+              2
+            ],
+            "details": "Use SwiftUI's animation APIs to animate navigation transitions, button taps, and state changes. Focus on subtle, fluid motion that aligns with the coastal theme. Profile animations for performance on target devices.",
+            "status": "pending",
+            "testStrategy": "Manually test all animated interactions for smoothness and responsiveness. Use Instruments to check for dropped frames."
+          },
+          {
+            "id": 4,
+            "title": "Add Gesture-Based Controls for Common Actions",
+            "description": "Enable gesture-based interactions (e.g., swipe, pinch, tap) for frequently used actions to improve usability and modern appeal.",
+            "dependencies": [
+              3
+            ],
+            "details": "Identify key actions that benefit from gestures (e.g., swiping to delete, pinching to zoom product images). Implement gestures using SwiftUI's gesture system. Provide visual feedback for gesture recognition.",
+            "status": "pending",
+            "testStrategy": "Test all gesture controls for accuracy and responsiveness. Ensure gestures do not conflict with standard navigation."
+          },
+          {
+            "id": 5,
+            "title": "Optimize UI for Accessibility and Performance",
+            "description": "Ensure the polished UI is accessible to all users and performs smoothly across supported devices.",
+            "dependencies": [
+              4
+            ],
+            "details": "Add accessibility labels, traits, and dynamic type support to all UI elements. Test with VoiceOver and other assistive technologies. Profile the app for memory and CPU usage, optimizing images and animations as needed.",
+            "status": "pending",
+            "testStrategy": "Run accessibility audits and performance profiling. Validate with users using assistive technologies."
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "title": "Develop Wellness Hub: Habit Tracker, Journal, and Productivity Log",
+        "description": "Implement a suite of wellness tools, including habit tracking, daily journaling, productivity logging, and historical views.",
+        "details": "Create Core Data models for Habit, JournalEntry, TodoItem, and ProductivityLog. Build SwiftUI interfaces for tracking habits, writing journal entries, managing to-dos, and rating productivity. Implement historical views for past entries. Ensure data is stored securely and locally.",
+        "testStrategy": "Add, edit, and delete habits, journal entries, and to-dos. Log productivity ratings and review historical data. Test data persistence and retrieval after app restarts. Validate UI for usability and correctness.",
+        "priority": "medium",
+        "dependencies": [
+          15
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design and Implement Core Data Models",
+            "description": "Create Core Data entities and relationships for Habit, JournalEntry, TodoItem, and ProductivityLog to support all wellness hub features.",
+            "dependencies": [],
+            "details": "Define Core Data entities with appropriate attributes (e.g., name, date, status for Habit; content, date for JournalEntry; task details for TodoItem; rating and notes for ProductivityLog). Set up relationships if needed (e.g., linking habits to productivity logs). Ensure models are optimized for local storage and future scalability.",
+            "status": "pending",
+            "testStrategy": "Use unit tests to verify entity creation, attribute correctness, and relationship integrity. Test CRUD operations for each model."
+          },
+          {
+            "id": 2,
+            "title": "Develop Habit Tracker Interface",
+            "description": "Build SwiftUI views for creating, viewing, and updating habits, including daily tracking and completion toggles.",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement a list view of habits with daily checkboxes or toggles. Add functionality to create new habits, mark them as complete/incomplete, and view streaks or completion history. Bind UI to Core Data models for real-time updates.",
+            "status": "pending",
+            "testStrategy": "Perform UI tests to ensure habits can be added, marked complete, and persisted. Validate data sync with Core Data."
+          },
+          {
+            "id": 3,
+            "title": "Implement Journal Entry and Productivity Log Interfaces",
+            "description": "Create SwiftUI screens for writing daily journal entries and logging productivity ratings, with support for editing and saving entries.",
+            "dependencies": [
+              1
+            ],
+            "details": "Design input forms for journal entries (text input, date selection) and productivity logs (rating picker, notes). Ensure entries are saved to Core Data and can be edited or deleted. Provide feedback on successful save operations.",
+            "status": "pending",
+            "testStrategy": "Test entry creation, editing, and deletion. Verify data persistence and UI updates after changes."
+          },
+          {
+            "id": 4,
+            "title": "Build To-Do Management Feature",
+            "description": "Develop SwiftUI interfaces for adding, viewing, updating, and deleting to-do items, integrated with the productivity log if applicable.",
+            "dependencies": [
+              1
+            ],
+            "details": "Create a to-do list view with options to add new tasks, mark them as complete, and remove them. Optionally, allow linking completed to-dos to productivity logs. Ensure all actions update Core Data appropriately.",
+            "status": "pending",
+            "testStrategy": "Run UI and functional tests for to-do CRUD operations. Check for correct data storage and UI consistency."
+          },
+          {
+            "id": 5,
+            "title": "Implement Historical Views and Secure Local Storage",
+            "description": "Develop historical views for habits, journal entries, to-dos, and productivity logs, and ensure all data is stored securely and locally.",
+            "dependencies": [
+              2,
+              3,
+              4
+            ],
+            "details": "Create calendar or list-based historical views for each feature, allowing users to browse past entries. Integrate Core Data fetch requests for historical data. Implement data protection measures (e.g., enabling file protection, using NSPersistentStore with encryption if needed).",
+            "status": "pending",
+            "testStrategy": "Test navigation and data accuracy in historical views. Verify data remains accessible only on the device and is protected according to iOS security best practices."
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "title": "Integrate Apple HomeKit & Siri for Native Smart Home Control",
+        "description": "Bridge WLED devices to Apple HomeKit, enabling control via Home app and Siri voice commands.",
+        "details": "Implement HomeKit Accessory Protocol to expose WLED devices as HomeKit accessories. Map power and brightness controls to HomeKit characteristics. Register Siri intents for key actions (on/off, activate preset). Ensure secure pairing and privacy compliance.",
+        "testStrategy": "Add WLED devices to Home app and verify control functionality. Test Siri commands for supported actions. Validate HomeKit integration for reliability and security. Check for compliance with Apple guidelines.",
+        "priority": "medium",
+        "dependencies": [
+          16
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement HomeKit Accessory Protocol Support for WLED Devices",
+            "description": "Integrate the HomeKit Accessory Protocol (HAP) into the WLED firmware to enable communication with Apple HomeKit.",
+            "dependencies": [],
+            "details": "Research and select a suitable open-source HAP library compatible with the WLED platform (e.g., Arduino-HomeKit-ESP8266/ESP32). Integrate the library into the WLED codebase, ensuring the device can advertise itself as a HomeKit accessory and respond to basic HomeKit discovery requests.",
+            "status": "pending",
+            "testStrategy": "Verify that WLED devices are discoverable in the Apple Home app and can be added as new accessories."
+          },
+          {
+            "id": 2,
+            "title": "Map Power and Brightness Controls to HomeKit Characteristics",
+            "description": "Expose WLED device power (on/off) and brightness controls as HomeKit characteristics for seamless control via HomeKit.",
+            "dependencies": [
+              1
+            ],
+            "details": "Define HomeKit service and characteristic mappings for power (On/Off) and brightness (Lightbulb service, Brightness characteristic). Implement handlers to synchronize HomeKit commands with WLED's internal state and vice versa.",
+            "status": "pending",
+            "testStrategy": "Test toggling power and adjusting brightness from the Home app and confirm correct behavior on the WLED device."
+          },
+          {
+            "id": 3,
+            "title": "Register and Handle Siri Intents for Key Actions",
+            "description": "Enable Siri voice commands for key WLED actions such as turning on/off and activating presets.",
+            "dependencies": [
+              2
+            ],
+            "details": "Ensure HomeKit characteristic updates trigger corresponding WLED actions. Map HomeKit scenes or custom characteristics to WLED presets, allowing users to activate them via Siri. Document supported Siri phrases for users.",
+            "status": "pending",
+            "testStrategy": "Use Siri to issue commands (e.g., 'Turn on the lights', 'Set brightness to 50%', 'Activate preset X') and verify correct device response."
+          },
+          {
+            "id": 4,
+            "title": "Implement Secure Pairing and Privacy Compliance",
+            "description": "Ensure secure pairing of WLED devices with HomeKit and compliance with Apple privacy requirements.",
+            "dependencies": [
+              3
+            ],
+            "details": "Implement HomeKit's secure pairing process, including device authentication and encryption. Store pairing data securely on the device. Review and comply with Apple privacy guidelines, ensuring no sensitive data is exposed or logged unnecessarily.",
+            "status": "pending",
+            "testStrategy": "Attempt pairing from multiple devices, verify secure connection establishment, and check for privacy leaks in logs or network traffic."
+          },
+          {
+            "id": 5,
+            "title": "Conduct End-to-End Integration Testing and Documentation",
+            "description": "Test the complete HomeKit and Siri integration and provide user documentation for setup and usage.",
+            "dependencies": [
+              4
+            ],
+            "details": "Perform comprehensive testing covering all supported HomeKit and Siri features. Document setup steps, supported features, troubleshooting tips, and privacy information for end users.",
+            "status": "pending",
+            "testStrategy": "Follow documentation to set up a new device, test all control paths (Home app, Siri, presets), and validate user experience."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "created": "2025-07-10T06:16:14.534Z",
+      "updated": "2025-07-10T09:17:36.007Z",
+      "description": "Tasks for master context"
+    }
+  }
+}
