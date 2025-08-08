@@ -1,0 +1,278 @@
+{
+  "" : {
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic-Control-master.dia",
+    "emit-module-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic-Control-master-emit-module.d",
+    "emit-module-diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic-Control-master-emit-module.dia",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic-Control-master.swiftdeps"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Aesdetic_ControlApp.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/ContentView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ContentView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Models/Automation.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Automation~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Models/CoreDataEntities.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataEntities~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Models/WLEDAPIModels.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Models/WLEDDevice.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDevice~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/CoreDataManager.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/CoreDataManager~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/ResourceManager.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/ResourceManager~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/WLEDAPIError.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIError~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/WLEDAPIService.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/WLEDConnectionMonitor.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDConnectionMonitor~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/WLEDDiscoveryService.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/WLEDWebSocketManager.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDWebSocketManager~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/ViewModels/AutomationViewModel.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationViewModel~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/ViewModels/DashboardViewModel.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/ViewModels/DeviceControlViewModel.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/ViewModels/WellnessViewModel.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessViewModel~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/AutomationView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/AutomationView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/Components/DeviceCardComponents.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/Components/PlaceholderComponents.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/DashboardView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/DeviceControlView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/DeviceDetailView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/DeviceListView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceListView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/RealTimeSettingsView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/RealTimeSettingsView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/WellnessView.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WellnessView~partial.swiftmodule"
+  },
+  "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "const-values" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftconstvalues",
+    "dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols.d",
+    "diagnostics" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols.dia",
+    "index-unit-output-path" : "/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "swift-dependencies" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftdeps",
+    "swiftmodule" : "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/GeneratedAssetSymbols~partial.swiftmodule"
+  }
+}

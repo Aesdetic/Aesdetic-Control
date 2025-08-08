@@ -286,3 +286,34 @@ Production-ready app with advanced features and exceptional polish.
 - **Bonjour Framework:** Device discovery via mDNS
 - **Core Data:** Local persistence of user settings and automation
 - **Network Framework:** Connection monitoring and health management 
+
+## Native WLED Parity (Backend-first Reference)
+
+This section documents how native WLED exposes discovery and control so our app can match capabilities now (data layer), while reserving UI/UX polish for later.
+
+- Discovery (mDNS/Bonjour): Devices advertise `_wled._tcp.local` with TXT records (name/MAC/etc.). Use Bonjour to list devices; provide manual IP fallback.
+- Control APIs:
+  - HTTP JSON: `GET /json` (returns `state`, `info`, `effects`, `palettes`), `POST /json/state` (batch updates: `on`, `bri`, `seg[col,fx,sx,ix,pal]`, `transition`, `udpn`, `ps`/`pl`).
+  - WebSocket `/ws`: Same schema as HTTP; open only for the focused device (detail screen) to stream/receive live state.
+- Real-time/streams (optional): UDP realtime (21324), DDP/E1.31/Art-Net not required for standard UI.
+- State model highlights:
+  - Power/brightness: `state.on`, `state.bri`, optional `transition`.
+  - Segments: `state.seg[]` with `col`, `fx`, `sx`, `ix`, `pal`.
+  - Presets/playlists: `ps`/`pl` for apply; presets reside on device.
+  - Device sync (UDPN): `udpn.send/recv/sgrp/rgrp` for device-to-device mirroring.
+  - Nightlight: `nl` (on, dur, mode, target bri).
+- Performance practices:
+  - Keep one WebSocket for the focused device; disconnect others.
+  - Debounce slider/rapid changes and batch into single `/json/state` POSTs.
+  - Avoid heavy background timers; pause monitoring during heavy views and use sparse polling when unfocused.
+
+Backend-first Parity Goals (to enable future UI re-skin without rework):
+- Implement mDNS discovery + manual IP fallback.
+- Cache `/json` metadata (effects, palettes, info) per device session.
+- Enforce focused WebSocket policy; sparse polls otherwise.
+- Full segment update model parity.
+- Presets/playlists apply (and minimal listing), with basic save current state.
+- UDPN sync toggles.
+- Nightlight fields support.
+- Debounced/batched control updates.
+- Robust error handling, offline caching, exponential backoff; pause background monitors in heavy views.

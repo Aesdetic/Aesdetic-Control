@@ -1,0 +1,18 @@
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/DeviceDetailView.swift":
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.d"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.swiftdeps"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.o"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.dia"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceDetailView.swiftconstvalues"
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Models/WLEDAPIModels.swift":
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.dia"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.d"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.o"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.swiftdeps"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIModels.swiftconstvalues"
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/WLEDAPIService.swift":
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.swiftconstvalues"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.swiftdeps"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.dia"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.d"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDAPIService.o"

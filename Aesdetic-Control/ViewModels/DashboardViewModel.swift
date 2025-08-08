@@ -70,7 +70,9 @@ class DashboardViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.pauseGreetingTimer()
+            Task { @MainActor in
+                self?.pauseGreetingTimer()
+            }
         }
         
         // Resume greeting timer when app becomes active
@@ -79,7 +81,9 @@ class DashboardViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.resumeGreetingTimer()
+            Task { @MainActor in
+                self?.resumeGreetingTimer()
+            }
         }
     }
     
@@ -122,11 +126,13 @@ class DashboardViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         
-        // Refresh devices
-        await deviceController.refreshAllDevices()
+        // Refresh devices and automations concurrently
+        async let devicesRefresh: Void = deviceController.refreshAllDevices()
+        async let automationsRefresh: Void = automationViewModel.refreshAutomations()
         
-        // Refresh automations
-        await automationViewModel.refreshAutomations()
+        // Wait for both to complete
+        await devicesRefresh
+        await automationsRefresh
         
         updateCurrentGreeting()
         
@@ -217,6 +223,7 @@ private enum TimeOfDay {
 
 // MARK: - Daily Quote Manager
 
+@MainActor
 class DailyQuoteManager: ObservableObject {
     static let shared = DailyQuoteManager()
     

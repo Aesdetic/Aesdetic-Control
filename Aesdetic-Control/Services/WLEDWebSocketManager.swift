@@ -5,7 +5,8 @@ import os.log
 import UIKit // Added for UIApplication notifications
 
 /// Manages WebSocket connections to WLED devices for real-time state updates
-class WLEDWebSocketManager: ObservableObject {
+@MainActor
+class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     static let shared = WLEDWebSocketManager()
     
     // MARK: - Published Properties
@@ -87,7 +88,9 @@ class WLEDWebSocketManager: ObservableObject {
     
     deinit {
         // Ensure all resources are cleaned up
-        disconnectAll()
+        Task { @MainActor [weak self] in
+            self?.disconnectAll()
+        }
         // pathMonitor?.cancel() // This line was removed as pathMonitor is not defined in the original file
         NotificationCenter.default.removeObserver(self)
         
@@ -111,7 +114,9 @@ class WLEDWebSocketManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppDidEnterBackground()
+            Task { @MainActor [weak self] in
+                self?.handleAppDidEnterBackground()
+            }
         }
         
         NotificationCenter.default.addObserver(
@@ -119,7 +124,9 @@ class WLEDWebSocketManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppDidBecomeActive()
+            Task { @MainActor [weak self] in
+                self?.handleAppDidBecomeActive()
+            }
         }
     }
     
@@ -222,6 +229,19 @@ class WLEDWebSocketManager: ObservableObject {
         connectionStatus = .disconnected
         connectionMetrics = ConnectionMetrics()
     }
+
+    /// Disconnect from all devices except one (used to reduce memory/connection load when focusing a single device)
+    func disconnectAll(except keepDeviceId: String) {
+        logger.info("Disconnecting all WebSocket connections except: \(keepDeviceId)")
+        
+        let deviceIds = Array(webSocketTasks.keys)
+        for deviceId in deviceIds where deviceId != keepDeviceId {
+            disconnect(from: deviceId)
+        }
+        
+        updateConnectionStatus()
+        updateConnectionMetrics()
+    }
     
     /// Disconnect devices with low priority to make room for new connections
     func optimizeConnections() {
@@ -268,7 +288,9 @@ class WLEDWebSocketManager: ObservableObject {
             webSocketTask.send(message) { [weak self] error in
                 if let error = error {
                     self?.logger.error("Failed to send WebSocket message: \(error.localizedDescription)")
-                    self?.handleWebSocketError(.sendFailed(error), for: deviceId)
+                    Task { @MainActor in
+                        self?.handleWebSocketError(.sendFailed(error), for: deviceId)
+                    }
                 }
             }
         } catch {
@@ -283,9 +305,10 @@ class WLEDWebSocketManager: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             for device in devices {
                 group.addTask { [weak self] in
+                    guard let self = self else { return }
                     let priority = priorities[device.id] ?? 0
                     await MainActor.run {
-                        self?.connect(to: device, priority: priority)
+                        self.connect(to: device, priority: priority)
                     }
                 }
             }
@@ -297,8 +320,9 @@ class WLEDWebSocketManager: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             for deviceId in deviceIds {
                 group.addTask { [weak self] in
+                    guard let self = self else { return }
                     await MainActor.run {
-                        self?.sendStateUpdate(update, to: deviceId)
+                        self.sendStateUpdate(update, to: deviceId)
                     }
                 }
             }
@@ -308,24 +332,20 @@ class WLEDWebSocketManager: ObservableObject {
     // MARK: - Private Methods
     
     private func updateConnectionMetrics() {
-        DispatchQueue.main.async {
-            self.connectionMetrics.totalConnections = self.deviceConnectionStatuses.count
-            self.connectionMetrics.activeConnections = self.activeConnectionCount
-            self.connectionMetrics.failedConnections = self.deviceConnectionStatuses.values.filter { 
-                $0.lastError != nil 
-            }.count
-            
-            let latencies = self.deviceConnectionStatuses.values.compactMap { $0.latency }
-            self.connectionMetrics.averageLatency = latencies.isEmpty ? 0 : latencies.reduce(0, +) / Double(latencies.count)
-        }
+        connectionMetrics.totalConnections = deviceConnectionStatuses.count
+        connectionMetrics.activeConnections = activeConnectionCount
+        connectionMetrics.failedConnections = deviceConnectionStatuses.values.filter { 
+            $0.lastError != nil 
+        }.count
+        
+        let latencies = deviceConnectionStatuses.values.compactMap { $0.latency }
+        connectionMetrics.averageLatency = latencies.isEmpty ? 0 : latencies.reduce(0, +) / Double(latencies.count)
     }
     
-    private func updateDeviceConnectionStatus(deviceId: String, update: @escaping (inout DeviceConnectionStatus) -> Void) {
-        DispatchQueue.main.async {
-            var status = self.deviceConnectionStatuses[deviceId] ?? DeviceConnectionStatus(deviceId: deviceId)
-            update(&status)
-            self.deviceConnectionStatuses[deviceId] = status
-        }
+    private func updateDeviceConnectionStatus(deviceId: String, update: (inout DeviceConnectionStatus) -> Void) {
+        var status = deviceConnectionStatuses[deviceId] ?? DeviceConnectionStatus(deviceId: deviceId)
+        update(&status)
+        deviceConnectionStatuses[deviceId] = status
     }
     
     private func startConnectionMetricsTimer() {
@@ -334,7 +354,9 @@ class WLEDWebSocketManager: ObservableObject {
                 timer.invalidate()
                 return
             }
-            self.updateConnectionMetrics()
+            Task { @MainActor [weak self] in
+                self?.updateConnectionMetrics()
+            }
         }
     }
     
@@ -347,7 +369,9 @@ class WLEDWebSocketManager: ObservableObject {
                 timer.invalidate()
                 return
             }
-            self.performHealthCheck(for: deviceId)
+            Task { @MainActor [weak self] in
+                self?.performHealthCheck(for: deviceId)
+            }
         }
         connectionHealthTimers[deviceId] = timer
     }
@@ -369,15 +393,19 @@ class WLEDWebSocketManager: ObservableObject {
             
             if let error = error {
                 self.logger.warning("Health check failed for device \(deviceId): \(error.localizedDescription)")
-                self.updateDeviceConnectionStatus(deviceId: deviceId) { status in
-                    status.isHealthy = false
-                    status.latency = nil
+                Task { @MainActor in
+                    self.updateDeviceConnectionStatus(deviceId: deviceId) { status in
+                        status.isHealthy = false
+                        status.latency = nil
+                    }
                 }
             } else {
                 let latency = Date().timeIntervalSince(pingTime)
-                self.updateDeviceConnectionStatus(deviceId: deviceId) { status in
-                    status.isHealthy = true
-                    status.latency = latency
+                Task { @MainActor in
+                    self.updateDeviceConnectionStatus(deviceId: deviceId) { status in
+                        status.isHealthy = true
+                        status.latency = latency
+                    }
                 }
             }
         }
@@ -405,19 +433,27 @@ class WLEDWebSocketManager: ObservableObject {
         task.receive { [weak self] result in
             switch result {
             case .success(let message):
-                self?.handleReceivedMessage(message, from: deviceId)
+                Task { @MainActor in
+                    self?.handleReceivedMessage(message, from: deviceId)
+                }
                 
                 // Update connection health on successful message
-                self?.updateDeviceConnectionStatus(deviceId: deviceId) { status in
-                    status.isHealthy = true
+                Task { @MainActor in
+                    self?.updateDeviceConnectionStatus(deviceId: deviceId) { status in
+                        status.isHealthy = true
+                    }
                 }
                 
                 // Continue listening for more messages
-                self?.receiveMessage(for: deviceId, task: task)
+                Task { @MainActor in
+                    self?.receiveMessage(for: deviceId, task: task)
+                }
                 
             case .failure(let error):
                 self?.logger.error("WebSocket receive error for device \(deviceId): \(error.localizedDescription)")
-                self?.handleWebSocketError(.connectionLost(error), for: deviceId)
+                Task { @MainActor in
+                    self?.handleWebSocketError(.connectionLost(error), for: deviceId)
+                }
             }
         }
     }
@@ -452,9 +488,7 @@ class WLEDWebSocketManager: ObservableObject {
                 timestamp: Date()
             )
             
-            DispatchQueue.main.async {
-                self.deviceStateSubject.send(deviceUpdate)
-            }
+            deviceStateSubject.send(deviceUpdate)
             
             logger.debug("Received state update for device: \(deviceId)")
             
@@ -487,9 +521,7 @@ class WLEDWebSocketManager: ObservableObject {
             status.isHealthy = false
         }
         
-        DispatchQueue.main.async {
-            self.lastError = error
-        }
+        lastError = error
         
         // Attempt reconnection
         attemptReconnection(for: deviceId)
@@ -529,8 +561,10 @@ class WLEDWebSocketManager: ObservableObject {
                 return
             }
             
-            Task { @MainActor in
-                guard let device = await self.findDevice(by: deviceId) else { 
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                
+                guard let device = self.findDevice(by: deviceId) else { 
                     // Clean up if device no longer exists
                     self.reconnectTimers.removeValue(forKey: deviceId)
                     return 
@@ -545,7 +579,6 @@ class WLEDWebSocketManager: ObservableObject {
         updateConnectionMetrics()
     }
     
-    @MainActor
     private func findDevice(by deviceId: String) -> WLEDDevice? {
         // This would typically come from the device manager/view model
         // For now, we'll need to get this from DeviceControlViewModel
@@ -553,24 +586,22 @@ class WLEDWebSocketManager: ObservableObject {
     }
     
     private func updateConnectionStatus() {
-        DispatchQueue.main.async {
-            if self.webSocketTasks.isEmpty {
-                self.connectionStatus = .disconnected
+        if webSocketTasks.isEmpty {
+            connectionStatus = .disconnected
+        } else {
+            let hasConnectedDevices = deviceConnectionStatuses.values.contains { 
+                $0.status == .connected 
+            }
+            let hasReconnectingDevices = deviceConnectionStatuses.values.contains { 
+                $0.status == .reconnecting 
+            }
+            
+            if hasConnectedDevices {
+                connectionStatus = .connected
+            } else if hasReconnectingDevices {
+                connectionStatus = .reconnecting
             } else {
-                let hasConnectedDevices = self.deviceConnectionStatuses.values.contains { 
-                    $0.status == .connected 
-                }
-                let hasReconnectingDevices = self.deviceConnectionStatuses.values.contains { 
-                    $0.status == .reconnecting 
-                }
-                
-                if hasConnectedDevices {
-                    self.connectionStatus = .connected
-                } else if hasReconnectingDevices {
-                    self.connectionStatus = .reconnecting
-                } else {
-                    self.connectionStatus = .connecting
-                }
+                connectionStatus = .connecting
             }
         }
     }

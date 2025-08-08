@@ -121,7 +121,7 @@ struct DashboardView: View {
                 dashboardViewModel.updateCurrentGreeting()
             }
         }
-        .onChange(of: deviceControlViewModel.devices) { _ in
+        .onChange(of: deviceControlViewModel.devices) {
             // Mark for update on next access
             lastDevicesUpdateTime = Date.distantPast
         }
@@ -191,9 +191,7 @@ struct DashboardView: View {
         ScenesAutomationsSection(
             automations: automationViewModel.automations,
             onToggle: { automation in
-                Task {
-                    await automationViewModel.toggleAutomation(automation)
-                }
+                automationViewModel.toggleAutomation(automation)
             }
         )
         .padding(.bottom, 20)

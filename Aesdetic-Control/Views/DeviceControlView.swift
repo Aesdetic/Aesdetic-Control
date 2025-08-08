@@ -27,7 +27,7 @@ struct DeviceControlView: View {
                     // Main Content
                     if viewModel.devices.isEmpty && !viewModel.isScanning {
                         EmptyStateView(
-                            onScan: { Task { await viewModel.startScanning() } },
+                            onScan: { Task { viewModel.startScanning() } },
                             onAddDevice: { showAddDevice = true }
                         )
                     } else {
@@ -54,7 +54,10 @@ struct DeviceControlView: View {
                                 .transition(.opacity)
                             }
                             
-                            DeviceListView(viewModel: viewModel)
+                            DeviceListView(viewModel: viewModel) { tapped in
+                                selectedDevice = tapped
+                                showDeviceDetail = true
+                            }
                         }
                     }
                     
@@ -87,6 +90,10 @@ struct DeviceControlView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            // Periodically optimize active connections to reduce memory/network footprint
+            viewModel.optimizeWebSocketConnections()
+        }
         .sheet(isPresented: $showAddDevice) {
             AddDeviceSheet(viewModel: viewModel)
         }
@@ -393,7 +400,7 @@ struct AddDeviceSheet: View {
                             Button("Start Comprehensive Scan") {
                                 Task {
                                     isScanning = true
-                                    await viewModel.startScanning()
+                                    viewModel.startScanning()
                                 }
                             }
                             .buttonStyle(PrimaryButtonStyle())
@@ -495,38 +502,6 @@ struct AddDeviceSheet: View {
         .preferredColorScheme(.dark)
     }
 }
-
-// MARK: - Device Detail View (Placeholder for now)
-
-struct DeviceDetailView: View {
-    let device: WLEDDevice
-    let viewModel: DeviceControlViewModel
-    let onDismiss: () -> Void
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            VStack {
-                Text("Device Detail View")
-                    .font(.title)
-                    .foregroundColor(.white)
-                
-                Text("Coming Soon...")
-                    .font(.body)
-                    .foregroundColor(.gray)
-                
-                Button("Close") {
-                    onDismiss()
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .padding(.top, 32)
-            }
-        }
-        .preferredColorScheme(.dark)
-    }
-}
-
 #Preview {
     DeviceControlView()
 } 

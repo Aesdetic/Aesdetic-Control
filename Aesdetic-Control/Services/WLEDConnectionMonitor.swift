@@ -55,6 +55,7 @@ class WLEDConnectionMonitor: ObservableObject {
     private var monitorQueue = DispatchQueue(label: "WLEDConnectionMonitor.networkQueue")
     private var healthCheckTimer: Timer?
     private var quickCheckTimer: Timer?
+    private var isPaused: Bool = false
     
     // Reconnection tracking
     private var reconnectionAttempts: [String: Int] = [:]
@@ -179,6 +180,7 @@ class WLEDConnectionMonitor: ObservableObject {
     // MARK: - Health Check System
     
     private func startHealthChecks() {
+        guard !isPaused else { return }
         // Regular health checks every 30 seconds
         healthCheckTimer = Timer.scheduledTimer(withTimeInterval: healthCheckInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -192,6 +194,21 @@ class WLEDConnectionMonitor: ObservableObject {
                 await self?.performQuickChecks()
             }
         }
+    }
+
+    // MARK: - Pause/Resume Monitoring
+    func pauseMonitoring() {
+        isPaused = true
+        healthCheckTimer?.invalidate()
+        quickCheckTimer?.invalidate()
+        healthCheckTimer = nil
+        quickCheckTimer = nil
+    }
+    
+    func resumeMonitoring() {
+        guard isPaused else { return }
+        isPaused = false
+        startHealthChecks()
     }
     
     private func performHealthChecks() async {

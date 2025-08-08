@@ -37,7 +37,7 @@ struct ContentView: View {
             // Auto-start discovery when app launches if no devices exist
             Task {
                 if deviceViewModel.devices.isEmpty {
-                    await deviceViewModel.startScanning()
+                    deviceViewModel.startScanning()
                 }
             }
         }

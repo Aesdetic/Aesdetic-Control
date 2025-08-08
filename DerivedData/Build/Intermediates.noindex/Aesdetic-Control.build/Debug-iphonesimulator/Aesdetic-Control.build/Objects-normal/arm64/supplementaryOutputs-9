@@ -1,0 +1,18 @@
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Aesdetic_ControlApp.swift":
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.o"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.dia"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.swiftdeps"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.d"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/Aesdetic_ControlApp.swiftconstvalues"
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/ViewModels/DeviceControlViewModel.swift":
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.swiftconstvalues"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.dia"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.d"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.o"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceControlViewModel.swiftdeps"
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/ViewModels/DashboardViewModel.swift":
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.swiftconstvalues"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.d"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.dia"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.o"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DashboardViewModel.swiftdeps"

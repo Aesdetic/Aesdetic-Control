@@ -30,21 +30,24 @@ struct WLEDDevice: Identifiable, Hashable {
             return state?.isOn ?? false
         }
         set {
-            // Update the state if it exists, otherwise create a new one
-            if var currentState = state {
-                currentState = WLEDState(
+            if let currentState = state {
+                // Create new WLEDState with all fields properly copied
+                state = WLEDState(
                     brightness: currentState.brightness,
                     isOn: newValue,
-                    segments: currentState.segments
+                    segments: currentState.segments,
+                    transition: currentState.transition,
+                    preset: currentState.preset,
+                    playlist: currentState.playlist,
+                    nightLight: currentState.nightLight,
+                    udpSync: currentState.udpSync,
+                    liveDataOverride: currentState.liveDataOverride,
+                    mainSegment: currentState.mainSegment,
+                    lorMode: currentState.lorMode
                 )
-                state = currentState
             } else {
-                // Create a basic state if none exists
-                state = WLEDState(
-                    brightness: brightness,
-                    isOn: newValue,
-                    segments: []
-                )
+                // Create basic state with new initializer
+                state = WLEDState(brightness: brightness, isOn: newValue, segments: [])
             }
         }
     }
@@ -87,6 +90,9 @@ struct WLEDDevice: Identifiable, Hashable {
 struct WLEDResponse: Codable {
     let info: Info
     let state: WLEDState
+    // Optional metadata arrays provided by /json for UI population
+    let effects: [String]?
+    let palettes: [String]?
 }
 
 struct Info: Codable {
@@ -104,12 +110,67 @@ struct WLEDState: Codable {
     let brightness: Int
     let isOn: Bool
     let segments: [Segment]
+    
+    // Additional WLED API fields for robust integration
+    let transition: Int?          // Transition time in deciseconds (0.1s units)
+    let preset: Int?              // Preset ID (-1 = no preset)
+    let playlist: Int?            // Playlist ID (-1 = no playlist)
+    let nightLight: NightLight?   // Night light settings
+    let udpSync: UDPSync?        // UDP sync settings
+    let liveDataOverride: Int?    // Live data override
+    let mainSegment: Int?         // Main segment ID
+    let lorMode: Int?            // Live data override mode
 
     enum CodingKeys: String, CodingKey {
         case brightness = "bri"
         case isOn = "on"
         case segments = "seg"
+        case transition = "transition"
+        case preset = "ps"
+        case playlist = "pl"
+        case nightLight = "nl"
+        case udpSync = "udpn"
+        case liveDataOverride = "lor"
+        case mainSegment = "mainseg"
+        case lorMode = "lormode"
     }
+    
+    // Convenience initializer for basic state
+    init(brightness: Int, isOn: Bool, segments: [Segment] = [], 
+         transition: Int? = nil, preset: Int? = nil, playlist: Int? = nil,
+         nightLight: NightLight? = nil, udpSync: UDPSync? = nil,
+         liveDataOverride: Int? = nil, mainSegment: Int? = nil, lorMode: Int? = nil) {
+        self.brightness = brightness
+        self.isOn = isOn
+        self.segments = segments
+        self.transition = transition
+        self.preset = preset
+        self.playlist = playlist
+        self.nightLight = nightLight
+        self.udpSync = udpSync
+        self.liveDataOverride = liveDataOverride
+        self.mainSegment = mainSegment
+        self.lorMode = lorMode
+    }
+}
+
+// MARK: - Additional WLED API Models
+
+/// Night light configuration
+struct NightLight: Codable {
+    let on: Bool?           // Night light active
+    let dur: Int?           // Duration in minutes
+    let mode: Int?          // Fade mode (0=instant, 1=fade, 2=color fade, 3=sunrise)
+    let tbri: Int?          // Target brightness
+    let rem: Int?           // Remaining time in seconds
+}
+
+/// UDP sync configuration
+struct UDPSync: Codable {
+    let send: Bool?         // Send UDP sync packets
+    let recv: Bool?         // Receive UDP sync packets
+    let sgrp: Int?          // Sync groups bitmask
+    let rgrp: Int?          // Receive groups bitmask
 }
 
 struct Segment: Codable {

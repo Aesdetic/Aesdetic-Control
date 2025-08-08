@@ -365,10 +365,34 @@ struct ColorGradient: Codable {
     var endColor: Color
     var intermediateColors: [Color]
     
+    enum CodingKeys: String, CodingKey {
+        case startColor
+        case endColor
+        case intermediateColors
+    }
+    
     init(startColor: Color, endColor: Color, intermediateColors: [Color] = []) {
         self.startColor = startColor
         self.endColor = endColor
         self.intermediateColors = intermediateColors
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let startColorHex = try container.decode(String.self, forKey: .startColor)
+        let endColorHex = try container.decode(String.self, forKey: .endColor)
+        let intermediateHexes = try container.decode([String].self, forKey: .intermediateColors)
+        
+        self.startColor = Color(hex: startColorHex)
+        self.endColor = Color(hex: endColorHex)
+        self.intermediateColors = intermediateHexes.map { Color(hex: $0) }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(startColor.toHex(), forKey: .startColor)
+        try container.encode(endColor.toHex(), forKey: .endColor)
+        try container.encode(intermediateColors.map { $0.toHex() }, forKey: .intermediateColors)
     }
     
     var allColors: [Color] {

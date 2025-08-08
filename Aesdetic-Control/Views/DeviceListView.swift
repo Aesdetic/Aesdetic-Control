@@ -9,6 +9,8 @@ import SwiftUI
 
 struct DeviceListView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
+    // Callback to open the advanced detail view
+    var onDeviceTap: (WLEDDevice) -> Void = { _ in }
     @State private var showFilterMenu = false
     @State private var showBatchControls = false
     
@@ -30,8 +32,7 @@ struct DeviceListView: View {
                                 device: device,
                                 viewModel: viewModel
                             ) {
-                                // Handle card tap - could open device details
-                                print("Device tapped: \(device.name)")
+                                onDeviceTap(device)
                             }
                             .id(device.id)
                         }

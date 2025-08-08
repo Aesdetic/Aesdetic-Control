@@ -1,0 +1,18 @@
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/Components/PlaceholderComponents.swift":
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.o"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.swiftdeps"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.swiftconstvalues"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.d"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/PlaceholderComponents.dia"
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/Components/DeviceCardComponents.swift":
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.dia"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.swiftdeps"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.o"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.swiftconstvalues"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/DeviceCardComponents.d"
+"/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Services/WLEDDiscoveryService.swift":
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.d"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.swiftconstvalues"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.swiftdeps"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.o"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Aesdetic-Control.build/Debug-iphonesimulator/Aesdetic-Control.build/Objects-normal/arm64/WLEDDiscoveryService.dia"

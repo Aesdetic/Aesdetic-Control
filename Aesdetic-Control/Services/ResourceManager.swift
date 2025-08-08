@@ -63,7 +63,9 @@ class ResourceManager: ObservableObject {
             
             // Trigger cleanup if memory usage is high
             if usage > 80.0 { // 80% threshold
-                self.performMemoryCleanup()
+                Task { @MainActor in
+                    self.performMemoryCleanup()
+                }
             }
         }
     }
@@ -158,7 +160,9 @@ class ResourceManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppWillEnterForeground()
+            Task { @MainActor in
+                self?.handleAppWillEnterForeground()
+            }
         }
         
         NotificationCenter.default.addObserver(
@@ -182,7 +186,7 @@ class ResourceManager: ObservableObject {
         performBackgroundCleanup()
     }
     
-    private func handleAppWillEnterForeground() {
+    @MainActor private func handleAppWillEnterForeground() {
         print("📱 App entering foreground - Resuming operations")
         
         // Resume operations
@@ -192,7 +196,9 @@ class ResourceManager: ObservableObject {
         
         // Check if cleanup is needed after background time
         if memoryUsage > 60.0 {
-            performMemoryCleanup()
+            Task { @MainActor in
+                performMemoryCleanup()
+            }
         }
     }
     
@@ -211,23 +217,21 @@ class ResourceManager: ObservableObject {
         cleanupHandlers.removeValue(forKey: identifier)
     }
     
-    private func performMemoryCleanup() {
+    @MainActor private func performMemoryCleanup() {
         print("🧹 Performing memory cleanup")
         
         // Core Data cleanup
         CoreDataManager.shared.clearMemoryCache()
         
         // API cache cleanup
-        if let apiService = WLEDAPIService.shared as? any CleanupCapable {
-            apiService.clearCache()
-        }
+        WLEDAPIService.shared.clearCache()
         
         // WebSocket cleanup
         WLEDWebSocketManager.shared.cleanupInactiveConnections()
         
         // Run registered cleanup handlers
         for (identifier, handler) in cleanupHandlers {
-            print("Running cleanup handler: \\(identifier)")
+            print("Running cleanup handler: \(identifier)")
             handler()
         }
         
@@ -244,7 +248,9 @@ class ResourceManager: ObservableObject {
         print("🚨 Emergency cleanup - Freeing maximum memory")
         
         // Aggressive memory cleanup
-        performMemoryCleanup()
+        Task { @MainActor in
+            performMemoryCleanup()
+        }
         
         // Additional emergency measures
         CoreDataManager.shared.backgroundContext.reset()
@@ -258,7 +264,9 @@ class ResourceManager: ObservableObject {
     
     private func performBackgroundCleanup() {
         // Lightweight cleanup for background state
-        performMemoryCleanup()
+        Task { @MainActor in
+            performMemoryCleanup()
+        }
         
         // Reduce memory footprint
         CoreDataManager.shared.clearMemoryCache()
@@ -268,7 +276,9 @@ class ResourceManager: ObservableObject {
         print("⚡ Optimizing performance")
         
         // Cache optimization
-        performMemoryCleanup()
+        Task { @MainActor in
+            performMemoryCleanup()
+        }
         
         // Reduce update frequencies temporarily
         NotificationCenter.default.post(name: .performanceOptimizationRequested, object: nil)
@@ -280,7 +290,9 @@ class ResourceManager: ObservableObject {
         performanceTimer?.invalidate()
         
         // Final memory cleanup
-        performMemoryCleanup()
+        Task { @MainActor in
+            performMemoryCleanup()
+        }
         
         // Save any pending data
         Task {
@@ -313,7 +325,9 @@ class ResourceManager: ObservableObject {
     // MARK: - Public Interface
     
     func forceCleanup() {
-        performMemoryCleanup()
+        Task { @MainActor in
+            performMemoryCleanup()
+        }
     }
     
     func getResourceReport() -> (memoryUsage: Double, cacheSize: Int, isOptimized: Bool) {

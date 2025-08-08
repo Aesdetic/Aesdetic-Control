@@ -19,15 +19,54 @@ struct WLEDStateUpdate: Codable {
     let bri: Int?
     /// Array of segment updates
     let seg: [SegmentUpdate]?
-    /// Transition time in milliseconds
+    /// Transition time in deciseconds (0.1s units)
     let transition: Int?
+    /// Preset ID to apply (-1 = no preset)
+    let ps: Int?
+    /// Playlist ID to apply (-1 = no playlist)  
+    let pl: Int?
+    /// Night light settings
+    let nl: NightLightUpdate?
+    /// UDP sync settings
+    let udpn: UDPSyncUpdate?
+    /// Live data override
+    let lor: Int?
+    /// Main segment ID
+    let mainseg: Int?
+    /// Live data override mode
+    let lormode: Int?
     
-    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, transition: Int? = nil) {
+    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, transition: Int? = nil, 
+         ps: Int? = nil, pl: Int? = nil, nl: NightLightUpdate? = nil, udpn: UDPSyncUpdate? = nil,
+         lor: Int? = nil, mainseg: Int? = nil, lormode: Int? = nil) {
         self.on = on
         self.bri = bri
         self.seg = seg
         self.transition = transition
+        self.ps = ps
+        self.pl = pl
+        self.nl = nl
+        self.udpn = udpn
+        self.lor = lor
+        self.mainseg = mainseg
+        self.lormode = lormode
     }
+}
+
+/// Model for updating night light settings
+struct NightLightUpdate: Codable {
+    let on: Bool?           // Enable/disable night light
+    let dur: Int?           // Duration in minutes
+    let mode: Int?          // Fade mode (0=instant, 1=fade, 2=color fade, 3=sunrise)
+    let tbri: Int?          // Target brightness
+}
+
+/// Model for updating UDP sync settings
+struct UDPSyncUpdate: Codable {
+    let send: Bool?         // Send UDP sync packets
+    let recv: Bool?         // Receive UDP sync packets
+    let sgrp: Int?          // Sync groups bitmask
+    let rgrp: Int?          // Receive groups bitmask
 }
 
 /// Model for updating specific WLED segments

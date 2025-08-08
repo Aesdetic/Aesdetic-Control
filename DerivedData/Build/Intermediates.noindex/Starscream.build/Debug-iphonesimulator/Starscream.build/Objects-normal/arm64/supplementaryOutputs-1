@@ -1,0 +1,18 @@
+"/Users/ryan/Documents/Aesdetic-Control/DerivedData/SourcePackages/checkouts/Starscream/Sources/Compression/Compression.swift":
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/Compression.d"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/Compression.swiftdeps"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/Compression.swiftconstvalues"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/Compression.dia"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/Compression.o"
+"/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/DerivedSources/resource_bundle_accessor.swift":
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/resource_bundle_accessor.swiftconstvalues"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/resource_bundle_accessor.swiftdeps"
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/resource_bundle_accessor.dia"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/resource_bundle_accessor.d"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/resource_bundle_accessor.o"
+"/Users/ryan/Documents/Aesdetic-Control/DerivedData/SourcePackages/checkouts/Starscream/Sources/Compression/WSCompression.swift":
+  diagnostics: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/WSCompression.dia"
+  dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/WSCompression.d"
+  object: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/WSCompression.o"
+  const-values: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/WSCompression.swiftconstvalues"
+  swift-dependencies: "/Users/ryan/Documents/Aesdetic-Control/DerivedData/Build/Intermediates.noindex/Starscream.build/Debug-iphonesimulator/Starscream.build/Objects-normal/arm64/WSCompression.swiftdeps"

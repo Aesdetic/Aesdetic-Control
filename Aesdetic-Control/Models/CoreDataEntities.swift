@@ -1,6 +1,7 @@
 import Foundation
 import CoreData
 import SwiftUI
+import CoreLocation
 
 // MARK: - WLEDDeviceEntity
 @objc(WLEDDeviceEntity)
@@ -57,7 +58,15 @@ extension WLEDDeviceEntity {
         self.currentColorHex = device.currentColor.toHex()
         self.productType = device.productType.rawValue
         self.location = device.location.rawValue
+        
         self.lastSeen = device.lastSeen
+        
+        // Handle state update
+        let stateEntity = self.state ?? WLEDStateEntity(context: self.managedObjectContext!)
+        if let deviceState = device.state {
+            stateEntity.update(from: deviceState)
+        }
+        self.state = stateEntity
     }
     
     /// Convert entity to WLEDDevice
@@ -188,53 +197,88 @@ extension WLEDStateEntity {
 // MARK: - Conversion Extensions
 extension WLEDDevice {
     init?(from entity: WLEDDeviceEntity) {
-        self.init(
-            id: entity.id,
-            name: entity.name,
-            ipAddress: entity.ipAddress,
-            isOnline: entity.isOnline,
-            brightness: entity.brightnessInt,
-            currentColor: entity.currentColor,
-            productType: entity.productTypeEnum,
-            location: entity.locationEnum,
-            lastSeen: entity.lastSeen,
-            state: entity.state?.toWLEDState()
-        )
+        self.id = entity.id
+        self.name = entity.name
+        self.ipAddress = entity.ipAddress
+        self.isOnline = entity.isOnline
+        self.brightness = Int(entity.brightness)
+        self.currentColor = Color(hex: entity.currentColorHex)
+        self.productType = ProductType(rawValue: entity.productType) ?? .generic
+        self.location = DeviceLocation(rawValue: entity.location) ?? .all
+        self.lastSeen = entity.lastSeen
+        self.state = entity.state?.toWLEDState()
     }
 }
 
 extension WLEDStateEntity {
     func toWLEDState() -> WLEDState {
         let segments = segmentsArray.compactMap { $0.toSegment() }
+        
         return WLEDState(
-            brightness: brightnessInt,
-            isOn: isOn,
+            brightness: self.brightnessInt,
+            isOn: self.isOn,
             segments: segments
         )
+    }
+    
+    func update(from state: WLEDState) {
+        self.isOn = state.isOn
+        self.brightness = Int16(state.brightness)
+        
+        // Update segments
+        // Remove existing segments
+        if let existingSegments = self.segments as? Set<WLEDSegmentEntity> {
+            self.removeFromSegments(NSSet(set: existingSegments))
+        }
+        
+        // Add new segments
+        let newSegmentEntities = state.segments.map { segment -> WLEDSegmentEntity in
+            let entity = WLEDSegmentEntity(context: self.managedObjectContext!)
+            entity.update(from: segment)
+            return entity
+        }
+        self.addToSegments(NSSet(array: newSegmentEntities))
     }
 }
 
 extension WLEDSegmentEntity {
     func toSegment() -> Segment {
         return Segment(
-            id: segmentIdInt,
-            start: startInt,
-            stop: stopInt,
-            len: lengthInt,
-            grp: nil,
-            spc: nil,
-            ofs: nil,
-            on: isOn,
-            bri: brightnessInt,
-            colors: colors,
-            fx: effectInt,
-            sx: speedInt,
-            ix: intensityInt,
-            pal: paletteInt,
-            sel: isSelected,
-            rev: isReversed,
-            mi: isMirrored,
-            cln: nil
+            id: self.segmentIdInt,
+            start: self.startInt,
+            stop: self.stopInt,
+            len: self.lengthInt,
+            grp: nil, // Not persisted
+            spc: nil, // Not persisted
+            ofs: nil, // Not persisted
+            on: self.isOn,
+            bri: self.brightnessInt,
+            colors: self.colors,
+            fx: self.effectInt,
+            sx: self.speedInt,
+            ix: self.intensityInt,
+            pal: self.paletteInt,
+            sel: self.isSelected,
+            rev: self.isReversed,
+            mi: self.isMirrored,
+            cln: nil // Not persisted
         )
+    }
+
+    func update(from segment: Segment) {
+        self.segmentId = Int16(segment.id ?? 0)
+        self.start = Int16(segment.start ?? 0)
+        self.stop = Int16(segment.stop ?? 0)
+        self.length = Int16(segment.len ?? 0)
+        self.isOn = segment.on ?? true
+        self.brightness = Int16(segment.bri ?? 255)
+        self.effect = Int16(segment.fx ?? 0)
+        self.speed = Int16(segment.sx ?? 128)
+        self.intensity = Int16(segment.ix ?? 128)
+        self.palette = Int16(segment.pal ?? 0)
+        self.isSelected = segment.sel ?? false
+        self.isReversed = segment.rev ?? false
+        self.isMirrored = segment.mi ?? false
+        self.colors = segment.colors
     }
 } 

@@ -165,13 +165,8 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         netServiceBrowser = NetServiceBrowser()
         netServiceBrowser?.delegate = self
         
-        // Search for WLED devices using common service types
-        let serviceTypes = [
-            "_http._tcp.",      // HTTP services
-            "_wled._tcp.",      // WLED specific service
-            "_arduino._tcp.",   // Arduino devices
-            "_esp32._tcp."      // ESP32 devices
-        ]
+        // Focus search on native WLED service type first
+        let serviceTypes = ["_wled._tcp."]
         
         let discoveryGroup = DispatchGroup()
         
@@ -548,20 +543,23 @@ extension WLEDDiscoveryService: NetServiceDelegate {
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard let addresses = sender.addresses else { return }
         
+        // Attempt to parse TXT records for metadata
+        if let txtData = sender.txtRecordData(),
+           let dict = NetService.dictionary(fromTXTRecord: txtData) as? [String: Data] {
+            // Common TXT keys include "mac", "name"; not strictly required
+            if let macData = dict["mac"], let mac = String(data: macData, encoding: .utf8) {
+                logger.info("📝 TXT mac: \(mac)")
+            }
+        }
+
         for address in addresses {
             let ip = getIPString(from: address)
             if !ip.isEmpty && ip.contains(".") {
                 logger.info("🔍 Resolved mDNS service \(sender.name) to IP: \(ip)")
                 
-                // Check if this could be a WLED device
-                let name = sender.name.lowercased()
-                let type = sender.type.lowercased()
-                
-                if name.contains("wled") || name.contains("led") || name.contains("light") || 
-                   type.contains("wled") || name.contains("esp") || name.contains("arduino") {
-                    checkWLEDDevice(at: ip) { result in
-                        self.handleDeviceCheckResult(result, source: "mDNS")
-                    }
+                // For _wled._tcp specifically, directly verify via /json
+                checkWLEDDevice(at: ip) { result in
+                    self.handleDeviceCheckResult(result, source: "mDNS")
                 }
             }
         }

@@ -1,0 +1,24 @@
+{
+  "source": "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/DashboardView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Scenes & Automations",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 272
+        }
+      },
+      {
+        "comment": "",
+        "key": "Devices",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 356
+        }
+      }
+    ]
+  },
+  "version": 1
+}

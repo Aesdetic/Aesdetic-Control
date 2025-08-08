@@ -453,56 +453,159 @@
         "subtasks": [
           {
             "id": 1,
-            "title": "Develop Device Detail View with Gradient Bar Controls",
-            "description": "Create a detailed device control UI that includes a visual gradient bar for color selection and adjustment.",
-            "dependencies": [],
-            "details": "Design and implement a device detail page/component. Integrate a gradient bar UI element that allows users to select and adjust colors visually. Ensure the UI is responsive and accessible. Use a color picker or custom gradient slider as appropriate.",
+            "title": "Enable Device Card Navigation to Detail View",
+            "description": "Modify device card tap to navigate to a detailed device control view while preserving existing button functionality.",
+            "details": "",
             "status": "pending",
-            "testStrategy": "Verify the UI renders correctly for different devices. Test user interactions with the gradient bar for selecting and adjusting colors."
+            "dependencies": [],
+            "parentTaskId": 13
           },
           {
             "id": 2,
-            "title": "Implement Color Interpolation Algorithms for Smooth Transitions",
-            "description": "Calculate intermediate colors for smooth gradient transitions using color interpolation algorithms.",
-            "dependencies": [
-              1
-            ],
-            "details": "Develop or integrate color interpolation logic (e.g., linear RGB or HSV interpolation) to compute intermediate colors between selected points on the gradient bar. Ensure the algorithm supports smooth and accurate color transitions.",
+            "title": "Create Advanced Device Detail View Structure",
+            "description": "Build the main `DeviceDetailView` with proper layout, navigation, and matching dark theme design system.",
+            "details": "",
             "status": "pending",
-            "testStrategy": "Unit test the interpolation function with various color inputs. Visually inspect the gradient bar for smoothness."
+            "dependencies": [
+              "13.1"
+            ],
+            "parentTaskId": 13
           },
           {
             "id": 3,
-            "title": "Enable Real-Time Preview via WebSocket Integration",
-            "description": "Integrate WebSocket communication to provide real-time preview of color and effect changes on devices.",
-            "dependencies": [
-              2
-            ],
-            "details": "Set up WebSocket connections between the client and backend/device. On color or effect changes, send updates via WebSocket and reflect changes instantly on the device. Handle connection errors and reconnections gracefully.",
+            "title": "Implement Device Information Header & Settings",
+            "description": "Add device info header (name, IP, online state) and actions (real-time connect, reconnect, metrics) in dark theme.",
+            "details": "",
             "status": "pending",
-            "testStrategy": "Test real-time updates by adjusting controls and observing immediate device response. Simulate network interruptions to ensure robust handling."
+            "dependencies": [
+              "13.2"
+            ],
+            "parentTaskId": 13
           },
           {
             "id": 4,
-            "title": "Implement Device Grouping and Synchronized Control",
-            "description": "Allow users to group multiple devices and apply synchronized settings, including gradients and effects.",
-            "dependencies": [
-              3
-            ],
-            "details": "Add UI and backend logic for creating, editing, and managing device groups. When a group is selected, ensure that color, gradient, and effect changes are applied to all devices in the group simultaneously. Update WebSocket logic to support group commands.",
+            "title": "Add Color Controls: Solid & Gradient Bar (with Image Sampling)",
+            "description": "Implement solid color picker with quick chips and a two-stop gradient bar with optional image sampling and Apply.",
+            "details": "",
             "status": "pending",
-            "testStrategy": "Create groups and verify that settings are applied to all grouped devices. Test edge cases such as adding/removing devices from groups."
+            "dependencies": [
+              "13.3"
+            ],
+            "parentTaskId": 13
           },
           {
             "id": 5,
-            "title": "Support Product-Specific Presets and Effects",
-            "description": "Integrate support for device-specific presets and effects, allowing users to quickly apply predefined settings.",
-            "dependencies": [
-              4
-            ],
-            "details": "Fetch and display available presets/effects for each device type. Allow users to select and apply these presets, updating the device(s) in real time. Ensure compatibility with both individual and grouped devices.",
+            "title": "Integrate Effects Selection & Parameters",
+            "description": "Add effects picker (subset) with speed/intensity sliders and Apply using WLED API.",
+            "details": "",
             "status": "pending",
-            "testStrategy": "Test preset/effect application on various device types and groups. Validate that the correct settings are applied and previewed in real time."
+            "dependencies": [
+              "13.4"
+            ],
+            "parentTaskId": 13
+          },
+          {
+            "id": 6,
+            "title": "Add Device Sync Controls (UDP)",
+            "description": "Provide UDP send/recv toggles and group steppers; wire to state update.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [
+              "13.5"
+            ],
+            "parentTaskId": 13
+          },
+          {
+            "id": 7,
+            "title": "Presets: Quick Apply & Save Flow",
+            "description": "Add quick preset chips for apply and a basic save current state flow (UI only for now).",
+            "details": "",
+            "status": "pending",
+            "dependencies": [
+              "13.6"
+            ],
+            "parentTaskId": 13
+          },
+          {
+            "id": 8,
+            "title": "13.8 mDNS Discovery Parity (+ manual IP fallback)",
+            "description": "Implement Bonjour scan for `_wled._tcp` with TXT parsing; provide manual IP add; unify into device store.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 9,
+            "title": "13.9 Cache /json metadata (effects, palettes, info)",
+            "description": "On first open of device detail, GET /json and cache effects/palettes/info per device session; reuse to populate pickers.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 10,
+            "title": "13.10 Focused WebSocket policy",
+            "description": "Open /ws only for the focused device (detail screen). Disconnect others; sparse polling elsewhere.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 11,
+            "title": "13.11 Segments parity (fx/sx/ix/pal/col)",
+            "description": "Implement full segment update model with effect, speed, intensity, palette, and color arrays; safe per-segment updates.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 12,
+            "title": "13.12 Presets & Playlists apply",
+            "description": "Support apply of presets (ps) and playlists (pl/playlist object). Minimal list and apply, plus save current state.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 13,
+            "title": "13.13 UDPN sync toggles",
+            "description": "Expose udpn.send/recv/sgrp/rgrp; apply via /json/state updates with debounce.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 14,
+            "title": "13.14 Nightlight support",
+            "description": "Implement nl (on,dur,fade,tbri) fields in state updates and UI toggles (backend first).",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 15,
+            "title": "13.15 Debounced & batched /json/state updates",
+            "description": "Coalesce rapid brightness/color/effect changes into one state POST; 200–300ms debounce and merge.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
+          },
+          {
+            "id": 16,
+            "title": "13.16 Error/offline handling & timer pausing",
+            "description": "Exponential backoff for retries, offline cache, and pause background monitors during heavy views.",
+            "details": "",
+            "status": "pending",
+            "dependencies": [],
+            "parentTaskId": 13
           }
         ]
       },
@@ -779,7 +882,7 @@
     ],
     "metadata": {
       "created": "2025-07-10T06:16:14.534Z",
-      "updated": "2025-07-10T09:17:36.007Z",
+      "updated": "2025-08-07T08:30:19.730Z",
       "description": "Tasks for master context"
     }
   }

@@ -1,0 +1,112 @@
+{
+  "source": "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/Components/DeviceCardComponents.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Online",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 186
+        }
+      },
+      {
+        "comment": "",
+        "key": "Offline",
+        "location": {
+          "startingColumn": 51,
+          "startingLine": 186
+        }
+      },
+      {
+        "comment": "",
+        "key": "Brightness",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 271
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld%%",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 324
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose Device Image",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 660
+        }
+      },
+      {
+        "comment": "",
+        "key": "Upload Custom Image",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 532
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose from Photos",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 546
+        }
+      },
+      {
+        "comment": "",
+        "key": "Upload a PNG image for your device",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 551
+        }
+      },
+      {
+        "comment": "",
+        "key": "Aesdetic Products",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 577
+        }
+      },
+      {
+        "comment": "",
+        "key": "Uploads",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 606
+        }
+      },
+      {
+        "comment": "",
+        "key": "Others",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 635
+        }
+      },
+      {
+        "comment": "",
+        "key": "Done",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 664
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 671
+        }
+      }
+    ]
+  },
+  "version": 1
+}

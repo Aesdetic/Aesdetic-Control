@@ -77,6 +77,8 @@ struct EnhancedDeviceCard: View {
                 .fill(Color(.systemGray6))
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)) // Ensure all corners match
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeviceUpdated"))) { _ in
             syncWithDeviceState()
         }
@@ -85,6 +87,10 @@ struct EnhancedDeviceCard: View {
         }
         .onAppear {
             syncWithDeviceState()
+        }
+        .onDisappear {
+            brightnessUpdateTimer?.invalidate()
+            brightnessUpdateTimer = nil
         }
     }
     
@@ -95,41 +101,25 @@ struct EnhancedDeviceCard: View {
                 VStack {
                     Spacer()
                     ZStack {
-                        // Glow effect positioned outside/around the image
+                        // Simplified, lower-cost ambient glow
                         Circle()
                             .fill(
-                                                            RadialGradient(
-                                colors: currentPowerState && device.isOnline ? [
-                                    Color.blue.opacity(brightnessEffect * 0.4),
-                                    Color.blue.opacity(brightnessEffect * 0.25),
-                                    Color.blue.opacity(brightnessEffect * 0.12),
-                                    Color.blue.opacity(brightnessEffect * 0.05),
-                                    Color.clear
-                                ] : [Color.clear],
-                                center: .center,
-                                startRadius: 0,
-                                endRadius: 60
+                                RadialGradient(
+                                    colors: currentPowerState && device.isOnline ? [
+                                        Color.blue.opacity(brightnessEffect * 0.2),
+                                        Color.blue.opacity(brightnessEffect * 0.06),
+                                        Color.clear
+                                    ] : [Color.clear],
+                                    center: .center,
+                                    startRadius: 0,
+                                    endRadius: 60
+                                )
                             )
-                            )
-                            .scaleEffect(1.4)
-                            .blur(radius: currentPowerState && device.isOnline ? 8 + (brightnessEffect * 4) : 0)
+                            .scaleEffect(1.25)
+                            .blur(radius: currentPowerState && device.isOnline ? 6 + (brightnessEffect * 3) : 0)
                             .shadow(
-                                color: currentPowerState && device.isOnline ? Color.blue.opacity(brightnessEffect * 0.3) : Color.clear,
-                                radius: currentPowerState && device.isOnline ? 4 + (brightnessEffect * 3) : 0,
-                                x: 0,
-                                y: 0
-                            )
-                            .shadow(
-                                color: currentPowerState && device.isOnline ? Color.blue.opacity(brightnessEffect * 0.2) : Color.clear,
-                                radius: currentPowerState && device.isOnline ? 8 + (brightnessEffect * 4) : 0,
-                                x: 0,
-                                y: 0
-                            )
-                            .shadow(
-                                color: currentPowerState && device.isOnline ? Color.blue.opacity(brightnessEffect * 0.1) : Color.clear,
-                                radius: currentPowerState && device.isOnline ? 12 + (brightnessEffect * 6) : 0,
-                                x: 0,
-                                y: 0
+                                color: currentPowerState && device.isOnline ? Color.blue.opacity(brightnessEffect * 0.15) : Color.clear,
+                                radius: currentPowerState && device.isOnline ? 6 + (brightnessEffect * 4) : 0
                             )
                             .animation(.easeInOut(duration: 0.3), value: device.brightness)
                             .animation(.easeInOut(duration: 0.3), value: currentPowerState)
@@ -399,13 +389,17 @@ struct ProductImageWithBrightness: View {
             // Product image from assets or custom uploaded image
             Group {
                 if let customURL = DeviceImageManager.shared.getCustomImageURL(for: selectedImageName),
-                   let uiImage = UIImage(contentsOfFile: customURL.path) {
+                   let uiImage = DeviceImageManager.shared.loadDownsampledImage(at: customURL, maxDimension: 480) {
                     Image(uiImage: uiImage)
                         .resizable()
+                        .interpolation(.low)
+                        .antialiased(false)
                         .aspectRatio(contentMode: .fit)
                 } else {
                     Image(selectedImageName)
                         .resizable()
+                        .interpolation(.low)
+                        .antialiased(false)
                         .aspectRatio(contentMode: .fit)
                 }
             }
@@ -673,7 +667,7 @@ struct ImagePickerSheet: View {
                     }
                 }
             }
-            .onChange(of: selectedPhotoItem) { newItem in
+            .onChange(of: selectedPhotoItem) { _, newItem in
                 Task {
                     await handleSelectedPhoto(newItem)
                 }
@@ -715,6 +709,12 @@ class DeviceImageManager: ObservableObject {
     static let shared = DeviceImageManager()
     
     private let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    private let imageCache = NSCache<NSString, UIImage>()
+
+    init() {
+        // Approximate pixel-cost cache (width*height). Target ~50M pixels total.
+        imageCache.totalCostLimit = 50_000_000
+    }
     
     func getImageName(for deviceId: String) -> String {
         return UserDefaults.standard.string(forKey: "deviceImage_\(deviceId)") ?? "product_image"
@@ -727,22 +727,41 @@ class DeviceImageManager: ObservableObject {
     }
     
     func saveCustomImage(_ imageData: Data, for deviceId: String) async -> String {
-        let customImageName = "custom_\(deviceId)_\(UUID().uuidString)"
-        let imageURL = documentsDirectory.appendingPathComponent("\(customImageName).png")
-        
+        let baseName = "custom_\(deviceId)_\(UUID().uuidString)"
+        let jpgURL = documentsDirectory.appendingPathComponent("\(baseName).jpg")
+        // Downsample before saving to cap stored size
+        if let down = downsampleCGImage(from: imageData as NSData, maxDimension: 1200) {
+            let ui = UIImage(cgImage: down)
+            if let jpg = ui.jpegData(compressionQuality: 0.85) {
+                do {
+                    try jpg.write(to: jpgURL, options: .atomic)
+                    setImageName(baseName, for: deviceId)
+                    imageCache.setObject(ui, forKey: jpgURL.absoluteString as NSString, cost: Int(ui.size.width * ui.size.height))
+                    return baseName
+                } catch {
+                    print("Error writing compressed image: \(error)")
+                }
+            }
+        }
+        // Fallback: write original bytes as PNG
+        let pngURL = documentsDirectory.appendingPathComponent("\(baseName).png")
         do {
-            try imageData.write(to: imageURL)
-            setImageName(customImageName, for: deviceId)
-            return customImageName
+            try imageData.write(to: pngURL, options: .atomic)
+            setImageName(baseName, for: deviceId)
+            return baseName
         } catch {
-            print("Error saving custom image: \(error)")
-            return "product_image" // fallback to default
+            print("Error saving custom image fallback: \(error)")
+            return "product_image"
         }
     }
     
     func getCustomImageURL(for imageName: String) -> URL? {
         guard imageName.hasPrefix("custom_") else { return nil }
-        return documentsDirectory.appendingPathComponent("\(imageName).png")
+        let jpg = documentsDirectory.appendingPathComponent("\(imageName).jpg")
+        if FileManager.default.fileExists(atPath: jpg.path) { return jpg }
+        let png = documentsDirectory.appendingPathComponent("\(imageName).png")
+        if FileManager.default.fileExists(atPath: png.path) { return png }
+        return nil
     }
     
     func getUploadedImages() -> [(String, String)] {
@@ -752,9 +771,8 @@ class DeviceImageManager: ObservableObject {
             
             return files.compactMap { url in
                 let filename = url.lastPathComponent
-                guard filename.hasSuffix(".png") && filename.hasPrefix("custom_") else { return nil }
-                
-                let imageName = String(filename.dropLast(4)) // Remove .png extension
+                guard (filename.hasSuffix(".png") || filename.hasSuffix(".jpg")) && filename.hasPrefix("custom_") else { return nil }
+                let imageName = url.deletingPathExtension().lastPathComponent
                 let displayName = "Custom Image"
                 return (imageName, displayName)
             }
@@ -762,6 +780,36 @@ class DeviceImageManager: ObservableObject {
             print("Error reading uploaded images: \(error)")
             return []
         }
+    }
+
+    // Downsample large images to reduce memory usage
+    func loadDownsampledImage(at url: URL, maxDimension: CGFloat) -> UIImage? {
+        let key = url.absoluteString as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension
+        ] as CFDictionary
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+        let ui = UIImage(cgImage: cgImage)
+        imageCache.setObject(ui, forKey: key, cost: Int(ui.size.width * ui.size.height))
+        return ui
+    }
+
+    private func downsampleCGImage(from data: NSData, maxDimension: Int) -> CGImage? {
+        let options: CFDictionary = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let src = CGImageSourceCreateWithData(data, options) else { return nil }
+        let thumbOpts: CFDictionary = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension
+        ] as CFDictionary
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOpts)
     }
 }
 
@@ -779,13 +827,17 @@ struct ImageSelectionCard: View {
             // Image preview
             Group {
                 if let customURL = DeviceImageManager.shared.getCustomImageURL(for: imageName),
-                   let uiImage = UIImage(contentsOfFile: customURL.path) {
+                   let uiImage = DeviceImageManager.shared.loadDownsampledImage(at: customURL, maxDimension: 300) {
                     Image(uiImage: uiImage)
                         .resizable()
+                        .interpolation(.low)
+                        .antialiased(false)
                         .aspectRatio(contentMode: .fit)
                 } else {
                     Image(imageName)
                         .resizable()
+                        .interpolation(.low)
+                        .antialiased(false)
                         .aspectRatio(contentMode: .fit)
                 }
             }

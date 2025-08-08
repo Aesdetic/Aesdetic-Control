@@ -1,0 +1,208 @@
+{
+  "source": "/Users/ryan/Documents/Aesdetic-Control/Aesdetic-Control/Views/DeviceDetailView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Device Sync - Coming Soon",
+        "location": {
+          "startingColumn": 14,
+          "startingLine": 655
+        }
+      },
+      {
+        "comment": "",
+        "key": "Presets - Coming Soon",
+        "location": {
+          "startingColumn": 14,
+          "startingLine": 660
+        }
+      },
+      {
+        "comment": "",
+        "key": "Settings - Coming Soon",
+        "location": {
+          "startingColumn": 14,
+          "startingLine": 665
+        }
+      },
+      {
+        "comment": "",
+        "key": "Device Control",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 155
+        }
+      },
+      {
+        "comment": "",
+        "key": "Device Name",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 217
+        }
+      },
+      {
+        "comment": "",
+        "key": "•",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 236
+        }
+      },
+      {
+        "comment": "",
+        "key": "Online",
+        "location": {
+          "startingColumn": 52,
+          "startingLine": 231
+        }
+      },
+      {
+        "comment": "",
+        "key": "Offline",
+        "location": {
+          "startingColumn": 63,
+          "startingLine": 231
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld%%",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 250
+        }
+      },
+      {
+        "comment": "",
+        "key": "Solid",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 327
+        }
+      },
+      {
+        "comment": "",
+        "key": "Gradient",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 343
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose Color",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 412
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld%%",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 457
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 475
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit Color",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 487
+        }
+      },
+      {
+        "comment": "",
+        "key": "Apply Gradient",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 505
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose Color",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 518
+        }
+      },
+      {
+        "comment": "",
+        "key": "Effects Library",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 549
+        }
+      },
+      {
+        "comment": "",
+        "key": "Effect Controls",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 576
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 588
+        }
+      },
+      {
+        "comment": "",
+        "key": "Speed",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 584
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 607
+        }
+      },
+      {
+        "comment": "",
+        "key": "Intensity",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 603
+        }
+      },
+      {
+        "comment": "",
+        "key": "Color Palette",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 621
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 907
+        }
+      }
+    ]
+  },
+  "version": 1
+}

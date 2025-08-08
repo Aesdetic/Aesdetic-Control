@@ -81,6 +81,7 @@ class DeviceControlViewModel: ObservableObject {
     
     // Combine cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
+    private var metadataCache: [String: (effects: [String], palettes: [String], timestamp: Date)] = [:]
     
     // User interaction tracking for optimistic updates
     private var lastUserInput: [String: Date] = [:]
@@ -302,6 +303,24 @@ class DeviceControlViewModel: ObservableObject {
             devices[index].lastSeen = stateUpdate.timestamp
             devices[index].isOnline = true
         }
+    }
+
+    // MARK: - Effects/Palettes metadata
+    func getEffectsAndPalettes(for device: WLEDDevice) async -> (effects: [String], palettes: [String])? {
+        // Use local view-model cache first
+        if let cached = metadataCache[device.id], Date().timeIntervalSince(cached.timestamp) < 3600 {
+            return (cached.effects, cached.palettes)
+        }
+        // Ask API (will also cache internally)
+        do {
+            let resp = try await apiService.getState(for: device)
+            if let effects = resp.effects, let palettes = resp.palettes {
+                let entry = (effects, palettes, Date())
+                metadataCache[device.id] = entry
+                return (effects, palettes)
+            }
+        } catch { }
+        return nil
     }
     
     // MARK: - Multi-Device Batch Operations
@@ -709,12 +728,12 @@ class DeviceControlViewModel: ObservableObject {
     
     // MARK: - Device Discovery
     
-    func startScanning() async {
-        await wledService.startDiscovery()
+    func startScanning() {
+        wledService.startDiscovery()
     }
     
-    func stopScanning() async {
-        await wledService.stopDiscovery()
+    func stopScanning() {
+        wledService.stopDiscovery()
     }
     
     func addDeviceByIP(_ ipAddress: String) {
@@ -848,6 +867,8 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func connectRealTimeForDevice(_ device: WLEDDevice) {
+        // Connect only this device with higher priority and temporarily pause others
+        webSocketManager.disconnectAll(except: device.id)
         connectWebSocketIfNeeded(for: device)
     }
     
