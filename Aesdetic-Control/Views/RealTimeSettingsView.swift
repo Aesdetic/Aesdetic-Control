@@ -24,6 +24,7 @@ struct RealTimeSettingsView: View {
                         
                         Toggle("", isOn: $viewModel.isRealTimeEnabled)
                             .labelsHidden()
+                            .sensorySelection(trigger: viewModel.isRealTimeEnabled)
                     }
                     .padding(.vertical, 4)
                     
@@ -87,6 +88,7 @@ struct RealTimeSettingsView: View {
                         }
                         .foregroundColor(.blue)
                     }
+                    .sensorySelection(trigger: UUID())
                     .disabled(!viewModel.isRealTimeEnabled)
                     
                 } header: {

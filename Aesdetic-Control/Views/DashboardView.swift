@@ -757,6 +757,7 @@ struct MiniDeviceCard: View {
             .animation(.easeInOut(duration: 0.2), value: currentPowerState)
         }
         .buttonStyle(.plain)
+        .sensorySelection(trigger: isToggling)
         .disabled(!device.isOnline || isToggling)
     }
 }

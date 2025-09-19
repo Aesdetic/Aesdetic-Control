@@ -137,6 +137,7 @@ fileprivate struct PowerToggleRow: View {
                 .onChange(of: isOn) { _, val in
                     Task { await viewModel.setDevicePower(device, isOn: val) }
                 }
+                .sensorySelection(trigger: isOn)
         }
     }
 }
@@ -155,6 +156,7 @@ fileprivate struct UDPTogglesRow: View {
                 .onChange(of: udpSend) { _, v in
                     Task { await viewModel.setUDPSync(device, send: v, recv: nil) }
                 }
+                .sensorySelection(trigger: udpSend)
             Spacer()
             Toggle("Receive", isOn: $udpRecv)
                 .tint(.white)
@@ -162,6 +164,7 @@ fileprivate struct UDPTogglesRow: View {
                 .onChange(of: udpRecv) { _, v in
                     Task { await viewModel.setUDPSync(device, send: nil, recv: v) }
                 }
+                .sensorySelection(trigger: udpRecv)
         }
     }
 }
