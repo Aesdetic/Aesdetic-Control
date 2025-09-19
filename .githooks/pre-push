@@ -1,0 +1,58 @@
+#!/bin/sh
+# Pre-push size guard: blocks large pushes and recommends Git LFS
+# Thresholds
+MAX_FILE_BYTES=$((8 * 1024 * 1024))    # 8 MB per file
+MAX_TOTAL_BYTES=$((75 * 1024 * 1024))  # 75 MB total
+
+# Collect refs from stdin (provided by git)
+while read local_ref local_sha remote_ref remote_sha; do
+  REFS="$REFS $local_sha..$remote_sha"
+  # For new branches, remote_sha can be all zeros; handle by using empty range
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    RANGES="$RANGES $local_sha"
+  else
+    RANGES="$RANGES $remote_sha..$local_sha"
+  fi
+done
+
+# Fallback if stdin provided nothing
+if [ -z "$RANGES" ]; then
+  RANGES="HEAD"
+fi
+
+TOTAL_BYTES=0
+OVERSIZED_FILES=0
+
+# Find added/modified blobs in the ranges
+FILES=$(git diff --name-only --diff-filter=AM $RANGES)
+
+for f in $FILES; do
+  # Skip deleted/renamed
+  if [ ! -f "$f" ]; then
+    continue
+  fi
+  size=$(wc -c <"$f" | tr -d ' ')
+  TOTAL_BYTES=$((TOTAL_BYTES + size))
+  if [ "$size" -ge "$MAX_FILE_BYTES" ]; then
+    echo "[pre-push] File too large: $f ($(printf '%.2f' $(echo "$size/1048576" | bc -l)) MB) >= 8 MB" >&2
+    OVERSIZED_FILES=1
+  fi
+done
+
+if [ "$OVERSIZED_FILES" -ne 0 ]; then
+  cat >&2 <<'EOF'
+[pre-push] One or more files exceed 8 MB. Consider using Git LFS:
+  git lfs install
+  git lfs track "*.png" "*.jpg" "*.zip" "*.dylib" "*.xcarchive"
+  git add .gitattributes && git commit -m "chore(lfs): track large binaries"
+EOF
+  exit 1
+fi
+
+if [ "$TOTAL_BYTES" -ge "$MAX_TOTAL_BYTES" ]; then
+  echo "[pre-push] Total push size too large: $(printf '%.2f' $(echo "$TOTAL_BYTES/1048576" | bc -l)) MB >= 75 MB" >&2
+  echo "[pre-push] Consider pushing a smaller set of changes or using Git LFS for large binaries." >&2
+  exit 1
+fi
+
+exit 0
