@@ -24,6 +24,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     private var reconnectAttempts: [String: Int] = [:]
     private var reconnectTimers: [String: Timer] = [:]
     private var connectionHealthTimers: [String: Timer] = [:]
+    private var schedulerTask: Task<Void, Never>? = nil
     private var lastPingTimes: [String: Date] = [:]
     
     // Connection pool management
@@ -80,7 +81,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         config.timeoutIntervalForResource = 30
         self.urlSession = URLSession(configuration: config)
         
-        startConnectionMetricsTimer()
+        startUnifiedScheduler()
         
         // Observe app lifecycle to manage resources
         setupAppLifecycleObservers()
@@ -98,16 +99,9 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         // pathMonitor?.cancel() // This line was removed as pathMonitor is not defined in the original file
         NotificationCenter.default.removeObserver(self)
         
-        // Cancel all timers explicitly
-        for timer in connectionHealthTimers.values {
-            timer.invalidate()
-        }
-        connectionHealthTimers.removeAll()
-        
-        for timer in reconnectTimers.values {
-            timer.invalidate()
-        }
-        reconnectTimers.removeAll()
+        // Cancel unified scheduler
+        schedulerTask?.cancel()
+        schedulerTask = nil
     }
     
     // MARK: - App Lifecycle Management
@@ -333,32 +327,31 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         deviceConnectionStatuses[deviceId] = status
     }
     
-    private func startConnectionMetricsTimer() {
-        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-            Task { @MainActor in
-                self.updateConnectionMetrics()
+    private func startUnifiedScheduler() {
+        // Cancel any existing scheduler
+        schedulerTask?.cancel()
+        schedulerTask = Task { [weak self] in
+            guard let self = self else { return }
+            while !Task.isCancelled {
+                // Update metrics
+                await MainActor.run {
+                    self.updateConnectionMetrics()
+                }
+                // Perform health checks for all connected devices
+                let deviceIds = self.connectedDeviceIds
+                for deviceId in deviceIds {
+                    await MainActor.run {
+                        self.performHealthCheck(for: deviceId)
+                    }
+                }
+                // Sleep ~30s between cycles
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
             }
         }
     }
     
     private func startHealthMonitoring(for deviceId: String) {
-        // Cancel existing timer first to prevent duplicates
-        connectionHealthTimers[deviceId]?.invalidate()
-        
-        let timer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-            Task { @MainActor in
-                self.performHealthCheck(for: deviceId)
-            }
-        }
-        connectionHealthTimers[deviceId] = timer
+        // No-op: unified scheduler handles health checks
     }
     
     private func performHealthCheck(for deviceId: String) {
