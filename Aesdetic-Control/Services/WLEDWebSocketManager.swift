@@ -295,11 +295,9 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     func connectToDevices(_ devices: [WLEDDevice], priorities: [String: Int] = [:]) async {
         await withTaskGroup(of: Void.self) { group in
             for device in devices {
-                group.addTask { [weak self] in
+                group.addTask { @MainActor in
                     let priority = priorities[device.id] ?? 0
-                    await MainActor.run {
-                        self?.connect(to: device, priority: priority)
-                    }
+                    self.connect(to: device, priority: priority)
                 }
             }
         }
@@ -309,10 +307,8 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     func sendBatchUpdate(_ update: WLEDStateUpdate, to deviceIds: [String]) async {
         await withTaskGroup(of: Void.self) { group in
             for deviceId in deviceIds {
-                group.addTask { [weak self] in
-                    await MainActor.run {
-                        self?.sendStateUpdate(update, to: deviceId)
-                    }
+                group.addTask { @MainActor in
+                    self.sendStateUpdate(update, to: deviceId)
                 }
             }
         }
@@ -378,8 +374,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         
         let pingMessage = URLSessionWebSocketTask.Message.string("ping")
         webSocketTask.send(pingMessage) { [weak self] error in
-            guard let self = self else { return }
-            Task { @MainActor [weak self] in
+            Task { @MainActor in
                 guard let self = self else { return }
                 if let error = error {
                     self.logger.warning("Health check failed for device \(deviceId): \(error.localizedDescription)")
