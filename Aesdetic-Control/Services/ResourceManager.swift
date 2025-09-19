@@ -4,6 +4,7 @@ import SwiftUI
 import Combine
 
 /// Comprehensive resource and memory management system
+@MainActor
 class ResourceManager: ObservableObject {
     static let shared = ResourceManager()
     
@@ -43,7 +44,9 @@ class ResourceManager: ObservableObject {
     private func setupMemoryMonitoring() {
         // Monitor memory usage every 30 seconds
         memoryTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            self?.updateMemoryUsage()
+            Task { @MainActor in
+                self?.updateMemoryUsage()
+            }
         }
         
         // Listen for memory warnings
@@ -52,7 +55,9 @@ class ResourceManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleMemoryWarning()
+            Task { @MainActor in
+                self?.handleMemoryWarning()
+            }
         }
     }
     
@@ -108,7 +113,9 @@ class ResourceManager: ObservableObject {
     private func setupPerformanceMonitoring() {
         // Monitor performance every 60 seconds
         performanceTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
-            self?.updatePerformanceMetrics()
+            Task { @MainActor in
+                self?.updatePerformanceMetrics()
+            }
         }
     }
     
@@ -150,7 +157,9 @@ class ResourceManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppDidEnterBackground()
+            Task { @MainActor in
+                self?.handleAppDidEnterBackground()
+            }
         }
         
         NotificationCenter.default.addObserver(
@@ -158,7 +167,9 @@ class ResourceManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppWillEnterForeground()
+            Task { @MainActor in
+                self?.handleAppWillEnterForeground()
+            }
         }
         
         NotificationCenter.default.addObserver(
@@ -166,7 +177,9 @@ class ResourceManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppWillTerminate()
+            Task { @MainActor in
+                self?.handleAppWillTerminate()
+            }
         }
     }
     
@@ -179,10 +192,12 @@ class ResourceManager: ObservableObject {
         }
         
         // Perform background cleanup
-        performBackgroundCleanup()
+        Task { @MainActor in
+            performBackgroundCleanup()
+        }
     }
     
-    private func handleAppWillEnterForeground() {
+    @MainActor private func handleAppWillEnterForeground() {
         print("📱 App entering foreground - Resuming operations")
         
         // Resume operations
@@ -198,7 +213,9 @@ class ResourceManager: ObservableObject {
     
     private func handleAppWillTerminate() {
         print("📱 App terminating - Final cleanup")
-        performFinalCleanup()
+        Task { @MainActor in
+            performFinalCleanup()
+        }
     }
     
     // MARK: - Cleanup Operations
@@ -211,23 +228,21 @@ class ResourceManager: ObservableObject {
         cleanupHandlers.removeValue(forKey: identifier)
     }
     
-    private func performMemoryCleanup() {
+    @MainActor private func performMemoryCleanup() {
         print("🧹 Performing memory cleanup")
         
         // Core Data cleanup
         CoreDataManager.shared.clearMemoryCache()
         
         // API cache cleanup
-        if let apiService = WLEDAPIService.shared as? any CleanupCapable {
-            apiService.clearCache()
-        }
+        WLEDAPIService.shared.clearCache()
         
         // WebSocket cleanup
         WLEDWebSocketManager.shared.cleanupInactiveConnections()
         
         // Run registered cleanup handlers
         for (identifier, handler) in cleanupHandlers {
-            print("Running cleanup handler: \\(identifier)")
+            print("Running cleanup handler: \(identifier)")
             handler()
         }
         
@@ -244,7 +259,9 @@ class ResourceManager: ObservableObject {
         print("🚨 Emergency cleanup - Freeing maximum memory")
         
         // Aggressive memory cleanup
-        performMemoryCleanup()
+        Task { @MainActor in
+            performMemoryCleanup()
+        }
         
         // Additional emergency measures
         CoreDataManager.shared.backgroundContext.reset()
@@ -256,7 +273,7 @@ class ResourceManager: ObservableObject {
         URLCache.shared.memoryCapacity = 10 * 1024 * 1024
     }
     
-    private func performBackgroundCleanup() {
+    @MainActor private func performBackgroundCleanup() {
         // Lightweight cleanup for background state
         performMemoryCleanup()
         
@@ -264,7 +281,7 @@ class ResourceManager: ObservableObject {
         CoreDataManager.shared.clearMemoryCache()
     }
     
-    private func performPerformanceOptimization() {
+    @MainActor private func performPerformanceOptimization() {
         print("⚡ Optimizing performance")
         
         // Cache optimization
@@ -274,7 +291,7 @@ class ResourceManager: ObservableObject {
         NotificationCenter.default.post(name: .performanceOptimizationRequested, object: nil)
     }
     
-    private func performFinalCleanup() {
+    @MainActor private func performFinalCleanup() {
         // Cancel all timers
         memoryTimer?.invalidate()
         performanceTimer?.invalidate()
@@ -313,7 +330,9 @@ class ResourceManager: ObservableObject {
     // MARK: - Public Interface
     
     func forceCleanup() {
-        performMemoryCleanup()
+        Task { @MainActor in
+            performMemoryCleanup()
+        }
     }
     
     func getResourceReport() -> (memoryUsage: Double, cacheSize: Int, isOptimized: Bool) {

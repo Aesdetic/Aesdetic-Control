@@ -142,7 +142,7 @@ struct EnhancedDeviceOverviewCard: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(.systemBackground))
+                    .fill(Color.clear)
                     .shadow(
                         color: device.isOnline ? 
                             device.currentColor.opacity(0.15) : 
@@ -267,7 +267,7 @@ struct EmptyDevicesPrompt: View {
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color(.systemGray6))
+                .fill(Color.clear)
         )
         .padding(.horizontal)
         .accessibilityElement(children: .contain)
@@ -526,7 +526,7 @@ struct EnhancedAutomationOverviewCard: View {
                 }
             }
             .padding()
-            .background(Color(.systemBackground))
+            .background(Color.clear)
             .scaleEffect(isPressed ? 0.98 : 1.0)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
             
@@ -592,7 +592,7 @@ struct EnhancedAutomationOverviewCard: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .background(Color(.systemBackground))
+        .background(Color.clear)
         .cornerRadius(12)
         .shadow(radius: automation.currentState == .active ? 3 : 1)
         .overlay(

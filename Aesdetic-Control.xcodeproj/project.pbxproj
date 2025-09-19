@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		94DCF13A2E17D55E00C7DB07 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 94DCF1392E17D55E00C7DB07 /* Starscream */; };
+		9401E9A92E7BBE9000053730 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 9401E9A82E7BBE9000053730 /* Starscream */; };
+		9401E9AB2E7BC93F00053730 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 9401E9AA2E7BC93F00053730 /* Starscream */; };
+		9401E9AD2E7BC94700053730 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 9401E9AC2E7BC94700053730 /* Starscream */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -33,9 +35,22 @@
 		944464732E0D2D0300F0E904 /* Aesdetic-ControlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Aesdetic-ControlUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		9401E9AE2E7BDC7600053730 /* Exceptions for "Aesdetic-Control" folder in "Aesdetic-Control" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AppInfo.plist,
+			);
+			target = 9444645B2E0D2D0100F0E904 /* Aesdetic-Control */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9444645E2E0D2D0100F0E904 /* Aesdetic-Control */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				9401E9AE2E7BDC7600053730 /* Exceptions for "Aesdetic-Control" folder in "Aesdetic-Control" target */,
+			);
 			path = "Aesdetic-Control";
 			sourceTree = "<group>";
 		};
@@ -56,7 +71,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				94DCF13A2E17D55E00C7DB07 /* Starscream in Frameworks */,
+				9401E9A92E7BBE9000053730 /* Starscream in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -64,6 +79,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9401E9AB2E7BC93F00053730 /* Starscream in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,18 +87,27 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9401E9AD2E7BC94700053730 /* Starscream in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		9401E9A72E7BBE9000053730 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		944464532E0D2D0100F0E904 = {
 			isa = PBXGroup;
 			children = (
 				9444645E2E0D2D0100F0E904 /* Aesdetic-Control */,
 				9444646C2E0D2D0300F0E904 /* Aesdetic-ControlTests */,
 				944464762E0D2D0300F0E904 /* Aesdetic-ControlUITests */,
+				9401E9A72E7BBE9000053730 /* Frameworks */,
 				9444645D2E0D2D0100F0E904 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -117,7 +142,7 @@
 			);
 			name = "Aesdetic-Control";
 			packageProductDependencies = (
-				94DCF1392E17D55E00C7DB07 /* Starscream */,
+				9401E9A82E7BBE9000053730 /* Starscream */,
 			);
 			productName = "Aesdetic-Control";
 			productReference = 9444645C2E0D2D0100F0E904 /* Aesdetic-Control.app */;
@@ -141,6 +166,7 @@
 			);
 			name = "Aesdetic-ControlTests";
 			packageProductDependencies = (
+				9401E9AA2E7BC93F00053730 /* Starscream */,
 			);
 			productName = "Aesdetic-ControlTests";
 			productReference = 944464692E0D2D0300F0E904 /* Aesdetic-ControlTests.xctest */;
@@ -164,6 +190,7 @@
 			);
 			name = "Aesdetic-ControlUITests";
 			packageProductDependencies = (
+				9401E9AC2E7BC94700053730 /* Starscream */,
 			);
 			productName = "Aesdetic-ControlUITests";
 			productReference = 944464732E0D2D0300F0E904 /* Aesdetic-ControlUITests.xctest */;
@@ -202,7 +229,7 @@
 			mainGroup = 944464532E0D2D0100F0E904;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				94DCF1382E17D55E00C7DB07 /* XCRemoteSwiftPackageReference "Starscream" */,
+				9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9444645D2E0D2D0100F0E904 /* Products */;
@@ -411,7 +438,7 @@
 				DEVELOPMENT_TEAM = 986FL957WY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSBonjourServices = "_http._tcp. _wled._tcp.";
+				INFOPLIST_KEY_NSBonjourServices = "_wled._tcp _http._tcp";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs local network access to discover and connect to WLED devices on your network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -444,7 +471,7 @@
 				DEVELOPMENT_TEAM = 986FL957WY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSBonjourServices = "_http._tcp. _wled._tcp.";
+				INFOPLIST_KEY_NSBonjourServices = "_wled._tcp _http._tcp";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs local network access to discover and connect to WLED devices on your network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -471,7 +498,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				DEVELOPMENT_TEAM = 986FL957WY;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				MARKETING_VERSION = 1.0;
@@ -490,7 +517,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				DEVELOPMENT_TEAM = 986FL957WY;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				MARKETING_VERSION = 1.0;
@@ -508,7 +535,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				DEVELOPMENT_TEAM = 986FL957WY;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-ControlUITests";
@@ -525,7 +552,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 22T3N4ZD6J;
+				DEVELOPMENT_TEAM = 986FL957WY;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.aesdetic.Aesdetic-ControlUITests";
@@ -579,7 +606,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		94DCF1382E17D55E00C7DB07 /* XCRemoteSwiftPackageReference "Starscream" */ = {
+		9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/daltoniam/Starscream.git";
 			requirement = {
@@ -590,9 +617,19 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		94DCF1392E17D55E00C7DB07 /* Starscream */ = {
+		9401E9A82E7BBE9000053730 /* Starscream */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 94DCF1382E17D55E00C7DB07 /* XCRemoteSwiftPackageReference "Starscream" */;
+			package = 9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */;
+			productName = Starscream;
+		};
+		9401E9AA2E7BC93F00053730 /* Starscream */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */;
+			productName = Starscream;
+		};
+		9401E9AC2E7BC94700053730 /* Starscream */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */;
 			productName = Starscream;
 		};
 /* End XCSwiftPackageProductDependency section */

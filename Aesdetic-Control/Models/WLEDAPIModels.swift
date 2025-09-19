@@ -12,6 +12,7 @@ import UIKit
 // MARK: - API Request Models
 
 /// Model for updating WLED device state via API
+/// - Note: Top-level `transition` (ms) is honored by WLED for solid/preset jumps.
 struct WLEDStateUpdate: Codable {
     /// Power state (on/off)
     let on: Bool?
@@ -19,38 +20,102 @@ struct WLEDStateUpdate: Codable {
     let bri: Int?
     /// Array of segment updates
     let seg: [SegmentUpdate]?
+    let udpn: UDPNUpdate?
     /// Transition time in milliseconds
     let transition: Int?
+    /// Apply preset by ID
+    let ps: Int?
+    /// Night Light configuration
+    let nl: NightLightUpdate?
     
-    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, transition: Int? = nil) {
+    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, nl: NightLightUpdate? = nil) {
         self.on = on
         self.bri = bri
         self.seg = seg
+        self.udpn = udpn
         self.transition = transition
+        self.ps = ps
+        self.nl = nl
     }
+}
+
+// UDP sync options
+struct UDPNUpdate: Codable {
+    let send: Bool?
+    let recv: Bool?
+    let nn: Int?
+}
+
+// Night Light update
+struct NightLightUpdate: Codable {
+    let on: Bool?
+    let dur: Int?
+    let mode: Int?
+    let tbri: Int?
 }
 
 /// Model for updating specific WLED segments
 struct SegmentUpdate: Codable {
-    /// Segment ID (0-based)
+    // Identification
     let id: Int?
-    /// Colors array (RGB values)
+
+    // Bounds and options
+    let start: Int?
+    let stop: Int?
+    let len: Int?
+    let grp: Int?
+    let spc: Int?
+    let ofs: Int?
+
+    // State
+    let on: Bool?
+    let bri: Int?
     let col: [[Int]]?
-    /// Effect ID
+
+    // Effect
     let fx: Int?
-    /// Effect speed (0-255)
     let sx: Int?
-    /// Effect intensity (0-255)
     let ix: Int?
-    /// Palette ID
     let pal: Int?
-    /// Segment selection
+
+    // Flags
     let sel: Bool?
-    /// Reverse direction
     let rev: Bool?
-    
-    init(id: Int? = nil, col: [[Int]]? = nil, fx: Int? = nil, sx: Int? = nil, ix: Int? = nil, pal: Int? = nil, sel: Bool? = nil, rev: Bool? = nil) {
+    let mi: Bool?
+    let cln: Int?
+    /// Freeze flag: true = freeze segment (stop animations), false = resume
+    let frz: Bool?
+
+    init(
+        id: Int? = nil,
+        start: Int? = nil,
+        stop: Int? = nil,
+        len: Int? = nil,
+        grp: Int? = nil,
+        spc: Int? = nil,
+        ofs: Int? = nil,
+        on: Bool? = nil,
+        bri: Int? = nil,
+        col: [[Int]]? = nil,
+        fx: Int? = nil,
+        sx: Int? = nil,
+        ix: Int? = nil,
+        pal: Int? = nil,
+        sel: Bool? = nil,
+        rev: Bool? = nil,
+        mi: Bool? = nil,
+        cln: Int? = nil,
+        frz: Bool? = nil
+    ) {
         self.id = id
+        self.start = start
+        self.stop = stop
+        self.len = len
+        self.grp = grp
+        self.spc = spc
+        self.ofs = ofs
+        self.on = on
+        self.bri = bri
         self.col = col
         self.fx = fx
         self.sx = sx
@@ -58,6 +123,9 @@ struct SegmentUpdate: Codable {
         self.pal = pal
         self.sel = sel
         self.rev = rev
+        self.mi = mi
+        self.cln = cln
+        self.frz = frz
     }
 }
 
@@ -143,6 +211,16 @@ extension Color {
         let blue = Double(max(0, min(255, rgb[2]))) / 255.0
         
         return Color(red: red, green: green, blue: blue)
+    }
+    static func lerp(_ a: Color, _ b: Color, _ t: Double) -> Color {
+        let ar = a.toRGBArray()
+        let br = b.toRGBArray()
+        func mix(_ x: Int, _ y: Int) -> Double { Double(x) * (1 - t) + Double(y) * t }
+        return Color(
+            red: mix(ar[0], br[0]) / 255.0,
+            green: mix(ar[1], br[1]) / 255.0,
+            blue: mix(ar[2], br[2]) / 255.0
+        )
     }
 }
 

@@ -496,36 +496,6 @@ struct AddDeviceSheet: View {
     }
 }
 
-// MARK: - Device Detail View (Placeholder for now)
-
-struct DeviceDetailView: View {
-    let device: WLEDDevice
-    let viewModel: DeviceControlViewModel
-    let onDismiss: () -> Void
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            VStack {
-                Text("Device Detail View")
-                    .font(.title)
-                    .foregroundColor(.white)
-                
-                Text("Coming Soon...")
-                    .font(.body)
-                    .foregroundColor(.gray)
-                
-                Button("Close") {
-                    onDismiss()
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .padding(.top, 32)
-            }
-        }
-        .preferredColorScheme(.dark)
-    }
-}
 
 #Preview {
     DeviceControlView()

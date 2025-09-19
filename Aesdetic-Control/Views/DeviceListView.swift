@@ -9,6 +9,7 @@ import SwiftUI
 
 struct DeviceListView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
+    var onDeviceTap: (WLEDDevice) -> Void = { _ in }
     @State private var showFilterMenu = false
     @State private var showBatchControls = false
     
@@ -30,8 +31,12 @@ struct DeviceListView: View {
                                 device: device,
                                 viewModel: viewModel
                             ) {
-                                // Handle card tap - could open device details
-                                print("Device tapped: \(device.name)")
+                                // Present immediately, prefetch in background to avoid delay
+                                onDeviceTap(device)
+                                Task.detached { [weak viewModel] in
+                                    guard let vm = viewModel else { return }
+                                    await vm.prefetchDeviceDetailData(for: device)
+                                }
                             }
                             .id(device.id)
                         }
@@ -77,7 +82,7 @@ struct DeviceListHeader: View {
             }
         }
         .padding(.vertical, 8)
-        .background(Color.black.opacity(0.7))
+        .background(Color.clear)
     }
 }
 
@@ -378,7 +383,7 @@ struct DeviceDetailPanel: View {
             }
         }
         .padding(12)
-        .background(Color.black.opacity(0.3))
+        .background(Color.clear)
         .cornerRadius(8)
         .padding(.top, 4)
     }
@@ -576,7 +581,7 @@ struct DeviceFilterSheet: View {
                 Spacer()
             }
             .padding(20)
-            .background(Color.black)
+            .background(Color.clear)
             .navigationTitle("Filter & Sort")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

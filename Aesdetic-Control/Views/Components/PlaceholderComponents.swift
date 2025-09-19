@@ -21,7 +21,7 @@ struct DailyGreetingCard: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemGray6))
+        .background(Color.clear)
         .cornerRadius(12)
         .padding(.horizontal)
     }
@@ -50,7 +50,7 @@ struct DeviceOverviewCard: View {
                 .foregroundColor(.secondary)
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(Color.clear)
         .cornerRadius(12)
         .shadow(radius: 2)
     }
@@ -79,7 +79,7 @@ struct AutomationOverviewCard: View {
                 .labelsHidden()
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(Color.clear)
         .cornerRadius(12)
         .shadow(radius: 1)
     }
@@ -121,7 +121,7 @@ struct DeviceControlCard: View {
             }
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(Color.clear)
         .cornerRadius(12)
         .shadow(radius: 2)
     }
@@ -137,7 +137,7 @@ struct DiscoveryStatusView: View {
                 .foregroundColor(.secondary)
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(Color.clear)
         .cornerRadius(8)
     }
 }
@@ -493,8 +493,10 @@ struct HabitTrackerCard: View {
 }
 
 struct DailyJournalCard: View {
+    @EnvironmentObject var wellnessVM: WellnessViewModel
     let entry: JournalEntry?
     @State private var journalText: String = ""
+    @State private var selectedMood: JournalEntry.Mood = .neutral
     @State private var isEditing: Bool = false
     
     var body: some View {
@@ -518,6 +520,13 @@ struct DailyJournalCard: View {
                     .foregroundColor(.white.opacity(0.7))
             }
             
+            Picker("Mood", selection: $selectedMood) {
+                ForEach(JournalEntry.Mood.allCases, id: \.self) { m in
+                    Text("\(m.emoji) \(m.rawValue.capitalized)").tag(m)
+                }
+            }
+            .pickerStyle(.segmented)
+
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(.white.opacity(0.08))
@@ -544,6 +553,16 @@ struct DailyJournalCard: View {
                 }
             }
             .frame(minHeight: 100)
+
+            Button(action: { wellnessVM.upsertTodayJournal(content: journalText, mood: selectedMood) }) {
+                Text("Save Journal")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.black)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 14)
+                    .background(Color.white)
+                    .cornerRadius(10)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
@@ -557,7 +576,8 @@ struct DailyJournalCard: View {
                 )
         )
         .onAppear {
-            journalText = entry?.content ?? ""
+            journalText = entry?.content ?? wellnessVM.todaysJournal?.content ?? ""
+            selectedMood = entry?.mood ?? wellnessVM.todaysJournal?.mood ?? .neutral
         }
     }
 }
@@ -699,12 +719,13 @@ struct LightingWellnessTipsCard: View {
 
 // MARK: - Placeholder Views
 
-struct CreateAutomationView: View {
+// Deprecated placeholder kept for reference; real view lives in Views/CreateAutomationView.swift
+struct CreateAutomationPlaceholderView: View {
     var body: some View {
         NavigationStack {
-            Text("Create Automation")
+            Text("Create Automation (Placeholder)")
                 .navigationTitle("New Automation")
                 .navigationBarTitleDisplayMode(.inline)
         }
     }
-} 
+}

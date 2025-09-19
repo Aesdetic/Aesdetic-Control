@@ -74,6 +74,8 @@ class DeviceControlViewModel: ObservableObject {
     
     // Service dependencies
     private let apiService = WLEDAPIService.shared
+    private let colorPipeline = ColorPipeline()
+    private lazy var transitionRunner = GradientTransitionRunner(pipeline: colorPipeline)
     let wledService = WLEDDiscoveryService()
     private let coreDataManager = CoreDataManager.shared
     private let webSocketManager = WLEDWebSocketManager.shared
@@ -169,7 +171,10 @@ class DeviceControlViewModel: ObservableObject {
         webSocketManager.deviceStateUpdates
             .receive(on: DispatchQueue.main)
             .sink { [weak self] stateUpdate in
-                self?.handleWebSocketStateUpdate(stateUpdate)
+                // Defer state writes to next runloop to avoid re-entrant view updates
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleWebSocketStateUpdate(stateUpdate)
+                }
             }
             .store(in: &cancellables)
         
@@ -628,13 +633,15 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int) async {
-        // Mark device under user control for brightness changes too
         markUserInteraction(device.id)
-        
-        await updateDeviceState(device) { currentDevice in
-            var updatedDevice = currentDevice
-            updatedDevice.brightness = brightness
-            return updatedDevice
+        var intent = ColorIntent(deviceId: device.id, mode: .solid)
+        intent.segmentId = 0
+        intent.brightness = max(0, min(255, brightness))
+        await colorPipeline.apply(intent, to: device)
+        // Optimistic local update
+        if let index = devices.firstIndex(where: { $0.id == device.id }) {
+            devices[index].brightness = brightness
+            devices[index].isOnline = true
         }
     }
     
@@ -863,9 +870,126 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
     
+    // MARK: - Prefetching Helpers
+    
+    /// Warm up data and connections for a device detail view
+    func prefetchDeviceDetailData(for device: WLEDDevice) async {
+        // Refresh latest state in background
+        await refreshDeviceState(device)
+        
+        // Ensure real-time connection if enabled
+        connectWebSocketIfNeeded(for: device)
+    }
+    
     // MARK: - Error Handling
     
     func dismissError() {
         errorMessage = nil
+    }
+
+    // MARK: - Gradient Helpers (foundation)
+
+    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int) async {
+        let gradient = LEDGradient(stops: stops)
+        let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+        var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+        intent.segmentId = 0
+        intent.perLEDHex = frame
+        await colorPipeline.apply(intent, to: device)
+    }
+
+    func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 20, aBrightness: Int? = nil, bBrightness: Int? = nil) async {
+        await transitionRunner.start(
+            device: device,
+            from: from,
+            to: to,
+            durationSec: durationSec,
+            fps: fps,
+            segmentId: 0,
+            onProgress: nil
+        )
+    }
+
+    func cancelStreaming(for device: WLEDDevice) async {
+        await transitionRunner.cancel(deviceId: device.id)
+    }
+
+    // MARK: - Segments
+    func updateSegmentBounds(device: WLEDDevice, segmentId: Int, start: Int, stop: Int) async {
+        let seg = SegmentUpdate(id: segmentId, start: start, stop: stop)
+        let state = WLEDStateUpdate(seg: [seg])
+        _ = try? await apiService.updateState(for: device, state: state)
+        // Optimistic update: adjust device.brightness or lastSeen only; avoid mutating nested state structures that may be immutable in models
+        if let idx = devices.firstIndex(where: { $0.id == device.id }) {
+            devices[idx].lastSeen = Date()
+            devices[idx].isOnline = true
+        }
+    }
+
+    // MARK: - Scenes
+
+    func saveCurrentScene(device: WLEDDevice, primaryStops: [GradientStop], transitionEnabled: Bool, secondaryStops: [GradientStop]?, durationSec: Double?, aBrightness: Int?, bBrightness: Int?, effectsEnabled: Bool, effectId: Int?, paletteId: Int?, speed: Int?, intensity: Int?, name: String) {
+        let scene = Scene(
+            name: name,
+            deviceId: device.id,
+            brightness: device.brightness,
+            primaryStops: primaryStops,
+            transitionEnabled: transitionEnabled,
+            secondaryStops: secondaryStops,
+            durationSec: durationSec,
+            aBrightness: aBrightness,
+            bBrightness: bBrightness,
+            effectsEnabled: effectsEnabled,
+            effectId: effectId,
+            paletteId: paletteId,
+            speed: speed,
+            intensity: intensity
+        )
+        ScenesStore.shared.add(scene)
+    }
+
+    func applyScene(_ scene: Scene, to device: WLEDDevice) async {
+        // 1) Cancel any running streams
+        await cancelStreaming(for: device)
+
+        // 2) Brightness first (bri-only)
+        await updateDeviceBrightness(device, brightness: scene.brightness)
+
+        // 3) Effects
+        if scene.effectsEnabled {
+            // If base colors are available, set them via segment update first
+            if let baseA = scene.primaryStops.first?.color.toRGBArray() {
+                let seg = SegmentUpdate(id: 0, col: [baseA])
+                let st = WLEDStateUpdate(seg: [seg])
+                _ = try? await apiService.updateState(for: device, state: st)
+            }
+            _ = try? await apiService.setEffect(
+                scene.effectId ?? 0,
+                forSegment: 0,
+                speed: scene.speed,
+                intensity: scene.intensity,
+                palette: scene.paletteId,
+                device: device
+            )
+            return
+        }
+
+        // 4) Transition vs static
+        if scene.transitionEnabled, let secondary = scene.secondaryStops, let dur = scene.durationSec {
+            let gA = LEDGradient(stops: scene.primaryStops)
+            let gB = LEDGradient(stops: secondary)
+            await startSmoothABStreaming(
+                device,
+                from: gA,
+                to: gB,
+                durationSec: dur,
+                fps: 20,
+                aBrightness: scene.aBrightness,
+                bBrightness: scene.bBrightness
+            )
+        } else {
+            let ledCount = device.state?.segments.first?.len ?? 120
+            await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops, ledCount: ledCount)
+        }
     }
 } 

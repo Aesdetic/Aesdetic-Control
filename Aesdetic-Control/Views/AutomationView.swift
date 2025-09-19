@@ -16,34 +16,61 @@ struct AutomationView: View {
     private let fastAnimation: Animation = .easeInOut(duration: 0.15)
     
     var body: some View {
-        NavigationView {
-            GeometryReader { geometry in
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        // Header Section
-                        headerSection(geometry: geometry)
+        // RESTRUCTURED: Remove NavigationStack, use working pattern from Dashboard
+        GeometryReader { geometry in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    // Enhanced safe area spacing for status bar
+                    Spacer()
+                        .frame(height: max(80, geometry.safeAreaInsets.top + 40))
+                    
+                    // Header
+                    HStack {
+                        Text("Automation")
+                            .font(.system(size: 38, weight: .heavy, design: .rounded))
+                            .foregroundColor(.white)
                         
-                        // Quick Presets Section
-                        presetsSection(geometry: geometry)
+                        Spacer()
                         
-                        // User Automations Section
-                        automationsSection(geometry: geometry)
-                        
-                        // Bottom padding for safe scrolling
-                        Color.clear.frame(height: 20)
+                        // Add automation button
+                        Button(action: { showingCreateAutomation = true }) {
+                            Image(systemName: "plus")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                        }
                     }
-                    .animation(standardAnimation, value: viewModel.automations.count)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                    
+                    // Quick Presets Section
+                    presetsSection(geometry: geometry)
+                    
+                    // User Automations Section
+                    automationsSection(geometry: geometry)
+                    
+                    // Bottom spacing
+                    Spacer()
+                        .frame(height: 100)
                 }
-                .background(Color.black) // Dark theme background
-                .navigationBarHidden(true)
-                .refreshable {
-                    await viewModel.refreshAutomations()
-                }
+                .animation(standardAnimation, value: viewModel.automations.count)
+            }
+            .background(Color.clear)
+            .refreshable {
+                await viewModel.refreshAutomations()
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .background(Color.clear) // Make NavigationStack transparent
         .sheet(isPresented: $showingCreateAutomation) {
-            CreateAutomationView()
+            // Minimal stub to satisfy compile; replace with real view when ready
+            VStack(spacing: 16) {
+                Text("Create Automation")
+                    .font(.title2)
+                Text("Coming soon")
+                    .foregroundColor(.gray)
+                Button("Close") { showingCreateAutomation = false }
+                    .buttonStyle(.bordered)
+            }
+            .padding()
         }
     }
     
@@ -135,6 +162,7 @@ struct AutomationView: View {
                 .padding(.horizontal, 16)
             }
         }
+        .background(Color.clear)
         .padding(.bottom, 20)
     }
 }

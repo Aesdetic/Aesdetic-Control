@@ -74,9 +74,11 @@ struct EnhancedDeviceCard: View {
         .frame(maxWidth: .infinity, minHeight: 193) // Increased by 5% (184 * 1.05)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.systemGray6))
+                .fill(Color.clear)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)) // Ensure all corners match
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeviceUpdated"))) { _ in
             syncWithDeviceState()
         }
@@ -303,7 +305,7 @@ struct EnhancedDeviceCard: View {
                     .fill(.regularMaterial)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color(.systemGray6).opacity(0.3))
+                            .fill(Color.clear)
                     )
                     .frame(height: 25) // Increased by 5% (24 * 1.05)
                 
@@ -342,8 +344,11 @@ struct EnhancedDeviceCard: View {
                         
                         // Cancel previous timer and create new one
                         brightnessUpdateTimer?.invalidate()
-                        brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+                        brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { _ in
                             Task {
+                                #if DEBUG
+                                print("[CARD] Debounced bri=\(Int(localBrightness)) for dev=\(device.id)")
+                                #endif
                                 await updateBrightness()
                             }
                         }
@@ -558,7 +563,7 @@ struct ImagePickerSheet: View {
                             .frame(height: 120)
                             .background(
                                 RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(.systemGray6))
+                                    .fill(Color.clear)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 16)
                                             .stroke(Color.accentColor.opacity(0.3), style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
@@ -673,10 +678,8 @@ struct ImagePickerSheet: View {
                     }
                 }
             }
-            .onChange(of: selectedPhotoItem) { newItem in
-                Task {
-                    await handleSelectedPhoto(newItem)
-                }
+            .onChange(of: selectedPhotoItem) { _, newItem in
+                Task { await handleSelectedPhoto(newItem) }
             }
         }
         .onAppear {
@@ -792,7 +795,7 @@ struct ImageSelectionCard: View {
             .frame(height: 80)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(.systemGray6))
+                    .fill(Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)

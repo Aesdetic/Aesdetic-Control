@@ -15,49 +15,60 @@ struct WellnessView: View {
     private let fastAnimation: Animation = .easeInOut(duration: 0.15)
     
     var body: some View {
-        NavigationView {
-            GeometryReader { geometry in
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        // Header Section
-                        headerSection(geometry: geometry)
+        // RESTRUCTURED: Remove NavigationStack, use working pattern from Dashboard
+        GeometryReader { geometry in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    // Enhanced safe area spacing for status bar
+                    Spacer()
+                        .frame(height: max(80, geometry.safeAreaInsets.top + 40))
+                    
+                    // Header
+                    HStack {
+                        Text("Wellness")
+                            .font(.system(size: 38, weight: .heavy, design: .rounded))
+                            .foregroundColor(.white)
                         
-                        // Today's Focus Section
-                        focusSection(geometry: geometry)
-                        
-                        // Morning Check-in (conditional)
-                        if viewModel.shouldShowMorningCheckin {
-                            checkinSection(geometry: geometry)
-                        }
-                        
-                        // Habit Tracker Section
-                        habitsSection(geometry: geometry)
-                        
-                        // Daily Journal Section
-                        journalSection(geometry: geometry)
-                        
-                        // Evening Reflection (conditional)
-                        if viewModel.shouldShowEveningReflection {
-                            reflectionSection(geometry: geometry)
-                        }
-                        
-                        // Wellness Tips Section
-                        tipsSection(geometry: geometry)
-                        
-                        // Bottom padding for safe scrolling
-                        Color.clear.frame(height: 20)
+                        Spacer()
                     }
-                    .animation(standardAnimation, value: viewModel.shouldShowMorningCheckin)
-                    .animation(standardAnimation, value: viewModel.shouldShowEveningReflection)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                    
+                    // Today's Focus Section
+                    focusSection(geometry: geometry)
+                    
+                    // Morning Check-in (conditional)
+                    if viewModel.shouldShowMorningCheckin {
+                        checkinSection(geometry: geometry)
+                    }
+                    
+                    // Habit Tracker Section
+                    habitsSection(geometry: geometry)
+                    
+                    // Daily Journal Section
+                    journalSection(geometry: geometry)
+                    
+                    // Evening Reflection (conditional)
+                    if viewModel.shouldShowEveningReflection {
+                        reflectionSection(geometry: geometry)
+                    }
+                    
+                    // Wellness Tips Section
+                    tipsSection(geometry: geometry)
+                    
+                    // Bottom spacing
+                    Spacer()
+                        .frame(height: 100)
                 }
-                .background(Color.black) // Dark theme background
-                .navigationBarHidden(true)
-                .refreshable {
-                    await viewModel.refreshData()
-                }
+                .animation(standardAnimation, value: viewModel.shouldShowMorningCheckin)
+                .animation(standardAnimation, value: viewModel.shouldShowEveningReflection)
+            }
+            .background(Color.clear)
+            .refreshable {
+                await viewModel.refreshData()
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .background(Color.clear)
     }
     
     // MARK: - Header Section
@@ -132,8 +143,22 @@ struct WellnessView: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 16)
             
+            // Stats chip
+            HStack {
+                Text("7‑day mood avg: ")
+                    .foregroundColor(.white.opacity(0.8))
+                Text("–")
+                    .foregroundColor(.white)
+                    .fontWeight(.semibold)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            
             DailyJournalCard(entry: viewModel.todaysJournal)
                 .padding(.horizontal, 16)
+            
+            // History list
+            // Journal history list placeholder (model not implemented)
         }
         .padding(.bottom, 20)
     }
@@ -167,6 +192,7 @@ struct WellnessView: View {
             LightingWellnessTipsCard()
                 .padding(.horizontal, 16)
         }
+        .background(Color.clear)
         .padding(.bottom, 20)
     }
 }

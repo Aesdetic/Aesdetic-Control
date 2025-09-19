@@ -54,6 +54,22 @@ class WellnessViewModel: ObservableObject {
             )
         }
     }
+
+    func upsertTodayJournal(content: String, mood: JournalEntry.Mood) {
+        if var entry = todaysJournal {
+            entry.content = content
+            entry.mood = mood
+            entry.date = Date()
+            todaysJournal = entry
+        } else {
+            todaysJournal = JournalEntry(
+                id: UUID().uuidString,
+                content: content,
+                mood: mood,
+                date: Date()
+            )
+        }
+    }
 }
 
 struct WellnessHabit: Identifiable, Codable {
@@ -62,8 +78,8 @@ struct WellnessHabit: Identifiable, Codable {
     var isCompleted: Bool
 }
 
-struct JournalEntry: Identifiable, Codable {
-    let id: String
+struct JournalEntry: Identifiable, Codable, Equatable {
+    var id: String
     var content: String
     var mood: Mood
     var date: Date

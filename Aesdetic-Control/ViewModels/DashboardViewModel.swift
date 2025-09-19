@@ -10,7 +10,7 @@ import Combine
 import SwiftUI
 
 @MainActor
-class DashboardViewModel: ObservableObject {
+final class DashboardViewModel: ObservableObject {
     
     // MARK: - Singleton
     static let shared = DashboardViewModel()
@@ -70,7 +70,9 @@ class DashboardViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.pauseGreetingTimer()
+            Task { @MainActor in
+                self?.pauseGreetingTimer()
+            }
         }
         
         // Resume greeting timer when app becomes active
@@ -79,7 +81,9 @@ class DashboardViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.resumeGreetingTimer()
+            Task { @MainActor in
+                self?.resumeGreetingTimer()
+            }
         }
     }
     
