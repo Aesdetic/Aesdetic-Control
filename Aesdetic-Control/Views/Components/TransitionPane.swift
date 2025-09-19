@@ -164,7 +164,7 @@ struct TransitionPane: View {
             applyWorkItem = work
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 150_000_000)
-                work()
+                work.perform()
             }
         } else {
             Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }

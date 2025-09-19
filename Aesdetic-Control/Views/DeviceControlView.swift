@@ -494,6 +494,8 @@ struct AddDeviceSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 

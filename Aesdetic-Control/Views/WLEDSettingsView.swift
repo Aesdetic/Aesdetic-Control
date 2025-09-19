@@ -336,6 +336,7 @@ struct WLEDSettingsView: View {
                         .background(Color.white)
                         .cornerRadius(10)
                 }
+                .sensorySuccess(trigger: UUID())
                 Button(action: { WLEDAPIService.shared.clearCache() }) {
                     Text("Clear Cache")
                         .font(.subheadline.weight(.semibold))
@@ -345,6 +346,7 @@ struct WLEDSettingsView: View {
                         .background(Color.white)
                         .cornerRadius(10)
                 }
+                .sensorySelection(trigger: UUID())
             }
         }
         .padding(16)

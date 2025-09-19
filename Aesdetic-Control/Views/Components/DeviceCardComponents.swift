@@ -257,7 +257,7 @@ struct EnhancedDeviceCard: View {
                 .scaleEffect(isToggling ? 0.95 : 1.0)
                 .animation(.easeInOut(duration: 0.1), value: isToggling)
                 .animation(.easeInOut(duration: 0.2), value: currentPowerState)
-            }
+                }
             .buttonStyle(.plain)
             .sensorySelection(trigger: isToggling)
             .disabled(!device.isOnline || isToggling)
@@ -292,6 +292,7 @@ struct EnhancedDeviceCard: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .sensorySelection(trigger: showImagePicker)
             }
             
             brightnessBar

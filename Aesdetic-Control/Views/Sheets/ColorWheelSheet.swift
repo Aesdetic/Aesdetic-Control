@@ -50,6 +50,8 @@ struct ColorWheelSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 
