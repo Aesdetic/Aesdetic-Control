@@ -17,6 +17,7 @@ struct ScenesListView: View {
                     Button("Apply") {
                         Task { await viewModel.applyScene(scene, to: device) }
                     }
+                    .sensorySuccess(trigger: scene.id)
                 }
             }
             .onDelete { idx in

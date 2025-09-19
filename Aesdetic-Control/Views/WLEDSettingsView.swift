@@ -368,18 +368,21 @@ struct WLEDSettingsView: View {
                 range: 1...255,
                 onEnd: commitNightLight
             )
+            .sensorySelection(trigger: nightLightDurationMin)
             IntStepperRow(
                 title: "Mode",
                 value: $nightLightMode,
                 range: 0...3,
                 onEnd: commitNightLight
             )
+            .sensorySelection(trigger: nightLightMode)
             IntStepperRow(
                 title: "Target Brightness",
                 value: $nightLightTargetBri,
                 range: 0...255,
                 onEnd: commitNightLight
             )
+            .sensorySelection(trigger: nightLightTargetBri)
             Button("Apply Night Light") { commitNightLight() }
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.black)
@@ -387,6 +390,7 @@ struct WLEDSettingsView: View {
                 .padding(.horizontal, 14)
                 .background(Color.white)
                 .cornerRadius(10)
+                .sensorySuccess(trigger: UUID())
         }
         .padding(16)
         .background(Color.white.opacity(0.08))
