@@ -100,6 +100,89 @@ fileprivate struct SegmentBoundsRow: View {
     }
 }
 
+// Small typed int stepper row to avoid complex closures in-line
+fileprivate struct IntStepperRow: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var onEnd: (() -> Void)? = nil
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .foregroundColor(.white)
+            Spacer()
+            Stepper("\(value)", value: $value, in: range, step: 1, onEditingChanged: { editing in
+                if !editing { onEnd?() }
+            })
+            .labelsHidden()
+        }
+    }
+}
+
+fileprivate struct PowerToggleRow: View {
+    @EnvironmentObject var viewModel: DeviceControlViewModel
+    @Binding var isOn: Bool
+    let device: WLEDDevice
+
+    var body: some View {
+        HStack {
+            Text("Power")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .tint(.white)
+                .onChange(of: isOn) { _, val in
+                    Task { await viewModel.setDevicePower(device, isOn: val) }
+                }
+        }
+    }
+}
+
+fileprivate struct UDPTogglesRow: View {
+    @EnvironmentObject var viewModel: DeviceControlViewModel
+    @Binding var udpSend: Bool
+    @Binding var udpRecv: Bool
+    let device: WLEDDevice
+
+    var body: some View {
+        HStack {
+            Toggle("Send (UDPN)", isOn: $udpSend)
+                .tint(.white)
+                .foregroundColor(.white)
+                .onChange(of: udpSend) { _, v in
+                    Task { await viewModel.setUDPSync(device, send: v, recv: nil) }
+                }
+            Spacer()
+            Toggle("Receive", isOn: $udpRecv)
+                .tint(.white)
+                .foregroundColor(.white)
+                .onChange(of: udpRecv) { _, v in
+                    Task { await viewModel.setUDPSync(device, send: nil, recv: v) }
+                }
+        }
+    }
+}
+
+fileprivate struct UDPNetworkRow: View {
+    @Binding var network: Int
+    let device: WLEDDevice
+
+    var body: some View {
+        HStack {
+            Text("Network")
+                .foregroundColor(.white)
+            Spacer()
+            Stepper("\(network)", value: $network, in: 0...255, step: 1, onEditingChanged: { _ in
+                Task { _ = try? await WLEDAPIService.shared.setUDPSync(for: device, send: nil, recv: nil, network: network) }
+            })
+            .labelsHidden()
+        }
+    }
+}
+
 struct WLEDSettingsView: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
@@ -114,6 +197,11 @@ struct WLEDSettingsView: View {
     @State private var udpNetwork: Int = 0
     @State private var info: Info?
     @State private var isLoading: Bool = false
+    // Night Light mirrors (WLEDStateUpdate.nl)
+    @State private var nightLightOn: Bool = false
+    @State private var nightLightDurationMin: Int = 10
+    @State private var nightLightMode: Int = 0
+    @State private var nightLightTargetBri: Int = 0
 
     var body: some View {
         ScrollView {
@@ -122,6 +210,7 @@ struct WLEDSettingsView: View {
                 powerSection
                 syncSection
                 ledSection
+                nightLightSection
                 realtimeSection
                 actionsSection
             }
@@ -160,19 +249,8 @@ struct WLEDSettingsView: View {
 
     private var powerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Power")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
-                Spacer()
-                Toggle("", isOn: $isOn)
-                .labelsHidden()
-                .tint(.white)
-                .onChange(of: isOn) { _, val in
-                    Task { await viewModel.setDevicePower(device, isOn: val) }
-                }
-            }
-            EmptyView()
+            PowerToggleRow(isOn: $isOn, device: device)
+                .environmentObject(viewModel)
         }
         .padding(16)
         .background(Color.white.opacity(0.08))
@@ -185,30 +263,9 @@ struct WLEDSettingsView: View {
             Text("Sync Interfaces")
                 .font(.headline.weight(.semibold))
                 .foregroundColor(.white)
-            HStack {
-                Toggle("Send (UDPN)", isOn: $udpSend)
-                .tint(.white)
-                .foregroundColor(.white)
-                .onChange(of: udpSend) { _, v in
-                    Task { await viewModel.setUDPSync(device, send: v, recv: nil) }
-                }
-                Spacer()
-                Toggle("Receive", isOn: $udpRecv)
-                .tint(.white)
-                .foregroundColor(.white)
-                .onChange(of: udpRecv) { _, v in
-                    Task { await viewModel.setUDPSync(device, send: nil, recv: v) }
-                }
-            }
-            HStack {
-                Text("Network")
-                    .foregroundColor(.white)
-                Spacer()
-                Stepper("\(udpNetwork)", value: $udpNetwork, in: 0...255, step: 1, onEditingChanged: { _ in
-                    Task { _ = try? await WLEDAPIService.shared.setUDPSync(for: device, send: nil, recv: nil, network: udpNetwork) }
-                })
-                .labelsHidden()
-            }
+            UDPTogglesRow(udpSend: $udpSend, udpRecv: $udpRecv, device: device)
+                .environmentObject(viewModel)
+            UDPNetworkRow(network: $udpNetwork, device: device)
         }
         .padding(16)
         .background(Color.white.opacity(0.08))
@@ -291,6 +348,59 @@ struct WLEDSettingsView: View {
         .background(Color.white.opacity(0.08))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.15)))
         .cornerRadius(12)
+    }
+
+    // MARK: - Night Light
+    private var nightLightSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Night Light")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+            Toggle("Enabled", isOn: $nightLightOn)
+                .tint(.white)
+                .foregroundColor(.white)
+            IntStepperRow(
+                title: "Duration (min)",
+                value: $nightLightDurationMin,
+                range: 1...255,
+                onEnd: commitNightLight
+            )
+            IntStepperRow(
+                title: "Mode",
+                value: $nightLightMode,
+                range: 0...3,
+                onEnd: commitNightLight
+            )
+            IntStepperRow(
+                title: "Target Brightness",
+                value: $nightLightTargetBri,
+                range: 0...255,
+                onEnd: commitNightLight
+            )
+            Button("Apply Night Light") { commitNightLight() }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .background(Color.white)
+                .cornerRadius(10)
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.08))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.15)))
+        .cornerRadius(12)
+    }
+
+    private func commitNightLight() {
+        Task {
+            _ = try? await WLEDAPIService.shared.configureNightLight(
+                enabled: nightLightOn,
+                duration: nightLightDurationMin,
+                mode: nightLightMode,
+                targetBrightness: nightLightTargetBri,
+                for: device
+            )
+        }
     }
 
     private var actionsSection: some View {

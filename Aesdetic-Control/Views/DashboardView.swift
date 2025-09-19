@@ -82,7 +82,7 @@ struct DashboardView: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             GeometryReader { geometry in
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) { // LazyVStack for better performance with many devices
@@ -121,7 +121,7 @@ struct DashboardView: View {
                 dashboardViewModel.updateCurrentGreeting()
             }
         }
-        .onChange(of: deviceControlViewModel.devices) { _ in
+        .onChange(of: deviceControlViewModel.devices) { _, _ in
             // Mark for update on next access
             lastDevicesUpdateTime = Date.distantPast
         }

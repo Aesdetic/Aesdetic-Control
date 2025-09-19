@@ -6,7 +6,7 @@ struct RealTimeSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 // MARK: - Real-Time Controls Section
                 Section {

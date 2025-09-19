@@ -24,4 +24,32 @@ node_modules/
 
 # Task files
 # tasks.json
-# tasks/ \n# Xcode / Swift build artifacts\nDerivedData/\nbuild/\nbuild-output/\n*.xcuserstate\n*.xccheckout\n*.xcscmblueprint\n\n# Xcode project user settings\nAesdetic-Control.xcodeproj/project.xcworkspace/xcuserdata/\nAesdetic-Control.xcodeproj/xcuserdata/\nAesdetic-Control.xcworkspace/xcuserdata/\n\n# Swift Package Manager\n/.build/\n/Packages/\n/Package.resolved\n\n# Carthage\n/Carthage/Build/\n\n# CocoaPods\n/Pods/\n\n# Other\n*.orig\n*.rej\n
+# tasks/
+
+# Xcode / Swift build artifacts
+DerivedData/
+build/
+build-output/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Xcode project user settings
+Aesdetic-Control.xcodeproj/project.xcworkspace/xcuserdata/
+Aesdetic-Control.xcodeproj/xcuserdata/
+Aesdetic-Control.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+/.build/
+/Packages/
+/Package.resolved
+
+# Carthage
+/Carthage/Build/
+
+# CocoaPods
+/Pods/
+
+# Other
+*.orig
+*.rej

@@ -18,7 +18,7 @@ struct DeviceControlView: View {
     @State private var showRealTimeSettings: Bool = false
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 // Dark theme background
                 Color.black.ignoresSafeArea()
@@ -434,7 +434,7 @@ struct AddDeviceSheet: View {
                                 .background(Color.gray.opacity(0.2))
                                 .cornerRadius(12)
                                 .keyboardType(.numbersAndPunctuation)
-                                .autocapitalization(.none)
+                                .textInputAutocapitalization(.never)
                                 .disableAutocorrection(true)
                             
                             Button("Add Device") {

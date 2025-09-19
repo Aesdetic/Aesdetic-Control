@@ -111,6 +111,14 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try await updateState(for: device, state: stateUpdate)
     }
 
+    // MARK: - UDP Sync Controls
+    @discardableResult
+    func setUDPSync(for device: WLEDDevice, send: Bool? = nil, recv: Bool? = nil, network: Int? = nil) async throws -> WLEDResponse {
+        let udpn = UDPNUpdate(send: send, recv: recv, nn: network)
+        let stateUpdate = WLEDStateUpdate(udpn: udpn)
+        return try await updateState(for: device, state: stateUpdate)
+    }
+
     // MARK: - Per-LED Control
     func setSegmentPixels(
         for device: WLEDDevice,

@@ -656,6 +656,23 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
     
+    func setDevicePower(_ device: WLEDDevice, isOn: Bool) async {
+        // Respect user interaction protection and perform an optimistic state update via unified path
+        markUserInteraction(device.id)
+        await updateDeviceState(device) { currentDevice in
+            var updatedDevice = currentDevice
+            updatedDevice.isOn = isOn
+            return updatedDevice
+        }
+    }
+
+    func setUDPSync(_ device: WLEDDevice, send: Bool?, recv: Bool?) async {
+        // Build UDPN update and call API; optimistic no-op on UI
+        let udpn = UDPNUpdate(send: send, recv: recv, nn: nil)
+        let state = WLEDStateUpdate(udpn: udpn)
+        _ = try? await apiService.updateState(for: device, state: state)
+    }
+    
     private func updateDeviceState(_ device: WLEDDevice, update: (WLEDDevice) -> WLEDDevice) async {
         let updatedDevice = update(device)
         
@@ -717,11 +734,11 @@ class DeviceControlViewModel: ObservableObject {
     // MARK: - Device Discovery
     
     func startScanning() async {
-        await wledService.startDiscovery()
+        wledService.startDiscovery()
     }
     
     func stopScanning() async {
-        await wledService.stopDiscovery()
+        wledService.stopDiscovery()
     }
     
     func addDeviceByIP(_ ipAddress: String) {
