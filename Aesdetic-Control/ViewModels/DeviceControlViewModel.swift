@@ -461,7 +461,8 @@ class DeviceControlViewModel: ObservableObject {
                     let onlineDevices = persistedDevices.filter { $0.isOnline }
                     if !onlineDevices.isEmpty {
                         // Small delay to allow app to fully initialize
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 1_000_000_000)
                             self.connectWebSocketsForAllDevices()
                         }
                     }

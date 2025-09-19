@@ -174,7 +174,8 @@ struct QuickPresetCard: View {
             withAnimation(.easeInOut(duration: 0.2)) {
                 isPressed = true
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000)
                 withAnimation(.easeInOut(duration: 0.2)) {
                     isPressed = false
                 }

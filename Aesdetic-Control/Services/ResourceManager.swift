@@ -103,7 +103,8 @@ class ResourceManager: ObservableObject {
         performEmergencyCleanup()
         
         // Reset warning after 10 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
             self.isLowMemoryWarning = false
         }
     }

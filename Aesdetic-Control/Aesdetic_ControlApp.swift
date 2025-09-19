@@ -106,7 +106,8 @@ final class LocalNetworkPrompter {
             let b = NWBrowser(for: bonjour, using: params)
             browser = b
             b.start(queue: .main)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
                 self?.browser?.cancel()
                 self?.browser = nil
             }
@@ -121,7 +122,8 @@ final class LocalNetworkPrompter {
             conn.start(queue: .main)
             let payload = "{}".data(using: .utf8)!
             conn.send(content: payload, completion: .contentProcessed { [weak self] _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                     self?.udpConnection?.cancel()
                     self?.udpConnection = nil
                 }

@@ -483,7 +483,8 @@ struct AddDeviceSheet: View {
         .onReceive(viewModel.wledService.$isScanning) { scanning in
             if !scanning && isScanning {
                 // Auto-dismiss after successful scan if devices were found
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                     if !viewModel.devices.isEmpty {
                         dismiss()
                     } else {

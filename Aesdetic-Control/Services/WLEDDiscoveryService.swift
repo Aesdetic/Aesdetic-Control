@@ -150,7 +150,8 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             }
             
             // Auto-stop discovery after finding devices (with a small delay to find more)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if self.discoveredDevices.count > 0 && self.isScanning {
                     self.logger.info("🎯 Auto-stopping discovery after finding \(self.discoveredDevices.count) devices")
                     self.stopDiscovery()

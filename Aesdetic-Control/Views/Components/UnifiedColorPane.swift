@@ -90,7 +90,10 @@ struct UnifiedColorPane: View {
                 Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
             }
             applyWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                work()
+            }
         } else {
             Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
         }
