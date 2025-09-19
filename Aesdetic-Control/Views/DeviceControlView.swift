@@ -357,7 +357,7 @@ struct AddDeviceSheet: View {
     @State private var isScanning: Bool = false
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
                 

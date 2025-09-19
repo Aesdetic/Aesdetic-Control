@@ -107,7 +107,7 @@ struct DashboardView: View {
                     .animation(standardAnimation, value: filteredDevices.count)
                 }
                 .background(backgroundGradient)
-                .navigationBarHidden(true)
+                .toolbar(.hidden, for: .navigationBar)
                 .refreshable {
                     await refreshData()
                 }
