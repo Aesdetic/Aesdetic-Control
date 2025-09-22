@@ -321,7 +321,7 @@ struct EnhancedDeviceCard: View {
                         )
                     )
                     .frame(width: max(24, geometry.size.width * CGFloat(localBrightness / 255.0)), height: 25)
-                    .animation(.easeInOut(duration: 0.1), value: localBrightness)
+                .animation(.easeInOut(duration: 0.1), value: Int(localBrightness / 5.0))
                 
                 // Brightness percentage text
                 HStack {
@@ -346,7 +346,7 @@ struct EnhancedDeviceCard: View {
                         
                         // Cancel previous timer and create new one
                         brightnessUpdateTimer?.invalidate()
-                        brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { _ in
+                        brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { _ in
                             #if DEBUG
                             print("[CARD] Debounced bri=\(Int(localBrightness)) for dev=\(device.id)")
                             #endif

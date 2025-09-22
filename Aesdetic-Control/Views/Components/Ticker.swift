@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 final class Ticker: ObservableObject {
     static let shared = Ticker()
@@ -8,6 +9,8 @@ final class Ticker: ObservableObject {
 
     private init() {
         start()
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
     }
 
     func start() {
@@ -22,6 +25,14 @@ final class Ticker: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+    }
+
+    @objc private func appDidEnterBackground() {
+        stop()
+    }
+
+    @objc private func appDidBecomeActive() {
+        start()
     }
 }
 

@@ -12,26 +12,28 @@ struct ContentView: View {
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     
     var body: some View {
-        TabView {
-            DashboardView()
-                .tabItem {
-                    Label("Dashboard", systemImage: "square.grid.2x2")
-                }
+        ZStack {
+            TabView {
+                DashboardView()
+                    .tabItem {
+                        Label("Dashboard", systemImage: "square.grid.2x2")
+                    }
 
-            DeviceControlView()
-                .tabItem {
-                    Label("Devices", systemImage: "lightbulb.2")
-                }
+                DeviceControlView()
+                    .tabItem {
+                        Label("Devices", systemImage: "lightbulb.2")
+                    }
 
-            AutomationView()
-                .tabItem {
-                    Label("Automation", systemImage: "clock.arrow.2.circlepath")
-                }
-            
-            WellnessView()
-                .tabItem {
-                    Label("Wellness", systemImage: "heart.text.square")
-                }
+                AutomationView()
+                    .tabItem {
+                        Label("Automation", systemImage: "clock.arrow.2.circlepath")
+                    }
+                
+                WellnessView()
+                    .tabItem {
+                        Label("Wellness", systemImage: "heart.text.square")
+                    }
+            }
         }
         .onAppear {
             // Auto-start discovery when app launches if no devices exist

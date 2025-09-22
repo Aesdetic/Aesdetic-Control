@@ -520,8 +520,10 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             status.reconnectAttempts = currentAttempts + 1
         }
         
-        // Exponential backoff: 2^attempt seconds
-        let delay = TimeInterval(pow(2.0, Double(currentAttempts)))
+        // Exponential backoff with jitter: (2^attempt) +/- 20%
+        let base = pow(2.0, Double(currentAttempts))
+        let jitter = Double.random(in: 0.8...1.2)
+        let delay = min(30.0, base * jitter)
         
         logger.info("Attempting reconnection \(currentAttempts + 1)/\(self.maxReconnectAttempts) for device \(deviceId) in \(delay) seconds")
         

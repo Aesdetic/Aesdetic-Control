@@ -747,13 +747,14 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func refreshDevices() async {
+        // Coalesce refresh storms with a short TTL window
+        if let last = _lastRefreshRequested, Date().timeIntervalSince(last) < 1.5 { return }
+        _lastRefreshRequested = Date()
         isLoading = true
-        defer { 
-            Task { @MainActor in
-                self.isLoading = false
-            }
+        defer {
+            Task { @MainActor in self.isLoading = false }
         }
-        
+
         // Limit concurrency to avoid memory/network pressure
         let limit = 4
         var index = 0
@@ -821,8 +822,12 @@ class DeviceControlViewModel: ObservableObject {
         } catch {
             // Don't update UI for background refresh failures
             // Connection monitor will handle offline detection
+            // Avoid spamming logs on timeouts
         }
     }
+
+    // MARK: - Refresh Coalescing
+    private var _lastRefreshRequested: Date?
     
     // MARK: - Additional Device Control Methods
     

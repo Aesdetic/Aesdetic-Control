@@ -149,6 +149,7 @@ struct DashboardView: View {
                 ) {
                     ForEach(filteredDevices, id: \.id) { device in
                         MiniDeviceCard(device: device)
+                            .id(device.id)
                     }
                 }
                 .padding(.horizontal, 16)

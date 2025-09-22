@@ -22,7 +22,7 @@ struct DeviceDetailView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            AppBackground()
 
             VStack(spacing: 16) {
             header

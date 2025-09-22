@@ -20,8 +20,7 @@ struct DeviceControlView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // Dark theme background
-                Color.black.ignoresSafeArea()
+                AppBackground()
                 
                 VStack(spacing: 0) {
                     // Main Content
@@ -359,7 +358,7 @@ struct AddDeviceSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                AppBackground()
                 
                 if isScanning {
                     // Show enhanced scanning progress

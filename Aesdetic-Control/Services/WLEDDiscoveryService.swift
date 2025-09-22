@@ -10,6 +10,7 @@ import Network
 import Combine
 import SwiftUI
 import SystemConfiguration.CaptiveNetwork
+import os.log
 
 @available(iOS 14.0, *)
 class WLEDDiscoveryService: NSObject, ObservableObject {
@@ -22,6 +23,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     private var scannedIPs = Set<String>()
     private let syncQueue = DispatchQueue(label: "wled.discovery.sync")
     private let logger = os.Logger(subsystem: "com.aesdetic.control", category: "Discovery")
+    private var failedIPBanlist: [String: Date] = [:]
     
     // Network discovery components
     private var netServiceBrowser: NetServiceBrowser?
@@ -31,21 +33,29 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     
     // Discovery configuration
     private let discoveryTimeout: TimeInterval = 5.0
-    private let httpTimeout: TimeInterval = 5.0 // Increased from 3.0
+    private let httpTimeout: TimeInterval = 1.5
     private let maxConcurrentHTTPRequests = 8
+    private let failureTTL: TimeInterval = 15 * 60
     
     // Semaphore for controlling concurrent HTTP requests
     private let httpSemaphore: DispatchSemaphore
 
     override init() {
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = httpTimeout
         config.timeoutIntervalForResource = httpTimeout * 2
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.httpMaximumConnectionsPerHost = 4
+        config.allowsConstrainedNetworkAccess = true
+        config.allowsExpensiveNetworkAccess = true
         session = URLSession(configuration: config)
         httpSemaphore = DispatchSemaphore(value: maxConcurrentHTTPRequests)
         
         super.init()
         logger.info("🏠 WLEDDiscoveryService initialized with enhanced discovery capabilities")
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
     }
     
     deinit {
@@ -91,9 +101,14 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
 
         // Cancel in-flight HTTP scans by invalidating and recreating the session
         session.invalidateAndCancel()
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = httpTimeout
         config.timeoutIntervalForResource = httpTimeout * 2
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.httpMaximumConnectionsPerHost = 4
+        config.allowsConstrainedNetworkAccess = true
+        config.allowsExpensiveNetworkAccess = true
         session = URLSession(configuration: config)
         
         DispatchQueue.main.async {
@@ -381,6 +396,13 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             scanGroup.enter()
             httpSemaphore.wait() // Control concurrent requests
             
+            // Allow cancellation during long scans
+            if !self.isScanning {
+                self.httpSemaphore.signal()
+                scanGroup.leave()
+                continue
+            }
+
             checkWLEDDevice(at: ipAddress) { result in
                 self.handleDeviceCheckResult(result, source: "IP Scan")
                 self.httpSemaphore.signal()
@@ -411,11 +433,15 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     private func checkWLEDDevice(at ipAddress: String, completion: @escaping (Result<WLEDDevice, Error>) -> Void) {
         // Check if already scanned
         var alreadyScanned = false
+        var isBanned = false
         syncQueue.sync {
             alreadyScanned = !scannedIPs.insert(ipAddress).inserted
+            if let ts = failedIPBanlist[ipAddress], Date().timeIntervalSince(ts) < failureTTL {
+                isBanned = true
+            }
         }
         
-        if alreadyScanned {
+        if alreadyScanned || isBanned {
             completion(.failure(NSError(domain: "WLEDDiscovery", code: -1, userInfo: [NSLocalizedDescriptionKey: "Already scanned"])))
             return
         }
@@ -430,11 +456,19 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         request.timeoutInterval = httpTimeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("WLED-Discovery/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("close", forHTTPHeaderField: "Connection")
 
         session.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
             
             if let error = error {
+                // Fast-ban endpoints that timeout/unreachable to avoid energy drains
+                let nserr = error as NSError
+                if nserr.domain == NSURLErrorDomain && (nserr.code == NSURLErrorTimedOut || nserr.code == NSURLErrorCannotConnectToHost || nserr.code == NSURLErrorNetworkConnectionLost || nserr.code == NSURLErrorCannotFindHost) {
+                    self.syncQueue.async {
+                        self.failedIPBanlist[ipAddress] = Date()
+                    }
+                }
                 completion(.failure(error))
                 return
             }
@@ -450,6 +484,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
                          data != nil)
             
             guard isWLED, let data = data else {
+                // Not a WLED device - do not ban, just ignore
                 completion(.failure(NSError(domain: "WLEDDiscovery", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not a WLED device"])))
                 return
             }

@@ -20,7 +20,7 @@ struct Aesdetic_ControlApp: App {
     
     var body: some SwiftUI.Scene {
         WindowGroup {
-            ContentView()
+            RootContainer()
                 .environmentObject(deviceControlViewModel)
                 .environmentObject(automationViewModel)
                 .environmentObject(dashboardViewModel)
