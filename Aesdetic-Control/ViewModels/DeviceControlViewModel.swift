@@ -772,6 +772,8 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     private func refreshDeviceState(_ device: WLEDDevice) async {
+        // Skip refresh for off-subnet devices to avoid timeouts/energy drain
+        if !isIPInCurrentSubnets(device.ipAddress) { return }
         do {
             let response = try await apiService.getState(for: device)
             
@@ -885,6 +887,8 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func connectRealTimeForDevice(_ device: WLEDDevice) {
+        // Skip off-subnet devices
+        guard isIPInCurrentSubnets(device.ipAddress) else { return }
         connectWebSocketIfNeeded(for: device)
     }
     
@@ -904,11 +908,49 @@ class DeviceControlViewModel: ObservableObject {
     
     /// Warm up data and connections for a device detail view
     func prefetchDeviceDetailData(for device: WLEDDevice) async {
-        // Refresh latest state in background
-        await refreshDeviceState(device)
+        // Refresh latest state in background if on subnet
+        if isIPInCurrentSubnets(device.ipAddress) {
+            await refreshDeviceState(device)
+        }
         
         // Ensure real-time connection if enabled
-        connectWebSocketIfNeeded(for: device)
+        if isIPInCurrentSubnets(device.ipAddress) {
+            connectWebSocketIfNeeded(for: device)
+        }
+    }
+
+    // MARK: - Network Helpers
+    private func isIPInCurrentSubnets(_ ip: String) -> Bool {
+        let bases = currentSubnetBases()
+        let base = subnetBase(for: ip)
+        return bases.contains(base)
+    }
+
+    private func currentSubnetBases() -> Set<String> {
+        var bases: Set<String> = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return bases }
+        defer { freeifaddrs(ifaddr) }
+        for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+            let interface = ptr.pointee
+            if interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
+                let name = String(cString: interface.ifa_name)
+                if name.hasPrefix("en") || name.hasPrefix("bridge") {
+                    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+                    let ip = String(cString: host)
+                    let base = subnetBase(for: ip)
+                    if !base.isEmpty { bases.insert(base) }
+                }
+            }
+        }
+        return bases
+    }
+
+    private func subnetBase(for ip: String) -> String {
+        let comps = ip.split(separator: ".")
+        if comps.count >= 3 { return "\(comps[0]).\(comps[1]).\(comps[2])" }
+        return ""
     }
     
     // MARK: - Error Handling

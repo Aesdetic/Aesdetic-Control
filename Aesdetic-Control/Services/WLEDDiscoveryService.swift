@@ -10,6 +10,7 @@ import Network
 import Combine
 import SwiftUI
 import SystemConfiguration.CaptiveNetwork
+import UIKit
 import os.log
 
 @available(iOS 14.0, *)
@@ -30,6 +31,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     private var foundNetServices: [NetService] = []
     private var udpSocket: NWConnection?
     private var udpListener: NWListener?
+    private var wasScanningBeforeBackground: Bool = false
     
     // Discovery configuration
     private let discoveryTimeout: TimeInterval = 5.0
@@ -56,6 +58,21 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         logger.info("🏠 WLEDDiscoveryService initialized with enhanced discovery capabilities")
         NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    // MARK: - App Lifecycle
+    @objc private func appDidEnterBackground() {
+        syncQueue.async { self.wasScanningBeforeBackground = self.isScanning }
+        if isScanning { stopDiscovery() }
+    }
+    
+    @objc private func appDidBecomeActive() {
+        var shouldResume = false
+        syncQueue.sync {
+            shouldResume = wasScanningBeforeBackground
+            wasScanningBeforeBackground = false
+        }
+        if shouldResume { startDiscovery() }
     }
     
     deinit {

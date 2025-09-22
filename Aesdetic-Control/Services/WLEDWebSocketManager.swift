@@ -23,6 +23,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     private let maxReconnectAttempts = 5
     private var reconnectAttempts: [String: Int] = [:]
     private var reconnectTimers: [String: Timer] = [:]
+    private var reconnectBanUntilByDevice: [String: Date] = [:]
     private var connectionHealthTimers: [String: Timer] = [:]
     private var schedulerTask: Task<Void, Never>? = nil
     private var lastPingTimes: [String: Date] = [:]
@@ -76,9 +77,13 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     
     // MARK: - Initialization
     private init() {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10
-        config.timeoutIntervalForResource = 30
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 8
+        config.timeoutIntervalForResource = 20
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.allowsConstrainedNetworkAccess = true
+        config.allowsExpensiveNetworkAccess = true
         self.urlSession = URLSession(configuration: config)
         
         // Defer starting scheduler until a connection exists
@@ -134,6 +139,12 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             timer.invalidate()
         }
         connectionHealthTimers.removeAll()
+        // Pause reconnect attempts in background
+        for timer in reconnectTimers.values { timer.invalidate() }
+        reconnectTimers.removeAll()
+        // Stop scheduler
+        schedulerTask?.cancel()
+        schedulerTask = nil
     }
     
     private func handleAppDidBecomeActive() {
@@ -147,6 +158,21 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     
     /// Connect to a WLED device's WebSocket endpoint
     func connect(to device: WLEDDevice, priority: Int = 0) {
+        // Skip devices not on current subnet to avoid energy/timeouts
+        if !isIPInCurrentSubnets(device.ipAddress) {
+            logger.info("Skipping WebSocket connect for off-subnet device: \(device.id) @ \(device.ipAddress)")
+            updateDeviceConnectionStatus(deviceId: device.id) { status in
+                status.status = .disconnected
+            }
+            // Ban reconnects for a short window
+            reconnectBanUntilByDevice[device.id] = Date().addingTimeInterval(10 * 60)
+            return
+        }
+        // Respect ban window after repeated failures
+        if let until = reconnectBanUntilByDevice[device.id], Date() < until {
+            logger.debug("Reconnect banned until \(until) for device: \(device.id)")
+            return
+        }
         // Check connection limits
         guard activeConnectionCount < maxConcurrentConnections else {
             logger.warning("Connection limit reached. Cannot connect to device: \(device.id)")
@@ -509,6 +535,8 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
                 status.lastError = .maxReconnectAttemptsReached
                 status.reconnectAttempts = currentAttempts
             }
+            // Ban further attempts for 10 minutes
+            reconnectBanUntilByDevice[deviceId] = Date().addingTimeInterval(10 * 60)
             disconnect(from: deviceId)
             return
         }
@@ -552,6 +580,40 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         }
         
         updateConnectionMetrics()
+    }
+
+    // MARK: - Network Helpers
+    private func isIPInCurrentSubnets(_ ip: String) -> Bool {
+        let bases = currentSubnetBases()
+        let base = subnetBase(for: ip)
+        return bases.contains(base)
+    }
+
+    private func currentSubnetBases() -> Set<String> {
+        var bases: Set<String> = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return bases }
+        defer { freeifaddrs(ifaddr) }
+        for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+            let interface = ptr.pointee
+            if interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
+                let name = String(cString: interface.ifa_name)
+                if name.hasPrefix("en") || name.hasPrefix("bridge") {
+                    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+                    let ip = String(cString: host)
+                    let base = subnetBase(for: ip)
+                    if !base.isEmpty { bases.insert(base) }
+                }
+            }
+        }
+        return bases
+    }
+
+    private func subnetBase(for ip: String) -> String {
+        let comps = ip.split(separator: ".")
+        if comps.count >= 3 { return "\(comps[0]).\(comps[1]).\(comps[2])" }
+        return ""
     }
     
     private func findDevice(by deviceId: String) -> WLEDDevice? {
