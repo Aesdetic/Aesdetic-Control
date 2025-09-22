@@ -754,12 +754,19 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
         
-        await withTaskGroup(of: Void.self) { group in
-            for device in devices {
-                group.addTask { [weak self] in
-                    await self?.refreshDeviceState(device)
+        // Limit concurrency to avoid memory/network pressure
+        let limit = 4
+        var index = 0
+        while index < devices.count {
+            await withTaskGroup(of: Void.self) { group in
+                for d in devices[index..<min(index+limit, devices.count)] {
+                    group.addTask { [weak self] in
+                        await self?.refreshDeviceState(d)
+                    }
                 }
+                for await _ in group { }
             }
+            index += limit
         }
     }
     

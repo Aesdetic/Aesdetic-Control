@@ -81,7 +81,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         config.timeoutIntervalForResource = 30
         self.urlSession = URLSession(configuration: config)
         
-        startUnifiedScheduler()
+        // Defer starting scheduler until a connection exists
         
         // Observe app lifecycle to manage resources
         setupAppLifecycleObservers()
@@ -187,6 +187,8 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         requestFullState(for: device.id)
         
         updateConnectionMetrics()
+        // Start scheduler if this is the first active connection
+        if schedulerTask == nil { startUnifiedScheduler() }
     }
     
     /// Disconnect from a specific device's WebSocket
@@ -226,6 +228,9 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         
         connectionStatus = .disconnected
         connectionMetrics = ConnectionMetrics()
+        // Stop scheduler when no connections remain
+        schedulerTask?.cancel()
+        schedulerTask = nil
     }
     
     /// Disconnect devices with low priority to make room for new connections

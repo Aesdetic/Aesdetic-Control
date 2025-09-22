@@ -124,7 +124,7 @@ struct DashboardView: View {
                 ScenesAutomationsSection(
                     automations: automationViewModel.automations,
                     onToggle: { automation in
-                        Task { await automationViewModel.toggleAutomation(automation) }
+                        Task { automationViewModel.toggleAutomation(automation) }
                     }
                 )
                 .padding(.top, 0)

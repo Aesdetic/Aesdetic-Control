@@ -18,7 +18,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     @Published var discoveryProgress: String = ""
     @Published var lastDiscoveryTime: Date?
     
-    private let session: URLSession
+    private var session: URLSession
     private var scannedIPs = Set<String>()
     private let syncQueue = DispatchQueue(label: "wled.discovery.sync")
     private let logger = os.Logger(subsystem: "com.aesdetic.control", category: "Discovery")
@@ -32,7 +32,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     // Discovery configuration
     private let discoveryTimeout: TimeInterval = 5.0
     private let httpTimeout: TimeInterval = 5.0 // Increased from 3.0
-    private let maxConcurrentHTTPRequests = 50
+    private let maxConcurrentHTTPRequests = 8
     
     // Semaphore for controlling concurrent HTTP requests
     private let httpSemaphore: DispatchSemaphore
@@ -88,6 +88,13 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         udpSocket = nil
         udpListener?.cancel()
         udpListener = nil
+
+        // Cancel in-flight HTTP scans by invalidating and recreating the session
+        session.invalidateAndCancel()
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = httpTimeout
+        config.timeoutIntervalForResource = httpTimeout * 2
+        session = URLSession(configuration: config)
         
         DispatchQueue.main.async {
             self.isScanning = false
@@ -287,7 +294,8 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     
     private func startComprehensiveIPScanning(completion: @escaping () -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let networkRanges = self.getNetworkRanges()
+            // Limit to current device subnets only to avoid massive sweeps
+            let networkRanges = self.getNetworkRanges().prefix(2)
             let scanGroup = DispatchGroup()
             
             self.logger.info("🔍 Starting IP scan on \(networkRanges.count) network ranges")
@@ -318,25 +326,13 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             }
         }
         
-        // Add common network ranges as fallback
-        let commonRanges = [
-            "192.168.0", "192.168.1", "192.168.2", "192.168.3",
-            "192.168.4", "192.168.5", "192.168.10", "192.168.11",
-            "192.168.20", "192.168.30", "192.168.40", "192.168.50",
-            "192.168.100", "192.168.101", "192.168.254",
-            "10.0.0", "10.0.1", "10.0.2", "10.1.0", "10.1.1",
-            "172.16.0", "172.16.1", "172.16.2", "172.31.0"
-        ]
-        
-        for range in commonRanges {
-            if !ranges.contains(range) {
-                ranges.append(range)
-            }
-        }
+        // Remove large hard-coded ranges to prevent excessive scanning
         
         logger.info("📊 Will scan \(ranges.count) network ranges: \(ranges)")
         return ranges
     }
+
+    // Removed setSession helper; session is now a var and directly reassigned.
     
     private func getCurrentDeviceIPs() -> [String] {
         var ips: [String] = []
