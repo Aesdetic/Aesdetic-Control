@@ -38,9 +38,7 @@ class AutomationViewModel: ObservableObject {
         // Reduced frequency: Update every 5 seconds instead of 1 second for better performance
         // Most automation state changes don't need sub-second precision
         realTimeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateAutomationStates()
-            }
+            DispatchQueue.main.async { self?.updateAutomationStates() }
         }
     }
     
@@ -70,7 +68,7 @@ class AutomationViewModel: ObservableObject {
     private func startSlowTimer() {
         // Slow timer for when no active automations need frequent updates (every 30 seconds)
         realTimeTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 self?.updateAutomationStates()
                 self?.optimizeTimerFrequency() // Re-evaluate timer needs
             }
@@ -178,14 +176,16 @@ class AutomationViewModel: ObservableObject {
     
     func updateAutomationProgress(_ automationId: String, progress: Double) {
         if let index = automations.firstIndex(where: { $0.id == automationId }) {
-            automations[index].progress = progress
-            objectWillChange.send()
+            DispatchQueue.main.async {
+                self.automations[index].progress = progress
+                self.objectWillChange.send()
+            }
         }
     }
     
     func startAutomation(_ automation: Automation) {
         if let index = automations.firstIndex(where: { $0.id == automation.id }) {
-            automations[index].updateState(.active)
+            DispatchQueue.main.async { self.automations[index].updateState(.active) }
             
             // TODO: Trigger actual automation execution
             simulateAutomationExecution(automation)
@@ -197,7 +197,7 @@ class AutomationViewModel: ObservableObject {
     
     func stopAutomation(_ automation: Automation) {
         if let index = automations.firstIndex(where: { $0.id == automation.id }) {
-            automations[index].updateState(.completed)
+            DispatchQueue.main.async { self.automations[index].updateState(.completed) }
             
             // Optimize timer frequency after stopping automation
             optimizeTimerFrequency()

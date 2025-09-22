@@ -347,12 +347,10 @@ struct EnhancedDeviceCard: View {
                         // Cancel previous timer and create new one
                         brightnessUpdateTimer?.invalidate()
                         brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { _ in
-                            Task {
-                                #if DEBUG
-                                print("[CARD] Debounced bri=\(Int(localBrightness)) for dev=\(device.id)")
-                                #endif
-                                await updateBrightness()
-                            }
+                            #if DEBUG
+                            print("[CARD] Debounced bri=\(Int(localBrightness)) for dev=\(device.id)")
+                            #endif
+                            Task { await updateBrightness() }
                         }
                     }
                 }

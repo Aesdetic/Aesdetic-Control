@@ -14,47 +14,36 @@ struct DashboardView: View {
     
     @Environment(\.colorScheme) var colorScheme
     
+    // TEMP: Minimal debug mode to isolate background/layout issues
+    @State private var debugMinimalMode: Bool = true
+    // Safe area helper for consistent top spacing (avoids status indicators overlap)
+    private var topSafeAreaInset: CGFloat {
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first {
+            return window.safeAreaInsets.top
+        }
+        return 0
+    }
+    
     // MARK: - Performance Optimization Properties
     
-    // Memoized expensive calculations
+    // Derived-data cache (updated only from explicit events, never from computed properties)
     @State private var memoizedDeviceStats: (total: Int, online: Int, offline: Int) = (0, 0, 0)
     @State private var memoizedFilteredDevices: [WLEDDevice] = []
-    @State private var lastDevicesUpdateTime: Date = Date()
     
-    private let deviceUpdateThreshold: TimeInterval = 0.5 // Update stats max every 500ms
+    private let deviceUpdateThrottle: TimeInterval = 0.5 // 500ms throttle window
+    @State private var lastDerivedUpdate: Date = .distantPast
     
     // Animation optimization
     private let standardAnimation: Animation = .easeInOut(duration: 0.25)
     private let fastAnimation: Animation = .easeInOut(duration: 0.15)
     private let smoothAnimation: Animation = .interpolatingSpring(stiffness: 300, damping: 30)
     
-    // Background gradient
-    private var backgroundGradient: some View {
-        Color.black
-    }
+    // Background handled globally by AppBackground
     
-    // Computed properties with memoization
-    private var deviceStatistics: (total: Int, online: Int, offline: Int) {
-        let currentTime = Date()
-        if currentTime.timeIntervalSince(lastDevicesUpdateTime) > deviceUpdateThreshold || 
-           memoizedDeviceStats.total != deviceControlViewModel.devices.count {
-            updateMemoizedStats()
-        }
-        return memoizedDeviceStats
-    }
-    
-    private var filteredDevices: [WLEDDevice] {
-        let currentDevices = deviceControlViewModel.devices
-        let currentTime = Date()
-        
-        // Only recalculate if devices changed or enough time passed
-        if currentTime.timeIntervalSince(lastDevicesUpdateTime) > deviceUpdateThreshold || 
-           memoizedFilteredDevices.count != currentDevices.count {
-            updateMemoizedFilteredDevices()
-        }
-        
-        return memoizedFilteredDevices
-    }
+    // Side-effect-free accessors
+    private var deviceStatistics: (total: Int, online: Int, offline: Int) { memoizedDeviceStats }
+    private var filteredDevices: [WLEDDevice] { memoizedFilteredDevices }
     
     private func updateMemoizedStats() {
         let devices = deviceControlViewModel.devices
@@ -63,7 +52,7 @@ struct DashboardView: View {
         let offline = total - online
         
         memoizedDeviceStats = (total: total, online: online, offline: offline)
-        lastDevicesUpdateTime = Date()
+        lastDerivedUpdate = Date()
     }
     
     private func updateMemoizedFilteredDevices() {
@@ -77,53 +66,100 @@ struct DashboardView: View {
                 device.location == deviceControlViewModel.selectedLocationFilter
             }
         }
-        
-        lastDevicesUpdateTime = Date()
+        lastDerivedUpdate = Date()
+    }
+
+    // Call this when inputs change, throttled to 500ms
+    private func recomputeDerivedIfNeeded() {
+        let now = Date()
+        guard now.timeIntervalSince(lastDerivedUpdate) >= deviceUpdateThrottle else { return }
+        updateMemoizedStats()
+        updateMemoizedFilteredDevices()
     }
     
     var body: some View {
-        NavigationStack {
-            GeometryReader { geometry in
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) { // LazyVStack for better performance with many devices
-                        // Header with logo only
-                        headerSection(geometry: geometry)
-                        
-                        // Greeting text on left side
-                        greetingSection(geometry: geometry)
-                        
-                        // Motivational text under greeting
-                        motivationalSection(geometry: geometry)
-                        
-                        // Scenes and automations
-                        scenesSection(geometry: geometry)
-                        
-                        // Statistics with memoized data
-                        statisticsSection(geometry: geometry)
-                        
-                        // Device cards with optimized rendering
-                        deviceCardsSection(geometry: geometry)
+        ZStack {
+            AppBackground()
+            VStack(spacing: 0) {
+                // Combined header row: greeting aligned with logo bottom
+                HStack(alignment: .lastTextBaseline, spacing: 12) {
+                    Text(dashboardViewModel.currentGreeting)
+                        .font(.largeTitle.weight(.bold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .id(dashboardViewModel.currentGreeting)
+                    Spacer()
+                    Group {
+                        if let logoImage = UIImage(named: "aesdetic_logo") {
+                            Image(uiImage: logoImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                        } else {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(.white)
+                        }
                     }
-                    .animation(standardAnimation, value: filteredDevices.count)
+                    .frame(width: 44, height: 44)
+                    .alignmentGuide(.lastTextBaseline) { d in d[.bottom] }
                 }
-                .background(backgroundGradient)
-                .toolbar(.hidden, for: .navigationBar)
-                .refreshable {
-                    await refreshData()
+                .padding(.horizontal, 16)
+                .padding(.top, topSafeAreaInset + 12)
+                .padding(.bottom, 2)
+
+                // Motivational text
+                HStack {
+                    Text(dashboardViewModel.currentQuote)
+                        .font(.title3.weight(.regular))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .id(dashboardViewModel.currentQuote)
+                    Spacer()
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
+                // Scenes & Automations
+                ScenesAutomationsSection(
+                    automations: automationViewModel.automations,
+                    onToggle: { automation in
+                        Task { await automationViewModel.toggleAutomation(automation) }
+                    }
+                )
+                .padding(.top, 0)
+                .padding(.bottom, 8)
+                .onReceive(automationViewModel.$automations) { _ in
+                    DispatchQueue.main.async { recomputeDerivedIfNeeded() }
+                }
+
+                // Devices stats (from derived cache)
+                DeviceStatsSection(
+                    totalDevices: deviceStatistics.total,
+                    activeDevices: deviceStatistics.online,
+                    activeAutomations: automationViewModel.automations.filter { $0.isEnabled }.count
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                // Device cards grid (from derived cache)
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 18)],
+                    spacing: 18
+                ) {
+                    ForEach(filteredDevices, id: \.id) { device in
+                        MiniDeviceCard(device: device)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .background(Color.clear)
+                .onChange(of: deviceControlViewModel.devices) { _, _ in
+                    DispatchQueue.main.async { recomputeDerivedIfNeeded() }
+                }
+
+                Spacer(minLength: 16)
             }
-        }
-        .navigationViewStyle(StackNavigationViewStyle())
-        .onAppear {
-            updateMemoizedStats()
-            updateMemoizedFilteredDevices()
-            Task { @MainActor in
-                dashboardViewModel.updateCurrentGreeting()
-            }
-        }
-        .onChange(of: deviceControlViewModel.devices) { _, _ in
-            // Mark for update on next access
-            lastDevicesUpdateTime = Date.distantPast
         }
     }
     
@@ -191,9 +227,7 @@ struct DashboardView: View {
         ScenesAutomationsSection(
             automations: automationViewModel.automations,
             onToggle: { automation in
-                Task {
-                    await automationViewModel.toggleAutomation(automation)
-                }
+                Task { automationViewModel.toggleAutomation(automation) }
             }
         )
         .padding(.bottom, 20)
@@ -240,22 +274,13 @@ struct DashboardView: View {
     
     @MainActor
     private func refreshData() async {
-        // Parallelize refresh operations for better performance
+        // Await all async work, then update derived caches once
         await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await deviceControlViewModel.refreshDevices()
-            }
-            
-            group.addTask {
-                await MainActor.run {
-                    dashboardViewModel.updateCurrentGreeting()
-                }
-            }
-            
-            // Update memoized data after refresh
-            updateMemoizedStats()
-            updateMemoizedFilteredDevices()
+            group.addTask { await deviceControlViewModel.refreshDevices() }
+            group.addTask { await dashboardViewModel.updateCurrentGreeting() }
+            for await _ in group { }
         }
+        DispatchQueue.main.async { recomputeDerivedIfNeeded() }
     }
 }
 
@@ -270,7 +295,7 @@ struct ScenesAutomationsSection: View {
     let onToggle: (Automation) -> Void
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
             Text("Scenes & Automations")
                 .font(.title2)
                 .fontWeight(.semibold)
@@ -278,7 +303,7 @@ struct ScenesAutomationsSection: View {
                 .padding(.horizontal, 20)
             
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                LazyHStack(spacing: 12) {
                     ForEach(automations) { automation in
                         SceneAutomationButton(
                             automation: automation,
@@ -287,8 +312,15 @@ struct ScenesAutomationsSection: View {
                     }
                 }
                 .padding(.horizontal, 20)
+                .background(Color.clear)
             }
+            .frame(height: 52)
+            .scrollIndicators(.hidden)
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            .scrollClipDisabled()
         }
+        .background(Color.clear)
     }
 }
 
@@ -300,48 +332,26 @@ struct SceneAutomationButton: View {
     
     var body: some View {
         Button(action: onToggle) {
-            HStack(spacing: 12) {
-                // Icon on the left
+            HStack(spacing: 8) {
                 Image(systemName: automation.automationType.systemImage)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundColor(automation.isEnabled ? .black : .white)
-                    .frame(width: 24, height: 24)
-                
-                // Name on the right
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 22, height: 22)
+
                 Text(automation.name)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(automation.isEnabled ? .black : .white)
+                    .font(.headline)
+                    .foregroundColor(.white)
                     .lineLimit(1)
-                
+
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .frame(minWidth: 140, maxWidth: 200)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(
-                        automation.isEnabled 
-                        ? .white 
-                        : .white.opacity(0.15)
-                    )
-                    .overlay(
-                        automation.isEnabled ? nil :
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(.regularMaterial)
-                            .opacity(0.8)
-                    )
-            )
-
-            .shadow(
-                color: automation.isEnabled ? .black.opacity(0.1) : .clear,
-                radius: automation.isEnabled ? 8 : 0,
-                x: 0,
-                y: automation.isEnabled ? 2 : 0
-            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(minWidth: 160, maxWidth: 220)
+            .liquidGlassButton(cornerRadius: 18, active: automation.isEnabled, tint: .blue)
         }
         .buttonStyle(PlainButtonStyle())
-        .scaleEffect(automation.isEnabled ? 1.0 : 0.98)
+        .scaleEffect(1.0)
         .animation(.easeInOut(duration: 0.2), value: automation.isEnabled)
     }
 }
@@ -404,14 +414,7 @@ struct UnifiedStatsCard: View {
             )
         }
         .frame(height: 68)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(.black.opacity(0.3))
-                )
-        )
+        .liquidGlassButton(cornerRadius: 20, active: true, tint: .blue)
     }
 }
 
@@ -547,16 +550,7 @@ struct MiniDeviceCard: View {
         .aspectRatio(1.0, contentMode: .fit)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scaleEffect(1.0)
-        .background(
-            RoundedRectangle(cornerRadius: 19, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 19, style: .continuous)
-                        .fill(.black.opacity(0.3))
-                )
-                .scaleEffect(1.0)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+        .liquidGlassButton(cornerRadius: 19, active: currentPowerState, tint: device.currentColor)
         .onAppear {
             // Clear any UI optimistic state on appear
             viewModel.clearUIOptimisticState(deviceId: device.id)
@@ -713,18 +707,14 @@ struct MiniDeviceCard: View {
                 // Allow time for the API call and state propagation
                 try? await Task.sleep(nanoseconds: 750_000_000) // 0.75 seconds
                 
-                // Reset UI state after completion
-                await MainActor.run {
+                // Reset UI state after completion (next runloop tick)
+                DispatchQueue.main.async {
                     isToggling = false
-                    
-                    // ViewModel will handle state cleanup automatically
-                    // UI will reflect the coordinated state through currentPowerState
                     let finalState = viewModel.getCurrentPowerState(for: device.id)
-                        
-                        if finalState == targetState {
-                            print("✅ Dashboard toggle successful: \(targetState ? "ON" : "OFF")")
-                        } else {
-                            print("⚠️ Dashboard toggle mismatch - wanted: \(targetState), got: \(finalState)")
+                    if finalState == targetState {
+                        print("✅ Dashboard toggle successful: \(targetState ? "ON" : "OFF")")
+                    } else {
+                        print("⚠️ Dashboard toggle mismatch - wanted: \(targetState), got: \(finalState)")
                     }
                 }
             }
