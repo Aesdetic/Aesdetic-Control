@@ -99,14 +99,34 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             task.cancel(with: .normalClosure, reason: nil)
         }
         webSocketTasks.removeAll()
+        
+        // Cancel all timers to prevent memory leaks
+        for timer in reconnectTimers.values {
+            timer.invalidate()
+        }
+        reconnectTimers.removeAll()
+        
+        for timer in connectionHealthTimers.values {
+            timer.invalidate()
+        }
+        connectionHealthTimers.removeAll()
+        
         reconnectAttempts.removeAll()
         connectionPriorities.removeAll()
-        // pathMonitor?.cancel() // This line was removed as pathMonitor is not defined in the original file
-        NotificationCenter.default.removeObserver(self)
+        reconnectBanUntilByDevice.removeAll()
+        lastPingTimes.removeAll()
         
         // Cancel unified scheduler
         schedulerTask?.cancel()
         schedulerTask = nil
+        
+        // Cancel all Combine subscriptions
+        cancellables.removeAll()
+        
+        NotificationCenter.default.removeObserver(self)
+        
+        // Note: deviceConnectionStatuses is @Published and main actor-isolated
+        // It will be cleaned up when the main actor context is deallocated
     }
     
     // MARK: - App Lifecycle Management

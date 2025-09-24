@@ -13,10 +13,20 @@ struct LiquidGlassButtonStyle: ViewModifier {
             .background(
                 Group {
                     if active {
-                        // Active: bright white glass, feels elevated
+                        // Active: premium liquid glass with layered materials and gentle tint
                         shape
-                            .fill(Color.white.opacity(0.78))
-                            .overlay(shape.fill(.ultraThinMaterial.opacity(0.25)))
+                            .fill(Color.white.opacity(0.66))
+                            .overlay(shape.fill(.ultraThinMaterial.opacity(0.35)))
+                            // Subtle specular highlight from top-left
+                            .overlay(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.28), Color.white.opacity(0.10), .clear],
+                                    startPoint: .topLeading,
+                                    endPoint: .center
+                                )
+                                .clipShape(shape)
+                            )
+                            // Optional tint bloom to inherit device/section color
                             .overlay(
                                 Group {
                                     if let tint = tint {
@@ -26,23 +36,36 @@ struct LiquidGlassButtonStyle: ViewModifier {
                                             endPoint: .bottomTrailing
                                         )
                                         .blendMode(.overlay)
+                                        .clipShape(shape)
                                     }
                                 }
                             )
                     } else {
-                        // Inactive: no material, fully clear fill to avoid any gray block
+                        // Inactive: faint glassy presence without heavy material
                         shape
-                            .fill(Color.clear)
+                            .fill(Color.white.opacity(0.06))
                     }
                 }
             )
             .overlay(
-                shape
-                    .strokeBorder(
-                        active ? Color.clear : Color.white.opacity(0.18),
-                        lineWidth: active ? 0 : 1
-                    )
-                    .blendMode(.overlay)
+                // Outer edge light or outline depending on state
+                Group {
+                    if active {
+                        shape
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.35), Color.white.opacity(0.10)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
+                    } else {
+                        shape
+                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                            .blendMode(.overlay)
+                    }
+                }
             )
             .overlay(
                 LinearGradient(
@@ -55,7 +78,10 @@ struct LiquidGlassButtonStyle: ViewModifier {
             // Ensure all backgrounds/materials are clipped strictly to the shape
             .clipShape(shape)
             .compositingGroup()
-            .shadow(color: .black.opacity(active ? 0.25 : 0.06), radius: active ? 16 : 8, x: 0, y: active ? 8 : 2)
+            // Soft drop shadow for elevation
+            .shadow(color: .black.opacity(active ? 0.22 : 0.06), radius: active ? 16 : 8, x: 0, y: active ? 8 : 2)
+            // Optional tint glow for vivid feel (very subtle)
+            .shadow(color: (tint ?? .clear).opacity(active ? 0.18 : 0.06), radius: active ? 10 : 6, x: 0, y: 0)
     }
 }
 

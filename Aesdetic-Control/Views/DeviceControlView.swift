@@ -18,11 +18,46 @@ struct DeviceControlView: View {
     @State private var showRealTimeSettings: Bool = false
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                AppBackground()
-                
-                VStack(spacing: 0) {
+        ZStack {
+            AppBackground()
+            
+            GeometryReader { geometry in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        // Enhanced safe area spacing for status bar
+                        Spacer()
+                            .frame(height: max(80, geometry.safeAreaInsets.top + 40))
+                        
+                        // Header - matching Dashboard style exactly
+                        HStack(alignment: .lastTextBaseline, spacing: 12) {
+                            Text("Devices")
+                                .font(.largeTitle.weight(.bold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            
+                            Spacer()
+                            
+                            // Real-Time Settings Button
+                            Button {
+                                showRealTimeSettings = true
+                            } label: {
+                                Image(systemName: "gear")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                            }
+                            
+                            // Add Device Button
+                            Button {
+                                showAddDevice = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 20)
+                    
                     // Main Content
                     if viewModel.devices.isEmpty && !viewModel.isScanning {
                         EmptyStateView(
@@ -30,57 +65,36 @@ struct DeviceControlView: View {
                             onAddDevice: { showAddDevice = true }
                         )
                     } else {
-                        // Device List (show immediately when devices are found, even during scanning)
-                        VStack(spacing: 0) {
-                            // Optional: Show small scanning indicator at top if still scanning
-                            if viewModel.isScanning {
-                                HStack {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text("Discovering devices...")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                    Spacer()
-                                    Text("\(viewModel.devices.count) found")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Color.gray.opacity(0.1))
-                                .cornerRadius(8)
-                                .padding(.horizontal, 16)
-                                .transition(.opacity)
+                        // Optional: Show small scanning indicator at top if still scanning
+                        if viewModel.isScanning {
+                            HStack {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                Text("Discovering devices...")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Spacer()
+                                Text("\(viewModel.devices.count) found")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
                             }
-                            
-                            DeviceListView(viewModel: viewModel)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.gray.opacity(0.1))
+                            .cornerRadius(8)
+                            .padding(.horizontal, 16)
+                            .transition(.opacity)
+                        }
+                        
+                        DeviceListView(viewModel: viewModel) { device in
+                            selectedDevice = device
+                            showDeviceDetail = true
                         }
                     }
                     
-                    Spacer()
-                }
-            }
-            .navigationTitle("Devices")
-            .navigationBarTitleDisplayMode(.large)
-            .preferredColorScheme(.dark)
-            .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    // Real-Time Settings Button
-                    Button {
-                        showRealTimeSettings = true
-                    } label: {
-                        Image(systemName: "gear")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                    }
-                    
-                    // Add Device Button
-                    Button {
-                        showAddDevice = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .foregroundColor(.white)
-                            .font(.title2)
+                        // Bottom spacing to prevent tab bar overlap and shadow clipping
+                        Spacer()
+                            .frame(height: geometry.safeAreaInsets.bottom + 120) // Increased for shadow space
                     }
                 }
             }

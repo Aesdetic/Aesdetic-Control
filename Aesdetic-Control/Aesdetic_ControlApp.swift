@@ -46,6 +46,11 @@ struct Aesdetic_ControlApp: App {
                     if newPhase == .active {
                         // When app becomes active, ensure permission prompt (if still pending)
                         LocalNetworkPrompter.shared.trigger()
+                        
+                        // Immediately check device status when returning to app
+                        Task { @MainActor in
+                            await deviceControlViewModel.checkDeviceStatusOnAppActive()
+                        }
                     }
                 }
         }

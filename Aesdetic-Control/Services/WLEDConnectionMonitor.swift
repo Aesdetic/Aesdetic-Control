@@ -36,9 +36,9 @@ class WLEDConnectionMonitor: ObservableObject {
     private let coreDataManager: CoreDataManager
     
     // Health check configuration
-    private let healthCheckInterval: TimeInterval = 30.0 // Check every 30 seconds
-    private let quickCheckInterval: TimeInterval = 5.0   // Quick check every 5 seconds for recently discovered devices
-    private let connectionTimeout: TimeInterval = 3.0    // Connection timeout
+    private let healthCheckInterval: TimeInterval = 15.0 // Check every 15 seconds (reduced from 30)
+    private let quickCheckInterval: TimeInterval = 3.0   // Quick check every 3 seconds (reduced from 5)
+    private let connectionTimeout: TimeInterval = 2.0    // Connection timeout (reduced from 3)
     
     // Reconnection configuration
     private let reconnectionStrategy = ReconnectionStrategy.default
@@ -174,6 +174,21 @@ class WLEDConnectionMonitor: ObservableObject {
         reconnectionTasks.removeValue(forKey: deviceId)
         
         logger.info("Unregistered device from monitoring: \(deviceId)")
+    }
+    
+    /// Perform immediate health checks for all registered devices
+    func performImmediateHealthChecks() async {
+        logger.info("Performing immediate health checks for all devices")
+        
+        let devices = await loadRegisteredDevices()
+        
+        await withTaskGroup(of: Void.self) { group in
+            for device in devices {
+                group.addTask { [weak self] in
+                    await self?.checkDeviceHealth(device)
+                }
+            }
+        }
     }
     
     // MARK: - Health Check System

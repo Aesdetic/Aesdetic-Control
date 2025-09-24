@@ -35,22 +35,9 @@
 		944464732E0D2D0300F0E904 /* Aesdetic-ControlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Aesdetic-ControlUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		9401E9AE2E7BDC7600053730 /* Exceptions for "Aesdetic-Control" folder in "Aesdetic-Control" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				AppInfo.plist,
-			);
-			target = 9444645B2E0D2D0100F0E904 /* Aesdetic-Control */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9444645E2E0D2D0100F0E904 /* Aesdetic-Control */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				9401E9AE2E7BDC7600053730 /* Exceptions for "Aesdetic-Control" folder in "Aesdetic-Control" target */,
-			);
 			path = "Aesdetic-Control";
 			sourceTree = "<group>";
 		};

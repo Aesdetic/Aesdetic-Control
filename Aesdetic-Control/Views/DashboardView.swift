@@ -245,7 +245,7 @@ struct DashboardView: View {
         )
         .padding(.horizontal, 20)
         .padding(.top, 12)
-        .animation(smoothAnimation, value: stats.total) // Smooth stat changes
+        .animation(.easeInOut(duration: 0.2), value: stats.total) // Reduced animation duration
     }
     
     @ViewBuilder
@@ -261,14 +261,14 @@ struct DashboardView: View {
                 MiniDeviceCard(device: device)
                     .id(device.id) // Stable identity for animations
                     .transition(.asymmetric(
-                        insertion: .scale.combined(with: .opacity).animation(smoothAnimation.delay(0.1)),
-                        removal: .scale.combined(with: .opacity).animation(fastAnimation)
+                        insertion: .scale.combined(with: .opacity).animation(.easeInOut(duration: 0.2).delay(0.1)),
+                        removal: .scale.combined(with: .opacity).animation(.easeInOut(duration: 0.15))
                     ))
             }
         }
         .padding(.horizontal, 18)
         .padding(.top, 20)
-        .animation(standardAnimation, value: filteredDevices.count)
+        .animation(.easeInOut(duration: 0.2), value: filteredDevices.count)
     }
     
     // MARK: - Performance Optimized Data Refresh
@@ -349,7 +349,7 @@ struct SceneAutomationButton: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(minWidth: 160, maxWidth: 220)
-            .liquidGlassButton(cornerRadius: 18, active: automation.isEnabled, tint: .blue)
+            .liquidGlassButton(cornerRadius: 18, active: automation.isEnabled, tint: .gray)
         }
         .buttonStyle(PlainButtonStyle())
         .scaleEffect(1.0)
@@ -415,7 +415,7 @@ struct UnifiedStatsCard: View {
             )
         }
         .frame(height: 68)
-        .liquidGlassButton(cornerRadius: 20, active: true, tint: .blue)
+        .liquidGlassButton(cornerRadius: 20, active: true, tint: .gray)
     }
 }
 
@@ -551,7 +551,82 @@ struct MiniDeviceCard: View {
         .aspectRatio(1.0, contentMode: .fit)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scaleEffect(1.0)
-        .liquidGlassButton(cornerRadius: 19, active: currentPowerState, tint: device.currentColor)
+        .background(
+            // Liquid glass effect as background - non-interactive with state-based styling
+            Group {
+                if currentPowerState {
+                    // Active: premium liquid glass with layered materials and gentle tint
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.white.opacity(0.66))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(.ultraThinMaterial.opacity(0.35))
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.28), Color.white.opacity(0.10), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .center
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [device.currentColor.opacity(0.22), device.currentColor.opacity(0.12)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            .blendMode(.overlay)
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [Color.white.opacity(0.35), Color.white.opacity(0.10)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.22), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .center
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .compositingGroup()
+                        .shadow(color: .black.opacity(0.22), radius: 16, x: 0, y: 8)
+                        .shadow(color: device.currentColor.opacity(0.18), radius: 10, x: 0, y: 0)
+                } else {
+                    // Inactive: faint glassy presence without heavy material
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                                .blendMode(.overlay)
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.08), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .center
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .compositingGroup()
+                        .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
+                        .shadow(color: device.currentColor.opacity(0.06), radius: 6, x: 0, y: 0)
+                }
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .onAppear {
             // Clear any UI optimistic state on appear
             viewModel.clearUIOptimisticState(deviceId: device.id)
@@ -692,8 +767,15 @@ struct MiniDeviceCard: View {
             // Calculate target state BEFORE any state changes
             let targetState = !currentPowerState
             
+            // If device appears offline but we're trying to control it, mark it as online
+            // This handles cases where discovery set isOnline=true but UI hasn't updated yet
+            if !device.isOnline {
+                viewModel.markDeviceOnline(device.id)
+            }
+            
             // Register UI optimistic state with ViewModel for coordination
-            viewModel.registerUIOptimisticState(deviceId: device.id, state: targetState)
+            // Register optimistic UI state for immediate feedback
+            // Note: This method was removed to prevent memory leaks
             isToggling = true
             
             // Haptic feedback for immediate response

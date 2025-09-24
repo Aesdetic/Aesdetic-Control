@@ -99,6 +99,7 @@ class DeviceControlViewModel: ObservableObject {
     
     // Pending toggles tracking (anti-flicker)
     private var pendingToggles: [String: Bool] = [:]
+    private var toggleTimers: [String: Timer] = [:]
     
     // Add this dictionary to coordinate with UI-level optimistic state
     private var uiToggleStates: [String: Bool] = [:]
@@ -114,12 +115,91 @@ class DeviceControlViewModel: ObservableObject {
     // State change batching for performance
     private var pendingDeviceUpdates: [String: WLEDDevice] = [:]
     private var batchUpdateTimer: Timer?
-    private let batchUpdateInterval: TimeInterval = 0.1 // 100ms batching window
+    private let batchUpdateInterval: TimeInterval = 0.2 // 200ms batching window for better performance
     
-    // MARK: - UI State Coordination
+    // MARK: - App Lifecycle Management
     
-    func registerUIOptimisticState(deviceId: String, state: Bool) {
-        uiToggleStates[deviceId] = state
+    /// Immediately check device status when app becomes active
+    @MainActor
+    func checkDeviceStatusOnAppActive() async {
+        print("🔄 App became active - checking device status immediately")
+        
+        // Get all persisted devices
+        let persistedDevices = await coreDataManager.fetchDevices()
+        
+        // Perform immediate health checks for all devices
+        await withTaskGroup(of: Void.self) { group in
+            for device in persistedDevices {
+                group.addTask { [weak self] in
+                    await self?.performImmediateHealthCheck(for: device)
+                }
+            }
+        }
+        
+        // Also trigger connection monitor to perform immediate checks
+        await connectionMonitor.performImmediateHealthChecks()
+    }
+    
+    /// Perform immediate health check for a single device
+    private func performImmediateHealthCheck(for device: WLEDDevice) async {
+        do {
+            // Quick HTTP ping to check if device is reachable
+            let response = try await apiService.getState(for: device)
+            
+            // Device is online - update status immediately
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].isOnline = true
+                    devices[index].lastSeen = Date()
+                    print("✅ Immediate check: \(device.name) is online")
+                }
+            }
+            
+        } catch {
+            // Device is offline - update status immediately
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].isOnline = false
+                    print("❌ Immediate check: \(device.name) is offline")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Memory Management
+    
+    private func startMemoryMonitoring() {
+        // Monitor memory usage every 30 seconds
+        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.logMemoryUsage()
+            }
+        }
+    }
+    
+    @MainActor
+    private func logMemoryUsage() {
+        var memoryInfo = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &memoryInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_,
+                         task_flavor_t(MACH_TASK_BASIC_INFO),
+                         $0,
+                         &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            let memoryUsageMB = Double(memoryInfo.resident_size) / 1024.0 / 1024.0
+            print("Memory usage: \(String(format: "%.2f", memoryUsageMB)) MB")
+            
+            // Warn if memory usage is high
+            if memoryUsageMB > 100 {
+                print("⚠️ High memory usage detected: \(String(format: "%.2f", memoryUsageMB)) MB")
+            }
+        }
     }
     
     func clearUIOptimisticState(deviceId: String) {
@@ -139,11 +219,28 @@ class DeviceControlViewModel: ObservableObject {
         setupSubscriptions()
         loadDevicesFromPersistence()
         setupWebSocketSubscriptions()
+        
+        // Start memory monitoring
+        startMemoryMonitoring()
     }
     
     deinit {
         cancellables.removeAll()
         batchUpdateTimer?.invalidate()
+        // Clean up all toggle timers
+        toggleTimers.values.forEach { $0.invalidate() }
+        toggleTimers.removeAll()
+        
+        // Note: webSocketManager.disconnectAll() is main actor-isolated
+        // WebSocket connections will be cleaned up when the main actor context is deallocated
+        
+        // Clear all device-related collections
+        pendingDeviceUpdates.removeAll()
+        pendingToggles.removeAll()
+        uiToggleStates.removeAll()
+        lastUserInput.removeAll()
+        
+        print("DeviceControlViewModel deinit - Memory cleaned up")
     }
     
     // MARK: - Subscription Setup
@@ -163,6 +260,19 @@ class DeviceControlViewModel: ObservableObject {
         wledService.$isScanning
             .receive(on: DispatchQueue.main)
             .assign(to: \.isScanning, on: self)
+            .store(in: &cancellables)
+        
+        // Listen for device discovery notifications
+        NotificationCenter.default.publisher(for: NSNotification.Name("DeviceDiscovered"))
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                if let userInfo = notification.userInfo,
+                   let deviceId = userInfo["deviceId"] as? String,
+                   let isOnline = userInfo["isOnline"] as? Bool,
+                   isOnline {
+                    self?.markDeviceOnline(deviceId)
+                }
+            }
             .store(in: &cancellables)
     }
     
@@ -456,6 +566,11 @@ class DeviceControlViewModel: ObservableObject {
                     self.connectionMonitor.registerDevice(device)
                 }
                 
+                // Perform immediate status check for all devices on app launch
+                Task { @MainActor in
+                    await self.performInitialDeviceStatusCheck()
+                }
+                
                 // Auto-connect real-time WebSocket for online devices if enabled
                 if self.isRealTimeEnabled {
                     let onlineDevices = persistedDevices.filter { $0.isOnline }
@@ -471,6 +586,20 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
     
+    /// Perform initial device status check when app launches
+    private func performInitialDeviceStatusCheck() async {
+        print("🚀 App launched - performing initial device status check")
+        
+        // Quick parallel health checks for all devices
+        await withTaskGroup(of: Void.self) { group in
+            for device in devices {
+                group.addTask { [weak self] in
+                    await self?.performImmediateHealthCheck(for: device)
+                }
+            }
+        }
+    }
+    
     private func handleDiscoveredDevices(_ discoveredDevices: [WLEDDevice]) async {
         for discoveredDevice in discoveredDevices {
             // Check if device already exists
@@ -480,16 +609,30 @@ class DeviceControlViewModel: ObservableObject {
                 updatedDevice.name = discoveredDevice.name
                 updatedDevice.ipAddress = discoveredDevice.ipAddress
                 updatedDevice.productType = discoveredDevice.productType
+                updatedDevice.isOnline = discoveredDevice.isOnline  // CRITICAL: Update online status
+                updatedDevice.brightness = discoveredDevice.brightness
+                updatedDevice.isOn = discoveredDevice.isOn
+                updatedDevice.currentColor = discoveredDevice.currentColor
                 updatedDevice.lastSeen = Date()
                 
                 devices[existingIndex] = updatedDevice
                 await coreDataManager.saveDevice(updatedDevice)
+                
+                // Force UI update to reflect the new online status
+                await MainActor.run {
+                    objectWillChange.send()
+                }
             } else {
                 // Add new device
                 var newDevice = discoveredDevice
                 newDevice.lastSeen = Date()
                 devices.append(newDevice)
                 await coreDataManager.saveDevice(newDevice)
+                
+                // Force UI update for new device
+                await MainActor.run {
+                    objectWillChange.send()
+                }
             }
             
             // Register with connection monitor
@@ -501,19 +644,36 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     private func updateDeviceHealthStatus(_ healthStatus: [String: Bool]) {
+        var hasChanges = false
         for (deviceId, isOnline) in healthStatus {
             if let index = devices.firstIndex(where: { $0.id == deviceId }) {
-                devices[index].isOnline = isOnline
+                if devices[index].isOnline != isOnline {
+                    devices[index].isOnline = isOnline
+                    hasChanges = true
+                }
+            }
+        }
+        
+        // Force UI update if any device status changed
+        if hasChanges {
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
             }
         }
     }
     
     // MARK: - Real-Time State Management
     
-    // Toggle control for preventing rapid toggles
-    private var toggleTimers: [String: Timer] = [:]
-    
     // MARK: - Enhanced Device Control
+    
+    /// Force a device to be marked as online (useful after successful discovery)
+    func markDeviceOnline(_ deviceId: String) {
+        if let index = devices.firstIndex(where: { $0.id == deviceId }) {
+            devices[index].isOnline = true
+            devices[index].lastSeen = Date()
+            objectWillChange.send()
+        }
+    }
     
     func toggleDevicePower(_ device: WLEDDevice) async {
         // The UI will have already registered the optimistic state.

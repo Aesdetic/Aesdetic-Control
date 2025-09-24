@@ -572,6 +572,13 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
                 self.discoveredDevices.append(device)
                 self.logger.info("🎉 Added new device: \(device.name) at \(device.ipAddress)")
             }
+            
+            // Notify the ViewModel to mark this device as online
+            NotificationCenter.default.post(
+                name: NSNotification.Name("DeviceDiscovered"),
+                object: nil,
+                userInfo: ["deviceId": device.id, "isOnline": true]
+            )
         }
     }
 }

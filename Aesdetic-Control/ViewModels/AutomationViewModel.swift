@@ -35,9 +35,9 @@ class AutomationViewModel: ObservableObject {
     // MARK: - Real-Time Updates
     
     private func startRealTimeUpdates() {
-        // Reduced frequency: Update every 5 seconds instead of 1 second for better performance
+        // Reduced frequency: Update every 8 seconds instead of 5 seconds for better performance
         // Most automation state changes don't need sub-second precision
-        realTimeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        realTimeTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { [weak self] _ in
             DispatchQueue.main.async { self?.updateAutomationStates() }
         }
     }
@@ -66,8 +66,8 @@ class AutomationViewModel: ObservableObject {
     }
     
     private func startSlowTimer() {
-        // Slow timer for when no active automations need frequent updates (every 30 seconds)
-        realTimeTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+        // Slow timer for when no active automations need frequent updates (every 45 seconds)
+        realTimeTimer = Timer.scheduledTimer(withTimeInterval: 45.0, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
                 self?.updateAutomationStates()
                 self?.optimizeTimerFrequency() // Re-evaluate timer needs

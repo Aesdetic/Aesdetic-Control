@@ -47,7 +47,7 @@ struct EnhancedDeviceCard: View {
             // Product image as background element, aligned bottom-right
             productImageSection
             
-            // Content layered on top
+            // Content layered on top - all interactive elements
             VStack(spacing: 0) {
                 // Header section
                 headerSection
@@ -73,12 +73,81 @@ struct EnhancedDeviceCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: 193) // Increased by 5% (184 * 1.05)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.clear)
+            // Liquid glass effect as background - non-interactive with state-based styling
+            Group {
+                if currentPowerState {
+                    // Active: premium liquid glass with layered materials and gentle tint
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.white.opacity(0.66))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.ultraThinMaterial.opacity(0.35))
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.28), Color.white.opacity(0.10), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .center
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.22), Color.white.opacity(0.12)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            .blendMode(.overlay)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [Color.white.opacity(0.35), Color.white.opacity(0.10)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.22), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .center
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .compositingGroup()
+                        .shadow(color: .black.opacity(0.22), radius: 16, x: 0, y: 8)
+                        .shadow(color: .white.opacity(0.18), radius: 10, x: 0, y: 0)
+                } else {
+                    // Inactive: faint glassy presence without heavy material
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                                .blendMode(.overlay)
+                        )
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.08), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .center
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .compositingGroup()
+                        .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
+                        .shadow(color: .white.opacity(0.06), radius: 6, x: 0, y: 0)
+                }
+            }
         )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)) // Ensure all corners match
-        .contentShape(Rectangle())
-        .onTapGesture { onTap() }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeviceUpdated"))) { _ in
             syncWithDeviceState()
         }
@@ -87,6 +156,11 @@ struct EnhancedDeviceCard: View {
         }
         .onAppear {
             syncWithDeviceState()
+        }
+        .onDisappear {
+            // Clean up timers to prevent memory leaks
+            brightnessUpdateTimer?.invalidate()
+            brightnessUpdateTimer = nil
         }
     }
     
@@ -133,9 +207,7 @@ struct EnhancedDeviceCard: View {
                                 x: 0,
                                 y: 0
                             )
-                            .animation(.easeInOut(duration: 0.3), value: device.brightness)
-                            .animation(.easeInOut(duration: 0.3), value: currentPowerState)
-                            .animation(.easeInOut(duration: 0.3), value: device.isOnline)
+                            .animation(.easeInOut(duration: 0.2), value: currentPowerState)
                         
                         // Product image on top of the glow
                         ProductImageWithBrightness(
@@ -191,6 +263,10 @@ struct EnhancedDeviceCard: View {
                     .foregroundColor(device.isOnline ? .green : .red)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap()
+        }
     }
     
     private var powerButtonSection: some View {
@@ -199,8 +275,15 @@ struct EnhancedDeviceCard: View {
                 // Calculate target state BEFORE any state changes
                 let targetState = !currentPowerState
                 
+                // If device appears offline but we're trying to control it, mark it as online
+                // This handles cases where discovery set isOnline=true but UI hasn't updated yet
+                if !device.isOnline {
+                    viewModel.markDeviceOnline(device.id)
+                }
+                
                 // Register UI optimistic state with ViewModel for coordination
-                viewModel.registerUIOptimisticState(deviceId: device.id, state: targetState)
+                // Register optimistic UI state for immediate feedback
+                // Note: This method was removed to prevent memory leaks
                 isToggling = true
                 
                 // Haptic feedback for immediate response
@@ -208,8 +291,6 @@ struct EnhancedDeviceCard: View {
                 impactFeedback.impactOccurred()
                 
                 Task {
-                    print("🎯 Device tab toggle initiated: \(device.id) → \(targetState ? "ON" : "OFF")")
-                    
                     await viewModel.toggleDevicePower(device)
                     
                     // Allow time for the API call and state propagation
@@ -340,13 +421,13 @@ struct EnhancedDeviceCard: View {
                         let percentage = max(0, min(1, value.location.x / geometry.size.width))
                         let newBrightness = percentage * 255.0
                     
-                    // Only update if change is significant enough
-                    if abs(newBrightness - localBrightness) >= 5 {
+                    // Only update if change is significant enough (increased threshold for better performance)
+                    if abs(newBrightness - localBrightness) >= 10 {
                         localBrightness = newBrightness
                         
-                        // Cancel previous timer and create new one
+                        // Cancel previous timer and create new one with longer interval for better performance
                         brightnessUpdateTimer?.invalidate()
-                        brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { _ in
+                        brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
                             #if DEBUG
                             print("[CARD] Debounced bri=\(Int(localBrightness)) for dev=\(device.id)")
                             #endif
@@ -372,10 +453,10 @@ struct EnhancedDeviceCard: View {
         
         // Only sync if we're not actively controlling and not recently set
         let now = Date()
-        let canSync = !isControlling && (lastBrightnessSet == nil || now.timeIntervalSince(lastBrightnessSet!) > 1.0)
+        let canSync = !isControlling && (lastBrightnessSet == nil || now.timeIntervalSince(lastBrightnessSet!) > 2.0)
         if canSync {
             let deviceBrightness = Double(updatedDevice.brightness)
-            if abs(localBrightness - deviceBrightness) > 15 {
+            if abs(localBrightness - deviceBrightness) > 20 {
                 localBrightness = deviceBrightness
             }
         }
@@ -419,9 +500,14 @@ struct ProductImageWithBrightness: View {
             .brightness(brightnessBoost)
             .scaleEffect(scaleEffect)
             .shadow(color: glowColor, radius: glowRadius)
-            .animation(.easeInOut(duration: 0.3), value: brightness)
-            .animation(.easeInOut(duration: 0.3), value: isOn)
-            .animation(.easeInOut(duration: 0.3), value: isOnline)
+            .animation(.easeInOut(duration: 0.2), value: isOn)
+            .onDisappear {
+                // Clear image cache when view disappears to free memory
+                if let customURL = DeviceImageManager.shared.getCustomImageURL(for: selectedImageName) {
+                    // Force image deallocation
+                    _ = try? FileManager.default.removeItem(at: customURL)
+                }
+            }
         }
         .onAppear {
             selectedImageName = DeviceImageManager.shared.getImageName(for: deviceId)
