@@ -7,9 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		9401E9A92E7BBE9000053730 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 9401E9A82E7BBE9000053730 /* Starscream */; };
 		9401E9AB2E7BC93F00053730 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 9401E9AA2E7BC93F00053730 /* Starscream */; };
 		9401E9AD2E7BC94700053730 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 9401E9AC2E7BC94700053730 /* Starscream */; };
+		9417AFBC2E9959F5006CD87B /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 9417AFBB2E9959F5006CD87B /* Starscream */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,7 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				9401E9A92E7BBE9000053730 /* Starscream in Frameworks */,
+				9417AFBC2E9959F5006CD87B /* Starscream in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -129,7 +129,7 @@
 			);
 			name = "Aesdetic-Control";
 			packageProductDependencies = (
-				9401E9A82E7BBE9000053730 /* Starscream */,
+				9417AFBB2E9959F5006CD87B /* Starscream */,
 			);
 			productName = "Aesdetic-Control";
 			productReference = 9444645C2E0D2D0100F0E904 /* Aesdetic-Control.app */;
@@ -604,17 +604,17 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		9401E9A82E7BBE9000053730 /* Starscream */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */;
-			productName = Starscream;
-		};
 		9401E9AA2E7BC93F00053730 /* Starscream */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */;
 			productName = Starscream;
 		};
 		9401E9AC2E7BC94700053730 /* Starscream */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */;
+			productName = Starscream;
+		};
+		9417AFBB2E9959F5006CD87B /* Starscream */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 9401E9A62E7BBE7E00053730 /* XCRemoteSwiftPackageReference "Starscream" */;
 			productName = Starscream;

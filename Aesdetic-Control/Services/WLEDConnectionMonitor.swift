@@ -36,9 +36,9 @@ class WLEDConnectionMonitor: ObservableObject {
     private let coreDataManager: CoreDataManager
     
     // Health check configuration
-    private let healthCheckInterval: TimeInterval = 15.0 // Check every 15 seconds (reduced from 30)
-    private let quickCheckInterval: TimeInterval = 3.0   // Quick check every 3 seconds (reduced from 5)
-    private let connectionTimeout: TimeInterval = 2.0    // Connection timeout (reduced from 3)
+    private let healthCheckInterval: TimeInterval = 30.0 // Check every 30 seconds
+    private let quickCheckInterval: TimeInterval = 10.0  // Quick check every 10 seconds (increased to reduce load)
+    private let connectionTimeout: TimeInterval = 2.0    // Connection timeout
     
     // Reconnection configuration
     private let reconnectionStrategy = ReconnectionStrategy.default
@@ -176,6 +176,19 @@ class WLEDConnectionMonitor: ObservableObject {
         logger.info("Unregistered device from monitoring: \(deviceId)")
     }
     
+    /// Reset reconnection state for a device (useful when user manually refreshes)
+    func resetReconnectionState(for deviceId: String) {
+        consecutiveFailures[deviceId] = 0
+        reconnectionAttempts[deviceId] = 0
+        reconnectionStatus[deviceId] = "Monitoring"
+        
+        // Cancel any active reconnection task
+        reconnectionTasks[deviceId]?.cancel()
+        reconnectionTasks.removeValue(forKey: deviceId)
+        
+        logger.info("Reset reconnection state for device: \(deviceId)")
+    }
+    
     /// Perform immediate health checks for all registered devices
     func performImmediateHealthChecks() async {
         logger.info("Performing immediate health checks for all devices")
@@ -215,11 +228,22 @@ class WLEDConnectionMonitor: ObservableObject {
             return
         }
         
-        let devices = await loadRegisteredDevices()
-        logger.debug("Performing health checks for \(devices.count) devices")
+        let allDevices = await loadRegisteredDevices()
+        
+        // Filter out devices that have exceeded max retries to prevent infinite loops
+        let devicesToCheck = allDevices.filter { device in
+            let attempts = reconnectionAttempts[device.id, default: 0]
+            return attempts < reconnectionStrategy.maxRetries
+        }
+        
+        if devicesToCheck.count < allDevices.count {
+            logger.debug("Skipping health checks for \(allDevices.count - devicesToCheck.count) devices that exceeded max retries")
+        }
+        
+        logger.debug("Performing health checks for \(devicesToCheck.count) devices")
         
         await withTaskGroup(of: Void.self) { group in
-            for device in devices {
+            for device in devicesToCheck {
                 group.addTask { [weak self] in
                     await self?.checkDeviceHealth(device)
                 }
@@ -231,7 +255,11 @@ class WLEDConnectionMonitor: ObservableObject {
         guard isNetworkAvailable else { return }
         
         let problemDevices = await loadRegisteredDevices().filter { device in
-            consecutiveFailures[device.id, default: 0] > 0
+            let failures = consecutiveFailures[device.id, default: 0]
+            let attempts = reconnectionAttempts[device.id, default: 0]
+            
+            // Only check devices that have failures but haven't exceeded max retries
+            return failures > 0 && failures < 3 && attempts < reconnectionStrategy.maxRetries
         }
         
         if !problemDevices.isEmpty {

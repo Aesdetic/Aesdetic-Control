@@ -73,81 +73,19 @@ struct EnhancedDeviceCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: 193) // Increased by 5% (184 * 1.05)
         .background(
-            // Liquid glass effect as background - non-interactive with state-based styling
-            Group {
-                if currentPowerState {
-                    // Active: premium liquid glass with layered materials and gentle tint
+            // SIMPLIFIED: Removed liquid glass for performance
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(currentPowerState ? Color.white.opacity(0.12) : Color.white.opacity(0.06))
+                .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.66))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(.ultraThinMaterial.opacity(0.35))
-                        )
-                        .overlay(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.28), Color.white.opacity(0.10), .clear],
-                                startPoint: .topLeading,
-                                endPoint: .center
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        )
-                        .overlay(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.22), Color.white.opacity(0.12)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                            .blendMode(.overlay)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .strokeBorder(
-                                    LinearGradient(
-                                        colors: [Color.white.opacity(0.35), Color.white.opacity(0.10)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1
-                                )
-                        )
-                        .overlay(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.22), .clear],
-                                startPoint: .topLeading,
-                                endPoint: .center
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .compositingGroup()
-                        .shadow(color: .black.opacity(0.22), radius: 16, x: 0, y: 8)
-                        .shadow(color: .white.opacity(0.18), radius: 10, x: 0, y: 0)
-                } else {
-                    // Inactive: faint glassy presence without heavy material
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.06))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-                                .blendMode(.overlay)
-                        )
-                        .overlay(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.08), .clear],
-                                startPoint: .topLeading,
-                                endPoint: .center
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .compositingGroup()
-                        .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
-                        .shadow(color: .white.opacity(0.06), radius: 6, x: 0, y: 0)
-                }
-            }
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(Rectangle())
+        // .onTapGesture removed - NavigationLink in DeviceListView handles navigation
+        // This allows the card's interactive controls (power, brightness) to work independently
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeviceUpdated"))) { _ in
             syncWithDeviceState()
         }
@@ -170,71 +108,22 @@ struct EnhancedDeviceCard: View {
                 Spacer()
                 VStack {
                     Spacer()
-                    ZStack {
-                        // Glow effect positioned outside/around the image
-                        Circle()
-                            .fill(
-                                                            RadialGradient(
-                                colors: currentPowerState && device.isOnline ? [
-                                    Color.blue.opacity(brightnessEffect * 0.4),
-                                    Color.blue.opacity(brightnessEffect * 0.25),
-                                    Color.blue.opacity(brightnessEffect * 0.12),
-                                    Color.blue.opacity(brightnessEffect * 0.05),
-                                    Color.clear
-                                ] : [Color.clear],
-                                center: .center,
-                                startRadius: 0,
-                                endRadius: 60
-                            )
-                            )
-                            .scaleEffect(1.4)
-                            .blur(radius: currentPowerState && device.isOnline ? 8 + (brightnessEffect * 4) : 0)
-                            .shadow(
-                                color: currentPowerState && device.isOnline ? Color.blue.opacity(brightnessEffect * 0.3) : Color.clear,
-                                radius: currentPowerState && device.isOnline ? 4 + (brightnessEffect * 3) : 0,
-                                x: 0,
-                                y: 0
-                            )
-                            .shadow(
-                                color: currentPowerState && device.isOnline ? Color.blue.opacity(brightnessEffect * 0.2) : Color.clear,
-                                radius: currentPowerState && device.isOnline ? 8 + (brightnessEffect * 4) : 0,
-                                x: 0,
-                                y: 0
-                            )
-                            .shadow(
-                                color: currentPowerState && device.isOnline ? Color.blue.opacity(brightnessEffect * 0.1) : Color.clear,
-                                radius: currentPowerState && device.isOnline ? 12 + (brightnessEffect * 6) : 0,
-                                x: 0,
-                                y: 0
-                            )
-                            .animation(.easeInOut(duration: 0.2), value: currentPowerState)
-                        
-                        // Product image on top of the glow
-                        ProductImageWithBrightness(
-                            brightness: Double(device.brightness),
-                            isOn: currentPowerState,
-                            isOnline: device.isOnline,
-                            deviceId: device.id
-                        )
-                    }
+                    ProductImageWithBrightness(
+                        brightness: Double(device.brightness),
+                        isOn: currentPowerState,
+                        isOnline: device.isOnline,
+                        deviceId: device.id
+                    )
                     .frame(
-                        width: geometry.size.width * 0.64, // 15% smaller than 75%
-                        height: geometry.size.height * 0.68
+                        width: geometry.size.width * 0.5,
+                        height: geometry.size.height * 0.5
                     )
-                    .offset(x: 30, y: 30)
-                    .mask(
-                        // Create a smooth gradient mask to blend with card background
-                        RadialGradient(
-                            colors: [.white, .white.opacity(0.98), .white.opacity(0.9), .white.opacity(0.7), .white.opacity(0.4), .white.opacity(0.1), .clear],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: geometry.size.width * 0.8
-                        )
-                    )
+                    .offset(x: 20, y: 20)
+                    .opacity(currentPowerState && device.isOnline ? 1.0 : 0.5)
                 }
             }
         }
-        .clipped() // Clip the parts of the image that go outside the card's bounds
+        .clipped()
     }
     
     private var headerSection: some View {
@@ -262,10 +151,6 @@ struct EnhancedDeviceCard: View {
                     .fontWeight(.medium)
                     .foregroundColor(device.isOnline ? .green : .red)
             }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap()
         }
     }
     

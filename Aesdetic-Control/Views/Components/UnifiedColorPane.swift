@@ -4,10 +4,7 @@ struct UnifiedColorPane: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
 
-    @State private var gradient = LEDGradient(stops: [
-        GradientStop(position: 0.0, hexColor: "FF0000"),
-        GradientStop(position: 1.0, hexColor: "0000FF")
-    ])
+    @State private var gradient: LEDGradient?
     @State private var selectedStopId: UUID? = nil
     @State private var showWheel: Bool = false
     @State private var wheelInitial: Color = .white
@@ -17,6 +14,19 @@ struct UnifiedColorPane: View {
     init(device: WLEDDevice) {
         self.device = device
         _briUI = State(initialValue: Double(device.brightness))
+        // Initialize gradient immediately in init to avoid main queue dispatch during rendering
+        _gradient = State(initialValue: LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FF0000"),
+            GradientStop(position: 1.0, hexColor: "0000FF")
+        ]))
+    }
+    
+    // Direct gradient access (no longer lazy)
+    private var currentGradient: LEDGradient {
+        gradient ?? LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FF0000"),
+            GradientStop(position: 1.0, hexColor: "0000FF")
+        ])
     }
 
     var body: some View {
@@ -42,19 +52,26 @@ struct UnifiedColorPane: View {
             .padding(.horizontal, 16)
 
             GradientBar(
-                gradient: $gradient,
+                gradient: Binding(
+                    get: { currentGradient },
+                    set: { newGradient in
+                        gradient = newGradient
+                    }
+                ),
                 selectedStopId: $selectedStopId,
                 onTapStop: { id in
-                    if let stop = gradient.stops.first(where: { $0.id == id }) {
+                    if let stop = currentGradient.stops.first(where: { $0.id == id }) {
                         wheelInitial = stop.color
                         showWheel = true
                     }
                 },
                 onTapAnywhere: { t, tapped in
-                    let color = GradientSampler.sampleColor(at: t, stops: gradient.stops)
+                    let color = GradientSampler.sampleColor(at: t, stops: currentGradient.stops)
                     let new = GradientStop(position: t, hexColor: color.toHex())
-                    gradient.stops.append(new)
-                    gradient.stops.sort { $0.position < $1.position }
+                    var updatedGradient = currentGradient
+                    updatedGradient.stops.append(new)
+                    updatedGradient.stops.sort { $0.position < $1.position }
+                    gradient = updatedGradient
                     selectedStopId = new.id
                 },
                 onStopsChanged: { stops, phase in
@@ -64,17 +81,30 @@ struct UnifiedColorPane: View {
             .frame(height: 56)
             .padding(.horizontal, 16)
         }
+        .task {
+            // Initialize gradient on first appearance
+            if gradient == nil {
+                gradient = LEDGradient(stops: [
+                    GradientStop(position: 0.0, hexColor: "FF0000"),
+                    GradientStop(position: 1.0, hexColor: "0000FF")
+                ])
+            }
+        }
         .sheet(isPresented: $showWheel) {
-            ColorWheelSheet(initial: wheelInitial, canRemove: (gradient.stops.count > 1), onRemoveStop: {
-                if let id = selectedStopId, gradient.stops.count > 1 {
-                    gradient.stops.removeAll { $0.id == id }
+            ColorWheelSheet(initial: wheelInitial, canRemove: (currentGradient.stops.count > 1), onRemoveStop: {
+                if let id = selectedStopId, currentGradient.stops.count > 1 {
+                    var updatedGradient = currentGradient
+                    updatedGradient.stops.removeAll { $0.id == id }
+                    gradient = updatedGradient
                     selectedStopId = nil
-                    Task { await applyNow(stops: gradient.stops) }
+                    Task { await applyNow(stops: updatedGradient.stops) }
                 }
             }, onDone: { color in
-                if let id = selectedStopId, let idx = gradient.stops.firstIndex(where: { $0.id == id }) {
-                    gradient.stops[idx].hexColor = color.toHex()
-                    Task { await applyNow(stops: gradient.stops) }
+                if let id = selectedStopId, let idx = currentGradient.stops.firstIndex(where: { $0.id == id }) {
+                    var updatedGradient = currentGradient
+                    updatedGradient.stops[idx].hexColor = color.toHex()
+                    gradient = updatedGradient
+                    Task { await applyNow(stops: updatedGradient.stops) }
                 }
             })
         }

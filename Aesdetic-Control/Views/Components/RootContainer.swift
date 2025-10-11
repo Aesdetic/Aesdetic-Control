@@ -9,5 +9,3 @@ struct RootContainer: View {
         .preferredColorScheme(.dark)
     }
 }
-
-

@@ -13,13 +13,12 @@ import Combine
 struct DeviceControlView: View {
     @ObservedObject private var viewModel = DeviceControlViewModel.shared
     @State private var showAddDevice: Bool = false
-    @State private var selectedDevice: WLEDDevice?
-    @State private var showDeviceDetail: Bool = false
     @State private var showRealTimeSettings: Bool = false
 
     var body: some View {
-        ZStack {
-            AppBackground()
+        NavigationStack {
+            ZStack {
+                AppBackground()
             
             GeometryReader { geometry in
                 ScrollView(.vertical, showsIndicators: false) {
@@ -87,8 +86,7 @@ struct DeviceControlView: View {
                         }
                         
                         DeviceListView(viewModel: viewModel) { device in
-                            selectedDevice = device
-                            showDeviceDetail = true
+                            // Navigation handled by NavigationLink in DeviceListView
                         }
                     }
                     
@@ -103,16 +101,13 @@ struct DeviceControlView: View {
         .sheet(isPresented: $showAddDevice) {
             AddDeviceSheet(viewModel: viewModel)
         }
-        .sheet(isPresented: $showRealTimeSettings) {
-            RealTimeSettingsView(viewModel: viewModel)
-        }
-        .fullScreenCover(isPresented: $showDeviceDetail) {
-            if let device = selectedDevice {
-                DeviceDetailView(device: device, viewModel: viewModel) {
-                    showDeviceDetail = false
-                    selectedDevice = nil
-                }
+            .sheet(isPresented: $showRealTimeSettings) {
+                RealTimeSettingsView(viewModel: viewModel)
             }
+            .navigationDestination(for: WLEDDevice.self) { device in
+                DeviceDetailView(device: device, viewModel: viewModel)
+            }
+            .navigationBarHidden(true)
         }
     }
     

@@ -27,6 +27,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     private var connectionHealthTimers: [String: Timer] = [:]
     private var schedulerTask: Task<Void, Never>? = nil
     private var lastPingTimes: [String: Date] = [:]
+    private var lastParseErrors: [String: Date] = [:]  // Track last parse error time per device
     
     // Connection pool management
     private let maxConcurrentConnections = 20
@@ -490,29 +491,56 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     }
     
     private func parseStateUpdate(from data: Data, deviceId: String) {
-        do {
-            let response = try JSONDecoder().decode(WLEDResponse.self, from: data)
+        // Parse on background thread to avoid blocking main thread
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
             
-            let deviceUpdate = WLEDDeviceStateUpdate(
-                deviceId: deviceId,
-                state: response.state,
-                info: WLEDInfo(
-                    name: response.info.name,
-                    mac: response.info.mac,
-                    version: response.info.ver,
-                    brand: nil,
-                    product: nil,
-                    uptime: nil
-                ),
-                timestamp: Date()
-            )
-            
-            deviceStateSubject.send(deviceUpdate)
-            
-            logger.debug("Received state update for device: \(deviceId)")
-            
-        } catch {
-            logger.error("Failed to parse WebSocket message for device \(deviceId): \(error.localizedDescription)")
+            do {
+                let response = try JSONDecoder().decode(WLEDResponse.self, from: data)
+                
+                let deviceUpdate = WLEDDeviceStateUpdate(
+                    deviceId: deviceId,
+                    state: response.state,
+                    info: WLEDInfo(
+                        name: response.info.name,
+                        mac: response.info.mac,
+                        version: response.info.ver,
+                        brand: nil,
+                        product: nil,
+                        uptime: nil
+                    ),
+                    timestamp: Date()
+                )
+                
+                // Send update on main thread
+                Task { @MainActor in
+                    self.deviceStateSubject.send(deviceUpdate)
+                    self.logger.debug("Received state update for device: \(deviceId)")
+                }
+                
+            } catch {
+                // Log parsing errors but don't spam - only log once per minute per device
+                let now = Date()
+                let lastErrorKey = "lastParseError_\(deviceId)"
+                
+                // Check error throttling on main thread to avoid Swift 6 concurrency issues
+                Task { @MainActor in
+                    if let lastError = self.lastParseErrors[lastErrorKey],
+                       now.timeIntervalSince(lastError) < 60 {
+                        // Skip logging if we logged an error for this device in the last minute
+                        return
+                    }
+                    
+                    self.lastParseErrors[lastErrorKey] = now
+                    
+                    // Try to get raw message for debugging
+                    if let rawMessage = String(data: data, encoding: .utf8) {
+                        self.logger.debug("Failed to parse WebSocket message for device \(deviceId). Raw message: \(rawMessage)")
+                    } else {
+                        self.logger.debug("Failed to parse WebSocket message for device \(deviceId): \(error.localizedDescription)")
+                    }
+                }
+            }
         }
     }
     

@@ -35,8 +35,8 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     
     // Discovery configuration
     private let discoveryTimeout: TimeInterval = 5.0
-    private let httpTimeout: TimeInterval = 1.5
-    private let maxConcurrentHTTPRequests = 8
+    private let httpTimeout: TimeInterval = 1.0  // Faster timeout for quicker discovery
+    private let maxConcurrentHTTPRequests = 5   // Balanced between 3 and 8 for better discovery
     private let failureTTL: TimeInterval = 15 * 60
     
     // Semaphore for controlling concurrent HTTP requests
@@ -331,6 +331,8 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             let scanGroup = DispatchGroup()
             
             self.logger.info("🔍 Starting IP scan on \(networkRanges.count) network ranges")
+            self.logger.info("📡 Scanning IP ranges: \(networkRanges)")
+            self.logger.info("⚙️ Using \(self.maxConcurrentHTTPRequests) concurrent requests with \(self.httpTimeout)s timeout")
             
             for networkRange in networkRanges {
                 scanGroup.enter()
@@ -340,7 +342,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             }
             
             scanGroup.notify(queue: .main) {
-                self.logger.info("✅ IP range scanning completed")
+                self.logger.info("✅ IP range scanning completed - found \(self.discoveredDevices.count) devices total")
                 completion()
             }
         }
@@ -407,20 +409,22 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     private func scanIPRange(_ networkBase: String, completion: @escaping () -> Void) {
         let scanGroup = DispatchGroup()
         
+        // Full IP sweep (1-254) with intelligent auto-stop when devices are found
         for i in 1...254 {
             let ipAddress = "\(networkBase).\(i)"
             
             scanGroup.enter()
             httpSemaphore.wait() // Control concurrent requests
             
-            // Allow cancellation during long scans
+            // Allow cancellation during long scans or when devices are found
             if !self.isScanning {
                 self.httpSemaphore.signal()
                 scanGroup.leave()
                 continue
             }
 
-            checkWLEDDevice(at: ipAddress) { result in
+            // No delay needed - let semaphore control the flow
+            self.checkWLEDDevice(at: ipAddress) { result in
                 self.handleDeviceCheckResult(result, source: "IP Scan")
                 self.httpSemaphore.signal()
                 scanGroup.leave()
@@ -549,36 +553,61 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         }
     }
 
+    private var pendingDeviceUpdates: [WLEDDevice] = []
+    private var deviceUpdateTimer: Timer?
+    
     private func addOrUpdateDevice(_ device: WLEDDevice) {
-        DispatchQueue.main.async {
-            if let index = self.discoveredDevices.firstIndex(where: { $0.id == device.id }) {
-                // Update existing device - preserve user-customized name
-                let existingName = self.discoveredDevices[index].name
-                self.discoveredDevices[index] = WLEDDevice(
-                    id: device.id,
-                    name: existingName, // Keep the existing name
-                    ipAddress: device.ipAddress,
-                    isOnline: true,
-                    brightness: device.brightness,
-                    currentColor: device.currentColor,
-                    productType: device.productType,
-                    location: self.discoveredDevices[index].location, // Keep existing location
-                    lastSeen: Date(),
-                    state: device.state
-                )
-                self.logger.info("🔄 Updated device: \(existingName)")
-            } else {
-                // Add new device with default "Aesdetic-LED" name
-                self.discoveredDevices.append(device)
-                self.logger.info("🎉 Added new device: \(device.name) at \(device.ipAddress)")
-            }
+        // Batch device updates to avoid flooding main queue
+        syncQueue.async {
+            self.pendingDeviceUpdates.append(device)
             
-            // Notify the ViewModel to mark this device as online
-            NotificationCenter.default.post(
-                name: NSNotification.Name("DeviceDiscovered"),
-                object: nil,
-                userInfo: ["deviceId": device.id, "isOnline": true]
-            )
+            // Schedule batched update if not already scheduled
+            DispatchQueue.main.async {
+                self.deviceUpdateTimer?.invalidate()
+                self.deviceUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+                    self.flushPendingDeviceUpdates()
+                }
+            }
+        }
+    }
+    
+    private func flushPendingDeviceUpdates() {
+        syncQueue.async {
+            let updates = self.pendingDeviceUpdates
+            self.pendingDeviceUpdates.removeAll()
+            
+            DispatchQueue.main.async {
+                for device in updates {
+                    if let index = self.discoveredDevices.firstIndex(where: { $0.id == device.id }) {
+                        // Update existing device - preserve user-customized name
+                        let existingName = self.discoveredDevices[index].name
+                        self.discoveredDevices[index] = WLEDDevice(
+                            id: device.id,
+                            name: existingName,
+                            ipAddress: device.ipAddress,
+                            isOnline: true,
+                            brightness: device.brightness,
+                            currentColor: device.currentColor,
+                            productType: device.productType,
+                            location: self.discoveredDevices[index].location,
+                            lastSeen: Date(),
+                            state: device.state
+                        )
+                        self.logger.info("🔄 Updated device: \(existingName)")
+                    } else {
+                        // Add new device
+                        self.discoveredDevices.append(device)
+                        self.logger.info("🎉 Added new device: \(device.name) at \(device.ipAddress)")
+                    }
+                    
+                    // Notify the ViewModel
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("DeviceDiscovered"),
+                        object: nil,
+                        userInfo: ["deviceId": device.id, "isOnline": true]
+                    )
+                }
+            }
         }
     }
 }

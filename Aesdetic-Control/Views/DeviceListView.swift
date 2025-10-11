@@ -8,9 +8,15 @@ struct DeviceListView: View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 ForEach(viewModel.filteredDevices) { device in
-                    EnhancedDeviceCard(device: device, viewModel: viewModel) {
-                        onDeviceSelected(device)
+                    // Wrap EnhancedDeviceCard in NavigationLink
+                    // Card's own onTap is for internal controls (power, brightness)
+                    // NavigationLink handles navigation to detail view
+                    NavigationLink(value: device) {
+                        EnhancedDeviceCard(device: device, viewModel: viewModel) {
+                            // Empty onTap - navigation handled by NavigationLink
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 16)

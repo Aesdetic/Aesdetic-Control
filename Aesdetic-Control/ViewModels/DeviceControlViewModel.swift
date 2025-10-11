@@ -144,7 +144,7 @@ class DeviceControlViewModel: ObservableObject {
     private func performImmediateHealthCheck(for device: WLEDDevice) async {
         do {
             // Quick HTTP ping to check if device is reachable
-            let response = try await apiService.getState(for: device)
+            let _ = try await apiService.getState(for: device)
             
             // Device is online - update status immediately
             await MainActor.run {

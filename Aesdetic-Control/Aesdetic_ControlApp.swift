@@ -30,6 +30,20 @@ struct Aesdetic_ControlApp: App {
                     // Configure transparent backgrounds immediately
                     configureAppearances()
                     
+                    // Preload background image immediately
+                    Task { @MainActor in
+                        _ = BackgroundImageCache.shared
+                    }
+                    
+                    // CRITICAL: Warm up the sheet presentation system
+                    // This forces iOS to initialize presentation controllers
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                        // Trigger the active scene phase handler to warm up UI system
+                        await deviceControlViewModel.checkDeviceStatusOnAppActive()
+                        print("✅ Warmed up presentation system")
+                    }
+                    
                     // Prompt Local Network access immediately
                     LocalNetworkPrompter.shared.trigger()
                 }
@@ -77,11 +91,11 @@ struct Aesdetic_ControlApp: App {
         UINavigationBar.appearance().compactAppearance = navAppearance
         UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
         
-        // Set window background to white to prevent black default
+        // Set window background to black for dark theme consistency
         DispatchQueue.main.async {
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                let window = windowScene.windows.first {
-                window.backgroundColor = UIColor.white
+                window.backgroundColor = UIColor.black
             }
         }
     }
