@@ -14,6 +14,7 @@ struct DashboardView: View {
     
     @Environment(\.colorScheme) var colorScheme
     @State private var navigationPath = NavigationPath()
+    @State private var selectedDevice: WLEDDevice?
     
     // TEMP: Minimal debug mode to isolate background/layout issues
     @State private var debugMinimalMode: Bool = true
@@ -139,7 +140,7 @@ struct DashboardView: View {
                 DeviceStatsSection(
                     totalDevices: deviceStatistics.total,
                     activeDevices: deviceStatistics.online,
-                    activeAutomations: automationViewModel.automations.filter { $0.isEnabled }.count
+                    activeAutomations: automationViewModel.automations.filter { $0.enabled }.count
                 )
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -150,11 +151,10 @@ struct DashboardView: View {
                     spacing: 18
                 ) {
                     ForEach(filteredDevices, id: \.id) { device in
-                        NavigationLink(value: device) {
-                            MiniDeviceCard(device: device, onTap: {})
-                        }
-                        .buttonStyle(.plain)
-                            .id(device.id)
+                        MiniDeviceCard(device: device, onTap: {
+                            selectedDevice = device
+                        })
+                        .id(device.id)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -167,7 +167,7 @@ struct DashboardView: View {
                 Spacer(minLength: 16)
             }
         }
-            .navigationDestination(for: WLEDDevice.self) { device in
+            .sheet(item: $selectedDevice) { device in
                 DeviceDetailView(device: device, viewModel: deviceControlViewModel)
             }
             .navigationBarHidden(true)
@@ -251,7 +251,7 @@ struct DashboardView: View {
         DeviceStatsSection(
             totalDevices: stats.total,
             activeDevices: stats.online,
-            activeAutomations: automationViewModel.automations.filter { $0.isEnabled }.count
+            activeAutomations: automationViewModel.automations.filter { $0.enabled }.count
         )
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -268,10 +268,9 @@ struct DashboardView: View {
         ) {
             // Use memoized filtered devices
             ForEach(filteredDevices, id: \.id) { device in
-                NavigationLink(value: device) {
-                    MiniDeviceCard(device: device, onTap: {})
-                }
-                .buttonStyle(.plain)
+                MiniDeviceCard(device: device, onTap: {
+                    selectedDevice = device
+                })
                     .id(device.id) // Stable identity for animations
                     .transition(.asymmetric(
                         insertion: .scale.combined(with: .opacity).animation(.easeInOut(duration: 0.2).delay(0.1)),
@@ -318,12 +317,19 @@ struct ScenesAutomationsSection: View {
             
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
+                    // Always show "Add Scene" button
+                    AddSceneButton()
+                    
+                    // Show existing automations
                     ForEach(automations) { automation in
                         SceneAutomationButton(
                             automation: automation,
                             onToggle: { onToggle(automation) }
                         )
                     }
+                    
+                    // Always show "Add Automation" button
+                    AddAutomationButton()
                 }
                 .padding(.horizontal, 20)
                 .background(Color.clear)
@@ -347,7 +353,7 @@ struct SceneAutomationButton: View {
     var body: some View {
         Button(action: onToggle) {
             HStack(spacing: 8) {
-                Image(systemName: automation.automationType.systemImage)
+                Image(systemName: "clock")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.white)
                     .frame(width: 22, height: 22)
@@ -362,11 +368,11 @@ struct SceneAutomationButton: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(minWidth: 160, maxWidth: 220)
-            .liquidGlassButton(cornerRadius: 18, active: automation.isEnabled, tint: .gray)
+            .liquidGlassButton(cornerRadius: 18, active: automation.enabled, tint: .gray)
         }
         .buttonStyle(PlainButtonStyle())
         .scaleEffect(1.0)
-        .animation(.easeInOut(duration: 0.2), value: automation.isEnabled)
+        .animation(.easeInOut(duration: 0.2), value: automation.enabled)
     }
 }
 
@@ -578,6 +584,9 @@ struct MiniDeviceCard: View {
                 .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
         )
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onTapGesture {
+            onTap()
+        }
         .onAppear {
             // Clear any UI optimistic state on appear
             viewModel.clearUIOptimisticState(deviceId: device.id)
@@ -678,6 +687,86 @@ struct MiniDeviceCard: View {
         .buttonStyle(.plain)
         .sensorySelection(trigger: isToggling)
         .disabled(!device.isOnline || isToggling)
+    }
+}
+
+// MARK: - Add Scene Button
+struct AddSceneButton: View {
+    @State private var showAddScene = false
+    
+    var body: some View {
+        Button(action: {
+            showAddScene = true
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 22, height: 22)
+                
+                Text("Add Scene")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.15))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showAddScene) {
+            // TODO: Add scene creation sheet
+            Text("Add Scene - Coming Soon")
+                .presentationDetents([.medium])
+        }
+    }
+}
+
+// MARK: - Add Automation Button
+struct AddAutomationButton: View {
+    @State private var showAddAutomation = false
+    
+    var body: some View {
+        Button(action: {
+            showAddAutomation = true
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 22, height: 22)
+                
+                Text("Add Automation")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.15))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showAddAutomation) {
+            // TODO: Add automation creation sheet
+            Text("Add Automation - Coming Soon")
+                .presentationDetents([.medium])
+        }
     }
 }
 

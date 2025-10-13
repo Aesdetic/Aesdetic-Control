@@ -2,21 +2,19 @@ import SwiftUI
 
 struct DeviceListView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
-    let onDeviceSelected: (WLEDDevice) -> Void
+    @Binding var selectedDevice: WLEDDevice?
     
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 ForEach(viewModel.filteredDevices) { device in
-                    // Wrap EnhancedDeviceCard in NavigationLink
-                    // Card's own onTap is for internal controls (power, brightness)
-                    // NavigationLink handles navigation to detail view
-                    NavigationLink(value: device) {
-                        EnhancedDeviceCard(device: device, viewModel: viewModel) {
-                            // Empty onTap - navigation handled by NavigationLink
-                        }
+                    EnhancedDeviceCard(device: device, viewModel: viewModel) {
+                        // Handle device selection for modal presentation
+                        selectedDevice = device
                     }
-                    .buttonStyle(.plain)
+                    .onTapGesture {
+                        selectedDevice = device
+                    }
                 }
             }
             .padding(.horizontal, 16)

@@ -106,7 +106,7 @@ struct AutomationView: View {
                 QuickPresetCard(preset: .sunrise)
                 QuickPresetCard(preset: .sunset)
                 QuickPresetCard(preset: .focus)
-                QuickPresetCard(preset: .relax)
+                QuickPresetCard(preset: .bedtime)
             }
             .padding(.horizontal, 16)
         }

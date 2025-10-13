@@ -256,4 +256,21 @@ struct WLEDDeviceStateUpdate {
         self.info = info
         self.timestamp = timestamp
     }
+}
+
+// MARK: - Configuration Models
+
+/// Model for updating WLED device configuration
+/// Used to change device name (server description) and other settings
+struct WLEDConfigUpdate: Codable {
+    /// Device/Server description (the name shown in UI)
+    let name: String?
+    
+    init(name: String? = nil) {
+        self.name = name
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case name = "server-name"
+    }
 } 

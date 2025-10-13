@@ -14,6 +14,7 @@ struct DeviceControlView: View {
     @ObservedObject private var viewModel = DeviceControlViewModel.shared
     @State private var showAddDevice: Bool = false
     @State private var showRealTimeSettings: Bool = false
+    @State private var selectedDevice: WLEDDevice?
 
     var body: some View {
         NavigationStack {
@@ -85,9 +86,7 @@ struct DeviceControlView: View {
                             .transition(.opacity)
                         }
                         
-                        DeviceListView(viewModel: viewModel) { device in
-                            // Navigation handled by NavigationLink in DeviceListView
-                        }
+                        DeviceListView(viewModel: viewModel, selectedDevice: $selectedDevice)
                     }
                     
                         // Bottom spacing to prevent tab bar overlap and shadow clipping
@@ -104,7 +103,7 @@ struct DeviceControlView: View {
             .sheet(isPresented: $showRealTimeSettings) {
                 RealTimeSettingsView(viewModel: viewModel)
             }
-            .navigationDestination(for: WLEDDevice.self) { device in
+            .sheet(item: $selectedDevice) { device in
                 DeviceDetailView(device: device, viewModel: viewModel)
             }
             .navigationBarHidden(true)
@@ -328,33 +327,6 @@ struct CardButtonStyle: ButtonStyle {
     }
 }
 
-struct PrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.headline)
-            .foregroundColor(.white)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 16)
-            .background(Color.blue)
-            .cornerRadius(12)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
-    }
-}
-
-struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.headline)
-            .foregroundColor(.blue)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 16)
-            .background(Color.blue.opacity(0.2))
-            .cornerRadius(12)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
-    }
-}
 
 // MARK: - Add Device Sheet
 

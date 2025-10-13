@@ -64,7 +64,7 @@ struct TransitionPane: View {
                         }
                     } else {
                         Task {
-                            await viewModel.cancelStreaming(for: device)
+                            await viewModel.stopTransitionAndRevertToA(device: device)
                             await viewModel.applyGradientStopsAcrossStrip(device, stops: currentGradientA.stops, ledCount: device.state?.segments.first?.len ?? 120)
                         }
                     }
@@ -76,75 +76,78 @@ struct TransitionPane: View {
                 Button("Start") {
                     let gA = currentGradientA
                     let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
-                    Task { await viewModel.startSmoothABStreaming(device, from: gA, to: gB, durationSec: durationSec, fps: 20, aBrightness: Int(aBrightness), bBrightness: Int(bBrightness)) }
+                    Task { await viewModel.startTransition(from: gA, aBrightness: Int(aBrightness), to: gB, bBrightness: Int(bBrightness), durationSec: durationSec, device: device) }
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!transitionOn)
             }
             .padding(.horizontal, 16)
 
-            // Duration (mm:ss)
-            VStack(spacing: 6) {
-                let minutes = Int(durationSec) / 60
-                let seconds = Int(durationSec) % 60
-                HStack { Text(String(format: "Duration  %02d:%02d", minutes, seconds)).foregroundColor(.white); Spacer() }
-                Slider(value: $durationSec, in: 2...120, step: 1)
-            }
-            .padding(.horizontal, 16)
-
-            // A Brightness
-            VStack(spacing: 6) {
-                HStack { Text("A Brightness").foregroundColor(.white); Spacer(); Text("\(Int(round(aBrightness/255.0*100)))%").foregroundColor(.white.opacity(0.8)) }
-                Slider(value: $aBrightness, in: 0...255, step: 1)
-            }
-            .padding(.horizontal, 16)
-
-            // A Gradient
-            GradientBar(
-                gradient: Binding(
-                    get: { currentGradientA },
-                    set: { newGradient in
-                        gradientA = newGradient
-                        stopsA = newGradient.stops
+            // Collapsible Transition Controls
+            if transitionOn {
+                VStack(spacing: 16) {
+                    // Duration (mm:ss)
+                    VStack(spacing: 6) {
+                        let minutes = Int(durationSec) / 60
+                        let seconds = Int(durationSec) % 60
+                        HStack { Text(String(format: "Duration  %02d:%02d", minutes, seconds)).foregroundColor(.white); Spacer() }
+                        Slider(value: $durationSec, in: 2...120, step: 1)
                     }
-                ),
-                selectedStopId: $selectedA,
-                onTapStop: { id in
-                    wheelTarget = "A"; selectedA = id
-                    if let idx = currentGradientA.stops.firstIndex(where: { $0.id == id }) { 
-                        wheelInitial = currentGradientA.stops[idx].color
-                        showWheel = true 
+                    .padding(.horizontal, 16)
+
+                    // A Brightness
+                    VStack(spacing: 6) {
+                        HStack { Text("A Brightness").foregroundColor(.white); Spacer(); Text("\(Int(round(aBrightness/255.0*100)))%").foregroundColor(.white.opacity(0.8)) }
+                        Slider(value: $aBrightness, in: 0...255, step: 1)
                     }
-                },
-                onTapAnywhere: { t, _ in
-                    let c = GradientSampler.sampleColor(at: t, stops: currentGradientA.stops)
-                    let new = GradientStop(position: t, hexColor: c.toHex())
-                    var updatedStops = currentGradientA.stops
-                    updatedStops.append(new)
-                    updatedStops.sort { $0.position < $1.position }
-                    gradientA = LEDGradient(stops: updatedStops)
-                    stopsA = updatedStops
-                    selectedA = new.id
-                    throttleApply(stops: updatedStops, phase: .changed)
-                },
-                onStopsChanged: { stops, phase in
-                    gradientA = LEDGradient(stops: stops)
-                    stopsA = stops
-                    throttleApply(stops: stops, phase: phase)
-                }
-            )
-            .frame(height: 56)
-            .padding(.horizontal, 16)
+                    .padding(.horizontal, 16)
 
-            // B Brightness
-            VStack(spacing: 6) {
-                HStack { Text("B Brightness").foregroundColor(.white); Spacer(); Text("\(Int(round(bBrightness/255.0*100)))%").foregroundColor(.white.opacity(0.8)) }
-                Slider(value: $bBrightness, in: 0...255, step: 1)
-            }
-            .padding(.horizontal, 16)
+                    // A Gradient
+                    GradientBar(
+                        gradient: Binding(
+                            get: { currentGradientA },
+                            set: { newGradient in
+                                gradientA = newGradient
+                                stopsA = newGradient.stops
+                            }
+                        ),
+                        selectedStopId: $selectedA,
+                        onTapStop: { id in
+                            wheelTarget = "A"; selectedA = id
+                            if let idx = currentGradientA.stops.firstIndex(where: { $0.id == id }) { 
+                                wheelInitial = currentGradientA.stops[idx].color
+                                showWheel = true 
+                            }
+                        },
+                        onTapAnywhere: { t, _ in
+                            let c = GradientSampler.sampleColor(at: t, stops: currentGradientA.stops)
+                            let new = GradientStop(position: t, hexColor: c.toHex())
+                            var updatedStops = currentGradientA.stops
+                            updatedStops.append(new)
+                            updatedStops.sort { $0.position < $1.position }
+                            gradientA = LEDGradient(stops: updatedStops)
+                            stopsA = updatedStops
+                            selectedA = new.id
+                            throttleApply(stops: updatedStops, phase: .changed)
+                        },
+                        onStopsChanged: { stops, phase in
+                            gradientA = LEDGradient(stops: stops)
+                            stopsA = stops
+                            throttleApply(stops: stops, phase: phase)
+                        }
+                    )
+                    .frame(height: 56)
+                    .padding(.horizontal, 16)
 
-            // B Gradient (edit does not stream automatically)
-            GradientBar(
+                    // B Brightness
+                    VStack(spacing: 6) {
+                        HStack { Text("B Brightness").foregroundColor(.white); Spacer(); Text("\(Int(round(bBrightness/255.0*100)))%").foregroundColor(.white.opacity(0.8)) }
+                        Slider(value: $bBrightness, in: 0...255, step: 1)
+                    }
+                    .padding(.horizontal, 16)
+
+                    // B Gradient (edit does not stream automatically)
+                    GradientBar(
                 gradient: Binding(
                     get: { currentGradientB },
                     set: { newGradient in
@@ -175,9 +178,12 @@ struct TransitionPane: View {
                     gradientB = LEDGradient(stops: stops)
                     stopsB = stops
                 }
-            )
-            .frame(height: 56)
-            .padding(.horizontal, 16)
+                    )
+                    .frame(height: 56)
+                    .padding(.horizontal, 16)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .task {
             // Initialize gradients on first appearance
@@ -237,33 +243,31 @@ struct TransitionPane: View {
                 bBrightness = Double(d.brightness)
             }
         }
-    }
-
-    private func throttleApply(stops: [GradientStop], phase: DragPhase) {
-        let ledCount = device.state?.segments.first?.len ?? 120
-        if phase == .changed {
-            applyWorkItem?.cancel()
-            let work = DispatchWorkItem {
+        }
+        
+        private func throttleApply(stops: [GradientStop], phase: DragPhase) {
+            let ledCount = device.state?.segments.first?.len ?? 120
+            if phase == .changed {
+                applyWorkItem?.cancel()
+                let work = DispatchWorkItem {
+                    Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
+                }
+                applyWorkItem = work
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    work.perform()
+                }
+            } else {
                 Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
             }
-            applyWorkItem = work
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                work.perform()
+        }
+
+        private func applyNow(stops: [GradientStop]) async {
+            let ledCount = device.state?.segments.first?.len ?? 120
+            if stops.count == 1 {
+                await viewModel.updateDeviceColor(device, color: stops[0].color)
+            } else {
+                await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
             }
-        } else {
-            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
         }
     }
-
-    private func applyNow(stops: [GradientStop]) async {
-        let ledCount = device.state?.segments.first?.len ?? 120
-        if stops.count == 1 {
-            await viewModel.updateDeviceColor(device, color: stops[0].color)
-        } else {
-            await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
-        }
-    }
-}
-
-

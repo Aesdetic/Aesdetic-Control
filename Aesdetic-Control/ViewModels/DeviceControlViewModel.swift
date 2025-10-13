@@ -795,14 +795,36 @@ class DeviceControlViewModel: ObservableObject {
     
     func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int) async {
         markUserInteraction(device.id)
-        var intent = ColorIntent(deviceId: device.id, mode: .solid)
-        intent.segmentId = 0
-        intent.brightness = max(0, min(255, brightness))
-        await colorPipeline.apply(intent, to: device)
-        // Optimistic local update
-        if let index = devices.firstIndex(where: { $0.id == device.id }) {
-            devices[index].brightness = brightness
-            devices[index].isOnline = true
+        
+        // Create brightness-only state update
+        let stateUpdate = WLEDStateUpdate(bri: brightness)
+        
+        do {
+            _ = try await apiService.updateState(for: device, state: stateUpdate)
+            
+            // Send WebSocket update if connected
+            if isRealTimeEnabled {
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            }
+            
+            // Optimistic local update
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].brightness = brightness
+                    devices[index].isOnline = true
+                }
+            }
+            
+            // Persist the change
+            var updatedDevice = device
+            updatedDevice.brightness = brightness
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+            
+        } catch {
+            // Handle error but don't mark device offline for brightness failures
+            print("Brightness update failed: \(error.localizedDescription)")
         }
     }
     
@@ -827,9 +849,9 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
-    func setUDPSync(_ device: WLEDDevice, send: Bool?, recv: Bool?) async {
+    func setUDPSync(_ device: WLEDDevice, send: Bool?, recv: Bool?, network: Int? = nil) async {
         // Build UDPN update and call API; optimistic no-op on UI
-        let udpn = UDPNUpdate(send: send, recv: recv, nn: nil)
+        let udpn = UDPNUpdate(send: send, recv: recv, nn: network)
         let state = WLEDStateUpdate(udpn: udpn)
         _ = try? await apiService.updateState(for: device, state: state)
     }
@@ -1144,6 +1166,75 @@ class DeviceControlViewModel: ObservableObject {
 
     func cancelStreaming(for device: WLEDDevice) async {
         await transitionRunner.cancel(deviceId: device.id)
+    }
+
+    // MARK: - Device Rename
+    func renameDevice(_ device: WLEDDevice, to name: String) async {
+        do {
+            // First, update the WLED device configuration
+            _ = try await apiService.updateConfig(for: device, name: name)
+            
+            // Then update locally
+            var updatedDevice = device
+            updatedDevice.name = name
+            updatedDevice.lastSeen = Date()
+            
+            // Update local device list
+            await MainActor.run {
+                if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                    self.devices[index].name = name
+                    self.devices[index].lastSeen = Date()
+                }
+            }
+            
+            // Persist to Core Data
+            await coreDataManager.saveDevice(updatedDevice)
+            
+        } catch {
+            print("Failed to rename device: \(error.localizedDescription)")
+            // Even if the API call fails, we could still update locally
+            // but for now we'll just log the error
+        }
+    }
+    
+    // MARK: - Gradient Application with Independent Brightness
+    func applyGradientA(_ gradient: LEDGradient, aBrightness: Int?, to device: WLEDDevice) async {
+        // Apply gradient with optional brightness override
+        let ledCount = device.state?.segments.first?.len ?? 120
+        let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+        var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+        intent.segmentId = 0
+        intent.perLEDHex = frame
+        if let brightness = aBrightness {
+            intent.brightness = brightness
+        }
+        await colorPipeline.apply(intent, to: device)
+    }
+    
+    func applyGradientB(_ gradient: LEDGradient, bBrightness: Int?, to device: WLEDDevice) async {
+        // Secondary gradient for transitions - same as A for now
+        await applyGradientA(gradient, aBrightness: bBrightness, to: device)
+    }
+    
+    func startTransition(from: LEDGradient, aBrightness: Int, to: LEDGradient, bBrightness: Int, durationSec: Double, device: WLEDDevice) async {
+        // Use existing transitionRunner with brightness tweening
+        await transitionRunner.start(
+            device: device,
+            from: from,
+            to: to,
+            durationSec: durationSec,
+            fps: 20,
+            segmentId: 0,
+            aBrightness: aBrightness,
+            bBrightness: bBrightness,
+            onProgress: nil
+        )
+    }
+    
+    func stopTransitionAndRevertToA(device: WLEDDevice) async {
+        // Cancel runner, apply gradient A
+        await transitionRunner.cancel(deviceId: device.id)
+        // Note: caller should apply gradient A after this
     }
 
     // MARK: - Segments

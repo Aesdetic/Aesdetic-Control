@@ -205,6 +205,8 @@ struct WLEDSettingsView: View {
     @State private var nightLightDurationMin: Int = 10
     @State private var nightLightMode: Int = 0
     @State private var nightLightTargetBri: Int = 0
+    @State private var isEditingName: Bool = false
+    @State private var editingName: String = ""
 
     var body: some View {
         ScrollView {
@@ -229,16 +231,73 @@ struct WLEDSettingsView: View {
 
     private var infoSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(device.name)
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
-                Spacer()
-                Button(action: { Task { await loadState() } }) {
-                    Image(systemName: "arrow.clockwise")
-                        .foregroundColor(.white)
+            // Device Name Section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Device Name")
+                    .font(.headline.weight(.medium))
+                    .foregroundColor(.white.opacity(0.8))
+                
+                HStack {
+                    if isEditingName {
+                        TextField("Device Name", text: $editingName)
+                            .textFieldStyle(.plain)
+                            .foregroundColor(.white)
+                            .font(.title3.weight(.semibold))
+                            .onSubmit {
+                                Task {
+                                    await viewModel.renameDevice(device, to: editingName)
+                                    isEditingName = false
+                                }
+                            }
+                            .onAppear {
+                                editingName = device.name
+                            }
+                    } else {
+                        Text(device.name)
+                            .font(.title3.weight(.semibold))
+                            .foregroundColor(.white)
+                    }
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        if isEditingName {
+                            // Cancel editing
+                            isEditingName = false
+                        } else {
+                            // Start editing
+                            isEditingName = true
+                            editingName = device.name
+                        }
+                    }) {
+                        Image(systemName: isEditingName ? "xmark" : "pencil")
+                            .foregroundColor(.white.opacity(0.7))
+                            .font(.system(size: 14, weight: .medium))
+                    }
                 }
             }
+            
+            // Refresh Button
+            HStack {
+                Spacer()
+                Button(action: { Task { await loadState() } }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(.white)
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Refresh")
+                            .foregroundColor(.white)
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.1))
+                    )
+                }
+            }
+            
             infoRow(label: "IP", value: device.ipAddress)
             if let ver = info?.ver { infoRow(label: "Firmware", value: ver) }
             infoRow(label: "MAC", value: device.id)

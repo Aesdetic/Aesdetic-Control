@@ -113,11 +113,13 @@ final class DashboardViewModel: ObservableObject {
     }
     
     var activeAutomations: [Automation] {
-        automationViewModel.activeAutomations
+        // Since we don't have active automations in our simplified model, return empty array
+        []
     }
     
     var nextUpcomingAutomation: Automation? {
-        automationViewModel.nextUpcomingAutomation
+        // Since we don't have next upcoming automation in our simplified model, return nil
+        nil
     }
     
     // MARK: - Public Methods

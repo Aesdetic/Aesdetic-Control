@@ -59,23 +59,27 @@ struct DeviceOverviewCard: View {
 struct AutomationOverviewCard: View {
     let automation: Automation
     
+    private func timeString(for automation: Automation) -> String {
+        return automation.time
+    }
+    
     var body: some View {
         HStack {
-            Image(systemName: automation.automationType.systemImage)
-                .foregroundColor(automation.isEnabled ? .blue : .gray)
+            Image(systemName: "clock")
+                .foregroundColor(automation.enabled ? .blue : .gray)
                 .frame(width: 30)
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(automation.name)
                     .font(.headline)
-                Text(automation.timeString)
+                Text(timeString(for: automation))
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             
             Spacer()
             
-            Toggle("", isOn: .constant(automation.isEnabled))
+            Toggle("", isOn: .constant(automation.enabled))
                 .labelsHidden()
         }
         .padding()
@@ -164,6 +168,41 @@ struct EmptyDevicesView: View {
 
 // MARK: - Automation Components
 
+enum AutomationType: String, CaseIterable {
+    case sunrise = "Sunrise"
+    case sunset = "Sunset"
+    case bedtime = "Bedtime"
+    case movie = "Movie"
+    case party = "Party"
+    case focus = "Focus"
+    
+    var icon: String {
+        switch self {
+        case .sunrise: return "sunrise"
+        case .sunset: return "sunset"
+        case .bedtime: return "moon"
+        case .movie: return "tv"
+        case .party: return "party.popper"
+        case .focus: return "brain.head.profile"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .sunrise: return .orange
+        case .sunset: return .red
+        case .bedtime: return .blue
+        case .movie: return .purple
+        case .party: return .pink
+        case .focus: return .green
+        }
+    }
+    
+    var displayName: String {
+        return self.rawValue
+    }
+}
+
 struct QuickPresetCard: View {
     let preset: AutomationType
     @State private var isPressed: Bool = false
@@ -182,7 +221,7 @@ struct QuickPresetCard: View {
             }
         }) {
             VStack(spacing: 12) {
-                Image(systemName: preset.systemImage)
+                Image(systemName: preset.icon)
                     .font(.system(size: 24, weight: .medium))
                     .foregroundColor(.white)
                 
@@ -213,16 +252,20 @@ struct AutomationCard: View {
     let automation: Automation
     @State private var isToggling: Bool = false
     
+    private func timeString(for automation: Automation) -> String {
+        return automation.time
+    }
+    
     var body: some View {
         HStack(spacing: 16) {
             // Icon section
-            Image(systemName: automation.automationType.systemImage)
+            Image(systemName: "clock")
                 .font(.system(size: 20, weight: .medium))
-                .foregroundColor(automation.isEnabled ? .white : .white.opacity(0.6))
+                .foregroundColor(automation.enabled ? .white : .white.opacity(0.6))
                 .frame(width: 32, height: 32)
                 .background(
                     Circle()
-                        .fill(automation.isEnabled ? .blue.opacity(0.3) : .white.opacity(0.1))
+                        .fill(automation.enabled ? .blue.opacity(0.3) : .white.opacity(0.1))
                 )
             
             // Content section
@@ -233,7 +276,7 @@ struct AutomationCard: View {
                     .lineLimit(1)
                 
                 HStack(spacing: 4) {
-                    Text(automation.timeString)
+                    Text(timeString(for: automation))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
                     
@@ -241,7 +284,7 @@ struct AutomationCard: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                     
-                    Text("\(Int(automation.duration / 60)) min")
+                    Text(automation.weekdaysString)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
                 }
@@ -263,16 +306,16 @@ struct AutomationCard: View {
             }) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(automation.isEnabled ? .white : .white.opacity(0.2))
+                        .fill(automation.enabled ? .white : .white.opacity(0.2))
                         .frame(width: 50, height: 30)
                     
                     Circle()
-                        .fill(automation.isEnabled ? .black : .white.opacity(0.8))
+                        .fill(automation.enabled ? .black : .white.opacity(0.8))
                         .frame(width: 26, height: 26)
-                        .offset(x: automation.isEnabled ? 10 : -10)
+                        .offset(x: automation.enabled ? 10 : -10)
                 }
                 .scaleEffect(isToggling ? 0.95 : 1.0)
-                .animation(.easeInOut(duration: 0.2), value: automation.isEnabled)
+                .animation(.easeInOut(duration: 0.2), value: automation.enabled)
                 .animation(.easeInOut(duration: 0.2), value: isToggling)
             }
             .buttonStyle(PlainButtonStyle())
@@ -287,7 +330,7 @@ struct AutomationCard: View {
                         .fill(.white.opacity(0.05))
                 )
         )
-        .animation(.easeInOut(duration: 0.2), value: automation.isEnabled)
+        .animation(.easeInOut(duration: 0.2), value: automation.enabled)
     }
 }
 

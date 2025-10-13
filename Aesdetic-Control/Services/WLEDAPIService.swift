@@ -118,6 +118,45 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let stateUpdate = WLEDStateUpdate(udpn: udpn)
         return try await updateState(for: device, state: stateUpdate)
     }
+    
+    // MARK: - Configuration Update
+    
+    /// Updates the WLED device configuration (e.g., device name)
+    /// - Parameters:
+    ///   - device: The WLED device to update
+    ///   - name: The new device name (server description)
+    /// - Returns: The updated device state
+    func updateConfig(for device: WLEDDevice, name: String) async throws -> WLEDResponse {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Create the configuration update payload
+        let payload: [String: Any] = [
+            "id": [
+                "mdns": name  // WLED uses "mdns" field for the device name
+            ]
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        
+        let (data, response) = try await urlSession.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw WLEDAPIError.invalidResponse
+        }
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw WLEDAPIError.httpError(httpResponse.statusCode)
+        }
+        
+        // After config update, fetch the current state to return
+        return try await getState(for: device)
+    }
 
     // MARK: - Per-LED Control
     func setSegmentPixels(

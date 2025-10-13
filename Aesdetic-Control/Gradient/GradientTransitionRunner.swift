@@ -22,6 +22,30 @@ actor GradientTransitionRunner {
         segmentId: Int = 0,
         onProgress: ((Double) -> Void)? = nil
     ) async {
+        await start(
+            device: device,
+            from: from,
+            to: to,
+            durationSec: durationSec,
+            fps: fps,
+            segmentId: segmentId,
+            aBrightness: nil,
+            bBrightness: nil,
+            onProgress: onProgress
+        )
+    }
+    
+    func start(
+        device: WLEDDevice,
+        from: LEDGradient,
+        to: LEDGradient,
+        durationSec: Double,
+        fps: Int = 24,
+        segmentId: Int = 0,
+        aBrightness: Int?,
+        bBrightness: Int?,
+        onProgress: ((Double) -> Void)? = nil
+    ) async {
         cancelIds.remove(device.id)
 
         let total = max(0.1, durationSec)
@@ -45,6 +69,17 @@ actor GradientTransitionRunner {
             var intent = ColorIntent(deviceId: device.id, mode: .perLED)
             intent.segmentId = segmentId
             intent.perLEDHex = hex
+            
+            // Handle brightness tweening if brightness values are provided
+            if let aBright = aBrightness, let bBright = bBrightness {
+                let interpBrightness = Int(round(Double(aBright) * (1.0 - t) + Double(bBright) * t))
+                intent.brightness = interpBrightness
+                
+                // Use the pipeline's brightness handling
+                await pipeline.enqueuePendingBrightness(device, interpBrightness)
+                await pipeline.flushPendingBrightnessPublic(device)
+            }
+            
             await pipeline.apply(intent, to: device)
 
             onProgress?(t)

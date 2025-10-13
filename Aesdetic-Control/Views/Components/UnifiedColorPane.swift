@@ -90,26 +90,34 @@ struct UnifiedColorPane: View {
                 ])
             }
         }
-        .sheet(isPresented: $showWheel) {
-            ColorWheelSheet(initial: wheelInitial, canRemove: (currentGradient.stops.count > 1), onRemoveStop: {
-                if let id = selectedStopId, currentGradient.stops.count > 1 {
-                    var updatedGradient = currentGradient
-                    updatedGradient.stops.removeAll { $0.id == id }
-                    gradient = updatedGradient
-                    selectedStopId = nil
-                    Task { await applyNow(stops: updatedGradient.stops) }
-                }
-            }, onDone: { color in
-                if let id = selectedStopId, let idx = currentGradient.stops.firstIndex(where: { $0.id == id }) {
-                    var updatedGradient = currentGradient
-                    updatedGradient.stops[idx].hexColor = color.toHex()
-                    gradient = updatedGradient
-                    Task { await applyNow(stops: updatedGradient.stops) }
-                }
-            })
-        }
         .onAppear {
             briUI = Double(device.brightness)
+        }
+        // Inline color picker
+        if showWheel, let selectedId = selectedStopId {
+            ColorWheelInline(
+                initialColor: wheelInitial,
+                canRemove: currentGradient.stops.count > 1,
+                onColorChange: { color in
+                    if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
+                        var updatedGradient = currentGradient
+                        updatedGradient.stops[idx].hexColor = color.toHex()
+                        gradient = updatedGradient
+                        Task { await applyNow(stops: updatedGradient.stops) }
+                    }
+                },
+                onRemove: {
+                    if currentGradient.stops.count > 1 {
+                        var updatedGradient = currentGradient
+                        updatedGradient.stops.removeAll { $0.id == selectedId }
+                        gradient = updatedGradient
+                        selectedStopId = nil
+                        Task { await applyNow(stops: updatedGradient.stops) }
+                    }
+                },
+                onDismiss: { showWheel = false }
+            )
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -122,7 +130,7 @@ struct UnifiedColorPane: View {
             }
             applyWorkItem = work
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 150_000_000)
+                try? await Task.sleep(nanoseconds: 60_000_000)  // 60ms throttle for realtime
                 work.perform()
             }
         } else {
