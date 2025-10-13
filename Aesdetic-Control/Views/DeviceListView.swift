@@ -3,11 +3,16 @@ import SwiftUI
 struct DeviceListView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
     @Binding var selectedDevice: WLEDDevice?
+    var devices: [WLEDDevice]?  // Optional devices array for custom filtering
+    
+    private var displayDevices: [WLEDDevice] {
+        devices ?? viewModel.filteredDevices
+    }
     
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
-                ForEach(viewModel.filteredDevices) { device in
+                ForEach(displayDevices) { device in
                     EnhancedDeviceCard(device: device, viewModel: viewModel) {
                         // Handle device selection for modal presentation
                         selectedDevice = device

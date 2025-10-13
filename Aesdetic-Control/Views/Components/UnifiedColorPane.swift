@@ -60,9 +60,14 @@ struct UnifiedColorPane: View {
                 ),
                 selectedStopId: $selectedStopId,
                 onTapStop: { id in
+                    print("🎨 onTapStop called with id: \(id)")
                     if let stop = currentGradient.stops.first(where: { $0.id == id }) {
+                        print("🎨 Found stop with color: \(stop.color)")
                         wheelInitial = stop.color
                         showWheel = true
+                        print("🎨 showWheel set to: \(showWheel)")
+                    } else {
+                        print("❌ Stop not found for id: \(id)")
                     }
                 },
                 onTapAnywhere: { t, tapped in
@@ -80,6 +85,34 @@ struct UnifiedColorPane: View {
             )
             .frame(height: 56)
             .padding(.horizontal, 16)
+            
+            // Inline color picker
+            if showWheel, let selectedId = selectedStopId {
+                ColorWheelInline(
+                    initialColor: wheelInitial,
+                    canRemove: currentGradient.stops.count > 1,
+                    onColorChange: { color in
+                        if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
+                            var updatedGradient = currentGradient
+                            updatedGradient.stops[idx].hexColor = color.toHex()
+                            gradient = updatedGradient
+                            Task { await applyNow(stops: updatedGradient.stops) }
+                        }
+                    },
+                    onRemove: {
+                        if currentGradient.stops.count > 1 {
+                            var updatedGradient = currentGradient
+                            updatedGradient.stops.removeAll { $0.id == selectedId }
+                            gradient = updatedGradient
+                            selectedStopId = nil
+                            Task { await applyNow(stops: updatedGradient.stops) }
+                        }
+                    },
+                    onDismiss: { showWheel = false }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.horizontal, 16)
+            }
         }
         .task {
             // Initialize gradient on first appearance
@@ -92,32 +125,6 @@ struct UnifiedColorPane: View {
         }
         .onAppear {
             briUI = Double(device.brightness)
-        }
-        // Inline color picker
-        if showWheel, let selectedId = selectedStopId {
-            ColorWheelInline(
-                initialColor: wheelInitial,
-                canRemove: currentGradient.stops.count > 1,
-                onColorChange: { color in
-                    if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
-                        var updatedGradient = currentGradient
-                        updatedGradient.stops[idx].hexColor = color.toHex()
-                        gradient = updatedGradient
-                        Task { await applyNow(stops: updatedGradient.stops) }
-                    }
-                },
-                onRemove: {
-                    if currentGradient.stops.count > 1 {
-                        var updatedGradient = currentGradient
-                        updatedGradient.stops.removeAll { $0.id == selectedId }
-                        gradient = updatedGradient
-                        selectedStopId = nil
-                        Task { await applyNow(stops: updatedGradient.stops) }
-                    }
-                },
-                onDismiss: { showWheel = false }
-            )
-            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 

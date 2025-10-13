@@ -178,15 +178,20 @@ enum ProductType: String, CaseIterable, Codable {
     }
 }
 
-enum DeviceLocation: String, CaseIterable, Codable {
-    case all = "all"
-    case livingRoom = "living_room"
-    case bedroom = "bedroom"
-    case kitchen = "kitchen"
-    case office = "office"
-    case hallway = "hallway"
-    case bathroom = "bathroom"
-    case outdoor = "outdoor"
+enum DeviceLocation: Hashable, Codable {
+    case all
+    case livingRoom
+    case bedroom
+    case kitchen
+    case office
+    case hallway
+    case bathroom
+    case outdoor
+    case custom(String)
+    
+    static var allCases: [DeviceLocation] {
+        return [.all, .livingRoom, .bedroom, .kitchen, .office, .hallway, .bathroom, .outdoor]
+    }
     
     var displayName: String {
         switch self {
@@ -206,7 +211,71 @@ enum DeviceLocation: String, CaseIterable, Codable {
             return "Bathroom"
         case .outdoor:
             return "Outdoor"
+        case .custom(let name):
+            return name
         }
+    }
+    
+    var rawValue: String {
+        switch self {
+        case .all:
+            return "all"
+        case .livingRoom:
+            return "living_room"
+        case .bedroom:
+            return "bedroom"
+        case .kitchen:
+            return "kitchen"
+        case .office:
+            return "office"
+        case .hallway:
+            return "hallway"
+        case .bathroom:
+            return "bathroom"
+        case .outdoor:
+            return "outdoor"
+        case .custom(let name):
+            return "custom_\(name)"
+        }
+    }
+    
+    init(rawValue: String) {
+        switch rawValue {
+        case "all":
+            self = .all
+        case "living_room":
+            self = .livingRoom
+        case "bedroom":
+            self = .bedroom
+        case "kitchen":
+            self = .kitchen
+        case "office":
+            self = .office
+        case "hallway":
+            self = .hallway
+        case "bathroom":
+            self = .bathroom
+        case "outdoor":
+            self = .outdoor
+        default:
+            if rawValue.hasPrefix("custom_") {
+                let customName = String(rawValue.dropFirst(7)) // Remove "custom_" prefix
+                self = .custom(customName)
+            } else {
+                self = .bedroom // Default fallback
+            }
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self.init(rawValue: rawValue)
     }
     
     var systemImage: String {
@@ -227,6 +296,8 @@ enum DeviceLocation: String, CaseIterable, Codable {
             return "bathtub"
         case .outdoor:
             return "tree"
+        case .custom:
+            return "house"
         }
     }
 }

@@ -205,6 +205,10 @@ class DeviceControlViewModel: ObservableObject {
     func clearUIOptimisticState(deviceId: String) {
         uiToggleStates.removeValue(forKey: deviceId)
     }
+    
+    func setUIOptimisticState(deviceId: String, isOn: Bool) {
+        uiToggleStates[deviceId] = isOn
+    }
 
     func getCurrentPowerState(for deviceId: String) -> Bool {
         if let optimisticState = uiToggleStates[deviceId] {
@@ -1195,6 +1199,25 @@ class DeviceControlViewModel: ObservableObject {
             // Even if the API call fails, we could still update locally
             // but for now we'll just log the error
         }
+    }
+    
+    // MARK: - Device Location Update
+    func updateDeviceLocation(_ device: WLEDDevice, location: DeviceLocation) async {
+        // Update locally (location is stored only in the app, not on WLED device)
+        var updatedDevice = device
+        updatedDevice.location = location
+        updatedDevice.lastSeen = Date()
+        
+        // Update local device list
+        await MainActor.run {
+            if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                self.devices[index].location = location
+                self.devices[index].lastSeen = Date()
+            }
+        }
+        
+        // Persist to Core Data
+        await coreDataManager.saveDevice(updatedDevice)
     }
     
     // MARK: - Gradient Application with Independent Brightness

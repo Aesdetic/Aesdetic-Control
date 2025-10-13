@@ -46,8 +46,8 @@ struct GradientBar: View {
 
                     handle(for: stop)
                         .position(x: handleWidth / 2 + x, y: geo.size.height / 2)
-                        .highPriorityGesture(
-                            DragGesture(minimumDistance: 0)
+                        .gesture(
+                            DragGesture(minimumDistance: 5)
                                 .onChanged { g in
                                     let nx = max(0, min(w, g.location.x - handleWidth / 2))
                                     if let idx = gradient.stops.firstIndex(where: { $0.id == stop.id }) {
@@ -67,18 +67,26 @@ struct GradientBar: View {
                                     }
                                     onStopsChanged(gradient.stops, .ended)
                                 }
+                                .exclusively(before: 
+                                    TapGesture(count: 1)
+                                        .onEnded {
+                                            print("🔵 Single tap detected on stop \(stop.id)")
+                                            selectedStopId = stop.id
+                                            onTapStop(stop.id)
+                                        }
+                                )
+                                .exclusively(before:
+                                    TapGesture(count: 2)
+                                        .onEnded {
+                                            print("🔴 Double tap detected on stop \(stop.id)")
+                                            // Remove via double-tap (leave at least one stop)
+                                            if gradient.stops.count > 1 {
+                                                gradient.stops.removeAll { $0.id == stop.id }
+                                                onStopsChanged(gradient.stops, .ended)
+                                            }
+                                        }
+                                )
                         )
-                        .onTapGesture {
-                            selectedStopId = stop.id
-                            onTapStop(stop.id)
-                        }
-                        .onTapGesture(count: 2) {
-                            // Remove via double-tap (leave at least one stop)
-                            if gradient.stops.count > 1 {
-                                gradient.stops.removeAll { $0.id == stop.id }
-                                onStopsChanged(gradient.stops, .ended)
-                            }
-                        }
                         .contextMenu {
                             Button(role: .destructive) {
                                 if gradient.stops.count > 1 {

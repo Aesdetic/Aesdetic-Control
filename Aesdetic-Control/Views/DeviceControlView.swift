@@ -15,6 +15,7 @@ struct DeviceControlView: View {
     @State private var showAddDevice: Bool = false
     @State private var showRealTimeSettings: Bool = false
     @State private var selectedDevice: WLEDDevice?
+    @State private var selectedLocation: DeviceLocation = .all
 
     var body: some View {
         NavigationStack {
@@ -58,8 +59,13 @@ struct DeviceControlView: View {
                         .padding(.horizontal, 20)
                         .padding(.bottom, 20)
                     
+                    // Location Filter Pills
+                    locationFilterPills
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 16)
+                    
                     // Main Content
-                    if viewModel.devices.isEmpty && !viewModel.isScanning {
+                    if filteredDevicesByLocation.isEmpty && !viewModel.isScanning {
                         EmptyStateView(
                             onScan: { Task { await viewModel.startScanning() } },
                             onAddDevice: { showAddDevice = true }
@@ -86,7 +92,7 @@ struct DeviceControlView: View {
                             .transition(.opacity)
                         }
                         
-                        DeviceListView(viewModel: viewModel, selectedDevice: $selectedDevice)
+                        DeviceListView(viewModel: viewModel, selectedDevice: $selectedDevice, devices: filteredDevicesByLocation)
                     }
                     
                         // Bottom spacing to prevent tab bar overlap and shadow clipping
@@ -107,6 +113,12 @@ struct DeviceControlView: View {
                 DeviceDetailView(device: device, viewModel: viewModel)
             }
             .navigationBarHidden(true)
+            .onReceive(viewModel.$devices) { _ in
+                updateAvailableLocations()
+            }
+            .onAppear {
+                updateAvailableLocations()
+            }
         }
     }
     
@@ -125,6 +137,113 @@ struct DeviceControlView: View {
         case .disconnected:
             return .red
         }
+    }
+    
+    // MARK: - Filtered Devices
+    
+    private var filteredDevicesByLocation: [WLEDDevice] {
+        if selectedLocation == .all {
+            return viewModel.devices
+        }
+        return viewModel.devices.filter { $0.location == selectedLocation }
+    }
+    
+    @State private var cachedAvailableLocations: [DeviceLocation] = [.all, .livingRoom, .bedroom]
+    
+    private var availableLocations: [DeviceLocation] {
+        return cachedAvailableLocations
+    }
+    
+    // MARK: - Location Filter Pills
+    
+    private var locationFilterPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(availableLocations, id: \.self) { location in
+                    LocationPillButton(
+                        location: location,
+                        isSelected: selectedLocation == location,
+                        deviceCount: deviceCount(for: location)
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedLocation = location
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func deviceCount(for location: DeviceLocation) -> Int {
+        if location == .all {
+            return viewModel.devices.count
+        }
+        return viewModel.devices.filter { $0.location == location }.count
+    }
+    
+    private func updateAvailableLocations() {
+        // Get all unique locations from devices, plus the default ones
+        let deviceLocations = Set(viewModel.devices.map { $0.location })
+        let defaultLocations: [DeviceLocation] = [.all, .livingRoom, .bedroom]
+        
+        // Load custom locations from UserDefaults
+        let customLocations: [DeviceLocation] = {
+            guard let data = UserDefaults.standard.data(forKey: "customLocations"),
+                  let customLocs = try? JSONDecoder().decode([CustomLocation].self, from: data) else {
+                return []
+            }
+            return customLocs.map { .custom($0.name) }
+        }()
+        
+        // Combine and sort
+        let allLocations = deviceLocations.union(Set(defaultLocations)).union(Set(customLocations))
+        let sortedLocations = allLocations.sorted { first, second in
+            // Sort with "All" first, then alphabetically
+            if first == .all { return true }
+            if second == .all { return false }
+            return first.displayName < second.displayName
+        }
+        
+        // Only update if changed to avoid unnecessary view updates
+        if sortedLocations != cachedAvailableLocations {
+            cachedAvailableLocations = sortedLocations
+        }
+    }
+}
+
+// MARK: - Location Pill Button
+
+struct LocationPillButton: View {
+    let location: DeviceLocation
+    let isSelected: Bool
+    let deviceCount: Int
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(location.displayName)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(isSelected ? .black : .white)
+                
+                if deviceCount > 0 {
+                    Text("\(deviceCount)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(isSelected ? .black.opacity(0.6) : .white.opacity(0.6))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(isSelected ? Color.white : Color.white.opacity(0.15))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color.white.opacity(isSelected ? 0 : 0.3), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -14,9 +14,13 @@ struct DeviceDetailView: View {
     @State private var udpnNetwork: Int = 0
     @StateObject private var scenesStore = ScenesStore.shared
     @StateObject private var automationStore = AutomationStore.shared
-    @State private var isEditingName: Bool = false
-    @State private var editingName: String = ""
-    @FocusState private var isNameFieldFocused: Bool
+    @State private var showEditDeviceInfo: Bool = false
+    @State private var isToggling: Bool = false
+    
+    // Use coordinated power state from ViewModel
+    private var currentPowerState: Bool {
+        return viewModel.getCurrentPowerState(for: device.id)
+    }
     
     var body: some View {
         ZStack {
@@ -84,54 +88,94 @@ struct DeviceDetailView: View {
                 automationStore.add(automation)
             }
         }
+        .sheet(isPresented: $showEditDeviceInfo) {
+            EditDeviceInfoDialog(device: device)
+                .environmentObject(viewModel)
+        }
     }
     
     // MARK: - Header Row
     
     private var headerRow: some View {
         HStack(spacing: 16) {
-            // Power Toggle (left)
+            // Power Toggle (left) - Match device card styling exactly
             Button(action: {
+                // Calculate target state BEFORE any state changes
+                let targetState = !currentPowerState
+                
+                // Set optimistic state for immediate UI feedback
+                viewModel.setUIOptimisticState(deviceId: device.id, isOn: targetState)
+                
+                // If device appears offline but we're trying to control it, mark it as online
+                if !device.isOnline {
+                    viewModel.markDeviceOnline(device.id)
+                }
+                
+                isToggling = true
+                
+                // Haptic feedback for immediate response
+                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                impactFeedback.impactOccurred()
+                
                 Task {
+                    // Use the same toggle method as device card
                     await viewModel.toggleDevicePower(device)
+                    
+                    // Reset toggling state after operation
+                    await MainActor.run {
+                        isToggling = false
+                    }
                 }
             }) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(device.isOn ? Color.white : Color.white.opacity(0.15))
-                        .frame(width: 44, height: 44)
-                    
                     Image(systemName: "power")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(device.isOn ? .black : .white)
+                        .foregroundColor(currentPowerState ? .black : .white)
+                        .opacity(isToggling ? 0.7 : 1.0)
+                    
+                    // Loading indicator overlay
+                    if isToggling {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .foregroundColor(currentPowerState ? .black : .white)
+                    }
                 }
+                .frame(width: 36, height: 36) // Match device card size
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(currentPowerState ? .white : .clear)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(.white, lineWidth: currentPowerState ? 0 : 1.5)
+                        )
+                )
+                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                .scaleEffect(isToggling ? 0.95 : 1.0)
+                .animation(.easeInOut(duration: 0.1), value: isToggling)
+                .animation(.easeInOut(duration: 0.2), value: currentPowerState)
             }
             .buttonStyle(.plain)
+            .disabled(!device.isOnline || isToggling)
             
-            // Device Name (center) - Editable
-            if isEditingName {
-                TextField("Device Name", text: $editingName)
-                    .textFieldStyle(.plain)
-                    .foregroundColor(.white)
-                    .font(.title2.weight(.semibold))
-                    .multilineTextAlignment(.center)
-                    .focused($isNameFieldFocused)
-                    .onSubmit {
-                        Task {
-                            await saveDeviceName()
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-            } else {
+            // Device Name and Location (center) - Tappable to edit
+            VStack(spacing: 4) {
                 Text(device.name)
                     .font(.title2.weight(.semibold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        startEditingName()
-                    }
+                
+                // Location subtitle
+                if device.location != .all {
+                    Text(device.location.displayName)
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.6))
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                showEditDeviceInfo = true
             }
             
             Spacer()
@@ -353,42 +397,4 @@ struct DeviceDetailView: View {
         TransitionPane(device: device)
     }
     
-    // MARK: - Helper Functions
-    
-    private func startEditingName() {
-        editingName = device.name
-        isEditingName = true
-        // Focus the text field after a brief delay to ensure the view has updated
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            isNameFieldFocused = true
-        }
-    }
-    
-    private func saveDeviceName() async {
-        // Trim whitespace
-        let newName = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Validate name is not empty
-        guard !newName.isEmpty else {
-            // Reset to original name if empty
-            editingName = device.name
-            isEditingName = false
-            isNameFieldFocused = false
-            return
-        }
-        
-        // Only save if name actually changed
-        guard newName != device.name else {
-            isEditingName = false
-            isNameFieldFocused = false
-            return
-        }
-        
-        // Save the new name via ViewModel
-        await viewModel.renameDevice(device, to: newName)
-        
-        // Exit edit mode
-        isEditingName = false
-        isNameFieldFocused = false
-    }
 }
