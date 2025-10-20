@@ -13,6 +13,7 @@ struct ColorWheelInline: View {
     @State private var brightness: Double = 1
     @State private var temperature: Double = 5000 // Kelvin (2000-9000)
     @State private var pickerPosition: CGPoint = .zero
+    @State private var useNativePicker: Bool = true // Toggle between native and custom
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
     init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
@@ -34,6 +35,15 @@ struct ColorWheelInline: View {
                 
                 Spacer()
                 
+                // Toggle between native and custom picker
+                Button(action: { 
+                    useNativePicker.toggle()
+                }) {
+                    Image(systemName: useNativePicker ? "paintpalette" : "square.grid.3x3")
+                        .font(.title3)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                
                 Button(action: { onDismiss() }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
@@ -41,6 +51,99 @@ struct ColorWheelInline: View {
                 }
             }
             
+            if useNativePicker {
+                // Apple's Native ColorPicker
+                nativeColorPickerView
+            } else {
+                // Custom 2D Rectangular Color Gradient Picker
+                customColorPickerView
+            }
+            
+            // Saved Colors Section (shared between both)
+            savedColorsSection
+            
+            // Remove Button
+            if canRemove {
+                removeButton
+            }
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.1))
+        .cornerRadius(16)
+        .onAppear {
+            extractHSV(from: initialColor)
+            updatePickerPosition()
+        }
+        .onChange(of: selectedColor) { _, newColor in
+            if useNativePicker {
+                // Auto-apply when using native picker
+                applyColorToDevice()
+            }
+        }
+    }
+    
+    // MARK: - Native ColorPicker View
+    
+    private var nativeColorPickerView: some View {
+        VStack(spacing: 16) {
+            // Apple's native color picker
+            ColorPicker("Select Color", selection: $selectedColor, supportsOpacity: false)
+                .labelsHidden()
+                .frame(height: 200)
+                .padding()
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(12)
+            
+            // Temperature Slider (still useful with native picker)
+            VStack(spacing: 6) {
+                HStack {
+                    Image(systemName: "thermometer.sun")
+                        .foregroundColor(.orange)
+                    Text("Temperature")
+                        .foregroundColor(.white.opacity(0.8))
+                    Spacer()
+                    Text("\(Int(temperature))K")
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .font(.caption)
+                
+                Slider(value: $temperature, in: 2000...9000, step: 100, onEditingChanged: { editing in
+                    if !editing {
+                        applyTemperatureShift()
+                        applyColorToDevice()
+                    }
+                })
+                .accentColor(.orange)
+            }
+            
+            // Brightness Slider
+            VStack(spacing: 6) {
+                HStack {
+                    Image(systemName: "sun.max")
+                        .foregroundColor(.yellow)
+                    Text("Brightness")
+                        .foregroundColor(.white.opacity(0.8))
+                    Spacer()
+                    Text("\(Int(brightness * 100))%")
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .font(.caption)
+                
+                Slider(value: $brightness, in: 0...1, step: 0.01, onEditingChanged: { editing in
+                    if !editing {
+                        updateColor()
+                        applyColorToDevice()
+                    }
+                })
+                .accentColor(.yellow)
+            }
+        }
+    }
+    
+    // MARK: - Custom ColorPicker View
+    
+    private var customColorPickerView: some View {
+        VStack(spacing: 16) {
             // 2D Rectangular Color Gradient Picker
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
@@ -144,9 +247,13 @@ struct ColorWheelInline: View {
                 })
                 .accentColor(.yellow)
             }
-            
-            // Saved Colors Section
-            VStack(spacing: 8) {
+        }
+    }
+    
+    // MARK: - Saved Colors Section
+    
+    private var savedColorsSection: some View {
+        VStack(spacing: 8) {
                 HStack {
                     Text("Saved Colors")
                         .font(.caption)
@@ -202,32 +309,25 @@ struct ColorWheelInline: View {
                     }
                 }
             }
-            
-            // Remove Button
-            if canRemove {
-                Button(action: {
-                    onRemove()
-                    onDismiss()
-                }) {
-                    HStack {
-                        Image(systemName: "trash")
-                        Text("Remove Stop")
-                    }
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(.red)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.red.opacity(0.1))
-                    .cornerRadius(8)
-                }
-            }
         }
-        .padding(20)
-        .background(Color.white.opacity(0.1))
-        .cornerRadius(16)
-        .onAppear {
-            extractHSV(from: initialColor)
-            updatePickerPosition()
+    
+    // MARK: - Remove Button
+    
+    private var removeButton: some View {
+        Button(action: {
+            onRemove()
+            onDismiss()
+        }) {
+            HStack {
+                Image(systemName: "trash")
+                Text("Remove Stop")
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundColor(.red)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(Color.red.opacity(0.1))
+            .cornerRadius(8)
         }
     }
     
