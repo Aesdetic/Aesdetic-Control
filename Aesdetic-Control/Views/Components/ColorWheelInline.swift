@@ -11,9 +11,9 @@ struct ColorWheelInline: View {
     @State private var hue: Double = 0
     @State private var saturation: Double = 1
     @State private var brightness: Double = 1
-    @State private var temperature: Double = 5000 // Kelvin (2000-9000)
+    @State private var temperature: Double = 0.5 // 0 = orange, 0.5 = white, 1 = cool white
     @State private var pickerPosition: CGPoint = .zero
-    @State private var useNativePicker: Bool = true // Toggle between native and custom
+    @State private var hexInput: String = ""
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
     init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
@@ -35,15 +35,6 @@ struct ColorWheelInline: View {
                 
                 Spacer()
                 
-                // Toggle between native and custom picker
-                Button(action: { 
-                    useNativePicker.toggle()
-                }) {
-                    Image(systemName: useNativePicker ? "paintpalette" : "square.grid.3x3")
-                        .font(.title3)
-                        .foregroundColor(.white.opacity(0.6))
-                }
-                
                 Button(action: { onDismiss() }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
@@ -51,15 +42,10 @@ struct ColorWheelInline: View {
                 }
             }
             
-            if useNativePicker {
-                // Apple's Native ColorPicker
-                nativeColorPickerView
-            } else {
-                // Custom 2D Rectangular Color Gradient Picker
-                customColorPickerView
-            }
+            // Custom 2D Rectangular Color Gradient Picker
+            customColorPickerView
             
-            // Saved Colors Section (shared between both)
+            // Saved Colors Section
             savedColorsSection
             
             // Remove Button
@@ -73,70 +59,7 @@ struct ColorWheelInline: View {
         .onAppear {
             extractHSV(from: initialColor)
             updatePickerPosition()
-        }
-        .onChange(of: selectedColor) { _, newColor in
-            if useNativePicker {
-                // Auto-apply when using native picker
-                applyColorToDevice()
-            }
-        }
-    }
-    
-    // MARK: - Native ColorPicker View
-    
-    private var nativeColorPickerView: some View {
-        VStack(spacing: 16) {
-            // Apple's native color picker
-            ColorPicker("Select Color", selection: $selectedColor, supportsOpacity: false)
-                .labelsHidden()
-                .frame(height: 200)
-                .padding()
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(12)
-            
-            // Temperature Slider (still useful with native picker)
-            VStack(spacing: 6) {
-                HStack {
-                    Image(systemName: "thermometer.sun")
-                        .foregroundColor(.orange)
-                    Text("Temperature")
-                        .foregroundColor(.white.opacity(0.8))
-                    Spacer()
-                    Text("\(Int(temperature))K")
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .font(.caption)
-                
-                Slider(value: $temperature, in: 2000...9000, step: 100, onEditingChanged: { editing in
-                    if !editing {
-                        applyTemperatureShift()
-                        applyColorToDevice()
-                    }
-                })
-                .accentColor(.orange)
-            }
-            
-            // Brightness Slider
-            VStack(spacing: 6) {
-                HStack {
-                    Image(systemName: "sun.max")
-                        .foregroundColor(.yellow)
-                    Text("Brightness")
-                        .foregroundColor(.white.opacity(0.8))
-                    Spacer()
-                    Text("\(Int(brightness * 100))%")
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .font(.caption)
-                
-                Slider(value: $brightness, in: 0...1, step: 0.01, onEditingChanged: { editing in
-                    if !editing {
-                        updateColor()
-                        applyColorToDevice()
-                    }
-                })
-                .accentColor(.yellow)
-            }
+            updateHexInput()
         }
     }
     
@@ -199,6 +122,14 @@ struct ColorWheelInline: View {
                             applyColorToDevice()
                         }
                 )
+                .onAppear {
+                    // Update picker position with actual geometry size
+                    updatePickerPosition(in: geo.size)
+                }
+                .onChange(of: geo.size) { _, newSize in
+                    // Update position when geometry changes
+                    updatePickerPosition(in: newSize)
+                }
             }
             .frame(height: 200)
             
@@ -210,12 +141,12 @@ struct ColorWheelInline: View {
                     Text("Temperature")
                         .foregroundColor(.white.opacity(0.8))
                     Spacer()
-                    Text("\(Int(temperature))K")
+                    Text(temperatureText)
                         .foregroundColor(.white.opacity(0.8))
                 }
                 .font(.caption)
                 
-                Slider(value: $temperature, in: 2000...9000, step: 100, onEditingChanged: { editing in
+                Slider(value: $temperature, in: 0...1, step: 0.01, onEditingChanged: { editing in
                     if !editing {
                         // Apply temperature shift on release
                         applyTemperatureShift()
@@ -225,27 +156,37 @@ struct ColorWheelInline: View {
                 .accentColor(.orange)
             }
             
-            // Brightness Slider
+            // Hex Input Field
             VStack(spacing: 6) {
                 HStack {
-                    Image(systemName: "sun.max")
-                        .foregroundColor(.yellow)
-                    Text("Brightness")
+                    Text("#")
                         .foregroundColor(.white.opacity(0.8))
-                    Spacer()
-                    Text("\(Int(brightness * 100))%")
-                        .foregroundColor(.white.opacity(0.8))
+                        .font(.caption)
+                    
+                    TextField("FF5733", text: $hexInput)
+                        .font(.caption.monospaced())
+                        .foregroundColor(.white)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.white.opacity(0.1))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                        .onSubmit {
+                            applyHexColor()
+                        }
+                        .onChange(of: hexInput) { _, newValue in
+                            // Auto-apply when valid hex is entered
+                            if isValidHex(newValue) {
+                                applyHexColor()
+                            }
+                        }
                 }
-                .font(.caption)
-                
-                Slider(value: $brightness, in: 0...1, step: 0.01, onEditingChanged: { editing in
-                    if !editing {
-                        // Apply brightness on release
-                        updateColor()
-                        applyColorToDevice()
-                    }
-                })
-                .accentColor(.yellow)
             }
         }
     }
@@ -262,12 +203,14 @@ struct ColorWheelInline: View {
                     Spacer()
                     
                     Button(action: saveCurrentColor) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "bookmark.fill")
-                            Text("Save")
-                        }
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(.blue)
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                            .foregroundColor(.blue)
+                            .background(
+                                Circle()
+                                    .fill(Color.white.opacity(0.1))
+                                    .frame(width: 32, height: 32)
+                            )
                     }
                 }
                 
@@ -333,8 +276,21 @@ struct ColorWheelInline: View {
     
     // MARK: - Helper Functions
     
+    private var temperatureText: String {
+        if temperature < 0.3 {
+            return "Orange"
+        } else if temperature < 0.7 {
+            return "White"
+        } else {
+            return "Cool White"
+        }
+    }
+    
     private func updateColor() {
-        selectedColor = Color(hue: hue, saturation: saturation, brightness: brightness)
+        // Use full brightness (1.0) for accurate color representation
+        // Brightness will be controlled by WLED device separately
+        selectedColor = Color(hue: hue, saturation: saturation, brightness: 1.0)
+        updateHexInput()
     }
     
     private func extractHSV(from color: Color) {
@@ -365,28 +321,42 @@ struct ColorWheelInline: View {
     
     private func updatePickerPosition() {
         // Calculate position based on current hue and saturation
-        // Will be updated when GeometryReader provides size
-        pickerPosition = CGPoint(x: hue * 200, y: (1.0 - saturation) * 200)
+        // Use a reasonable default size that will be updated by GeometryReader
+        let defaultSize: CGFloat = 300 // Reasonable default
+        pickerPosition = CGPoint(x: hue * defaultSize, y: (1.0 - saturation) * defaultSize)
+    }
+    
+    private func updatePickerPosition(in size: CGSize) {
+        // Calculate position based on current hue and saturation with actual geometry size
+        let x = hue * Double(size.width)
+        let y = (1.0 - saturation) * Double(size.height)
+        pickerPosition = CGPoint(x: x, y: y)
     }
     
     private func applyTemperatureShift() {
         // Apply color temperature shift to current color
-        // Temperature range: 2000K (warm) to 9000K (cool)
-        let normalizedTemp = (temperature - 2000) / 7000 // 0 = warm, 1 = cool
+        // Temperature range: 0 = orange, 0.5 = white, 1 = cool white
         
         // Extract RGB from current color
         let uiColor = UIColor(selectedColor)
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
         
-        // Apply temperature shift (simplified algorithm)
-        // Warm (low K): increase red, decrease blue
-        // Cool (high K): decrease red, increase blue
-        let tempShift = (normalizedTemp - 0.5) * 0.3
-        let newR = max(0, min(1, r - tempShift))
-        let newB = max(0, min(1, b + tempShift))
+        // Apply temperature shift based on simplified range
+        if temperature < 0.3 {
+            // Orange shift: increase red, decrease blue
+            let orangeShift = (0.3 - temperature) / 0.3 * 0.2
+            r = min(1, r + orangeShift)
+            b = max(0, b - orangeShift * 0.5)
+        } else if temperature > 0.7 {
+            // Cool white shift: decrease red, increase blue
+            let coolShift = (temperature - 0.7) / 0.3 * 0.2
+            r = max(0, r - coolShift * 0.5)
+            b = min(1, b + coolShift)
+        }
+        // White range (0.3-0.7) keeps original color
         
-        selectedColor = Color(red: newR, green: g, blue: newB)
+        selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
     }
     
@@ -440,6 +410,27 @@ struct ColorWheelInline: View {
         guard index < colors.count else { return }
         colors.remove(at: index)
         updateSavedColors(colors)
+    }
+    
+    // MARK: - Hex Input Functions
+    
+    private func isValidHex(_ hex: String) -> Bool {
+        let cleanHex = hex.replacingOccurrences(of: "#", with: "").uppercased()
+        return cleanHex.count == 6 && cleanHex.allSatisfy { $0.isHexDigit }
+    }
+    
+    private func applyHexColor() {
+        let cleanHex = hexInput.replacingOccurrences(of: "#", with: "").uppercased()
+        guard isValidHex(cleanHex) else { return }
+        
+        let color = Color(hex: cleanHex)
+        selectedColor = color
+        extractHSV(from: color)
+        applyColorToDevice()
+    }
+    
+    private func updateHexInput() {
+        hexInput = selectedColor.toHex().replacingOccurrences(of: "#", with: "")
     }
 }
 
