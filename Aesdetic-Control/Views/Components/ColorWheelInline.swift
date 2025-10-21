@@ -376,29 +376,31 @@ struct ColorWheelInline: View {
     }
     
     private func applyTemperatureShift() {
-        // Generate warm/cool white colors directly based on temperature slider
-        // Temperature range: 0 = warm orange-white, 0.5 = neutral white, 1 = cool blue-white
+        // RGBWW Temperature Control: Generate appropriate color for WW/CW channels
+        // Temperature range: 0 = full WW, 0.5 = balanced WW/CW, 1 = full CW
         
         let r: CGFloat
         let g: CGFloat  
         let b: CGFloat
         
         if temperature < 0.5 {
-            // Warm white range (0 to 0.5)
+            // Warm white range (0 to 0.5) - Use WW channel
             let warmIntensity = (0.5 - temperature) / 0.5 // 0 to 1
             
-            // Warm white: high red, medium-high green, low blue
-            r = 1.0
-            g = 0.8 + warmIntensity * 0.2  // 0.8 to 1.0
-            b = 0.3 - warmIntensity * 0.3  // 0.3 to 0.0
+            // Create warm white color representation
+            // For RGBWW strips, this should trigger WW channel
+            r = warmIntensity * 0.9  // Warm white has slight red tint
+            g = warmIntensity * 0.7  // Less green for warmth
+            b = warmIntensity * 0.3  // Minimal blue for warmth
         } else {
-            // Cool white range (0.5 to 1)
+            // Cool white range (0.5 to 1) - Use CW channel  
             let coolIntensity = (temperature - 0.5) / 0.5 // 0 to 1
             
-            // Cool white: medium red, high green, high blue
-            r = 1.0 - coolIntensity * 0.2  // 1.0 to 0.8
-            g = 1.0
-            b = 0.8 + coolIntensity * 0.2   // 0.8 to 1.0
+            // Create cool white color representation
+            // For RGBWW strips, this should trigger CW channel
+            r = coolIntensity * 0.7  // Less red for coolness
+            g = coolIntensity * 0.9  // More green for coolness
+            b = coolIntensity * 1.0  // Full blue for coolness
         }
         
         selectedColor = Color(red: r, green: g, blue: b)
@@ -407,6 +409,8 @@ struct ColorWheelInline: View {
     
     private func applyColorToDevice() {
         // Apply color using WLED-accurate conversion
+        // For RGBWW strips: The color picker should detect when temperature slider
+        // is being used and send appropriate WW/CW channel commands instead of RGB
         onColorChange(selectedColor)
         
         // Haptic feedback
