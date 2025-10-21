@@ -133,7 +133,7 @@ struct ColorWheelInline: View {
             }
             .frame(height: 200)
             
-            // Temperature Slider
+            // Temperature Slider with Visual Gradient
             VStack(spacing: 6) {
                 HStack {
                     Image(systemName: "thermometer.sun")
@@ -146,14 +146,43 @@ struct ColorWheelInline: View {
                 }
                 .font(.caption)
                 
-                Slider(value: $temperature, in: 0...1, step: 0.01, onEditingChanged: { editing in
-                    if !editing {
-                        // Apply temperature shift on release
-                        applyTemperatureShift()
-                        applyColorToDevice()
+                // Custom slider with temperature gradient
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        // Temperature gradient background
+                        LinearGradient(
+                            colors: [
+                                Color.orange,           // Warm (left)
+                                Color.white,            // Neutral white (center)
+                                Color.blue.opacity(0.8) // Cool white (right)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(height: 6)
+                        .cornerRadius(3)
+                        
+                        // Slider thumb
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 20, height: 20)
+                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                            .offset(x: CGFloat(temperature) * (geometry.size.width - 20))
                     }
-                })
-                .accentColor(.orange)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let newValue = Double(value.location.x / geometry.size.width)
+                                temperature = max(0, min(1, newValue))
+                            }
+                            .onEnded { _ in
+                                applyTemperatureShift()
+                                applyColorToDevice()
+                            }
+                    )
+                }
+                .frame(height: 20)
             }
             
             // Hex Input Field
@@ -345,27 +374,33 @@ struct ColorWheelInline: View {
     }
     
     private func applyTemperatureShift() {
-        // Apply color temperature shift to current color
-        // Temperature range: 0 = orange, 0.5 = white, 1 = cool white
+        // Apply WLED-style color temperature adjustment
+        // Temperature range: 0 = warm orange, 0.5 = neutral white, 1 = cool blue-white
         
         // Extract RGB from current color
         let uiColor = UIColor(selectedColor)
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
         
-        // Apply temperature shift based on simplified range
-        if temperature < 0.3 {
-            // Orange shift: increase red, decrease blue
-            let orangeShift = (0.3 - temperature) / 0.3 * 0.2
-            r = min(1, r + orangeShift)
-            b = max(0, b - orangeShift * 0.5)
-        } else if temperature > 0.7 {
-            // Cool white shift: decrease red, increase blue
-            let coolShift = (temperature - 0.7) / 0.3 * 0.2
-            r = max(0, r - coolShift * 0.5)
-            b = min(1, b + coolShift)
+        // Calculate temperature shift intensity
+        let tempShift = (temperature - 0.5) * 2.0 // -1 to +1 range
+        
+        if tempShift < 0 {
+            // Warm shift (towards orange)
+            let warmIntensity = abs(tempShift)
+            // Increase red and yellow components, decrease blue
+            r = min(1, r + warmIntensity * 0.3)
+            g = min(1, g + warmIntensity * 0.2)
+            b = max(0, b - warmIntensity * 0.4)
+        } else if tempShift > 0 {
+            // Cool shift (towards blue-white)
+            let coolIntensity = tempShift
+            // Decrease red, increase blue, maintain green
+            r = max(0, r - coolIntensity * 0.2)
+            g = min(1, g + coolIntensity * 0.1)
+            b = min(1, b + coolIntensity * 0.3)
         }
-        // White range (0.3-0.7) keeps original color
+        // Neutral (0.5) keeps original color
         
         selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
