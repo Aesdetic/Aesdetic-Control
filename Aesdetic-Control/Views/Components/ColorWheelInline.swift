@@ -179,6 +179,8 @@ struct ColorWheelInline: View {
                             .onEnded { _ in
                                 // Apply color to device only on release
                                 applyColorToDevice()
+                                // Reset temperature slider flag after applying
+                                isUsingTemperatureSlider = false
                             }
                     )
                 }
@@ -432,6 +434,7 @@ struct ColorWheelInline: View {
         
         selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
+        updateHexInput() // Update hex code when temperature changes
     }
     
     private func applyColorToDevice() {
