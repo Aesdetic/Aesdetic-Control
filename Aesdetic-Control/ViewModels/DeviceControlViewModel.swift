@@ -836,10 +836,38 @@ class DeviceControlViewModel: ObservableObject {
         // Mark device under user control for color changes too
         markUserInteraction(device.id)
         
-        await updateDeviceState(device) { currentDevice in
-            var updatedDevice = currentDevice
+        // For color-only updates, don't include brightness to avoid WLED auto-dimming
+        // This prevents CCT temperature changes from causing unwanted brightness changes
+        do {
+            let rgb = color.toRGBArray()
+            let stateUpdate = WLEDStateUpdate(
+                seg: [SegmentUpdate(col: [rgb])]
+            )
+            
+            _ = try await apiService.updateState(for: device, state: stateUpdate)
+            
+            // Send WebSocket update if connected
+            if isRealTimeEnabled {
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            }
+            
+            // Update local device list with color only
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].currentColor = color
+                    devices[index].isOnline = true
+                }
+            }
+            
+            // Persist the color change
+            var updatedDevice = device
             updatedDevice.currentColor = color
-            return updatedDevice
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+            
+        } catch {
+            print("Color update failed: \(error.localizedDescription)")
         }
     }
     

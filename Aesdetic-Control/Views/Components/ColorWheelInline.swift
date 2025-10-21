@@ -179,8 +179,6 @@ struct ColorWheelInline: View {
                             .onEnded { _ in
                                 // Apply color to device only on release
                                 applyColorToDevice()
-                                // Reset temperature slider flag after applying
-                                isUsingTemperatureSlider = false
                             }
                     )
                 }
@@ -434,32 +432,13 @@ struct ColorWheelInline: View {
         
         selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
-        updateHexInput() // Update hex code when temperature changes
     }
     
     private func applyColorToDevice() {
         // Apply color using WLED-accurate conversion
         // For RGBWW strips: The color picker should detect when temperature slider
         // is being used and send appropriate WW/CW channel commands instead of RGB
-        
-        // Ensure minimum brightness for CCT colors to be visible
-        var finalColor = selectedColor
-        if isUsingTemperatureSlider {
-            // For CCT colors, ensure they have sufficient brightness to be visible
-            let minBrightness: CGFloat = 0.3 // Minimum 30% brightness for CCT colors
-            if brightness < minBrightness {
-                // Extract RGB components and scale to minimum brightness
-                let uiColor = UIColor(finalColor)
-                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-                uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
-                
-                // Scale to minimum brightness
-                let scale = minBrightness / max(r, g, b)
-                finalColor = Color(red: r * scale, green: g * scale, blue: b * scale)
-            }
-        }
-        
-        onColorChange(finalColor)
+        onColorChange(selectedColor)
         
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)
