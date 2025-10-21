@@ -148,8 +148,14 @@ struct UnifiedColorPane: View {
     private func applyNow(stops: [GradientStop]) async {
         let ledCount = device.state?.segments.first?.len ?? 120
         if stops.count == 1 {
-            // Treat as solid
-            await viewModel.updateDeviceColor(device, color: stops[0].color)
+            // For single color, use ColorPipeline to ensure proper brightness handling
+            // This prevents the brightness dimming issue in single color mode
+            let gradient = LEDGradient(stops: stops)
+            let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+            var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+            intent.segmentId = 0
+            intent.perLEDHex = frame
+            await viewModel.applyColorIntent(intent, to: device)
         } else {
             await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
         }
