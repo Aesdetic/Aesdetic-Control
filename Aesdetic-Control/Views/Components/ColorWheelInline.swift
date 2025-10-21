@@ -309,12 +309,15 @@ struct ColorWheelInline: View {
     // MARK: - Helper Functions
     
     private var temperatureText: String {
+        // Convert temperature slider (0-1) to Kelvin range (2700K-8000K)
+        let kelvin = Int(2700 + (temperature * (8000 - 2700)))
+        
         if temperature < 0.3 {
-            return "Orange"
+            return "\(kelvin)K (Warm)"
         } else if temperature < 0.7 {
-            return "White"
+            return "\(kelvin)K (Neutral)"
         } else {
-            return "Cool White"
+            return "\(kelvin)K (Cool)"
         }
     }
     
@@ -386,34 +389,39 @@ struct ColorWheelInline: View {
     }
     
     private func applyTemperatureShift() {
-        // RGBWW Temperature Control: Generate appropriate color for WW/CW channels
-        // Temperature range: 0 = full WW, 0.5 = balanced WW/CW, 1 = full CW
+        // WLED CCT (Correlated Color Temperature) Implementation
+        // Temperature range: 0 = warm white (2700K), 0.5 = neutral, 1 = cool white (8000K)
+        // Based on WLED's CCT handling documentation
         
         let r: CGFloat
         let g: CGFloat  
         let b: CGFloat
         
-        if temperature <= 0.5 {
-            // Warm white range (0 to 0.5) - Use WW channel
-            let warmIntensity = (0.5 - temperature) / 0.5 // 0 to 1
-            
-            // Create warm white color representation
-            // For RGBWW strips, this should trigger WW channel
-            r = max(0.1, warmIntensity * 0.9)  // Ensure minimum brightness
-            g = max(0.1, warmIntensity * 0.7)  // Ensure minimum brightness
-            b = max(0.05, warmIntensity * 0.3) // Ensure minimum brightness
+        // Convert temperature slider (0-1) to Kelvin range (2700K-8000K)
+        let kelvin = 2700 + (temperature * (8000 - 2700))
+        
+        // WLED's CCT calculation: RGB values based on color temperature
+        if kelvin <= 4000 {
+            // Warm white range (2700K-4000K)
+            let warmFactor = (4000 - kelvin) / 1300 // 0 to 1
+            r = 1.0
+            g = 0.8 + (warmFactor * 0.2)  // 0.8 to 1.0
+            b = 0.3 - (warmFactor * 0.3)  // 0.3 to 0.0
         } else {
-            // Cool white range (0.5 to 1) - Use CW channel  
-            let coolIntensity = (temperature - 0.5) / 0.5 // 0 to 1
-            
-            // Create cool white color representation
-            // For RGBWW strips, this should trigger CW channel
-            r = max(0.1, coolIntensity * 0.7)  // Ensure minimum brightness
-            g = max(0.1, coolIntensity * 0.9)  // Ensure minimum brightness
-            b = max(0.1, coolIntensity * 1.0)   // Ensure minimum brightness
+            // Cool white range (4000K-8000K)
+            let coolFactor = (kelvin - 4000) / 4000 // 0 to 1
+            r = 1.0 - (coolFactor * 0.2)  // 1.0 to 0.8
+            g = 1.0
+            b = 0.8 + (coolFactor * 0.2)   // 0.8 to 1.0
         }
         
-        selectedColor = Color(red: r, green: g, blue: b)
+        // Apply minimum brightness to prevent black colors
+        let minBrightness: CGFloat = 0.1
+        let finalR = max(minBrightness, r)
+        let finalG = max(minBrightness, g)
+        let finalB = max(minBrightness, b)
+        
+        selectedColor = Color(red: finalR, green: finalG, blue: finalB)
         extractHSV(from: selectedColor)
     }
     
