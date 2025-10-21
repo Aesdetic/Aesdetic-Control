@@ -87,11 +87,11 @@ struct ColorWheelInline: View {
                             endPoint: .trailing
                         )
                         
-                        // Vertical saturation gradient (white to transparent)
+                        // Vertical saturation gradient (saturated at bottom, white at top)
                         LinearGradient(
-                            colors: [.white, .clear],
-                            startPoint: .top,
-                            endPoint: .bottom
+                            colors: [.clear, .white],
+                            startPoint: .bottom,
+                            endPoint: .top
                         )
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -309,14 +309,20 @@ struct ColorWheelInline: View {
     
     private func updateColorFromPosition(_ location: CGPoint, in size: CGSize) {
         // Map position to hue (horizontal) and saturation (vertical)
-        let x = max(0, min(location.x, size.width))
-        let y = max(0, min(location.y, size.height))
+        // Account for indicator radius to keep calculations within bounds
+        let indicatorRadius: CGFloat = 14
+        let maxX = size.width - indicatorRadius
+        let maxY = size.height - indicatorRadius
         
-        hue = Double(x / size.width)
-        saturation = 1.0 - Double(y / size.height)
+        let x = max(indicatorRadius, min(location.x, maxX))
+        let y = max(indicatorRadius, min(location.y, maxY))
+        
+        // Map to hue (0-1) and saturation (0-1)
+        hue = Double((x - indicatorRadius) / (maxX - indicatorRadius))
+        saturation = Double((y - indicatorRadius) / (maxY - indicatorRadius))
         
         updateColor()
-        updatePickerPosition()
+        updatePickerPosition(in: size)
     }
     
     private func updatePickerPosition() {
@@ -328,8 +334,14 @@ struct ColorWheelInline: View {
     
     private func updatePickerPosition(in size: CGSize) {
         // Calculate position based on current hue and saturation with actual geometry size
-        let x = hue * Double(size.width)
-        let y = (1.0 - saturation) * Double(size.height)
+        // Account for indicator radius (14px) to keep it within bounds
+        let indicatorRadius: CGFloat = 14
+        let maxX = size.width - indicatorRadius
+        let maxY = size.height - indicatorRadius
+        
+        let x = indicatorRadius + hue * Double(maxX - indicatorRadius)
+        let y = indicatorRadius + saturation * Double(maxY - indicatorRadius)
+        
         pickerPosition = CGPoint(x: x, y: y)
     }
     
