@@ -430,7 +430,10 @@ struct ColorWheelInline: View {
             b = 0.918 + (factor * (1.0 - 0.918))    // 0.918 to 1.0
         }
         
-        selectedColor = Color(red: r, green: g, blue: b)
+        // Apply current device brightness to CCT colors
+        // This ensures CCT colors are visible at the device's current brightness level
+        let deviceBrightness = brightness // Use current brightness from HSV
+        selectedColor = Color(red: r * deviceBrightness, green: g * deviceBrightness, blue: b * deviceBrightness)
         extractHSV(from: selectedColor)
     }
     
