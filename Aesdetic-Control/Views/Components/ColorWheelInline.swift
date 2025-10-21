@@ -175,9 +175,11 @@ struct ColorWheelInline: View {
                             .onChanged { value in
                                 let newValue = Double(value.location.x / geometry.size.width)
                                 temperature = max(0, min(1, newValue))
+                                // Apply temperature change immediately during drag
+                                applyTemperatureShift()
                             }
                             .onEnded { _ in
-                                applyTemperatureShift()
+                                // Apply final color to device on release
                                 applyColorToDevice()
                             }
                     )
@@ -374,33 +376,30 @@ struct ColorWheelInline: View {
     }
     
     private func applyTemperatureShift() {
-        // Apply WLED-style color temperature adjustment
-        // Temperature range: 0 = warm orange, 0.5 = neutral white, 1 = cool blue-white
+        // Generate warm/cool white colors directly based on temperature slider
+        // Temperature range: 0 = warm orange-white, 0.5 = neutral white, 1 = cool blue-white
         
-        // Extract RGB from current color
-        let uiColor = UIColor(selectedColor)
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let r: CGFloat
+        let g: CGFloat  
+        let b: CGFloat
         
-        // Calculate temperature shift intensity
-        let tempShift = (temperature - 0.5) * 2.0 // -1 to +1 range
-        
-        if tempShift < 0 {
-            // Warm shift (towards orange)
-            let warmIntensity = abs(tempShift)
-            // Increase red and yellow components, decrease blue
-            r = min(1, r + warmIntensity * 0.3)
-            g = min(1, g + warmIntensity * 0.2)
-            b = max(0, b - warmIntensity * 0.4)
-        } else if tempShift > 0 {
-            // Cool shift (towards blue-white)
-            let coolIntensity = tempShift
-            // Decrease red, increase blue, maintain green
-            r = max(0, r - coolIntensity * 0.2)
-            g = min(1, g + coolIntensity * 0.1)
-            b = min(1, b + coolIntensity * 0.3)
+        if temperature < 0.5 {
+            // Warm white range (0 to 0.5)
+            let warmIntensity = (0.5 - temperature) / 0.5 // 0 to 1
+            
+            // Warm white: high red, medium-high green, low blue
+            r = 1.0
+            g = 0.8 + warmIntensity * 0.2  // 0.8 to 1.0
+            b = 0.3 - warmIntensity * 0.3  // 0.3 to 0.0
+        } else {
+            // Cool white range (0.5 to 1)
+            let coolIntensity = (temperature - 0.5) / 0.5 // 0 to 1
+            
+            // Cool white: medium red, high green, high blue
+            r = 1.0 - coolIntensity * 0.2  // 1.0 to 0.8
+            g = 1.0
+            b = 0.8 + coolIntensity * 0.2   // 0.8 to 1.0
         }
-        // Neutral (0.5) keeps original color
         
         selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
