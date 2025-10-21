@@ -432,6 +432,7 @@ struct ColorWheelInline: View {
         
         selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
+        updateHexInput()
     }
     
     private func applyColorToDevice() {
