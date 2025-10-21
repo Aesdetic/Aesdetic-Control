@@ -195,64 +195,63 @@ struct ColorWheelInline: View {
     
     private var savedColorsSection: some View {
         VStack(spacing: 8) {
-                HStack {
-                    Text("Saved Colors")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    Spacer()
-                    
-                    Button(action: saveCurrentColor) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title3)
-                            .foregroundColor(.blue)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(0.1))
-                                    .frame(width: 32, height: 32)
-                            )
-                    }
-                }
+            HStack {
+                Text("Saved Colors")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
                 
+                Spacer()
+            }
+            
+            ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(0..<6) { index in
-                        if index < savedColors.count {
-                            // Saved color button
-                            Button(action: {
-                                let color = Color(hex: savedColors[index])
-                                selectedColor = color
-                                extractHSV(from: color)
-                                applyColorToDevice()
-                            }) {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color(hex: savedColors[index]))
-                                    .frame(height: 44)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                                    )
-                            }
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    deleteSavedColor(at: index)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        } else {
-                            // Empty slot
+                    // Saved colors
+                    ForEach(Array(savedColors.enumerated()), id: \.offset) { index, colorHex in
+                        Button(action: {
+                            let color = Color(hex: colorHex)
+                            selectedColor = color
+                            extractHSV(from: color)
+                            applyColorToDevice()
+                        }) {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.white.opacity(0.05))
-                                .frame(height: 44)
+                                .fill(Color(hex: colorHex))
+                                .frame(width: 44, height: 44)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                )
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                deleteSavedColor(at: index)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                    
+                    // Add new color button (only show if under max limit)
+                    if savedColors.count < 8 {
+                        Button(action: saveCurrentColor) {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.white.opacity(0.1))
+                                .frame(width: 44, height: 44)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                )
+                                .overlay(
+                                    Image(systemName: "plus")
+                                        .font(.title3)
+                                        .foregroundColor(.blue)
                                 )
                         }
                     }
                 }
+                .padding(.horizontal, 4)
             }
         }
+    }
     
     // MARK: - Remove Button
     
@@ -388,8 +387,8 @@ struct ColorWheelInline: View {
     }
     
     private func updateSavedColors(_ colors: [String]) {
-        // Keep only last 6 colors (FIFO)
-        let limited = Array(colors.suffix(6))
+        // Keep only last 8 colors (FIFO)
+        let limited = Array(colors.suffix(8))
         if let data = try? JSONEncoder().encode(limited) {
             savedColorsData = data
         }
@@ -405,8 +404,8 @@ struct ColorWheelInline: View {
         // Add to end
         colors.append(hex)
         
-        // Auto-remove oldest if > 6
-        if colors.count > 6 {
+        // Auto-remove oldest if > 8
+        if colors.count > 8 {
             colors.removeFirst()
         }
         
