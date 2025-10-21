@@ -177,11 +177,11 @@ struct ColorWheelInline: View {
                                 let newValue = Double(value.location.x / geometry.size.width)
                                 temperature = max(0, min(1, newValue))
                                 isUsingTemperatureSlider = true
-                                // Apply temperature change immediately during drag
+                                // Only update color preview during drag, don't apply to device
                                 applyTemperatureShift()
                             }
                             .onEnded { _ in
-                                // Apply final color to device on release
+                                // Apply color to device only on release
                                 applyColorToDevice()
                             }
                     )
