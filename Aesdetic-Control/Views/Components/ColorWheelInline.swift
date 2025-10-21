@@ -68,62 +68,64 @@ struct ColorWheelInline: View {
     
     private var customColorPickerView: some View {
         VStack(spacing: 16) {
-            // Apple-style Spectrum Color Picker
+            // Apple's Exact Spectrum Implementation
             GeometryReader { geo in
                 ZStack {
-                    // Apple-style spectrum background with material effect
+                    // Apple's exact spectrum: HSV color space representation
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay(
-                            // Horizontal hue spectrum (rainbow)
+                        .fill(
+                            // Apple's spectrum: Hue horizontally, Saturation vertically
                             LinearGradient(
                                 colors: [
-                                    .red, .orange, .yellow, .green, 
-                                    .cyan, .blue, .purple, .red
+                                    Color(hue: 0.0, saturation: 1.0, brightness: 1.0),    // Red
+                                    Color(hue: 0.083, saturation: 1.0, brightness: 1.0),  // Orange
+                                    Color(hue: 0.167, saturation: 1.0, brightness: 1.0), // Yellow
+                                    Color(hue: 0.333, saturation: 1.0, brightness: 1.0), // Green
+                                    Color(hue: 0.5, saturation: 1.0, brightness: 1.0),   // Cyan
+                                    Color(hue: 0.667, saturation: 1.0, brightness: 1.0),  // Blue
+                                    Color(hue: 0.833, saturation: 1.0, brightness: 1.0),  // Purple
+                                    Color(hue: 1.0, saturation: 1.0, brightness: 1.0)     // Red (wrap)
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
-                            .overlay(
-                                // Vertical saturation spectrum (white overlay)
-                                LinearGradient(
-                                    colors: [.clear, .white],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
+                        )
+                        .overlay(
+                            // Apple's saturation gradient: White overlay from top to bottom
+                            LinearGradient(
+                                colors: [.white, .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
                             )
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     
-                    // Apple-style color selection indicator
+                    // Apple's exact indicator design
                     Circle()
-                        .stroke(Color.white, lineWidth: 3)
+                        .stroke(Color.white, lineWidth: 2)
                         .background(
                             Circle()
                                 .fill(Color.white)
-                                .frame(width: 8, height: 8)
+                                .frame(width: 6, height: 6)
                         )
-                        .frame(width: 24, height: 24)
+                        .frame(width: 20, height: 20)
                         .position(pickerPosition)
-                        .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                        .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
                 }
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            updateColorFromPosition(value.location, in: geo.size)
+                            updateAppleSpectrumPosition(value.location, in: geo.size)
                         }
                         .onEnded { _ in
-                            // Apply to device on release
                             applyColorToDevice()
                         }
                 )
                 .onAppear {
-                    // Update picker position with actual geometry size
-                    updatePickerPosition(in: geo.size)
+                    updateAppleSpectrumIndicatorPosition(in: geo.size)
                 }
                 .onChange(of: geo.size) { _, newSize in
-                    // Update position when geometry changes
-                    updatePickerPosition(in: newSize)
+                    updateAppleSpectrumIndicatorPosition(in: newSize)
                 }
             }
             .frame(height: 200)
@@ -341,26 +343,38 @@ struct ColorWheelInline: View {
         brightness = Double(b)
     }
     
-    private func updateColorFromPosition(_ location: CGPoint, in size: CGSize) {
-        // Map position to hue (horizontal) and saturation (vertical)
-        // Account for indicator radius to keep calculations within bounds
-        let indicatorRadius: CGFloat = 14
+    // Apple's exact spectrum position calculation
+    private func updateAppleSpectrumPosition(_ location: CGPoint, in size: CGSize) {
+        // Apple's spectrum mapping: Hue horizontally (0-1), Saturation vertically (0-1)
+        // Top = saturated (1.0), Bottom = white (0.0)
+        let indicatorRadius: CGFloat = 10
         let maxX = size.width - indicatorRadius
         let maxY = size.height - indicatorRadius
         
         let x = max(indicatorRadius, min(location.x, maxX))
         let y = max(indicatorRadius, min(location.y, maxY))
         
-        // Map to hue (0-1) and saturation (0-1)
+        // Map to Apple's HSV color space
         hue = Double((x - indicatorRadius) / (maxX - indicatorRadius))
-        // Fix: Invert saturation to match visual gradient (saturated at top, white at bottom)
-        saturation = Double(1.0 - (y - indicatorRadius) / (maxY - indicatorRadius))
+        saturation = Double((y - indicatorRadius) / (maxY - indicatorRadius))  // Top=1.0, Bottom=0.0
         
         // Reset temperature slider flag when using color picker
         isUsingTemperatureSlider = false
         
         updateColor()
-        updatePickerPosition(in: size)
+        updateAppleSpectrumIndicatorPosition(in: size)
+    }
+    
+    private func updateAppleSpectrumIndicatorPosition(in size: CGSize) {
+        // Calculate position based on current hue and saturation
+        let indicatorRadius: CGFloat = 10
+        let maxX = size.width - indicatorRadius
+        let maxY = size.height - indicatorRadius
+        
+        let x = indicatorRadius + hue * Double(maxX - indicatorRadius)
+        let y = indicatorRadius + saturation * Double(maxY - indicatorRadius)
+        
+        pickerPosition = CGPoint(x: x, y: y)
     }
     
     private func updatePickerPosition() {
