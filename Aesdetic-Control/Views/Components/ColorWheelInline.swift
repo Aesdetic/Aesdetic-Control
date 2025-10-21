@@ -68,51 +68,45 @@ struct ColorWheelInline: View {
     
     private var customColorPickerView: some View {
         VStack(spacing: 16) {
-            // 2D Rectangular Color Gradient Picker
+            // Apple-style Spectrum Color Picker
             GeometryReader { geo in
-                ZStack(alignment: .topLeading) {
-                    // Background: Hue gradient (horizontal) + Saturation gradient (vertical)
-                    ZStack {
-                        // Horizontal hue gradient
-                        LinearGradient(
-                            colors: [
-                                Color(hue: 0.0, saturation: 1, brightness: 1),    // Red
-                                Color(hue: 0.17, saturation: 1, brightness: 1),   // Yellow
-                                Color(hue: 0.33, saturation: 1, brightness: 1),   // Green
-                                Color(hue: 0.50, saturation: 1, brightness: 1),   // Cyan
-                                Color(hue: 0.67, saturation: 1, brightness: 1),   // Blue
-                                Color(hue: 0.83, saturation: 1, brightness: 1),   // Magenta
-                                Color(hue: 1.0, saturation: 1, brightness: 1)     // Red
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                        
-                        // Vertical saturation gradient (saturated at bottom, white at top)
-                        LinearGradient(
-                            colors: [.clear, .white],
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                    )
-                    
-                    // Draggable indicator
-                    Circle()
-                        .fill(selectedColor)
-                        .frame(width: 28, height: 28)
+                ZStack {
+                    // Apple-style spectrum background with material effect
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(.ultraThinMaterial)
                         .overlay(
-                            Circle()
-                                .stroke(Color.white, lineWidth: 3)
+                            // Horizontal hue spectrum (rainbow)
+                            LinearGradient(
+                                colors: [
+                                    .red, .orange, .yellow, .green, 
+                                    .cyan, .blue, .purple, .red
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .overlay(
+                                // Vertical saturation spectrum (white overlay)
+                                LinearGradient(
+                                    colors: [.clear, .white],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
                         )
-                        .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    
+                    // Apple-style color selection indicator
+                    Circle()
+                        .stroke(Color.white, lineWidth: 3)
+                        .background(
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 8, height: 8)
+                        )
+                        .frame(width: 24, height: 24)
                         .position(pickerPosition)
+                        .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
                 }
-                .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
