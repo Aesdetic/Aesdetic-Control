@@ -146,12 +146,12 @@ struct ColorWheelInline: View {
                 // Custom slider with temperature gradient
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
-                        // Temperature gradient background
+                        // WLED's exact CCT gradient background
                         LinearGradient(
                             colors: [
-                                Color.orange,           // Warm (left)
-                                Color.white,            // Neutral white (center)
-                                Color.blue.opacity(0.8) // Cool white (right)
+                                Color(hex: "#FFA000"),  // Warm white (~2700K)
+                                Color(hex: "#FFF1EA"),  // Neutral white (~4000K) 
+                                Color(hex: "#CBDBFF")   // Cool white (~6500K)
                             ],
                             startPoint: .leading,
                             endPoint: .trailing
@@ -305,8 +305,9 @@ struct ColorWheelInline: View {
     // MARK: - Helper Functions
     
     private var temperatureText: String {
-        // Convert temperature slider (0-1) to Kelvin range (2700K-8000K)
-        let kelvin = Int(2700 + (temperature * (8000 - 2700)))
+        // Convert temperature slider (0-1) to Kelvin range (2700K-6500K)
+        // Based on WLED's exact CCT values: #FFA000 (2700K) to #CBDBFF (6500K)
+        let kelvin = Int(2700 + (temperature * (6500 - 2700)))
         
         if temperature < 0.3 {
             return "\(kelvin)K (Warm)"
@@ -399,39 +400,37 @@ struct ColorWheelInline: View {
     }
     
     private func applyTemperatureShift() {
-        // WLED CCT (Correlated Color Temperature) Implementation
-        // Temperature range: 0 = warm white (2700K), 0.5 = neutral, 1 = cool white (8000K)
-        // Based on WLED's CCT handling documentation
+        // WLED's exact CCT (Correlated Color Temperature) Implementation
+        // Temperature range: 0 = #FFA000 (2700K), 0.5 = #FFF1EA (4000K), 1 = #CBDBFF (6500K)
+        // Based on WLED's native CCT color values
         
         let r: CGFloat
         let g: CGFloat  
         let b: CGFloat
         
-        // Convert temperature slider (0-1) to Kelvin range (2700K-8000K)
-        let kelvin = 2700 + (temperature * (8000 - 2700))
-        
-        // WLED's CCT calculation: RGB values based on color temperature
-        if kelvin <= 4000 {
-            // Warm white range (2700K-4000K)
-            let warmFactor = (4000 - kelvin) / 1300 // 0 to 1
+        if temperature <= 0.5 {
+            // Warm to neutral range (0.0 to 0.5)
+            // Interpolate between #FFA000 and #FFF1EA
+            let factor = temperature * 2.0 // 0 to 1
+            
+            // #FFA000 = RGB(255, 160, 0) = (1.0, 0.627, 0.0)
+            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
             r = 1.0
-            g = 0.8 + (warmFactor * 0.2)  // 0.8 to 1.0
-            b = 0.3 - (warmFactor * 0.3)  // 0.3 to 0.0
+            g = 0.627 + (factor * (0.945 - 0.627))  // 0.627 to 0.945
+            b = 0.0 + (factor * (0.918 - 0.0))      // 0.0 to 0.918
         } else {
-            // Cool white range (4000K-8000K)
-            let coolFactor = (kelvin - 4000) / 4000 // 0 to 1
-            r = 1.0 - (coolFactor * 0.2)  // 1.0 to 0.8
-            g = 1.0
-            b = 0.8 + (coolFactor * 0.2)   // 0.8 to 1.0
+            // Neutral to cool range (0.5 to 1.0)
+            // Interpolate between #FFF1EA and #CBDBFF
+            let factor = (temperature - 0.5) * 2.0 // 0 to 1
+            
+            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
+            // #CBDBFF = RGB(203, 219, 255) = (0.796, 0.859, 1.0)
+            r = 1.0 - (factor * (1.0 - 0.796))      // 1.0 to 0.796
+            g = 0.945 - (factor * (0.945 - 0.859))  // 0.945 to 0.859
+            b = 0.918 + (factor * (1.0 - 0.918))    // 0.918 to 1.0
         }
         
-        // Apply minimum brightness to prevent black colors
-        let minBrightness: CGFloat = 0.1
-        let finalR = max(minBrightness, r)
-        let finalG = max(minBrightness, g)
-        let finalB = max(minBrightness, b)
-        
-        selectedColor = Color(red: finalR, green: finalG, blue: finalB)
+        selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
     }
     
