@@ -353,7 +353,8 @@ struct ColorWheelInline: View {
         
         // Map to hue (0-1) and saturation (0-1)
         hue = Double((x - indicatorRadius) / (maxX - indicatorRadius))
-        saturation = Double((y - indicatorRadius) / (maxY - indicatorRadius))
+        // Fix: Invert saturation to match visual gradient (saturated at top, white at bottom)
+        saturation = Double(1.0 - (y - indicatorRadius) / (maxY - indicatorRadius))
         
         // Reset temperature slider flag when using color picker
         isUsingTemperatureSlider = false
@@ -377,7 +378,8 @@ struct ColorWheelInline: View {
         let maxY = size.height - indicatorRadius
         
         let x = indicatorRadius + hue * Double(maxX - indicatorRadius)
-        let y = indicatorRadius + saturation * Double(maxY - indicatorRadius)
+        // Fix: Use (1.0 - saturation) to match visual gradient (saturated at top, white at bottom)
+        let y = indicatorRadius + (1.0 - saturation) * Double(maxY - indicatorRadius)
         
         pickerPosition = CGPoint(x: x, y: y)
     }
