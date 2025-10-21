@@ -36,6 +36,38 @@ struct ColorWheelInline: View {
                 
                 Spacer()
                 
+                // Hex Input Field
+                HStack(spacing: 4) {
+                    Text("#")
+                        .foregroundColor(.white.opacity(0.8))
+                        .font(.caption)
+                    
+                    TextField("FF5733", text: $hexInput)
+                        .font(.caption.monospaced())
+                        .foregroundColor(.white)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.white.opacity(0.1))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                        .frame(width: 60)
+                        .onSubmit {
+                            applyHexColor()
+                        }
+                        .onChange(of: hexInput) { _, newValue in
+                            // Auto-apply when valid hex is entered
+                            if isValidHex(newValue) {
+                                applyHexColor()
+                            }
+                        }
+                }
+                
                 Button(action: { onDismiss() }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
@@ -185,38 +217,6 @@ struct ColorWheelInline: View {
                 .frame(height: 20)
             }
             
-            // Hex Input Field
-            VStack(spacing: 6) {
-                HStack {
-                    Text("#")
-                        .foregroundColor(.white.opacity(0.8))
-                        .font(.caption)
-                    
-                    TextField("FF5733", text: $hexInput)
-                        .font(.caption.monospaced())
-                        .foregroundColor(.white)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.white.opacity(0.1))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                        .onSubmit {
-                            applyHexColor()
-                        }
-                        .onChange(of: hexInput) { _, newValue in
-                            // Auto-apply when valid hex is entered
-                            if isValidHex(newValue) {
-                                applyHexColor()
-                            }
-                        }
-                }
-            }
         }
     }
     
