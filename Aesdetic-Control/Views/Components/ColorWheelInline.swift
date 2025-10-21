@@ -14,6 +14,7 @@ struct ColorWheelInline: View {
     @State private var temperature: Double = 0.5 // 0 = orange, 0.5 = white, 1 = cool white
     @State private var pickerPosition: CGPoint = .zero
     @State private var hexInput: String = ""
+    @State private var isUsingTemperatureSlider: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
     init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
@@ -175,6 +176,7 @@ struct ColorWheelInline: View {
                             .onChanged { value in
                                 let newValue = Double(value.location.x / geometry.size.width)
                                 temperature = max(0, min(1, newValue))
+                                isUsingTemperatureSlider = true
                                 // Apply temperature change immediately during drag
                                 applyTemperatureShift()
                             }
@@ -317,6 +319,11 @@ struct ColorWheelInline: View {
     }
     
     private func updateColor() {
+        // Don't override temperature-generated colors
+        if isUsingTemperatureSlider {
+            return
+        }
+        
         // Use full brightness (1.0) for accurate color representation
         // Brightness will be controlled by WLED device separately
         selectedColor = Color(hue: hue, saturation: saturation, brightness: 1.0)
@@ -351,6 +358,9 @@ struct ColorWheelInline: View {
         hue = Double((x - indicatorRadius) / (maxX - indicatorRadius))
         saturation = Double((y - indicatorRadius) / (maxY - indicatorRadius))
         
+        // Reset temperature slider flag when using color picker
+        isUsingTemperatureSlider = false
+        
         updateColor()
         updatePickerPosition(in: size)
     }
@@ -383,24 +393,24 @@ struct ColorWheelInline: View {
         let g: CGFloat  
         let b: CGFloat
         
-        if temperature < 0.5 {
+        if temperature <= 0.5 {
             // Warm white range (0 to 0.5) - Use WW channel
             let warmIntensity = (0.5 - temperature) / 0.5 // 0 to 1
             
             // Create warm white color representation
             // For RGBWW strips, this should trigger WW channel
-            r = warmIntensity * 0.9  // Warm white has slight red tint
-            g = warmIntensity * 0.7  // Less green for warmth
-            b = warmIntensity * 0.3  // Minimal blue for warmth
+            r = max(0.1, warmIntensity * 0.9)  // Ensure minimum brightness
+            g = max(0.1, warmIntensity * 0.7)  // Ensure minimum brightness
+            b = max(0.05, warmIntensity * 0.3) // Ensure minimum brightness
         } else {
             // Cool white range (0.5 to 1) - Use CW channel  
             let coolIntensity = (temperature - 0.5) / 0.5 // 0 to 1
             
             // Create cool white color representation
             // For RGBWW strips, this should trigger CW channel
-            r = coolIntensity * 0.7  // Less red for coolness
-            g = coolIntensity * 0.9  // More green for coolness
-            b = coolIntensity * 1.0  // Full blue for coolness
+            r = max(0.1, coolIntensity * 0.7)  // Ensure minimum brightness
+            g = max(0.1, coolIntensity * 0.9)  // Ensure minimum brightness
+            b = max(0.1, coolIntensity * 1.0)   // Ensure minimum brightness
         }
         
         selectedColor = Color(red: r, green: g, blue: b)
