@@ -492,6 +492,9 @@ struct ColorWheelInline: View {
             let warmWhite = Int((1.0 - temperature) * 255)
             let coolWhite = Int(temperature * 255)
             
+            // Update gradient bar with RGB approximation (visual preview)
+            onColorChange(selectedColor)
+            
             // Send RGBWW array directly to use dedicated white LEDs
             rgbwwCallback([0, 0, 0, warmWhite, coolWhite])
             print("🌡️ Temperature → RGBWW: [0, 0, 0, \(warmWhite), \(coolWhite)]")

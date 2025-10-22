@@ -103,7 +103,9 @@ struct UnifiedColorPane: View {
                     },
                     onColorChangeRGBWW: { rgbww in
                         // Handle RGBWW data from temperature slider
-                        // Send directly to device using ColorPipeline with RGBWW array
+                        // Note: The gradient stop is already updated via onColorChange (RGB approximation)
+                        // This callback sends the actual RGBWW data directly to the device
+                        
                         var intent = ColorIntent(deviceId: device.id, mode: .solid)
                         intent.segmentId = 0
                         intent.solidRGB = rgbww  // Send [0, 0, 0, WW, CW]
