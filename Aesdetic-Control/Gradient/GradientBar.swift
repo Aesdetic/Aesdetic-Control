@@ -106,12 +106,12 @@ struct GradientBar: View {
     }
 
     private func handle(for stop: GradientStop) -> some View {
-        Capsule()
+        RoundedRectangle(cornerRadius: 8)
             .fill(stop.color)
             .frame(width: handleWidth, height: handleHeight)
             .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
             .overlay(
-                Capsule()
+                RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.white.opacity(0.6), lineWidth: 1)
             )
             .accessibilityLabel("Gradient stop")
