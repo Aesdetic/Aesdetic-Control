@@ -101,6 +101,17 @@ struct UnifiedColorPane: View {
                             Task { await applyNow(stops: updatedGradient.stops) }
                         }
                     },
+                    onColorChangeRGBWW: { rgbww in
+                        // Handle RGBWW data from temperature slider
+                        // Send directly to device using ColorPipeline with RGBWW array
+                        var intent = ColorIntent(deviceId: device.id, mode: .solid)
+                        intent.segmentId = 0
+                        intent.solidRGB = rgbww  // Send [0, 0, 0, WW, CW]
+                        
+                        Task { await viewModel.applyColorIntent(intent, to: device) }
+                        
+                        print("✨ RGBWW Intent sent: \(rgbww)")
+                    },
                     onRemove: {
                         if currentGradient.stops.count > 1 {
                             var updatedGradient = currentGradient

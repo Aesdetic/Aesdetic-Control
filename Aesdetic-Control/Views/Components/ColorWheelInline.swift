@@ -4,6 +4,7 @@ struct ColorWheelInline: View {
     let initialColor: Color
     let canRemove: Bool
     let onColorChange: (Color) -> Void
+    let onColorChangeRGBWW: (([Int]) -> Void)? // Optional callback for RGBWW data
     let onRemove: () -> Void
     let onDismiss: () -> Void
     
@@ -16,13 +17,13 @@ struct ColorWheelInline: View {
     @State private var hexInput: String = ""
     @State private var isUsingTemperatureSlider: Bool = false
     @State private var isEditingHex: Bool = false
-    @State private var isPureWhiteMode: Bool = false // Toggle for RGBWW pure white mode
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
-    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int]) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
         self.initialColor = initialColor
         self.canRemove = canRemove
         self.onColorChange = onColorChange
+        self.onColorChangeRGBWW = onColorChangeRGBWW
         self.onRemove = onRemove
         self.onDismiss = onDismiss
         _selectedColor = State(initialValue: initialColor)
@@ -200,50 +201,25 @@ struct ColorWheelInline: View {
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     
-                    // Overlay when Pure White Mode is active
-                    if isPureWhiteMode {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.black.opacity(0.7))
-                            .overlay(
-                                VStack(spacing: 4) {
-                                    Image(systemName: "lightbulb.fill")
-                                        .font(.title2)
-                                        .foregroundColor(.yellow)
-                                    Text("Pure White Mode")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.8))
-                                    Text("Use temperature slider below")
-                                        .font(.caption2)
-                                        .foregroundColor(.white.opacity(0.6))
-                                }
-                            )
-                    }
-                    
-                    // Apple's exact indicator design (hidden in Pure White Mode)
-                    if !isPureWhiteMode {
-                        Circle()
-                            .stroke(Color.white, lineWidth: 2)
-                            .background(
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 6, height: 6)
-                            )
-                            .frame(width: 20, height: 20)
-                            .position(pickerPosition)
-                            .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
-                    }
+                    // Apple's exact indicator design
+                    Circle()
+                        .stroke(Color.white, lineWidth: 2)
+                        .background(
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 6, height: 6)
+                        )
+                        .frame(width: 20, height: 20)
+                        .position(pickerPosition)
+                        .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
                 }
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            if !isPureWhiteMode {
-                                updateAppleSpectrumPosition(value.location, in: geo.size)
-                            }
+                            updateAppleSpectrumPosition(value.location, in: geo.size)
                         }
                         .onEnded { _ in
-                            if !isPureWhiteMode {
-                                applyColorToDevice()
-                            }
+                            applyColorToDevice()
                         }
                 )
                 .onAppear {
@@ -254,26 +230,6 @@ struct ColorWheelInline: View {
                 }
             }
             .frame(height: 200)
-            
-            // Pure White Mode Toggle
-            HStack {
-                Image(systemName: isPureWhiteMode ? "lightbulb.fill" : "lightbulb")
-                    .foregroundColor(isPureWhiteMode ? .yellow : .white.opacity(0.6))
-                Text("Pure White Mode")
-                    .foregroundColor(.white.opacity(0.8))
-                    .font(.caption)
-                Spacer()
-                Toggle("", isOn: $isPureWhiteMode)
-                    .labelsHidden()
-                    .toggleStyle(SwitchToggleStyle(tint: .blue))
-            }
-            .padding(.horizontal, 4)
-            .onChange(of: isPureWhiteMode) { _, newValue in
-                if newValue {
-                    // When enabling pure white mode, update to show current temperature
-                    applyTemperatureShift()
-                }
-            }
             
             // Temperature Slider with Visual Gradient
             VStack(spacing: 6) {
@@ -493,96 +449,56 @@ struct ColorWheelInline: View {
     }
     
     private func applyTemperatureShift() {
-        if isPureWhiteMode {
-            // RGBWW Pure White Mode: Use dedicated WW/CW channels
-            // Temperature range: 0 = warm white (2700K), 0.5 = neutral, 1 = cool white (6500K)
+        // Temperature slider creates RGB approximation for UI preview
+        // The actual device update will send RGBWW: [0, 0, 0, WW, CW]
+        // Temperature range: 0 = #FFA000 (2700K), 0.5 = #FFF1EA (4000K), 1 = #CBDBFF (6500K)
+        
+        let r: CGFloat
+        let g: CGFloat  
+        let b: CGFloat
+        
+        if temperature <= 0.5 {
+            // Warm to neutral range (0.0 to 0.5)
+            let factor = temperature * 2.0
             
-            // WW (Warm White) and CW (Cool White) are inverse of each other
-            // At temperature = 0: WW = 255, CW = 0 (full warm)
-            // At temperature = 0.5: WW = 128, CW = 128 (neutral)
-            // At temperature = 1: WW = 0, CW = 255 (full cool)
-            // Note: WW/CW values calculated as: WW = (1-temp)*255, CW = temp*255
-            
-            // Create a visual representation for the UI (RGB approximation)
-            // But the actual WLED command will use RGBWW: [0, 0, 0, WW, CW]
-            let r: CGFloat
-            let g: CGFloat  
-            let b: CGFloat
-            
-            if temperature <= 0.5 {
-                let factor = temperature * 2.0
-                r = 1.0
-                g = 0.627 + (factor * (0.945 - 0.627))
-                b = 0.0 + (factor * (0.918 - 0.0))
-            } else {
-                let factor = (temperature - 0.5) * 2.0
-                r = 1.0 - (factor * (1.0 - 0.796))
-                g = 0.945 - (factor * (0.945 - 0.859))
-                b = 0.918 + (factor * (1.0 - 0.918))
-            }
-            
-            // Store the RGB approximation for UI display
-            selectedColor = Color(red: r, green: g, blue: b)
-            extractHSV(from: selectedColor)
-            updateHexInput()
-            
-            // Note: The actual WLED command will need to send [0, 0, 0, warmWhite, coolWhite]
-            // This will be handled in applyColorToDevice()
-            
+            // #FFA000 = RGB(255, 160, 0) = (1.0, 0.627, 0.0)
+            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
+            r = 1.0
+            g = 0.627 + (factor * (0.945 - 0.627))
+            b = 0.0 + (factor * (0.918 - 0.0))
         } else {
-            // RGB CCT Mode: Approximate white temperature using RGB
-            // Temperature range: 0 = #FFA000 (2700K), 0.5 = #FFF1EA (4000K), 1 = #CBDBFF (6500K)
+            // Neutral to cool range (0.5 to 1.0)
+            let factor = (temperature - 0.5) * 2.0
             
-            let r: CGFloat
-            let g: CGFloat  
-            let b: CGFloat
-            
-            if temperature <= 0.5 {
-                // Warm to neutral range (0.0 to 0.5)
-                let factor = temperature * 2.0
-                
-                // #FFA000 = RGB(255, 160, 0) = (1.0, 0.627, 0.0)
-                // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
-                r = 1.0
-                g = 0.627 + (factor * (0.945 - 0.627))
-                b = 0.0 + (factor * (0.918 - 0.0))
-            } else {
-                // Neutral to cool range (0.5 to 1.0)
-                let factor = (temperature - 0.5) * 2.0
-                
-                // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
-                // #CBDBFF = RGB(203, 219, 255) = (0.796, 0.859, 1.0)
-                r = 1.0 - (factor * (1.0 - 0.796))
-                g = 0.945 - (factor * (0.945 - 0.859))
-                b = 0.918 + (factor * (1.0 - 0.918))
-            }
-            
-            selectedColor = Color(red: r, green: g, blue: b)
-            extractHSV(from: selectedColor)
-            updateHexInput()
+            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
+            // #CBDBFF = RGB(203, 219, 255) = (0.796, 0.859, 1.0)
+            r = 1.0 - (factor * (1.0 - 0.796))
+            g = 0.945 - (factor * (0.945 - 0.859))
+            b = 0.918 + (factor * (1.0 - 0.918))
         }
+        
+        // Store RGB approximation for UI display (gradient bar preview)
+        selectedColor = Color(red: r, green: g, blue: b)
+        extractHSV(from: selectedColor)
+        updateHexInput()
     }
     
     private func applyColorToDevice() {
         // Apply color using WLED-accurate conversion
         
-        if isPureWhiteMode && isUsingTemperatureSlider {
-            // TODO: Implement full RGBWW channel control
-            // For true RGBWW support, we need to:
-            // 1. Calculate WW/CW values: [0, 0, 0, warmWhite, coolWhite]
-            // 2. Send directly via ColorPipeline with RGBWW array
-            // 3. Bypass the Color-to-hex conversion flow
-            //
-            // Current implementation: Sends RGB approximation (visual preview)
-            // Full implementation requires modifying UnifiedColorPane to accept RGBWW data
-            
+        if isUsingTemperatureSlider, let rgbwwCallback = onColorChangeRGBWW {
+            // Temperature slider was used - send RGBWW data: [0, 0, 0, WW, CW]
             let warmWhite = Int((1.0 - temperature) * 255)
             let coolWhite = Int(temperature * 255)
-            print("🌡️ Pure White Mode: WW=\(warmWhite), CW=\(coolWhite) (RGBWW=[0,0,0,\(warmWhite),\(coolWhite)])")
-            // For now, fall through to send RGB approximation
+            
+            // Send RGBWW array directly to use dedicated white LEDs
+            rgbwwCallback([0, 0, 0, warmWhite, coolWhite])
+            print("🌡️ Temperature → RGBWW: [0, 0, 0, \(warmWhite), \(coolWhite)]")
+        } else {
+            // Spectrum picker was used - send RGB color data
+            onColorChange(selectedColor)
+            print("🎨 Spectrum → RGB: \(selectedColor.toHex())")
         }
-        
-        onColorChange(selectedColor)
         
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)
