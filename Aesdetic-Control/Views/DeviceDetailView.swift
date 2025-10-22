@@ -60,28 +60,23 @@ struct DeviceDetailView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 20)
                     .padding(.bottom, 12)
-                    .onTapGesture {
-                        dismissColorPicker = true
-                    }
                 
                 // Tab Navigation Bar (blended with overall background)
                 tabNavigationBar
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                     .padding(.bottom, 2)
-                    .onTapGesture {
-                        dismissColorPicker = true
-                    }
                 
                 // Tab Content (blended with overall background)
                 ScrollView {
                     tabContent
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
-                        .onTapGesture {
-                            dismissColorPicker = true
-                        }
                 }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissColorPicker = true
             }
         }
         .presentationDetents([.large])
