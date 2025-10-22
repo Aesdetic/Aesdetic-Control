@@ -106,14 +106,21 @@ struct GradientBar: View {
     }
 
     private func handle(for stop: GradientStop) -> some View {
-        RoundedRectangle(cornerRadius: 8)
+        let isSelected = selectedStopId == stop.id
+        
+        return RoundedRectangle(cornerRadius: 8)
             .fill(stop.color)
             .frame(width: handleWidth, height: handleHeight)
             .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.white.opacity(0.6), lineWidth: 1)
+                    .stroke(
+                        isSelected ? Color.white : Color.white.opacity(0.6), 
+                        lineWidth: isSelected ? 3 : 1
+                    )
             )
+            .scaleEffect(isSelected ? 1.1 : 1.0)
+            .animation(.easeInOut(duration: 0.2), value: isSelected)
             .accessibilityLabel("Gradient stop")
             .accessibilityHint("Drag to reposition. Tap to edit. Double-tap to remove.")
     }
