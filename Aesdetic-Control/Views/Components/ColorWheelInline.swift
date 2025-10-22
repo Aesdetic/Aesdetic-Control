@@ -30,34 +30,14 @@ struct ColorWheelInline: View {
     var body: some View {
         VStack(spacing: 16) {
             // Header
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Color Picker")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        
-                        // Hex Code Display (as subtitle)
-                        Button(action: {
-                            isEditingHex = true
-                        }) {
-                            Text("#\(hexInput)")
-                                .font(.caption.monospaced())
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    
-                    Spacer()
-                    
-                    Button(action: { onDismiss() }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title3)
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                }
+            HStack {
+                Text("Color Picker")
+                    .font(.headline)
+                    .foregroundColor(.white)
                 
-                // Hex Input Field (only when editing)
+                Spacer()
+                
+                // Hex Code (editable in place)
                 if isEditingHex {
                     HStack(spacing: 4) {
                         Text("#")
@@ -78,6 +58,7 @@ struct ColorWheelInline: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.white.opacity(0.2), lineWidth: 1)
                             )
+                            .frame(width: 60)
                             .onSubmit {
                                 applyHexColor()
                                 isEditingHex = false
@@ -88,11 +69,32 @@ struct ColorWheelInline: View {
                                     applyHexColor()
                                 }
                             }
-                            .onTapGesture {
-                                // Keep editing mode when tapping the field
-                            }
                     }
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                } else {
+                    Button(action: {
+                        isEditingHex = true
+                    }) {
+                        Text("#\(hexInput)")
+                            .font(.caption.monospaced())
+                            .foregroundColor(.white.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.white.opacity(0.05))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                
+                Button(action: { onDismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.white.opacity(0.6))
                 }
             }
             
