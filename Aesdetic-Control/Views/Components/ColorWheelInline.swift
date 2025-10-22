@@ -7,6 +7,7 @@ struct ColorWheelInline: View {
     let onColorChangeRGBWW: (([Int]) -> Void)? // Optional callback for RGBWW data
     let onRemove: () -> Void
     let onDismiss: () -> Void
+    @Binding var isUsingTemperatureSlider: Bool
     
     @State private var selectedColor: Color
     @State private var hue: Double = 0
@@ -15,17 +16,17 @@ struct ColorWheelInline: View {
     @State private var temperature: Double = 0.5 // 0 = orange, 0.5 = white, 1 = cool white
     @State private var pickerPosition: CGPoint = .zero
     @State private var hexInput: String = ""
-    @State private var isUsingTemperatureSlider: Bool = false
     @State private var isEditingHex: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
-    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int]) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int]) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void, isUsingTemperatureSlider: Binding<Bool>) {
         self.initialColor = initialColor
         self.canRemove = canRemove
         self.onColorChange = onColorChange
         self.onColorChangeRGBWW = onColorChangeRGBWW
         self.onRemove = onRemove
         self.onDismiss = onDismiss
+        self._isUsingTemperatureSlider = isUsingTemperatureSlider
         _selectedColor = State(initialValue: initialColor)
     }
     
@@ -492,13 +493,14 @@ struct ColorWheelInline: View {
             let warmWhite = Int((1.0 - temperature) * 255)
             let coolWhite = Int(temperature * 255)
             
-            // DON'T call onColorChange() - it would trigger gradient processing
-            // which would override our RGBWW data with RGB approximation
-            // Only send RGBWW data directly to device
+            // Update gradient stop for visual feedback (RGB approximation)
+            // This shows the color change on the gradient bar
+            onColorChange(selectedColor)
             
+            // Send RGBWW data directly to device (bypasses gradient processing)
             rgbwwCallback([0, 0, 0, warmWhite, coolWhite])
             print("🌡️ Temperature → RGBWW: [0, 0, 0, \(warmWhite), \(coolWhite)]")
-            print("🎯 Temperature slider bypasses gradient processing")
+            print("🎯 Temperature slider updates gradient visually + sends RGBWW to device")
         } else {
             // Spectrum picker was used - send RGB color data
             onColorChange(selectedColor)

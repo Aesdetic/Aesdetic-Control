@@ -11,6 +11,7 @@ struct UnifiedColorPane: View {
     @State private var wheelInitial: Color = .white
     @State private var briUI: Double
     @State private var applyWorkItem: DispatchWorkItem? = nil
+    @State private var isUsingTemperatureSlider: Bool = false
 
     init(device: WLEDDevice, dismissColorPicker: Binding<Bool>) {
         self.device = device
@@ -98,7 +99,12 @@ struct UnifiedColorPane: View {
                             var updatedGradient = currentGradient
                             updatedGradient.stops[idx].hexColor = color.toHex()
                             gradient = updatedGradient
-                            Task { await applyNow(stops: updatedGradient.stops) }
+                            
+                            // Only trigger gradient processing if NOT using temperature slider
+                            // Temperature slider handles device updates via RGBWW callback
+                            if !isUsingTemperatureSlider {
+                                Task { await applyNow(stops: updatedGradient.stops) }
+                            }
                         }
                     },
                     onColorChangeRGBWW: { rgbww in
@@ -133,7 +139,8 @@ struct UnifiedColorPane: View {
                             Task { await applyNow(stops: updatedGradient.stops) }
                         }
                     },
-                    onDismiss: { showWheel = false }
+                    onDismiss: { showWheel = false },
+                    isUsingTemperatureSlider: $isUsingTemperatureSlider
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .padding(.horizontal, 16)
