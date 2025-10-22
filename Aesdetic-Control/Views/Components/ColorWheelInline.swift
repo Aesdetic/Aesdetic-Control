@@ -29,9 +29,9 @@ struct ColorWheelInline: View {
     
     var body: some View {
         ZStack {
-            // Background tap area to dismiss
-            Color.clear
-                .contentShape(Rectangle())
+            // Full screen background to catch taps outside color picker
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
                 .onTapGesture {
                     onDismiss()
                 }
