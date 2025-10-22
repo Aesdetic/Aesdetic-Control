@@ -97,17 +97,18 @@ struct ColorWheelInline: View {
                         onRemove()
                         onDismiss()
                     }) {
-                        Image(systemName: "minus")
-                            .font(.title3)
+                        Text("- Remove")
+                            .font(.caption)
                             .foregroundColor(.white.opacity(0.4))
-                            .padding(8)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
                             .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.white.opacity(0.1))
+                                Capsule()
+                                    .fill(Color.white.opacity(0.15))
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                Capsule()
+                                    .stroke(Color.white.opacity(0.25), lineWidth: 1)
                             )
                     }
                     .buttonStyle(.plain)
