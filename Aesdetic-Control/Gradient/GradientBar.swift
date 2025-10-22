@@ -27,8 +27,8 @@ struct GradientBar: View {
                     startPoint: .leading,
                     endPoint: .trailing
                 )
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.25), lineWidth: 1))
                 .contentShape(Rectangle())
                 .onTapGesture { location in
                     let w = max(1, geo.size.width - handleWidth)
