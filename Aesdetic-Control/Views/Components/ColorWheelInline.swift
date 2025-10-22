@@ -265,11 +265,11 @@ struct ColorWheelInline: View {
                             extractHSV(from: color)
                             applyColorToDevice()
                         }) {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .fill(Color(hex: colorHex))
-                                .frame(width: 44, height: 44)
+                                .frame(width: 22, height: 22)
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                                         .stroke(Color.white.opacity(0.3), lineWidth: 1)
                                 )
                         }
@@ -285,16 +285,16 @@ struct ColorWheelInline: View {
                     // Add new color button (only show if under max limit)
                     if savedColors.count < 8 {
                         Button(action: saveCurrentColor) {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .fill(Color.white.opacity(0.1))
-                                .frame(width: 44, height: 44)
+                                .frame(width: 22, height: 22)
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                                         .stroke(Color.white.opacity(0.3), lineWidth: 1)
                                 )
                                 .overlay(
                                     Image(systemName: "plus")
-                                        .font(.title3)
+                                        .font(.caption)
                                         .foregroundColor(.blue)
                                 )
                         }
