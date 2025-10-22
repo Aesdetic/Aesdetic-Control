@@ -295,7 +295,7 @@ struct ColorWheelInline: View {
                                 .overlay(
                                     Image(systemName: "plus")
                                         .font(.caption)
-                                        .foregroundColor(.blue)
+                                        .foregroundColor(.white.opacity(0.7))
                                 )
                         }
                     }
