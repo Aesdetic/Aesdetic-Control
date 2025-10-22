@@ -99,7 +99,7 @@ struct ColorWheelInline: View {
                     }) {
                         Text("- Remove")
                             .font(.caption)
-                            .foregroundColor(.white.opacity(0.1))
+                            .foregroundColor(.white.opacity(0.05))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
