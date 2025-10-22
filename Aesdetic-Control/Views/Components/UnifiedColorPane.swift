@@ -3,6 +3,7 @@ import SwiftUI
 struct UnifiedColorPane: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
+    @Binding var dismissColorPicker: Bool
 
     @State private var gradient: LEDGradient?
     @State private var selectedStopId: UUID? = nil
@@ -11,8 +12,9 @@ struct UnifiedColorPane: View {
     @State private var briUI: Double
     @State private var applyWorkItem: DispatchWorkItem? = nil
 
-    init(device: WLEDDevice) {
+    init(device: WLEDDevice, dismissColorPicker: Binding<Bool>) {
         self.device = device
+        self._dismissColorPicker = dismissColorPicker
         _briUI = State(initialValue: Double(device.brightness))
         // Initialize gradient immediately in init to avoid main queue dispatch during rendering
         _gradient = State(initialValue: LEDGradient(stops: [
@@ -125,6 +127,11 @@ struct UnifiedColorPane: View {
         }
         .onAppear {
             briUI = Double(device.brightness)
+        }
+        .onChange(of: dismissColorPicker) { _, newValue in
+            if newValue {
+                showWheel = false
+            }
         }
     }
 

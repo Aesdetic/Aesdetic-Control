@@ -3,6 +3,7 @@ import SwiftUI
 struct TransitionPane: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
+    @Binding var dismissColorPicker: Bool
 
     // A/B gradients (lazy initialization)
     @State private var stopsA: [GradientStop]?
@@ -24,8 +25,9 @@ struct TransitionPane: View {
     @State private var applyWorkItem: DispatchWorkItem? = nil
     @State private var durationSec: Double = 10
 
-    init(device: WLEDDevice) {
+    init(device: WLEDDevice, dismissColorPicker: Binding<Bool>) {
         self.device = device
+        self._dismissColorPicker = dismissColorPicker
         _aBrightness = State(initialValue: Double(device.brightness))
         _bBrightness = State(initialValue: Double(device.brightness))
         // Initialize gradients immediately in init to avoid main queue dispatch during rendering
@@ -241,6 +243,11 @@ struct TransitionPane: View {
             if let d = viewModel.devices.first(where: { $0.id == device.id }) {
                 aBrightness = Double(d.brightness)
                 bBrightness = Double(d.brightness)
+            }
+        }
+        .onChange(of: dismissColorPicker) { _, newValue in
+            if newValue {
+                showWheel = false
             }
         }
         }

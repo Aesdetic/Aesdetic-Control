@@ -16,6 +16,7 @@ struct DeviceDetailView: View {
     @StateObject private var automationStore = AutomationStore.shared
     @State private var showEditDeviceInfo: Bool = false
     @State private var isToggling: Bool = false
+    @State private var dismissColorPicker: Bool = false
     
     // Use coordinated power state from ViewModel
     private var currentPowerState: Bool {
@@ -59,18 +60,27 @@ struct DeviceDetailView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 20)
                     .padding(.bottom, 12)
+                    .onTapGesture {
+                        dismissColorPicker = true
+                    }
                 
                 // Tab Navigation Bar (blended with overall background)
                 tabNavigationBar
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                     .padding(.bottom, 2)
+                    .onTapGesture {
+                        dismissColorPicker = true
+                    }
                 
                 // Tab Content (blended with overall background)
                 ScrollView {
                     tabContent
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
+                        .onTapGesture {
+                            dismissColorPicker = true
+                        }
                 }
             }
         }
@@ -78,6 +88,11 @@ struct DeviceDetailView: View {
         .presentationDragIndicator(.hidden)
         .presentationBackground(.ultraThinMaterial)
         .navigationBarHidden(true)
+        .onChange(of: dismissColorPicker) { _, newValue in
+            if newValue {
+                dismissColorPicker = false
+            }
+        }
         .sheet(isPresented: $showSaveSceneDialog) {
             SaveSceneDialog(device: device, onSave: { scene in
                 scenesStore.add(scene)
@@ -390,11 +405,11 @@ struct DeviceDetailView: View {
     }
     
     private var gradientAEditor: some View {
-        UnifiedColorPane(device: device)
+        UnifiedColorPane(device: device, dismissColorPicker: $dismissColorPicker)
     }
     
     private var transitionSection: some View {
-        TransitionPane(device: device)
+        TransitionPane(device: device, dismissColorPicker: $dismissColorPicker)
     }
     
 }
