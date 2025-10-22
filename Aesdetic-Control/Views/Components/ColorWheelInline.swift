@@ -505,15 +505,11 @@ struct ColorWheelInline: View {
             
             print("🌡️ Temperature slider active - Kelvin: \(kelvin)K")
             
-            // Update gradient stop for visual feedback (RGB approximation)
-            // This shows the color change on the gradient bar
-            onColorChange(selectedColor)
-            
             // Send CCT data as Kelvin temperature (WLED native format)
             // Pass Kelvin value instead of RGBWW array
             rgbwwCallback([kelvin], selectedColor)
             print("🌡️ Temperature → CCT: \(kelvin)K")
-            print("🎯 Temperature slider updates gradient visually + sends CCT to device")
+            print("🎯 Temperature slider sends CCT to device")
         } else {
             // Spectrum picker was used - send RGB color data
             print("🎨 Spectrum picker active")
