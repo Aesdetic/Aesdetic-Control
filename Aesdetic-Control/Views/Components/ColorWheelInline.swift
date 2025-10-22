@@ -99,12 +99,12 @@ struct ColorWheelInline: View {
                     }) {
                         Text("- Remove")
                             .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(.white.opacity(0.1))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.white.opacity(0.1))
+                                    .fill(Color.white.opacity(0.7))
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
