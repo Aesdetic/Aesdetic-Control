@@ -97,18 +97,9 @@ struct ColorWheelInline: View {
                         onRemove()
                         onDismiss()
                     }) {
-                        Image(systemName: "trash")
-                            .font(.caption)
-                            .foregroundColor(.red.opacity(0.8))
-                            .padding(6)
-                            .background(
-                                Circle()
-                                    .fill(Color.red.opacity(0.1))
-                            )
-                            .overlay(
-                                Circle()
-                                    .stroke(Color.red.opacity(0.3), lineWidth: 1)
-                            )
+                        Image(systemName: "minus")
+                            .font(.title3)
+                            .foregroundColor(.white.opacity(0.6))
                     }
                     .buttonStyle(.plain)
                 }
