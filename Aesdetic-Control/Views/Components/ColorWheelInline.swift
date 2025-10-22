@@ -67,6 +67,7 @@ struct ColorWheelInline: View {
                             }
                         }
                 }
+                .padding(.trailing, 16)
                 
                 Button(action: { onDismiss() }) {
                     Image(systemName: "xmark.circle.fill")
