@@ -488,10 +488,14 @@ struct ColorWheelInline: View {
     private func applyColorToDevice() {
         // Apply color using WLED-accurate conversion
         
+        print("🎯 applyColorToDevice called - isUsingTemperatureSlider: \(isUsingTemperatureSlider)")
+        
         if isUsingTemperatureSlider, let rgbwwCallback = onColorChangeRGBWW {
             // Temperature slider was used - send RGBWW data: [0, 0, 0, WW, CW]
             let warmWhite = Int((1.0 - temperature) * 255)
             let coolWhite = Int(temperature * 255)
+            
+            print("🌡️ Temperature slider active - WW: \(warmWhite), CW: \(coolWhite)")
             
             // Update gradient stop for visual feedback (RGB approximation)
             // This shows the color change on the gradient bar
@@ -504,6 +508,7 @@ struct ColorWheelInline: View {
             print("🎯 Temperature slider updates gradient visually + sends RGBWW to device")
         } else {
             // Spectrum picker was used - send RGB color data
+            print("🎨 Spectrum picker active")
             onColorChange(selectedColor)
             print("🎨 Spectrum → RGB: \(selectedColor.toHex())")
         }

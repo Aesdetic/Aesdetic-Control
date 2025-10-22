@@ -112,11 +112,15 @@ struct UnifiedColorPane: View {
                         // Update gradient stop with the current temperature color (not initial)
                         // but DON'T trigger gradient processing to avoid overriding RGBWW
                         
+                        print("🔥 RGBWW Callback received: \(rgbww)")
+                        print("🎨 Current color: \(currentColor.toHex())")
+                        
                         if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
                             var updatedGradient = currentGradient
                             // Use the current temperature color for visual preview
                             updatedGradient.stops[idx].hexColor = currentColor.toHex()
                             gradient = updatedGradient
+                            print("✅ Updated gradient stop with color: \(currentColor.toHex())")
                             // DON'T call applyNow() - it would override RGBWW with RGB
                         }
                         
@@ -125,7 +129,11 @@ struct UnifiedColorPane: View {
                         intent.segmentId = 0
                         intent.solidRGB = rgbww  // Send [0, 0, 0, WW, CW]
                         
-                        Task { await viewModel.applyColorIntent(intent, to: device) }
+                        print("📡 Sending RGBWW intent to device: \(device.id)")
+                        Task { 
+                            await viewModel.applyColorIntent(intent, to: device)
+                            print("✅ RGBWW intent sent successfully")
+                        }
                         
                         print("✨ RGBWW Intent sent: \(rgbww)")
                         print("🎯 RGBWW bypasses gradient processing to preserve white LED benefits")
