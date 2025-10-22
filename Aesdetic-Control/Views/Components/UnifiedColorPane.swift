@@ -167,7 +167,18 @@ struct UnifiedColorPane: View {
 
     private func applyNow(stops: [GradientStop]) async {
         let ledCount = device.state?.segments.first?.len ?? 120
-        if stops.count == 1 {
+        
+        // Check if this is a "fake gradient" - all stops are the same white temperature
+        if stops.count > 1 && allStopsAreSameWhiteTemperature(stops) {
+            // Treat as single RGBWW color instead of gradient
+            let gradient = LEDGradient(stops: [stops[0]]) // Use first stop
+            let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+            var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+            intent.segmentId = 0
+            intent.perLEDHex = frame
+            await viewModel.applyColorIntent(intent, to: device)
+            print("🎯 Detected identical white temperature stops - using RGBWW mode")
+        } else if stops.count == 1 {
             // For single color, use ColorPipeline to ensure proper brightness handling
             // This prevents the brightness dimming issue in single color mode
             let gradient = LEDGradient(stops: stops)
@@ -179,6 +190,48 @@ struct UnifiedColorPane: View {
         } else {
             await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
         }
+    }
+    
+    private func allStopsAreSameWhiteTemperature(_ stops: [GradientStop]) -> Bool {
+        guard stops.count > 1 else { return false }
+        
+        // Check if all stops have the same hex color
+        let firstColor = stops[0].hexColor
+        let allSameColor = stops.allSatisfy { $0.hexColor == firstColor }
+        
+        // Check if it's a white temperature color (warm/cool white range)
+        let isWhiteTemperature = isWhiteTemperatureColor(firstColor)
+        
+        return allSameColor && isWhiteTemperature
+    }
+    
+    private func isWhiteTemperatureColor(_ hex: String) -> Bool {
+        // Check if this hex color represents a white temperature
+        // This includes warm whites (#FFA000 range) and cool whites (#CBDBFF range)
+        let color = Color(hex: hex)
+        let rgb = color.toRGBArray()
+        
+        // White temperature colors typically have:
+        // - High red component (warm whites)
+        // - High blue component (cool whites) 
+        // - Balanced RGB values (neutral whites)
+        // - Generally high brightness
+        
+        let r = rgb[0]
+        let g = rgb[1] 
+        let b = rgb[2]
+        let totalBrightness = r + g + b
+        
+        // Check if it's in white temperature range
+        // Warm whites: High red, moderate green, low blue
+        // Cool whites: Low red, moderate green, high blue
+        // Neutral whites: Balanced RGB
+        
+        let isWarmWhite = r > 200 && g > 100 && b < 100
+        let isCoolWhite = r < 100 && g > 100 && b > 200
+        let isNeutralWhite = r > 150 && g > 150 && b > 150 && totalBrightness > 400
+        
+        return isWarmWhite || isCoolWhite || isNeutralWhite
     }
 }
 
