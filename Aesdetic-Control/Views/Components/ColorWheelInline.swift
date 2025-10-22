@@ -138,9 +138,6 @@ struct ColorWheelInline: View {
         .padding(20)
         .background(Color.white.opacity(0.1))
         .cornerRadius(16)
-        .onTapGesture {
-            // Prevent tap from propagating to background
-        }
         .onAppear {
             extractHSV(from: initialColor)
             updatePickerPosition()
