@@ -129,7 +129,7 @@ struct ColorWheelInline: View {
                         .foregroundColor(.black.opacity(0.7))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 4)
-                        .frame(height: 24)
+                        .frame(width: 24, height: 24)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
                                 .fill(Color.white.opacity(0.7))
