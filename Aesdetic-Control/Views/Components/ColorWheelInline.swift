@@ -4,7 +4,7 @@ struct ColorWheelInline: View {
     let initialColor: Color
     let canRemove: Bool
     let onColorChange: (Color) -> Void
-    let onColorChangeRGBWW: (([Int]) -> Void)? // Optional callback for RGBWW data
+    let onColorChangeRGBWW: (([Int], Color) -> Void)? // Optional callback for RGBWW data + current color
     let onRemove: () -> Void
     let onDismiss: () -> Void
     @Binding var isUsingTemperatureSlider: Bool
@@ -19,7 +19,7 @@ struct ColorWheelInline: View {
     @State private var isEditingHex: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
-    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int]) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void, isUsingTemperatureSlider: Binding<Bool>) {
+    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int], Color) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void, isUsingTemperatureSlider: Binding<Bool>) {
         self.initialColor = initialColor
         self.canRemove = canRemove
         self.onColorChange = onColorChange
@@ -498,7 +498,8 @@ struct ColorWheelInline: View {
             onColorChange(selectedColor)
             
             // Send RGBWW data directly to device (bypasses gradient processing)
-            rgbwwCallback([0, 0, 0, warmWhite, coolWhite])
+            // Also pass the current color for visual consistency
+            rgbwwCallback([0, 0, 0, warmWhite, coolWhite], selectedColor)
             print("🌡️ Temperature → RGBWW: [0, 0, 0, \(warmWhite), \(coolWhite)]")
             print("🎯 Temperature slider updates gradient visually + sends RGBWW to device")
         } else {

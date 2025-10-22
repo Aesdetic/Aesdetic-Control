@@ -107,15 +107,15 @@ struct UnifiedColorPane: View {
                             }
                         }
                     },
-                    onColorChangeRGBWW: { rgbww in
+                    onColorChangeRGBWW: { rgbww, currentColor in
                         // Handle RGBWW data from temperature slider
-                        // Update gradient stop for visual consistency (RGB approximation)
+                        // Update gradient stop with the current temperature color (not initial)
                         // but DON'T trigger gradient processing to avoid overriding RGBWW
                         
                         if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
                             var updatedGradient = currentGradient
-                            // Use the RGB approximation for visual preview
-                            updatedGradient.stops[idx].hexColor = wheelInitial.toHex()
+                            // Use the current temperature color for visual preview
+                            updatedGradient.stops[idx].hexColor = currentColor.toHex()
                             gradient = updatedGradient
                             // DON'T call applyNow() - it would override RGBWW with RGB
                         }
