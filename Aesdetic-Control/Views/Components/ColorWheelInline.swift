@@ -123,10 +123,21 @@ struct ColorWheelInline: View {
                 }
                 
                 Button(action: { onDismiss() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
-                        .foregroundColor(.white.opacity(0.6))
+                    Image(systemName: "xmark")
+                        .font(.caption)
+                        .foregroundColor(.black.opacity(0.7))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.white.opacity(0.7))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
                 }
+                .buttonStyle(.plain)
             }
             
             // Custom 2D Rectangular Color Gradient Picker
