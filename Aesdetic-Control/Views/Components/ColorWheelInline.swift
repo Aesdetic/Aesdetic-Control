@@ -138,6 +138,10 @@ struct ColorWheelInline: View {
         .padding(20)
         .background(Color.white.opacity(0.1))
         .cornerRadius(16)
+        .onTapGesture {
+            // Block dismissal when tapping inside the color picker container
+            // This prevents the background tap gesture from dismissing the picker
+        }
         .onAppear {
             extractHSV(from: initialColor)
             updatePickerPosition()
