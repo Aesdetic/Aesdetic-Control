@@ -28,9 +28,17 @@ struct ColorWheelInline: View {
     }
     
     var body: some View {
-        VStack(spacing: 16) {
-            // Header
-            HStack {
+        ZStack {
+            // Background tap area to dismiss
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    onDismiss()
+                }
+            
+            VStack(spacing: 16) {
+                // Header
+                HStack {
                 Text("Color Picker")
                     .font(.headline)
                     .foregroundColor(.white)
@@ -130,10 +138,14 @@ struct ColorWheelInline: View {
         .padding(20)
         .background(Color.white.opacity(0.1))
         .cornerRadius(16)
+        .onTapGesture {
+            // Prevent tap from propagating to background
+        }
         .onAppear {
             extractHSV(from: initialColor)
             updatePickerPosition()
             updateHexInput()
+        }
         }
     }
     
