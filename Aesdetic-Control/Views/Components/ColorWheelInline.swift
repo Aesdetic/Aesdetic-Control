@@ -126,7 +126,7 @@ struct ColorWheelInline: View {
                     Image(systemName: "xmark")
                         .font(.caption)
                         .foregroundColor(.black.opacity(0.7))
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 4)
                         .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
