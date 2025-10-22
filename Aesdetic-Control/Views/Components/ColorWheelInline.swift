@@ -91,6 +91,28 @@ struct ColorWheelInline: View {
                     .buttonStyle(.plain)
                 }
                 
+                // Remove Stop Button (if can remove)
+                if canRemove {
+                    Button(action: {
+                        onRemove()
+                        onDismiss()
+                    }) {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .foregroundColor(.red.opacity(0.8))
+                            .padding(6)
+                            .background(
+                                Circle()
+                                    .fill(Color.red.opacity(0.1))
+                            )
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                
                 Button(action: { onDismiss() }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
@@ -103,11 +125,6 @@ struct ColorWheelInline: View {
             
             // Saved Colors Section
             savedColorsSection
-            
-            // Remove Button
-            if canRemove {
-                removeButton
-            }
         }
         .padding(20)
         .background(Color.white.opacity(0.1))
@@ -302,26 +319,6 @@ struct ColorWheelInline: View {
                 }
                 .padding(.horizontal, 4)
             }
-        }
-    }
-    
-    // MARK: - Remove Button
-    
-    private var removeButton: some View {
-        Button(action: {
-            onRemove()
-            onDismiss()
-        }) {
-            HStack {
-                Image(systemName: "trash")
-                Text("Remove Stop")
-            }
-            .font(.subheadline.weight(.medium))
-            .foregroundColor(.red)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(Color.red.opacity(0.1))
-            .cornerRadius(8)
         }
     }
     
