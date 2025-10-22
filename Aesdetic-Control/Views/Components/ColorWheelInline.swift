@@ -216,6 +216,7 @@ struct ColorWheelInline: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            isUsingTemperatureSlider = false  // Reset to RGB mode
                             updateAppleSpectrumPosition(value.location, in: geo.size)
                         }
                         .onEnded { _ in

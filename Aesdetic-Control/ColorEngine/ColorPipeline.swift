@@ -39,6 +39,30 @@ actor ColorPipeline {
                 }
             }
             if let rgb = intent.solidRGB {
+                // Log the exact color data being sent
+                if rgb.count == 5 {
+                    let ww = rgb[3]
+                    let cw = rgb[4]
+                    let totalWhite = ww + cw
+                    
+                    // Estimate power comparison (simplified)
+                    // RGB mixing for white typically uses ~70% of max power per channel
+                    // Dedicated WW/CW uses ~50% of max power per channel (more efficient)
+                    let estimatedRGBPower = Int(Double(totalWhite) * 0.7)
+                    let estimatedWWCWPower = Int(Double(totalWhite) * 0.5)
+                    let powerSavings = estimatedRGBPower - estimatedWWCWPower
+                    let efficiencyGain = powerSavings > 0 ? Int((Double(powerSavings) / Double(estimatedRGBPower)) * 100) : 0
+                    
+                    print("📡 ColorPipeline → WLED RGBWW: [\(rgb[0]), \(rgb[1]), \(rgb[2]), \(rgb[3]), \(rgb[4])]")
+                    print("   ⚡ Using dedicated WW/CW LEDs: ~\(efficiencyGain)% more efficient than RGB mixing")
+                    print("   💡 Brightness: ~\(totalWhite) | Est. power: \(estimatedWWCWPower) vs RGB: \(estimatedRGBPower)")
+                } else if rgb.count == 3 {
+                    let totalBrightness = rgb[0] + rgb[1] + rgb[2]
+                    print("📡 ColorPipeline → WLED RGB: [\(rgb[0]), \(rgb[1]), \(rgb[2])]")
+                    print("   🎨 Using RGB LEDs | Total brightness: ~\(totalBrightness)")
+                } else {
+                    print("📡 ColorPipeline → WLED: \(rgb)")
+                }
                 _ = try? await api.setColor(for: device, color: rgb)
             }
         case .perLED:
