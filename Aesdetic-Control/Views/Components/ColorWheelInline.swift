@@ -99,7 +99,16 @@ struct ColorWheelInline: View {
                     }) {
                         Image(systemName: "minus")
                             .font(.title3)
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundColor(.white.opacity(0.4))
+                            .padding(8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.white.opacity(0.1))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
                     }
                     .buttonStyle(.plain)
                 }
