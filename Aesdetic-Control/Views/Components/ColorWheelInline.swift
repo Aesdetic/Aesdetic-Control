@@ -271,7 +271,7 @@ struct ColorWheelInline: View {
                     }
                     .contentShape(Rectangle())
                     .gesture(
-                        DragGesture(minimumDistance: 0)
+                        DragGesture(minimumDistance: 5)
                             .onChanged { value in
                                 let newValue = Double(value.location.x / geometry.size.width)
                                 temperature = max(0, min(1, newValue))
@@ -284,6 +284,14 @@ struct ColorWheelInline: View {
                                 applyColorToDevice()
                             }
                     )
+                    .onTapGesture { location in
+                        // Allow tapping to set temperature
+                        let newValue = Double(location.x / geometry.size.width)
+                        temperature = max(0, min(1, newValue))
+                        isUsingTemperatureSlider = true
+                        applyTemperatureShift()
+                        applyColorToDevice()
+                    }
                 }
                 .frame(height: 20)
             }

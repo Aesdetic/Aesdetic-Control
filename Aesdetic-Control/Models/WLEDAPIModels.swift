@@ -71,6 +71,7 @@ struct SegmentUpdate: Codable {
     let on: Bool?
     let bri: Int?
     let col: [[Int]]?
+    let cct: Int?
 
     // Effect
     let fx: Int?
@@ -97,6 +98,7 @@ struct SegmentUpdate: Codable {
         on: Bool? = nil,
         bri: Int? = nil,
         col: [[Int]]? = nil,
+        cct: Int? = nil,
         fx: Int? = nil,
         sx: Int? = nil,
         ix: Int? = nil,
@@ -117,6 +119,7 @@ struct SegmentUpdate: Codable {
         self.on = on
         self.bri = bri
         self.col = col
+        self.cct = cct
         self.fx = fx
         self.sx = sx
         self.ix = ix

@@ -64,6 +64,11 @@ struct UnifiedColorPane: View {
                 selectedStopId: $selectedStopId,
                 onTapStop: { id in
                     print("🎨 onTapStop called with id: \(id)")
+                    
+                    // Reset temperature slider flag when user taps on gradient stop
+                    isUsingTemperatureSlider = false
+                    print("🔄 Reset isUsingTemperatureSlider to false")
+                    
                     if let stop = currentGradient.stops.first(where: { $0.id == id }) {
                         print("🎨 Found stop with color: \(stop.color)")
                         wheelInitial = stop.color

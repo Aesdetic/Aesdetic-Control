@@ -113,9 +113,8 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     
     func setCCT(for device: WLEDDevice, kelvin: Int) async throws -> WLEDResponse {
         // Set Color Temperature using WLED's native CCT format
-        // Send Kelvin temperature directly in the segment's col array
-        // col expects [[Int]] format, so we wrap the Kelvin value in an array
-        let segment = SegmentUpdate(id: 0, col: [[kelvin]])
+        // Use the dedicated cct field instead of col array
+        let segment = SegmentUpdate(id: 0, cct: kelvin)
         let stateUpdate = WLEDStateUpdate(seg: [segment])
         return try await updateState(for: device, state: stateUpdate)
     }
