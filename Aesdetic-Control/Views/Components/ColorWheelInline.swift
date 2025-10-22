@@ -4,7 +4,7 @@ struct ColorWheelInline: View {
     let initialColor: Color
     let canRemove: Bool
     let onColorChange: (Color) -> Void
-    let onColorChangeRGBWW: (([Int], Color) -> Void)? // Optional callback for RGBWW data + current color
+    let onColorChangeRGBWW: (([Int], Color) -> Void)? // Optional callback for CCT data + current color
     let onRemove: () -> Void
     let onDismiss: () -> Void
     @Binding var isUsingTemperatureSlider: Bool
@@ -491,21 +491,21 @@ struct ColorWheelInline: View {
         print("🎯 applyColorToDevice called - isUsingTemperatureSlider: \(isUsingTemperatureSlider)")
         
         if isUsingTemperatureSlider, let rgbwwCallback = onColorChangeRGBWW {
-            // Temperature slider was used - send RGBWW data: [0, 0, 0, WW, CW]
-            let warmWhite = Int((1.0 - temperature) * 255)
-            let coolWhite = Int(temperature * 255)
+            // Temperature slider was used - send CCT data as Kelvin temperature
+            // Convert slider position (0-1) to Kelvin range (2700K-6500K)
+            let kelvin = Int(2700 + (temperature * (6500 - 2700)))
             
-            print("🌡️ Temperature slider active - WW: \(warmWhite), CW: \(coolWhite)")
+            print("🌡️ Temperature slider active - Kelvin: \(kelvin)K")
             
             // Update gradient stop for visual feedback (RGB approximation)
             // This shows the color change on the gradient bar
             onColorChange(selectedColor)
             
-            // Send RGBWW data directly to device (bypasses gradient processing)
-            // Also pass the current color for visual consistency
-            rgbwwCallback([0, 0, 0, warmWhite, coolWhite], selectedColor)
-            print("🌡️ Temperature → RGBWW: [0, 0, 0, \(warmWhite), \(coolWhite)]")
-            print("🎯 Temperature slider updates gradient visually + sends RGBWW to device")
+            // Send CCT data as Kelvin temperature (WLED native format)
+            // Pass Kelvin value instead of RGBWW array
+            rgbwwCallback([kelvin], selectedColor)
+            print("🌡️ Temperature → CCT: \(kelvin)K")
+            print("🎯 Temperature slider updates gradient visually + sends CCT to device")
         } else {
             // Spectrum picker was used - send RGB color data
             print("🎨 Spectrum picker active")

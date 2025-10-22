@@ -107,12 +107,12 @@ struct UnifiedColorPane: View {
                             }
                         }
                     },
-                    onColorChangeRGBWW: { rgbww, currentColor in
-                        // Handle RGBWW data from temperature slider
+                    onColorChangeRGBWW: { cctData, currentColor in
+                        // Handle CCT data from temperature slider
                         // Update gradient stop with the current temperature color (not initial)
-                        // but DON'T trigger gradient processing to avoid overriding RGBWW
+                        // but DON'T trigger gradient processing to avoid overriding CCT
                         
-                        print("🔥 RGBWW Callback received: \(rgbww)")
+                        print("🔥 CCT Callback received: \(cctData)")
                         print("🎨 Current color: \(currentColor.toHex())")
                         
                         if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
@@ -121,22 +121,24 @@ struct UnifiedColorPane: View {
                             updatedGradient.stops[idx].hexColor = currentColor.toHex()
                             gradient = updatedGradient
                             print("✅ Updated gradient stop with color: \(currentColor.toHex())")
-                            // DON'T call applyNow() - it would override RGBWW with RGB
+                            // DON'T call applyNow() - it would override CCT with RGB
                         }
                         
-                        // Send RGBWW data directly to device (bypasses gradient processing)
-                        var intent = ColorIntent(deviceId: device.id, mode: .solid)
-                        intent.segmentId = 0
-                        intent.solidRGB = rgbww  // Send [0, 0, 0, WW, CW]
+                        // Send CCT data directly to device using WLED's native format
+                        // CCT data should be [kelvin] where kelvin is the temperature in Kelvin
+                        guard let kelvin = cctData.first else {
+                            print("❌ No Kelvin value in CCT data")
+                            return
+                        }
                         
-                        print("📡 Sending RGBWW intent to device: \(device.id)")
+                        print("📡 Sending CCT intent to device: \(device.id) - Kelvin: \(kelvin)K")
                         Task { 
-                            await viewModel.applyColorIntent(intent, to: device)
-                            print("✅ RGBWW intent sent successfully")
+                            await viewModel.applyCCTIntent(kelvin: kelvin, to: device)
+                            print("✅ CCT intent sent successfully")
                         }
                         
-                        print("✨ RGBWW Intent sent: \(rgbww)")
-                        print("🎯 RGBWW bypasses gradient processing to preserve white LED benefits")
+                        print("✨ CCT Intent sent: \(kelvin)K")
+                        print("🎯 CCT bypasses gradient processing to preserve white LED benefits")
                     },
                     onRemove: {
                         if currentGradient.stops.count > 1 {

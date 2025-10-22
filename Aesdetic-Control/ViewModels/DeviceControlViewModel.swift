@@ -1244,6 +1244,17 @@ class DeviceControlViewModel: ObservableObject {
         await colorPipeline.apply(intent, to: device)
     }
     
+    func applyCCTIntent(kelvin: Int, to device: WLEDDevice) async {
+        // Apply CCT (Color Temperature) using WLED's native CCT format
+        // Send Kelvin temperature directly to WLED device
+        do {
+            let response = try await apiService.setCCT(for: device, kelvin: kelvin)
+            print("✅ CCT applied successfully: \(kelvin)K")
+        } catch {
+            print("❌ Failed to apply CCT: \(error)")
+        }
+    }
+    
     func startTransition(from: LEDGradient, aBrightness: Int, to: LEDGradient, bBrightness: Int, durationSec: Double, device: WLEDDevice) async {
         // Use existing transitionRunner with brightness tweening
         await transitionRunner.start(
