@@ -492,12 +492,13 @@ struct ColorWheelInline: View {
             let warmWhite = Int((1.0 - temperature) * 255)
             let coolWhite = Int(temperature * 255)
             
-            // Update gradient bar with RGB approximation (visual preview)
-            onColorChange(selectedColor)
+            // DON'T call onColorChange() - it would trigger gradient processing
+            // which would override our RGBWW data with RGB approximation
+            // Only send RGBWW data directly to device
             
-            // Send RGBWW array directly to use dedicated white LEDs
             rgbwwCallback([0, 0, 0, warmWhite, coolWhite])
             print("🌡️ Temperature → RGBWW: [0, 0, 0, \(warmWhite), \(coolWhite)]")
+            print("🎯 Temperature slider bypasses gradient processing")
         } else {
             // Spectrum picker was used - send RGB color data
             onColorChange(selectedColor)

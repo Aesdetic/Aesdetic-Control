@@ -103,9 +103,18 @@ struct UnifiedColorPane: View {
                     },
                     onColorChangeRGBWW: { rgbww in
                         // Handle RGBWW data from temperature slider
-                        // Note: The gradient stop is already updated via onColorChange (RGB approximation)
-                        // This callback sends the actual RGBWW data directly to the device
+                        // Update gradient stop for visual consistency (RGB approximation)
+                        // but DON'T trigger gradient processing to avoid overriding RGBWW
                         
+                        if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
+                            var updatedGradient = currentGradient
+                            // Use the RGB approximation for visual preview
+                            updatedGradient.stops[idx].hexColor = wheelInitial.toHex()
+                            gradient = updatedGradient
+                            // DON'T call applyNow() - it would override RGBWW with RGB
+                        }
+                        
+                        // Send RGBWW data directly to device (bypasses gradient processing)
                         var intent = ColorIntent(deviceId: device.id, mode: .solid)
                         intent.segmentId = 0
                         intent.solidRGB = rgbww  // Send [0, 0, 0, WW, CW]
@@ -113,6 +122,7 @@ struct UnifiedColorPane: View {
                         Task { await viewModel.applyColorIntent(intent, to: device) }
                         
                         print("✨ RGBWW Intent sent: \(rgbww)")
+                        print("🎯 RGBWW bypasses gradient processing to preserve white LED benefits")
                     },
                     onRemove: {
                         if currentGradient.stops.count > 1 {
@@ -167,26 +177,7 @@ struct UnifiedColorPane: View {
 
     private func applyNow(stops: [GradientStop]) async {
         let ledCount = device.state?.segments.first?.len ?? 120
-        
-        // Check if this gradient contains white temperature colors
-        if stops.count > 1 && containsWhiteTemperatureStops(stops) {
-            // For gradients with white temperatures, we need to preserve RGBWW benefits
-            // Check if all stops are white temperatures (can use RGBWW mode)
-            if allStopsAreWhiteTemperature(stops) {
-                // All stops are white temperatures - use RGBWW mode for efficiency
-                let gradient = LEDGradient(stops: [stops[0]]) // Use first stop
-                let frame = GradientSampler.sample(gradient, ledCount: ledCount)
-                var intent = ColorIntent(deviceId: device.id, mode: .perLED)
-                intent.segmentId = 0
-                intent.perLEDHex = frame
-                await viewModel.applyColorIntent(intent, to: device)
-                print("🎯 All stops are white temperatures - using RGBWW mode")
-            } else {
-                // Mixed white + colored stops - use gradient but warn about color accuracy
-                await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
-                print("⚠️ Mixed white/colored gradient - RGBWW benefits may be reduced")
-            }
-        } else if stops.count == 1 {
+        if stops.count == 1 {
             // For single color, use ColorPipeline to ensure proper brightness handling
             // This prevents the brightness dimming issue in single color mode
             let gradient = LEDGradient(stops: stops)
@@ -198,53 +189,6 @@ struct UnifiedColorPane: View {
         } else {
             await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
         }
-    }
-    
-    private func containsWhiteTemperatureStops(_ stops: [GradientStop]) -> Bool {
-        return stops.contains { isWhiteTemperatureColor($0.hexColor) }
-    }
-    
-    private func allStopsAreWhiteTemperature(_ stops: [GradientStop]) -> Bool {
-        return stops.allSatisfy { isWhiteTemperatureColor($0.hexColor) }
-    }
-    
-    private func allStopsAreSameWhiteTemperature(_ stops: [GradientStop]) -> Bool {
-        guard stops.count > 1 else { return false }
-        
-        // Check if all stops have the same hex color
-        let firstColor = stops[0].hexColor
-        let allSameColor = stops.allSatisfy { $0.hexColor == firstColor }
-        
-        // Check if it's a white temperature color (warm/cool white range)
-        let isWhiteTemperature = isWhiteTemperatureColor(firstColor)
-        
-        return allSameColor && isWhiteTemperature
-    }
-    
-    private func isWhiteTemperatureColor(_ hex: String) -> Bool {
-        // Check if this hex color represents a white temperature
-        // Based on WLED's exact CCT values: #FFA000 (2700K) to #CBDBFF (6500K)
-        let color = Color(hex: hex)
-        let rgb = color.toRGBArray()
-        
-        let r = rgb[0]
-        let g = rgb[1] 
-        let b = rgb[2]
-        let totalBrightness = r + g + b
-        
-        // WLED temperature range detection:
-        // Warm whites: #FFA000 (255,160,0) - High red, moderate green, low blue
-        // Neutral whites: #FFF1EA (255,241,234) - High red, high green, moderate blue  
-        // Cool whites: #CBDBFF (203,219,255) - Moderate red, high green, high blue
-        
-        let isWarmWhite = r > 200 && g > 100 && b < 100
-        let isCoolWhite = r > 150 && g > 200 && b > 200
-        let isNeutralWhite = r > 200 && g > 200 && b > 150 && totalBrightness > 500
-        
-        // Additional check: colors that are close to the temperature gradient
-        let isInTemperatureRange = (r > 150 && g > 100 && b > 50) && totalBrightness > 300
-        
-        return isWarmWhite || isCoolWhite || isNeutralWhite || isInTemperatureRange
     }
 }
 
