@@ -99,6 +99,7 @@ struct UnifiedColorPane: View {
                 ColorWheelInline(
                     initialColor: wheelInitial,
                     canRemove: currentGradient.stops.count > 1,
+                    deviceCapabilities: device.capabilities,
                     onColorChange: { color in
                         if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
                             var updatedGradient = currentGradient

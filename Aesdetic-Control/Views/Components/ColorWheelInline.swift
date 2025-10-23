@@ -8,6 +8,7 @@ struct ColorWheelInline: View {
     let onRemove: () -> Void
     let onDismiss: () -> Void
     @Binding var isUsingTemperatureSlider: Bool
+    let deviceCapabilities: WLEDCapabilities
     
     @State private var selectedColor: Color
     @State private var hue: Double = 0
@@ -19,9 +20,10 @@ struct ColorWheelInline: View {
     @State private var isEditingHex: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
-    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int], Color) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void, isUsingTemperatureSlider: Binding<Bool>) {
+    init(initialColor: Color, canRemove: Bool, deviceCapabilities: WLEDCapabilities, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int], Color) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void, isUsingTemperatureSlider: Binding<Bool>) {
         self.initialColor = initialColor
         self.canRemove = canRemove
+        self.deviceCapabilities = deviceCapabilities
         self.onColorChange = onColorChange
         self.onColorChangeRGBWW = onColorChangeRGBWW
         self.onRemove = onRemove
@@ -233,8 +235,9 @@ struct ColorWheelInline: View {
             }
             .frame(height: 200)
             
-            // Temperature Slider with Visual Gradient
-            VStack(spacing: 6) {
+            // Temperature Slider with Visual Gradient (only for CCT-capable devices)
+            if deviceCapabilities.hasCCT {
+                VStack(spacing: 6) {
                 HStack {
                     Image(systemName: "thermometer.sun")
                         .foregroundColor(.orange)
@@ -295,7 +298,7 @@ struct ColorWheelInline: View {
                 }
                 .frame(height: 20)
             }
-            
+            }
         }
     }
     

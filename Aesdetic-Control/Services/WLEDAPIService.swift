@@ -492,7 +492,7 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 name: device.name,
                 mac: device.id,
                 ver: "0.14.0",
-                leds: LedInfo(count: 30)
+                leds: LedInfo(count: 30, lc: nil, rgbw: nil, wv: nil, cct: nil, pwr: nil, maxpwr: nil, fps: nil, maxseg: nil)
             ),
             state: WLEDState(
                 brightness: device.brightness,

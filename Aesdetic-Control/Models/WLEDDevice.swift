@@ -20,6 +20,7 @@ struct WLEDDevice: Identifiable, Hashable {
     var location: DeviceLocation
     var lastSeen: Date
     var state: WLEDState?
+    var capabilities: WLEDCapabilities = [] // LED strip capabilities
     
     // TODO: Add custom product image support
     // var productImage: String? // Asset name for custom product image
@@ -58,7 +59,7 @@ struct WLEDDevice: Identifiable, Hashable {
         hasher.combine(id)
     }
     
-    init(id: String, name: String, ipAddress: String, isOnline: Bool = false, brightness: Int = 0, currentColor: Color = .black, productType: ProductType = .generic, location: DeviceLocation = .all, lastSeen: Date = Date(), state: WLEDState? = nil) {
+    init(id: String, name: String, ipAddress: String, isOnline: Bool = false, brightness: Int = 0, currentColor: Color = .black, productType: ProductType = .generic, location: DeviceLocation = .all, lastSeen: Date = Date(), state: WLEDState? = nil, capabilities: WLEDCapabilities = []) {
         self.id = id
         self.name = name
         self.ipAddress = ipAddress
@@ -69,6 +70,7 @@ struct WLEDDevice: Identifiable, Hashable {
         self.location = location
         self.lastSeen = lastSeen
         self.state = state
+        self.capabilities = capabilities
     }
     
     // WLED API endpoints
@@ -98,6 +100,18 @@ struct Info: Codable {
 
 struct LedInfo: Codable {
     let count: Int
+    let lc: Int?           // Light capabilities bitfield
+    let rgbw: Bool?        // RGBW support (deprecated, use lc)
+    let wv: Bool?          // White slider visibility (deprecated, use lc)
+    let cct: Bool?         // CCT support (deprecated, use lc)
+    let pwr: Int?          // Current power consumption in mA
+    let maxpwr: Int?       // Maximum power limit in mA
+    let fps: Int?          // Frames per second
+    let maxseg: Int?       // Maximum segments
+    
+    enum CodingKeys: String, CodingKey {
+        case count, lc, rgbw, wv, cct, pwr, maxpwr, fps, maxseg
+    }
 }
 
 struct WLEDState: Codable {
@@ -132,11 +146,74 @@ struct Segment: Codable {
     let rev: Bool?
     let mi: Bool?
     let cln: Int?
+    let lc: Int?            // Light capabilities bitfield for this segment
 
     enum CodingKeys: String, CodingKey {
         case id, start, stop, len, grp, spc, ofs, on, bri
         case colors = "col"
-        case fx, sx, ix, pal, sel, rev, mi, cln
+        case fx, sx, ix, pal, sel, rev, mi, cln, lc
+    }
+}
+
+// MARK: - WLED Light Capabilities
+
+/// WLED light capability flags based on SEG_CAPABILITY constants
+struct WLEDCapabilities: OptionSet {
+    let rawValue: Int
+    
+    static let rgb = WLEDCapabilities(rawValue: 1 << 0)  // 0x01 - RGB support
+    static let white = WLEDCapabilities(rawValue: 1 << 1)  // 0x02 - White channel support
+    static let cct = WLEDCapabilities(rawValue: 1 << 2)  // 0x04 - CCT (Color Temperature) support
+    
+    /// Check if device supports RGB channels
+    var hasRGB: Bool {
+        return contains(.rgb)
+    }
+    
+    /// Check if device supports white channel
+    var hasWhite: Bool {
+        return contains(.white)
+    }
+    
+    /// Check if device supports CCT (Color Temperature)
+    var hasCCT: Bool {
+        return contains(.cct)
+    }
+    
+    /// Check if device supports RGBW (RGB + White)
+    var hasRGBW: Bool {
+        return hasRGB && hasWhite
+    }
+    
+    /// Check if device supports RGBWW (RGB + Warm White + Cool White)
+    var hasRGBWW: Bool {
+        return hasRGB && hasCCT
+    }
+    
+    /// Get the number of color channels this device supports
+    var channelCount: Int {
+        var count = 0
+        if hasRGB { count += 3 }  // R, G, B
+        if hasWhite { count += 1 }  // W
+        if hasCCT { count += 1 }  // CCT (or WW/CW)
+        return count
+    }
+    
+    /// Get a human-readable description of the LED type
+    var description: String {
+        if hasRGBWW {
+            return "RGBWW (RGB + Warm White + Cool White)"
+        } else if hasRGBW {
+            return "RGBW (RGB + White)"
+        } else if hasCCT {
+            return "CCT (Color Temperature)"
+        } else if hasWhite {
+            return "White Only"
+        } else if hasRGB {
+            return "RGB"
+        } else {
+            return "Unknown"
+        }
     }
 }
 
