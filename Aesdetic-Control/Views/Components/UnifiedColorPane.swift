@@ -11,7 +11,6 @@ struct UnifiedColorPane: View {
     @State private var wheelInitial: Color = .white
     @State private var briUI: Double
     @State private var applyWorkItem: DispatchWorkItem? = nil
-    @State private var isUsingTemperatureSlider: Bool = false
 
     init(device: WLEDDevice, dismissColorPicker: Binding<Bool>) {
         self.device = device
@@ -64,11 +63,6 @@ struct UnifiedColorPane: View {
                 selectedStopId: $selectedStopId,
                 onTapStop: { id in
                     print("🎨 onTapStop called with id: \(id)")
-                    
-                    // Reset temperature slider flag when user taps on gradient stop
-                    isUsingTemperatureSlider = false
-                    print("🔄 Reset isUsingTemperatureSlider to false")
-                    
                     if let stop = currentGradient.stops.first(where: { $0.id == id }) {
                         print("🎨 Found stop with color: \(stop.color)")
                         wheelInitial = stop.color
@@ -99,52 +93,13 @@ struct UnifiedColorPane: View {
                 ColorWheelInline(
                     initialColor: wheelInitial,
                     canRemove: currentGradient.stops.count > 1,
-                    deviceCapabilities: device.capabilities,
                     onColorChange: { color in
                         if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
                             var updatedGradient = currentGradient
                             updatedGradient.stops[idx].hexColor = color.toHex()
                             gradient = updatedGradient
-                            
-                            // Only trigger gradient processing if NOT using temperature slider
-                            // Temperature slider handles device updates via RGBWW callback
-                            if !isUsingTemperatureSlider {
-                                Task { await applyNow(stops: updatedGradient.stops) }
-                            }
+                            Task { await applyNow(stops: updatedGradient.stops) }
                         }
-                    },
-                    onColorChangeRGBWW: { cctData, currentColor in
-                        // Handle CCT data from temperature slider
-                        // Update gradient stop with the current temperature color (not initial)
-                        // but DON'T trigger gradient processing to avoid overriding CCT
-                        
-                        print("🔥 CCT Callback received: \(cctData)")
-                        print("🎨 Current color: \(currentColor.toHex())")
-                        
-                        if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
-                            var updatedGradient = currentGradient
-                            // Use the current temperature color for visual preview
-                            updatedGradient.stops[idx].hexColor = currentColor.toHex()
-                            gradient = updatedGradient
-                            print("✅ Updated gradient stop with color: \(currentColor.toHex())")
-                            // DON'T call applyNow() - it would override CCT with RGB
-                        }
-                        
-                        // Send CCT data directly to device using WLED's native format
-                        // CCT data should be [kelvin] where kelvin is the temperature in Kelvin
-                        guard let kelvin = cctData.first else {
-                            print("❌ No Kelvin value in CCT data")
-                            return
-                        }
-                        
-                        print("📡 Sending CCT intent to device: \(device.id) - Kelvin: \(kelvin)K")
-                        Task { 
-                            await viewModel.applyCCTIntent(kelvin: kelvin, to: device)
-                            print("✅ CCT intent sent successfully")
-                        }
-                        
-                        print("✨ CCT Intent sent: \(kelvin)K")
-                        print("🎯 CCT bypasses gradient processing to preserve white LED benefits")
                     },
                     onRemove: {
                         if currentGradient.stops.count > 1 {
@@ -155,8 +110,7 @@ struct UnifiedColorPane: View {
                             Task { await applyNow(stops: updatedGradient.stops) }
                         }
                     },
-                    onDismiss: { showWheel = false },
-                    isUsingTemperatureSlider: $isUsingTemperatureSlider
+                    onDismiss: { showWheel = false }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .padding(.horizontal, 16)

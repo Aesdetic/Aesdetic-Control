@@ -533,24 +533,6 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
                                    blue: Double(blue) / 255.0, 
                                    opacity: state.isOn ? 1.0 : 0.5)
 
-            // Extract LED capabilities from the device info
-            var capabilities = WLEDCapabilities()
-            if let lc = info.leds.lc {
-                capabilities = WLEDCapabilities(rawValue: lc)
-            } else {
-                // Fallback to deprecated flags if lc is not available
-                if info.leds.rgbw == true {
-                    capabilities.insert(.rgb)
-                    capabilities.insert(.white)
-                }
-                if info.leds.cct == true {
-                    capabilities.insert(.cct)
-                }
-                if info.leds.wv == true {
-                    capabilities.insert(.white)
-                }
-            }
-
             let wledDevice = WLEDDevice(
                 id: info.mac,
                 name: "Aesdetic-LED",
@@ -561,8 +543,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
                 productType: .generic,
                 location: .all,
                 lastSeen: Date(),
-                state: state,
-                capabilities: capabilities
+                state: state
             )
             
             completion(.success(wledDevice))

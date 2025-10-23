@@ -71,7 +71,6 @@ struct SegmentUpdate: Codable {
     let on: Bool?
     let bri: Int?
     let col: [[Int]]?
-    let cct: Int?
 
     // Effect
     let fx: Int?
@@ -98,7 +97,6 @@ struct SegmentUpdate: Codable {
         on: Bool? = nil,
         bri: Int? = nil,
         col: [[Int]]? = nil,
-        cct: Int? = nil,
         fx: Int? = nil,
         sx: Int? = nil,
         ix: Int? = nil,
@@ -119,7 +117,6 @@ struct SegmentUpdate: Codable {
         self.on = on
         self.bri = bri
         self.col = col
-        self.cct = cct
         self.fx = fx
         self.sx = sx
         self.ix = ix
@@ -275,5 +272,173 @@ struct WLEDConfigUpdate: Codable {
     
     enum CodingKeys: String, CodingKey {
         case name = "server-name"
+    }
+}
+
+// MARK: - LED Configuration Models
+
+/// LED hardware configuration for WLED devices
+struct LEDConfiguration: Codable {
+    /// LED strip type (WS281x, SK6812, etc.)
+    let stripType: Int
+    /// Color order (GRB, RGB, BRG, etc.)
+    let colorOrder: Int
+    /// GPIO pin for data
+    let gpioPin: Int
+    /// Number of LEDs
+    let ledCount: Int
+    /// Start LED index
+    let startLED: Int
+    /// Skip first N LEDs
+    let skipFirstLEDs: Int
+    /// Reverse direction
+    let reverseDirection: Bool
+    /// Refresh when off
+    let offRefresh: Bool
+    /// Auto white mode (0=none, 1=brighter, 2=accurate, 3=dual, 4=max)
+    let autoWhiteMode: Int
+    /// Maximum current per LED in mA
+    let maxCurrentPerLED: Int
+    /// Maximum total current in mA
+    let maxTotalCurrent: Int
+    /// Use per-output limiter
+    let usePerOutputLimiter: Bool
+    /// Enable automatic brightness limiter
+    let enableABL: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case stripType = "type"
+        case colorOrder = "co"
+        case gpioPin = "pin"
+        case ledCount = "len"
+        case startLED = "start"
+        case skipFirstLEDs = "skip"
+        case reverseDirection = "rev"
+        case offRefresh = "rf"
+        case autoWhiteMode = "aw"
+        case maxCurrentPerLED = "la"
+        case maxTotalCurrent = "ma"
+        case usePerOutputLimiter = "per"
+        case enableABL = "abl"
+    }
+}
+
+/// LED strip types supported by WLED
+enum LEDStripType: Int, CaseIterable, Codable {
+    case ws281x = 0
+    case sk6812 = 1
+    case tm1814 = 2
+    case ws2801 = 3
+    case apa102 = 4
+    case lpd8806 = 5
+    case tm1829 = 6
+    case ucs8903 = 7
+    case apa106 = 8
+    case tm1914 = 9
+    case fw1906 = 10
+    case ucs8904 = 11
+    case ws2805 = 12
+    case sm16825 = 13
+    case ws2811White = 14
+    case ws281xWWA = 15
+    
+    var displayName: String {
+        switch self {
+        case .ws281x: return "WS281x"
+        case .sk6812: return "SK6812/WS2814 RGBW"
+        case .tm1814: return "TM1814"
+        case .ws2801: return "WS2801"
+        case .apa102: return "APA102"
+        case .lpd8806: return "LPD8806"
+        case .tm1829: return "TM1829"
+        case .ucs8903: return "UCS8903"
+        case .apa106: return "APA106/PL9823"
+        case .tm1914: return "TM1914"
+        case .fw1906: return "FW1906 GRBCW"
+        case .ucs8904: return "UCS8904 RGBW"
+        case .ws2805: return "WS2805 RGBCW"
+        case .sm16825: return "SM16825 RGBCW"
+        case .ws2811White: return "WS2811 White"
+        case .ws281xWWA: return "WS281x WWA"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .ws281x: return "Standard WS2812/WS2813 RGB LEDs"
+        case .sk6812: return "SK6812/WS2814 RGBW LEDs with white channel"
+        case .tm1814: return "TM1814 RGB LEDs"
+        case .ws2801: return "WS2801 RGB LEDs (3-wire)"
+        case .apa102: return "APA102 RGB LEDs (4-wire)"
+        case .lpd8806: return "LPD8806 RGB LEDs"
+        case .tm1829: return "TM1829 RGB LEDs"
+        case .ucs8903: return "UCS8903 RGB LEDs"
+        case .apa106: return "APA106/PL9823 RGB LEDs"
+        case .tm1914: return "TM1914 RGB LEDs"
+        case .fw1906: return "FW1906 GRBCW LEDs"
+        case .ucs8904: return "UCS8904 RGBW LEDs"
+        case .ws2805: return "WS2805 RGBCW LEDs"
+        case .sm16825: return "SM16825 RGBCW LEDs"
+        case .ws2811White: return "WS2811 White LEDs"
+        case .ws281xWWA: return "WS281x Warm White Amber LEDs"
+        }
+    }
+}
+
+/// Color order options for LED strips
+enum LEDColorOrder: Int, CaseIterable, Codable {
+    case grb = 0
+    case rgb = 1
+    case brg = 2
+    case grbw = 3
+    case rgbw = 4
+    
+    var displayName: String {
+        switch self {
+        case .grb: return "GRB"
+        case .rgb: return "RGB"
+        case .brg: return "BRG"
+        case .grbw: return "GRBW"
+        case .rgbw: return "RGBW"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .grb: return "Green-Red-Blue (most common)"
+        case .rgb: return "Red-Green-Blue"
+        case .brg: return "Blue-Red-Green"
+        case .grbw: return "Green-Red-Blue-White"
+        case .rgbw: return "Red-Green-Blue-White"
+        }
+    }
+}
+
+/// Auto white mode options
+enum AutoWhiteMode: Int, CaseIterable, Codable {
+    case none = 0
+    case brighter = 1
+    case accurate = 2
+    case dual = 3
+    case max = 4
+    
+    var displayName: String {
+        switch self {
+        case .none: return "None"
+        case .brighter: return "Brighter"
+        case .accurate: return "Accurate"
+        case .dual: return "Dual"
+        case .max: return "Max"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .none: return "No auto white calculation"
+        case .brighter: return "Brighter white calculation"
+        case .accurate: return "Accurate white calculation"
+        case .dual: return "Dual white calculation"
+        case .max: return "Maximum white calculation"
+        }
     }
 } 

@@ -261,8 +261,7 @@ extension WLEDSegmentEntity {
             sel: self.isSelected,
             rev: self.isReversed,
             mi: self.isMirrored,
-            cln: nil, // Not persisted
-            lc: nil // Light capabilities not persisted in Core Data
+            cln: nil // Not persisted
         )
     }
 

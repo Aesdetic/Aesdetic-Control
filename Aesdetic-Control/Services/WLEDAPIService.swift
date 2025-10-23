@@ -110,14 +110,6 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let stateUpdate = WLEDStateUpdate(seg: [segment])
         return try await updateState(for: device, state: stateUpdate)
     }
-    
-    func setCCT(for device: WLEDDevice, kelvin: Int) async throws -> WLEDResponse {
-        // Set Color Temperature using WLED's native CCT format
-        // Use the dedicated cct field instead of col array
-        let segment = SegmentUpdate(id: 0, cct: kelvin)
-        let stateUpdate = WLEDStateUpdate(seg: [segment])
-        return try await updateState(for: device, state: stateUpdate)
-    }
 
     // MARK: - UDP Sync Controls
     @discardableResult
@@ -492,7 +484,7 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 name: device.name,
                 mac: device.id,
                 ver: "0.14.0",
-                leds: LedInfo(count: 30, lc: nil, rgbw: nil, wv: nil, cct: nil, pwr: nil, maxpwr: nil, fps: nil, maxseg: nil)
+                leds: LedInfo(count: 30)
             ),
             state: WLEDState(
                 brightness: device.brightness,
@@ -539,6 +531,175 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try parseResponse(data: data, device: device)
 }
 
+    // MARK: - LED Configuration API
+    
+    /// Update LED hardware configuration for a WLED device
+    /// - Parameters:
+    ///   - config: The LED configuration to apply
+    ///   - device: The target WLED device
+    /// - Returns: Success response
+    /// - Throws: WLEDAPIError if the request fails
+    func updateLEDConfiguration(_ config: LEDConfiguration, for device: WLEDDevice) async throws -> WLEDResponse {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Create the configuration payload matching WLED's expected format
+        let configPayload: [String: Any] = [
+            "hw": [
+                "led": [
+                    "total": config.ledCount,
+                    "maxpwr": config.maxTotalCurrent,
+                    "rgbwm": config.autoWhiteMode,
+                    "cct": false, // Color correction temperature
+                    "cr": false,  // Color correction from RGB
+                    "ic": false,  // Color correction IC
+                    "cb": 0,      // Color correction blending
+                    "fps": 42,    // Target FPS
+                    "prl": false  // Parallel I2S
+                ]
+            ],
+            "leds": [
+                [
+                    "pin": [config.gpioPin],
+                    "len": config.ledCount,
+                    "type": config.stripType,
+                    "co": config.colorOrder,
+                    "start": config.startLED,
+                    "skip": config.skipFirstLEDs,
+                    "rev": config.reverseDirection,
+                    "rf": config.offRefresh,
+                    "aw": config.autoWhiteMode,
+                    "la": config.maxCurrentPerLED,
+                    "ma": config.maxTotalCurrent,
+                    "per": config.usePerOutputLimiter
+                ]
+            ]
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: configPayload)
+        } catch {
+            throw WLEDAPIError.encodingError(error)
+        }
+        
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            
+            // Handle empty response for successful POST requests
+            if data.isEmpty {
+                return createSuccessResponse(for: device)
+            }
+            
+            return try parseResponse(data: data, device: device)
+        } catch {
+            throw handleError(error, device: device)
+        }
+    }
+    
+    /// Get current LED configuration from a WLED device
+    /// - Parameter device: The target WLED device
+    /// - Returns: Current LED configuration
+    /// - Throws: WLEDAPIError if the request fails
+    func getLEDConfiguration(for device: WLEDDevice) async throws -> LEDConfiguration {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        do {
+            let (data, response) = try await urlSession.data(from: url)
+            try validateHTTPResponse(response, device: device)
+            
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let hw = json["hw"] as? [String: Any],
+                  let led = hw["led"] as? [String: Any],
+                  let leds = json["leds"] as? [[String: Any]],
+                  let firstLED = leds.first else {
+                throw WLEDAPIError.invalidResponse
+            }
+            
+            // Extract configuration values with defaults
+            let stripType = firstLED["type"] as? Int ?? 0
+            let colorOrder = firstLED["co"] as? Int ?? 0
+            let gpioPin = (firstLED["pin"] as? [Int])?.first ?? 16
+            let ledCount = firstLED["len"] as? Int ?? 120
+            let startLED = firstLED["start"] as? Int ?? 0
+            let skipFirstLEDs = firstLED["skip"] as? Int ?? 0
+            let reverseDirection = firstLED["rev"] as? Bool ?? false
+            let offRefresh = firstLED["rf"] as? Bool ?? false
+            let autoWhiteMode = firstLED["aw"] as? Int ?? 0
+            let maxCurrentPerLED = firstLED["la"] as? Int ?? 55
+            let maxTotalCurrent = led["maxpwr"] as? Int ?? 3850
+            let usePerOutputLimiter = firstLED["per"] as? Bool ?? false
+            let enableABL = led["abl"] as? Bool ?? true
+            
+            return LEDConfiguration(
+                stripType: stripType,
+                colorOrder: colorOrder,
+                gpioPin: gpioPin,
+                ledCount: ledCount,
+                startLED: startLED,
+                skipFirstLEDs: skipFirstLEDs,
+                reverseDirection: reverseDirection,
+                offRefresh: offRefresh,
+                autoWhiteMode: autoWhiteMode,
+                maxCurrentPerLED: maxCurrentPerLED,
+                maxTotalCurrent: maxTotalCurrent,
+                usePerOutputLimiter: usePerOutputLimiter,
+                enableABL: enableABL
+            )
+        } catch {
+            throw handleError(error, device: device)
+        }
+    }
+    
+    /// Update specific LED settings without full configuration
+    /// - Parameters:
+    ///   - device: The target WLED device
+    ///   - stripType: LED strip type (optional)
+    ///   - colorOrder: Color order (optional)
+    ///   - gpioPin: GPIO pin (optional)
+    ///   - ledCount: Number of LEDs (optional)
+    ///   - maxCurrent: Maximum current in mA (optional)
+    ///   - enableABL: Enable automatic brightness limiter (optional)
+    /// - Returns: Success response
+    /// - Throws: WLEDAPIError if the request fails
+    func updateLEDSettings(for device: WLEDDevice, 
+                          stripType: Int? = nil,
+                          colorOrder: Int? = nil,
+                          gpioPin: Int? = nil,
+                          ledCount: Int? = nil,
+                          maxCurrent: Int? = nil,
+                          enableABL: Bool? = nil) async throws -> WLEDResponse {
+        
+        // Get current configuration first
+        let currentConfig = try await getLEDConfiguration(for: device)
+        
+        // Create updated configuration with provided values
+        let updatedConfig = LEDConfiguration(
+            stripType: stripType ?? currentConfig.stripType,
+            colorOrder: colorOrder ?? currentConfig.colorOrder,
+            gpioPin: gpioPin ?? currentConfig.gpioPin,
+            ledCount: ledCount ?? currentConfig.ledCount,
+            startLED: currentConfig.startLED,
+            skipFirstLEDs: currentConfig.skipFirstLEDs,
+            reverseDirection: currentConfig.reverseDirection,
+            offRefresh: currentConfig.offRefresh,
+            autoWhiteMode: currentConfig.autoWhiteMode,
+            maxCurrentPerLED: currentConfig.maxCurrentPerLED,
+            maxTotalCurrent: maxCurrent ?? currentConfig.maxTotalCurrent,
+            usePerOutputLimiter: currentConfig.usePerOutputLimiter,
+            enableABL: enableABL ?? currentConfig.enableABL
+        )
+        
+        return try await updateLEDConfiguration(updatedConfig, for: device)
+    }
+    
     // MARK: - Cache Management for ResourceManager
     
     func getCacheSize() -> Int {

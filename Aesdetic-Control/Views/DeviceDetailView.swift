@@ -102,6 +102,12 @@ struct DeviceDetailView: View {
             EditDeviceInfoDialog(device: device)
                 .environmentObject(viewModel)
         }
+        .sheet(isPresented: $showSettings) {
+            NavigationStack {
+                ComprehensiveSettingsView(device: device)
+                    .environmentObject(viewModel)
+            }
+        }
     }
     
     // MARK: - Header Row

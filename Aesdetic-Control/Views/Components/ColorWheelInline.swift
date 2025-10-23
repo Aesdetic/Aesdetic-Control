@@ -4,11 +4,8 @@ struct ColorWheelInline: View {
     let initialColor: Color
     let canRemove: Bool
     let onColorChange: (Color) -> Void
-    let onColorChangeRGBWW: (([Int], Color) -> Void)? // Optional callback for CCT data + current color
     let onRemove: () -> Void
     let onDismiss: () -> Void
-    @Binding var isUsingTemperatureSlider: Bool
-    let deviceCapabilities: WLEDCapabilities
     
     @State private var selectedColor: Color
     @State private var hue: Double = 0
@@ -17,18 +14,16 @@ struct ColorWheelInline: View {
     @State private var temperature: Double = 0.5 // 0 = orange, 0.5 = white, 1 = cool white
     @State private var pickerPosition: CGPoint = .zero
     @State private var hexInput: String = ""
+    @State private var isUsingTemperatureSlider: Bool = false
     @State private var isEditingHex: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
-    init(initialColor: Color, canRemove: Bool, deviceCapabilities: WLEDCapabilities, onColorChange: @escaping (Color) -> Void, onColorChangeRGBWW: (([Int], Color) -> Void)? = nil, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void, isUsingTemperatureSlider: Binding<Bool>) {
+    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
         self.initialColor = initialColor
         self.canRemove = canRemove
-        self.deviceCapabilities = deviceCapabilities
         self.onColorChange = onColorChange
-        self.onColorChangeRGBWW = onColorChangeRGBWW
         self.onRemove = onRemove
         self.onDismiss = onDismiss
-        self._isUsingTemperatureSlider = isUsingTemperatureSlider
         _selectedColor = State(initialValue: initialColor)
     }
     
@@ -219,7 +214,6 @@ struct ColorWheelInline: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            isUsingTemperatureSlider = false  // Reset to RGB mode
                             updateAppleSpectrumPosition(value.location, in: geo.size)
                         }
                         .onEnded { _ in
@@ -235,9 +229,8 @@ struct ColorWheelInline: View {
             }
             .frame(height: 200)
             
-            // Temperature Slider with Visual Gradient (only for CCT-capable devices)
-            if deviceCapabilities.hasCCT {
-                VStack(spacing: 6) {
+            // Temperature Slider with Visual Gradient
+            VStack(spacing: 6) {
                 HStack {
                     Image(systemName: "thermometer.sun")
                         .foregroundColor(.orange)
@@ -274,7 +267,7 @@ struct ColorWheelInline: View {
                     }
                     .contentShape(Rectangle())
                     .gesture(
-                        DragGesture(minimumDistance: 5)
+                        DragGesture(minimumDistance: 0)
                             .onChanged { value in
                                 let newValue = Double(value.location.x / geometry.size.width)
                                 temperature = max(0, min(1, newValue))
@@ -287,18 +280,10 @@ struct ColorWheelInline: View {
                                 applyColorToDevice()
                             }
                     )
-                    .onTapGesture { location in
-                        // Allow tapping to set temperature
-                        let newValue = Double(location.x / geometry.size.width)
-                        temperature = max(0, min(1, newValue))
-                        isUsingTemperatureSlider = true
-                        applyTemperatureShift()
-                        applyColorToDevice()
-                    }
                 }
                 .frame(height: 20)
             }
-            }
+            
         }
     }
     
@@ -462,9 +447,9 @@ struct ColorWheelInline: View {
     }
     
     private func applyTemperatureShift() {
-        // Temperature slider creates RGB approximation for UI preview
-        // The actual device update will send RGBWW: [0, 0, 0, WW, CW]
+        // WLED's exact CCT (Correlated Color Temperature) Implementation
         // Temperature range: 0 = #FFA000 (2700K), 0.5 = #FFF1EA (4000K), 1 = #CBDBFF (6500K)
+        // Based on WLED's native CCT color values
         
         let r: CGFloat
         let g: CGFloat  
@@ -472,25 +457,26 @@ struct ColorWheelInline: View {
         
         if temperature <= 0.5 {
             // Warm to neutral range (0.0 to 0.5)
-            let factor = temperature * 2.0
+            // Interpolate between #FFA000 and #FFF1EA
+            let factor = temperature * 2.0 // 0 to 1
             
             // #FFA000 = RGB(255, 160, 0) = (1.0, 0.627, 0.0)
             // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
             r = 1.0
-            g = 0.627 + (factor * (0.945 - 0.627))
-            b = 0.0 + (factor * (0.918 - 0.0))
+            g = 0.627 + (factor * (0.945 - 0.627))  // 0.627 to 0.945
+            b = 0.0 + (factor * (0.918 - 0.0))      // 0.0 to 0.918
         } else {
             // Neutral to cool range (0.5 to 1.0)
-            let factor = (temperature - 0.5) * 2.0
+            // Interpolate between #FFF1EA and #CBDBFF
+            let factor = (temperature - 0.5) * 2.0 // 0 to 1
             
             // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
             // #CBDBFF = RGB(203, 219, 255) = (0.796, 0.859, 1.0)
-            r = 1.0 - (factor * (1.0 - 0.796))
-            g = 0.945 - (factor * (0.945 - 0.859))
-            b = 0.918 + (factor * (1.0 - 0.918))
+            r = 1.0 - (factor * (1.0 - 0.796))      // 1.0 to 0.796
+            g = 0.945 - (factor * (0.945 - 0.859))  // 0.945 to 0.859
+            b = 0.918 + (factor * (1.0 - 0.918))    // 0.918 to 1.0
         }
         
-        // Store RGB approximation for UI display (gradient bar preview)
         selectedColor = Color(red: r, green: g, blue: b)
         extractHSV(from: selectedColor)
         updateHexInput()
@@ -498,27 +484,9 @@ struct ColorWheelInline: View {
     
     private func applyColorToDevice() {
         // Apply color using WLED-accurate conversion
-        
-        print("🎯 applyColorToDevice called - isUsingTemperatureSlider: \(isUsingTemperatureSlider)")
-        
-        if isUsingTemperatureSlider, let rgbwwCallback = onColorChangeRGBWW {
-            // Temperature slider was used - send CCT data as Kelvin temperature
-            // Convert slider position (0-1) to Kelvin range (2700K-6500K)
-            let kelvin = Int(2700 + (temperature * (6500 - 2700)))
-            
-            print("🌡️ Temperature slider active - Kelvin: \(kelvin)K")
-            
-            // Send CCT data as Kelvin temperature (WLED native format)
-            // Pass Kelvin value instead of RGBWW array
-            rgbwwCallback([kelvin], selectedColor)
-            print("🌡️ Temperature → CCT: \(kelvin)K")
-            print("🎯 Temperature slider sends CCT to device")
-        } else {
-            // Spectrum picker was used - send RGB color data
-            print("🎨 Spectrum picker active")
-            onColorChange(selectedColor)
-            print("🎨 Spectrum → RGB: \(selectedColor.toHex())")
-        }
+        // For RGBWW strips: The color picker should detect when temperature slider
+        // is being used and send appropriate WW/CW channel commands instead of RGB
+        onColorChange(selectedColor)
         
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)
