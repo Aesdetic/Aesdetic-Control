@@ -31,7 +31,8 @@ struct ComprehensiveSettingsView: View {
     // New state variables for comprehensive settings
     @State private var selectedSettingsCategory: SettingsCategory = .info
     @State private var showWebConfig: Bool = false
-    @State private var showWiFiSetup: Bool = false
+    
+    // WiFi state variables
     @State private var availableNetworks: [WiFiNetwork] = []
     @State private var isScanning: Bool = false
     @State private var selectedNetwork: WiFiNetwork?
@@ -42,12 +43,6 @@ struct ComprehensiveSettingsView: View {
     @State private var currentWiFiInfo: WiFiInfo?
     @State private var showAllNetworks: Bool = true
     @State private var showConnectedMessage: Bool = true
-    
-    // LED Configuration State
-    @State private var ledConfig: LEDConfiguration?
-    @State private var ledStripType: LEDStripType?
-    @State private var ledColorOrder: LEDColorOrder?
-    @State private var ledAutoWhiteMode: AutoWhiteMode?
     
     enum SettingsCategory: String, CaseIterable {
         case info = "Info"
@@ -146,7 +141,7 @@ struct ComprehensiveSettingsView: View {
         .task { 
             await loadState()
             await loadCurrentWiFiInfo()
-            await loadLEDConfiguration()
+            scanForNetworks()
         }
         .sheet(isPresented: $showWebConfig) {
             WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/settings")!)
@@ -291,7 +286,7 @@ struct ComprehensiveSettingsView: View {
     
     private var wifiSection: some View {
         VStack(spacing: 12) {
-            // Current WiFi Status
+            // Current WiFi
             SettingsCard(title: "Current WiFi", content: {
                 VStack(spacing: 12) {
                     if let wifiInfo = currentWiFiInfo {
@@ -299,7 +294,7 @@ struct ComprehensiveSettingsView: View {
                         InfoRow(label: "Signal", value: "\(wifiInfo.signalStrength) dBm")
                         InfoRow(label: "Channel", value: "\(wifiInfo.channel)")
                         InfoRow(label: "Security", value: wifiInfo.security)
-                        
+
                         // Helpful note about WiFi disconnection
                         Text("💡 To disconnect from WiFi, connect to a different network below")
                             .font(.caption)
@@ -320,7 +315,7 @@ struct ComprehensiveSettingsView: View {
             }, headerContent: {
                 AnyView(
                     Button("Refresh") {
-                        Task { 
+                        Task {
                             await loadCurrentWiFiInfo()
                             scanForNetworks()
                         }
@@ -501,7 +496,7 @@ struct ComprehensiveSettingsView: View {
                         .background(Color.white)
                         .cornerRadius(8)
                         .disabled(isScanning)
-                        
+
                         if isScanning {
                             ProgressView()
                                 .scaleEffect(0.7)
@@ -523,602 +518,20 @@ struct ComprehensiveSettingsView: View {
     
     private var ledsSection: some View {
         VStack(spacing: 12) {
-            // LED Hardware Configuration
-            SettingsCard(title: "LED Hardware Setup") {
+            SettingsCard(title: "LED Configuration") {
                 VStack(spacing: 12) {
-                    // LED Strip Type
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("LED Strip Type")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.white)
-                        
-                        Menu {
-                            ForEach(LEDStripType.allCases, id: \.self) { type in
-                                Button(action: {
-                                    Task {
-                                        try? await WLEDAPIService.shared.updateLEDSettings(
-                                            for: device,
-                                            stripType: type.rawValue
-                                        )
-                                    }
-                                }) {
-                                    VStack(alignment: .leading) {
-                                        Text(type.displayName)
-                                        Text(type.description)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text(ledStripType?.displayName ?? "Select LED Type")
-                                    .foregroundColor(.white)
-                                Spacer()
-                                Image(systemName: "chevron.down")
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 12)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(8)
-                        }
+                    Button(action: { openURL(URL(string: "http://\(device.ipAddress)/settings/leds")!) }) {
+                        SettingsButton(title: "LED Preferences", icon: "lightbulb")
                     }
-                    
-                    // Color Order
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Color Order")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.white)
-                        
-                        Menu {
-                            ForEach(LEDColorOrder.allCases, id: \.self) { order in
-                                Button(action: {
-                                    Task {
-                                        try? await WLEDAPIService.shared.updateLEDSettings(
-                                            for: device,
-                                            colorOrder: order.rawValue
-                                        )
-                                    }
-                                }) {
-                                    VStack(alignment: .leading) {
-                                        Text(order.displayName)
-                                        Text(order.description)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text(ledColorOrder?.displayName ?? "Select Color Order")
-                                    .foregroundColor(.white)
-                                Spacer()
-                                Image(systemName: "chevron.down")
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 12)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(8)
-                        }
+                    Button(action: { openURL(URL(string: "http://\(device.ipAddress)/settings/leds")!) }) {
+                        SettingsButton(title: "Pin Configuration", icon: "cable.connector")
                     }
-                    
-                        // GPIO Pin Configuration
-                        HStack {
-                            Text("GPIO Pin")
-                                .foregroundColor(.white)
-                            Spacer()
-                            HStack(spacing: 12) {
-                                Button(action: {
-                                    let currentValue = ledConfig?.gpioPin ?? 16
-                                    let newValue = max(0, currentValue - 1)
-                                    
-                                    // Update local state immediately for instant feedback
-                                    if var config = ledConfig {
-                                        config = LEDConfiguration(
-                                            stripType: config.stripType,
-                                            colorOrder: config.colorOrder,
-                                            gpioPin: newValue,
-                                            ledCount: config.ledCount,
-                                            startLED: config.startLED,
-                                            skipFirstLEDs: config.skipFirstLEDs,
-                                            reverseDirection: config.reverseDirection,
-                                            offRefresh: config.offRefresh,
-                                            autoWhiteMode: config.autoWhiteMode,
-                                            maxCurrentPerLED: config.maxCurrentPerLED,
-                                            maxTotalCurrent: config.maxTotalCurrent,
-                                            usePerOutputLimiter: config.usePerOutputLimiter,
-                                            enableABL: config.enableABL
-                                        )
-                                        ledConfig = config
-                                    }
-                                    
-                                    Task {
-                                        do {
-                                            try await WLEDAPIService.shared.updateLEDSettings(
-                                                for: device,
-                                                gpioPin: newValue
-                                            )
-                                        } catch {
-                                            print("Failed to update GPIO pin: \(error)")
-                                            // Revert on failure
-                                            await MainActor.run {
-                                                if var config = ledConfig {
-                                                    config = LEDConfiguration(
-                                                        stripType: config.stripType,
-                                                        colorOrder: config.colorOrder,
-                                                        gpioPin: currentValue,
-                                                        ledCount: config.ledCount,
-                                                        startLED: config.startLED,
-                                                        skipFirstLEDs: config.skipFirstLEDs,
-                                                        reverseDirection: config.reverseDirection,
-                                                        offRefresh: config.offRefresh,
-                                                        autoWhiteMode: config.autoWhiteMode,
-                                                        maxCurrentPerLED: config.maxCurrentPerLED,
-                                                        maxTotalCurrent: config.maxTotalCurrent,
-                                                        usePerOutputLimiter: config.usePerOutputLimiter,
-                                                        enableABL: config.enableABL
-                                                    )
-                                                    ledConfig = config
-                                                }
-                                            }
-                                        }
-                                    }
-                                }) {
-                                    Image(systemName: "minus")
-                                        .foregroundColor(.white)
-                                        .frame(width: 32, height: 32)
-                                        .background(Color.white.opacity(0.1))
-                                        .cornerRadius(8)
-                                }
-                                
-                                Text("\(ledConfig?.gpioPin ?? 16)")
-                                    .foregroundColor(.white)
-                                    .font(.system(.body, design: .monospaced))
-                                    .frame(minWidth: 40)
-                                
-                                Button(action: {
-                                    let currentValue = ledConfig?.gpioPin ?? 16
-                                    let newValue = min(39, currentValue + 1)
-                                    
-                                    // Update local state immediately for instant feedback
-                                    if var config = ledConfig {
-                                        config = LEDConfiguration(
-                                            stripType: config.stripType,
-                                            colorOrder: config.colorOrder,
-                                            gpioPin: newValue,
-                                            ledCount: config.ledCount,
-                                            startLED: config.startLED,
-                                            skipFirstLEDs: config.skipFirstLEDs,
-                                            reverseDirection: config.reverseDirection,
-                                            offRefresh: config.offRefresh,
-                                            autoWhiteMode: config.autoWhiteMode,
-                                            maxCurrentPerLED: config.maxCurrentPerLED,
-                                            maxTotalCurrent: config.maxTotalCurrent,
-                                            usePerOutputLimiter: config.usePerOutputLimiter,
-                                            enableABL: config.enableABL
-                                        )
-                                        ledConfig = config
-                                    }
-                                    
-                                    Task {
-                                        do {
-                                            try await WLEDAPIService.shared.updateLEDSettings(
-                                                for: device,
-                                                gpioPin: newValue
-                                            )
-                                        } catch {
-                                            print("Failed to update GPIO pin: \(error)")
-                                            // Revert on failure
-                                            await MainActor.run {
-                                                if var config = ledConfig {
-                                                    config = LEDConfiguration(
-                                                        stripType: config.stripType,
-                                                        colorOrder: config.colorOrder,
-                                                        gpioPin: currentValue,
-                                                        ledCount: config.ledCount,
-                                                        startLED: config.startLED,
-                                                        skipFirstLEDs: config.skipFirstLEDs,
-                                                        reverseDirection: config.reverseDirection,
-                                                        offRefresh: config.offRefresh,
-                                                        autoWhiteMode: config.autoWhiteMode,
-                                                        maxCurrentPerLED: config.maxCurrentPerLED,
-                                                        maxTotalCurrent: config.maxTotalCurrent,
-                                                        usePerOutputLimiter: config.usePerOutputLimiter,
-                                                        enableABL: config.enableABL
-                                                    )
-                                                    ledConfig = config
-                                                }
-                                            }
-                                        }
-                                    }
-                                }) {
-                                    Image(systemName: "plus")
-                                        .foregroundColor(.white)
-                                        .frame(width: 32, height: 32)
-                                        .background(Color.white.opacity(0.1))
-                                        .cornerRadius(8)
-                                }
-                            }
-                        }
-
-                        // LED Count
-                        HStack {
-                            Text("LED Count")
-                                .foregroundColor(.white)
-                            Spacer()
-                            HStack(spacing: 12) {
-                                Button(action: {
-                                    let currentValue = ledConfig?.ledCount ?? 120
-                                    let newValue = max(1, currentValue - 1)
-                                    
-                                    // Update local state immediately for instant feedback
-                                    if var config = ledConfig {
-                                        config = LEDConfiguration(
-                                            stripType: config.stripType,
-                                            colorOrder: config.colorOrder,
-                                            gpioPin: config.gpioPin,
-                                            ledCount: newValue,
-                                            startLED: config.startLED,
-                                            skipFirstLEDs: config.skipFirstLEDs,
-                                            reverseDirection: config.reverseDirection,
-                                            offRefresh: config.offRefresh,
-                                            autoWhiteMode: config.autoWhiteMode,
-                                            maxCurrentPerLED: config.maxCurrentPerLED,
-                                            maxTotalCurrent: config.maxTotalCurrent,
-                                            usePerOutputLimiter: config.usePerOutputLimiter,
-                                            enableABL: config.enableABL
-                                        )
-                                        ledConfig = config
-                                    }
-                                    
-                                    Task {
-                                        do {
-                                            try await WLEDAPIService.shared.updateLEDSettings(
-                                                for: device,
-                                                ledCount: newValue
-                                            )
-                                        } catch {
-                                            print("Failed to update LED count: \(error)")
-                                            // Revert on failure
-                                            await MainActor.run {
-                                                if var config = ledConfig {
-                                                    config = LEDConfiguration(
-                                                        stripType: config.stripType,
-                                                        colorOrder: config.colorOrder,
-                                                        gpioPin: config.gpioPin,
-                                                        ledCount: currentValue,
-                                                        startLED: config.startLED,
-                                                        skipFirstLEDs: config.skipFirstLEDs,
-                                                        reverseDirection: config.reverseDirection,
-                                                        offRefresh: config.offRefresh,
-                                                        autoWhiteMode: config.autoWhiteMode,
-                                                        maxCurrentPerLED: config.maxCurrentPerLED,
-                                                        maxTotalCurrent: config.maxTotalCurrent,
-                                                        usePerOutputLimiter: config.usePerOutputLimiter,
-                                                        enableABL: config.enableABL
-                                                    )
-                                                    ledConfig = config
-                                                }
-                                            }
-                                        }
-                                    }
-                                }) {
-                                    Image(systemName: "minus")
-                                        .foregroundColor(.white)
-                                        .frame(width: 32, height: 32)
-                                        .background(Color.white.opacity(0.1))
-                                        .cornerRadius(8)
-                                }
-                                
-                                Text("\(ledConfig?.ledCount ?? 120)")
-                                    .foregroundColor(.white)
-                                    .font(.system(.body, design: .monospaced))
-                                    .frame(minWidth: 60)
-                                
-                                Button(action: {
-                                    let currentValue = ledConfig?.ledCount ?? 120
-                                    let newValue = min(2000, currentValue + 1)
-                                    
-                                    // Update local state immediately for instant feedback
-                                    if var config = ledConfig {
-                                        config = LEDConfiguration(
-                                            stripType: config.stripType,
-                                            colorOrder: config.colorOrder,
-                                            gpioPin: config.gpioPin,
-                                            ledCount: newValue,
-                                            startLED: config.startLED,
-                                            skipFirstLEDs: config.skipFirstLEDs,
-                                            reverseDirection: config.reverseDirection,
-                                            offRefresh: config.offRefresh,
-                                            autoWhiteMode: config.autoWhiteMode,
-                                            maxCurrentPerLED: config.maxCurrentPerLED,
-                                            maxTotalCurrent: config.maxTotalCurrent,
-                                            usePerOutputLimiter: config.usePerOutputLimiter,
-                                            enableABL: config.enableABL
-                                        )
-                                        ledConfig = config
-                                    }
-                                    
-                                    Task {
-                                        do {
-                                            try await WLEDAPIService.shared.updateLEDSettings(
-                                                for: device,
-                                                ledCount: newValue
-                                            )
-                                        } catch {
-                                            print("Failed to update LED count: \(error)")
-                                            // Revert on failure
-                                            await MainActor.run {
-                                                if var config = ledConfig {
-                                                    config = LEDConfiguration(
-                                                        stripType: config.stripType,
-                                                        colorOrder: config.colorOrder,
-                                                        gpioPin: config.gpioPin,
-                                                        ledCount: currentValue,
-                                                        startLED: config.startLED,
-                                                        skipFirstLEDs: config.skipFirstLEDs,
-                                                        reverseDirection: config.reverseDirection,
-                                                        offRefresh: config.offRefresh,
-                                                        autoWhiteMode: config.autoWhiteMode,
-                                                        maxCurrentPerLED: config.maxCurrentPerLED,
-                                                        maxTotalCurrent: config.maxTotalCurrent,
-                                                        usePerOutputLimiter: config.usePerOutputLimiter,
-                                                        enableABL: config.enableABL
-                                                    )
-                                                    ledConfig = config
-                                                }
-                                            }
-                                        }
-                                    }
-                                }) {
-                                    Image(systemName: "plus")
-                                        .foregroundColor(.white)
-                                        .frame(width: 32, height: 32)
-                                        .background(Color.white.opacity(0.1))
-                                        .cornerRadius(8)
-                                }
-                            }
-                        }
-                }
-            }
-            
-            // Power Supply Configuration
-            SettingsCard(title: "Power Supply Settings") {
-                VStack(spacing: 12) {
-                    // Maximum Total Current
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Maximum Total Current")
-                                .foregroundColor(.white)
-                            Spacer()
-                            Text("\(ledConfig?.maxTotalCurrent ?? 3850) mA")
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                        
-                            Slider(
-                                value: Binding(
-                                    get: { Double(ledConfig?.maxTotalCurrent ?? 3850) },
-                                    set: { newValue in
-                                        let intValue = Int(newValue)
-                                        
-                                        // Update local state immediately for instant feedback
-                                        if var config = ledConfig {
-                                            config = LEDConfiguration(
-                                                stripType: config.stripType,
-                                                colorOrder: config.colorOrder,
-                                                gpioPin: config.gpioPin,
-                                                ledCount: config.ledCount,
-                                                startLED: config.startLED,
-                                                skipFirstLEDs: config.skipFirstLEDs,
-                                                reverseDirection: config.reverseDirection,
-                                                offRefresh: config.offRefresh,
-                                                autoWhiteMode: config.autoWhiteMode,
-                                                maxCurrentPerLED: config.maxCurrentPerLED,
-                                                maxTotalCurrent: intValue,
-                                                usePerOutputLimiter: config.usePerOutputLimiter,
-                                                enableABL: config.enableABL
-                                            )
-                                            ledConfig = config
-                                        }
-                                        
-                                        Task {
-                                            do {
-                                                try await WLEDAPIService.shared.updateLEDSettings(
-                                                    for: device,
-                                                    maxCurrent: intValue
-                                                )
-                                            } catch {
-                                                print("Failed to update max current: \(error)")
-                                            }
-                                        }
-                                    }
-                                ),
-                                in: 100...10000,
-                                step: 50
-                            )
-                        .accentColor(.white)
-                        
-                        Text("Recommended: 3850mA for most setups")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    
-                        // Automatic Brightness Limiter
-                        HStack {
-                            Text("Enable Automatic Brightness Limiter")
-                                .foregroundColor(.white)
-                            Spacer()
-                            Toggle("", isOn: Binding(
-                                get: { ledConfig?.enableABL ?? true },
-                                set: { newValue in
-                                    // Update local state immediately for instant feedback
-                                    if var config = ledConfig {
-                                        config = LEDConfiguration(
-                                            stripType: config.stripType,
-                                            colorOrder: config.colorOrder,
-                                            gpioPin: config.gpioPin,
-                                            ledCount: config.ledCount,
-                                            startLED: config.startLED,
-                                            skipFirstLEDs: config.skipFirstLEDs,
-                                            reverseDirection: config.reverseDirection,
-                                            offRefresh: config.offRefresh,
-                                            autoWhiteMode: config.autoWhiteMode,
-                                            maxCurrentPerLED: config.maxCurrentPerLED,
-                                            maxTotalCurrent: config.maxTotalCurrent,
-                                            usePerOutputLimiter: config.usePerOutputLimiter,
-                                            enableABL: newValue
-                                        )
-                                        ledConfig = config
-                                    }
-                                    
-                                    Task {
-                                        do {
-                                            try await WLEDAPIService.shared.updateLEDSettings(
-                                                for: device,
-                                                enableABL: newValue
-                                            )
-                                        } catch {
-                                            print("Failed to update ABL: \(error)")
-                                        }
-                                    }
-                                }
-                            ))
-                            .labelsHidden()
-                            .tint(.white)
-                        }
-                    
-                    if ledConfig?.enableABL == true {
-                        Text("⚠️ Keep below 1A if powering LEDs directly from ESP 5V pin!")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                            .padding(.top, 4)
+                    Button(action: { openURL(URL(string: "http://\(device.ipAddress)/settings/leds")!) }) {
+                        SettingsButton(title: "LED Type Settings", icon: "gear")
                     }
                 }
             }
             
-            // LED Behavior Settings
-            SettingsCard(title: "LED Behavior") {
-                VStack(spacing: 12) {
-                    // Reverse Direction
-                    HStack {
-                        Text("Reverse Direction")
-                            .foregroundColor(.white)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { ledConfig?.reverseDirection ?? false },
-                            set: { newValue in
-                                Task {
-                                    let updatedConfig = LEDConfiguration(
-                                        stripType: ledConfig?.stripType ?? 0,
-                                        colorOrder: ledConfig?.colorOrder ?? 0,
-                                        gpioPin: ledConfig?.gpioPin ?? 16,
-                                        ledCount: ledConfig?.ledCount ?? 120,
-                                        startLED: ledConfig?.startLED ?? 0,
-                                        skipFirstLEDs: ledConfig?.skipFirstLEDs ?? 0,
-                                        reverseDirection: newValue,
-                                        offRefresh: ledConfig?.offRefresh ?? false,
-                                        autoWhiteMode: ledConfig?.autoWhiteMode ?? 0,
-                                        maxCurrentPerLED: ledConfig?.maxCurrentPerLED ?? 55,
-                                        maxTotalCurrent: ledConfig?.maxTotalCurrent ?? 3850,
-                                        usePerOutputLimiter: ledConfig?.usePerOutputLimiter ?? false,
-                                        enableABL: ledConfig?.enableABL ?? true
-                                    )
-                                    try? await WLEDAPIService.shared.updateLEDConfiguration(updatedConfig, for: device)
-                                }
-                            }
-                        ))
-                        .labelsHidden()
-                        .tint(.white)
-                    }
-                    
-                    // Off Refresh
-                    HStack {
-                        Text("Refresh When Off")
-                            .foregroundColor(.white)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { ledConfig?.offRefresh ?? false },
-                            set: { newValue in
-                                Task {
-                                    let updatedConfig = LEDConfiguration(
-                                        stripType: ledConfig?.stripType ?? 0,
-                                        colorOrder: ledConfig?.colorOrder ?? 0,
-                                        gpioPin: ledConfig?.gpioPin ?? 16,
-                                        ledCount: ledConfig?.ledCount ?? 120,
-                                        startLED: ledConfig?.startLED ?? 0,
-                                        skipFirstLEDs: ledConfig?.skipFirstLEDs ?? 0,
-                                        reverseDirection: ledConfig?.reverseDirection ?? false,
-                                        offRefresh: newValue,
-                                        autoWhiteMode: ledConfig?.autoWhiteMode ?? 0,
-                                        maxCurrentPerLED: ledConfig?.maxCurrentPerLED ?? 55,
-                                        maxTotalCurrent: ledConfig?.maxTotalCurrent ?? 3850,
-                                        usePerOutputLimiter: ledConfig?.usePerOutputLimiter ?? false,
-                                        enableABL: ledConfig?.enableABL ?? true
-                                    )
-                                    try? await WLEDAPIService.shared.updateLEDConfiguration(updatedConfig, for: device)
-                                }
-                            }
-                        ))
-                        .labelsHidden()
-                        .tint(.white)
-                    }
-                    
-                    // Auto White Mode
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Auto White Mode")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.white)
-                        
-                        Menu {
-                            ForEach(AutoWhiteMode.allCases, id: \.self) { mode in
-                                Button(action: {
-                                    Task {
-                                        let updatedConfig = LEDConfiguration(
-                                            stripType: ledConfig?.stripType ?? 0,
-                                            colorOrder: ledConfig?.colorOrder ?? 0,
-                                            gpioPin: ledConfig?.gpioPin ?? 16,
-                                            ledCount: ledConfig?.ledCount ?? 120,
-                                            startLED: ledConfig?.startLED ?? 0,
-                                            skipFirstLEDs: ledConfig?.skipFirstLEDs ?? 0,
-                                            reverseDirection: ledConfig?.reverseDirection ?? false,
-                                            offRefresh: ledConfig?.offRefresh ?? false,
-                                            autoWhiteMode: mode.rawValue,
-                                            maxCurrentPerLED: ledConfig?.maxCurrentPerLED ?? 55,
-                                            maxTotalCurrent: ledConfig?.maxTotalCurrent ?? 3850,
-                                            usePerOutputLimiter: ledConfig?.usePerOutputLimiter ?? false,
-                                            enableABL: ledConfig?.enableABL ?? true
-                                        )
-                                        try? await WLEDAPIService.shared.updateLEDConfiguration(updatedConfig, for: device)
-                                    }
-                                }) {
-                                    VStack(alignment: .leading) {
-                                        Text(mode.displayName)
-                                        Text(mode.description)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text(ledAutoWhiteMode?.displayName ?? "Select Auto White Mode")
-                                    .foregroundColor(.white)
-                                Spacer()
-                                Image(systemName: "chevron.down")
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 12)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                    }
-                }
-            }
-            
-            // Segment Configuration
             SettingsCard(title: "Segment Configuration") {
                 SegmentBoundsRow(
                     device: device,
@@ -1127,15 +540,6 @@ struct ComprehensiveSettingsView: View {
                     stop: segStop
                 )
                 .environmentObject(viewModel)
-            }
-            
-            // Advanced Configuration Access
-            SettingsCard(title: "Advanced Configuration") {
-                VStack(spacing: 12) {
-                    Button(action: { openURL(URL(string: "http://\(device.ipAddress)/settings/leds")!) }) {
-                        SettingsButton(title: "Open Web LED Config", icon: "globe")
-                    }
-                }
             }
         }
     }
@@ -1359,7 +763,7 @@ struct ComprehensiveSettingsView: View {
         } catch { }
     }
     
-    // MARK: - WiFi Functionality
+    // MARK: - WiFi Helper Functions
     
     private func loadCurrentWiFiInfo() async {
         do {
@@ -1369,20 +773,6 @@ struct ComprehensiveSettingsView: View {
             }
         } catch {
             print("Failed to load WiFi info: \(error)")
-        }
-    }
-    
-    private func loadLEDConfiguration() async {
-        do {
-            let config = try await WLEDAPIService.shared.getLEDConfiguration(for: device)
-            await MainActor.run {
-                self.ledConfig = config
-                self.ledStripType = LEDStripType(rawValue: config.stripType)
-                self.ledColorOrder = LEDColorOrder(rawValue: config.colorOrder)
-                self.ledAutoWhiteMode = AutoWhiteMode(rawValue: config.autoWhiteMode)
-            }
-        } catch {
-            print("Failed to load LED configuration: \(error)")
         }
     }
     
