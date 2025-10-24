@@ -509,6 +509,7 @@ enum WiFiError: LocalizedError {
     case invalidResponse
     case invalidRequest
     case connectionFailed
+    case encodingError(String)
     
     var errorDescription: String? {
         switch self {
@@ -522,6 +523,8 @@ enum WiFiError: LocalizedError {
             return "Invalid request"
         case .connectionFailed:
             return "Failed to connect to network"
+        case .encodingError(let message):
+            return "Encoding error: \(message)"
         }
     }
 }
@@ -635,26 +638,50 @@ class WLEDWiFiService {
     }
     
     func connectToNetwork(device: WLEDDevice, ssid: String, password: String?) async throws {
-        // This would make an API call to configure WiFi on the WLED device
-        // Implementation would use WLED's JSON API to set WiFi credentials
+        // Follow WLED's proper /json/cfg read-modify-write pattern
+        // 1. GET /json/cfg → parse JSON
+        // 2. Modify only the Wi-Fi fields you need (SSID/PSK, etc.)
+        // 3. POST the full, edited object back to /json/cfg
         
-        let url = URL(string: "http://\(device.ipAddress)/json")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let configUrl = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WiFiError.invalidURL
+        }
         
-        var jsonBody: [String: Any] = [:]
+        // Step 1: GET /json/cfg to read current configuration
+        let (configData, configResponse) = try await URLSession.shared.data(from: configUrl)
         
-        // Configure WiFi settings according to WLED's API
-        var wifiConfig: [String: Any] = [:]
+        guard let httpConfigResponse = configResponse as? HTTPURLResponse,
+              httpConfigResponse.statusCode == 200 else {
+            throw WiFiError.networkError("Failed to read device configuration")
+        }
+        
+        // Parse the current configuration
+        guard var config = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
+            throw WiFiError.invalidResponse
+        }
+        
+        // Step 2: Modify only the WiFi fields, preserving the full schema
+        var wifiConfig = config["wifi"] as? [String: Any] ?? [:]
         wifiConfig["ssid"] = ssid
         if let password = password {
             wifiConfig["password"] = password
+        } else {
+            // For open networks, ensure password is empty
+            wifiConfig["password"] = ""
         }
+        config["wifi"] = wifiConfig
         
-        jsonBody["wifi"] = wifiConfig
+        // Step 3: POST the full, edited object back to /json/cfg
+        var request = URLRequest(url: configUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15.0 // Longer timeout for configuration changes
         
-        request.httpBody = try JSONSerialization.data(withJSONObject: jsonBody)
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: config)
+        } catch {
+            throw WiFiError.encodingError(error.localizedDescription)
+        }
         
         let (_, response) = try await URLSession.shared.data(for: request)
         
@@ -663,8 +690,9 @@ class WLEDWiFiService {
             throw WiFiError.connectionFailed
         }
         
-        // Wait a moment for the device to process the configuration
-        try await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+        // Wait for device to process configuration and potentially reboot
+        // Some builds may require a reboot to apply WiFi changes
+        try await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
     }
     
     
