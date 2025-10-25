@@ -91,7 +91,7 @@ extension WLEDDeviceEntity {
     }
     
     var locationEnum: DeviceLocation {
-        get { DeviceLocation(rawValue: location) ?? .all }
+        get { DeviceLocation(rawValue: location) }
         set { location = newValue.rawValue }
     }
 }
@@ -204,7 +204,7 @@ extension WLEDDevice {
         self.brightness = Int(entity.brightness)
         self.currentColor = Color(hex: entity.currentColorHex)
         self.productType = ProductType(rawValue: entity.productType) ?? .generic
-        self.location = DeviceLocation(rawValue: entity.location) ?? .all
+        self.location = DeviceLocation(rawValue: entity.location)
         self.lastSeen = entity.lastSeen
         self.state = entity.state?.toWLEDState()
     }

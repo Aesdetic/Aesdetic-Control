@@ -144,7 +144,7 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         
-        let (data, response) = try await urlSession.data(for: request)
+        let (_, response) = try await urlSession.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw WLEDAPIError.invalidResponse

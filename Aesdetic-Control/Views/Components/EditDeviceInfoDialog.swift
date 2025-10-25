@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Custom Location Model
 
 struct CustomLocation: Identifiable, Codable, Hashable {
-    let id = UUID()
+    var id = UUID()
     let name: String
     let icon: String // SF Symbol name or emoji for custom locations
     
