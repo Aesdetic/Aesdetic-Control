@@ -10,6 +10,15 @@ import Combine
 import SwiftUI
 import os.log
 
+struct DeviceEffectState {
+    var effectId: Int
+    var speed: Int
+    var intensity: Int
+    var paletteId: Int
+    
+    static let `default` = DeviceEffectState(effectId: 0, speed: 128, intensity: 128, paletteId: 0)
+}
+
 @MainActor
 class DeviceControlViewModel: ObservableObject {
     static let shared = DeviceControlViewModel()
@@ -27,13 +36,82 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
     
+    enum WLEDError: Identifiable, Equatable {
+        case deviceOffline(deviceName: String?)
+        case timeout(deviceName: String?)
+        case invalidResponse
+        case apiError(message: String)
+        
+        var id: String {
+            switch self {
+            case .deviceOffline(let name):
+                return "deviceOffline-\(name ?? "unknown")"
+            case .timeout(let name):
+                return "timeout-\(name ?? "unknown")"
+            case .invalidResponse:
+                return "invalidResponse"
+            case .apiError(let message):
+                return "apiError-\(message)"
+            }
+        }
+        
+        var message: String {
+            switch self {
+            case .deviceOffline(let name):
+                if let name, !name.isEmpty {
+                    return "\(name) is offline."
+                }
+                return "The device appears to be offline."
+            case .timeout(let name):
+                if let name, !name.isEmpty {
+                    return "\(name) is not responding."
+                }
+                return "The device did not respond in time."
+            case .invalidResponse:
+                return "Received an unexpected response from WLED."
+            case .apiError(let message):
+                return message
+            }
+        }
+        
+        var iconName: String {
+            switch self {
+            case .deviceOffline:
+                return "wifi.exclamationmark"
+            case .timeout:
+                return "clock.arrow.circlepath"
+            case .invalidResponse:
+                return "exclamationmark.triangle.fill"
+            case .apiError:
+                return "bolt.horizontal.circle.fill"
+            }
+        }
+        
+        var actionTitle: String? {
+            switch self {
+            case .deviceOffline, .timeout:
+                return "Retry"
+            case .invalidResponse, .apiError:
+                return nil
+            }
+        }
+    }
+    
     @Published var sortOption: DeviceSortOption = .name
     @Published var locationFilter: DeviceLocation = .all
     @Published var selectedLocationFilter: DeviceLocation = .all
     @Published var webSocketConnectionStatus: WLEDWebSocketManager.ConnectionStatus = .disconnected
     
-    // Computed filtered devices based on current filters
+    // Computed filtered devices based on current filters - Optimized with memoization
     var filteredDevices: [WLEDDevice] {
+        let now = Date()
+        
+        // Return cached result if recent enough
+        if now.timeIntervalSince(lastFilterUpdate) < filterUpdateThrottle && !cachedFilteredDevices.isEmpty {
+            return cachedFilteredDevices
+        }
+        
+        // Recompute filtered devices
         var filtered = devices
         
         // Apply location filter
@@ -53,6 +131,10 @@ class DeviceControlViewModel: ObservableObject {
             filtered = filtered.sorted { $0.brightness > $1.brightness }
         }
         
+        // Update cache
+        cachedFilteredDevices = filtered
+        lastFilterUpdate = now
+        
         return filtered
     }
     
@@ -63,6 +145,9 @@ class DeviceControlViewModel: ObservableObject {
             // Only update metrics if devices actually changed
             if devices.count != oldValue.count || 
                !devices.elementsEqual(oldValue, by: { $0.id == $1.id && $0.isOnline == $1.isOnline }) {
+                // Invalidate filter cache when devices change
+                cachedFilteredDevices = []
+                lastFilterUpdate = .distantPast
                 // Update handled by WebSocketManager directly
             }
         }
@@ -70,6 +155,7 @@ class DeviceControlViewModel: ObservableObject {
     @Published var isScanning: Bool = false
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    @Published var currentError: WLEDError?
     @Published var reconnectionStatus: [String: String] = [:]
     
     // Service dependencies
@@ -83,6 +169,22 @@ class DeviceControlViewModel: ObservableObject {
     
     // Combine cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - Capability Detection
+    private let capabilityDetector = CapabilityDetector.shared
+    
+    /// Local cache of device capabilities for synchronous access from MainActor
+    private var deviceCapabilities: [String: WLEDCapabilities] = [:]
+    
+    // Effect metadata caching
+    @Published private(set) var rawEffectMetadata: [String: [String]] = [:]
+    @Published private(set) var effectMetadataBundles: [String: EffectMetadataBundle] = [:]
+    @Published private(set) var effectStates: [String: [Int: DeviceEffectState]] = [:]
+    @Published private(set) var segmentCCTFormats: [String: [Int: Bool]] = [:]
+    @Published private(set) var presetsCache: [String: [WLEDPreset]] = [:]
+    @Published private(set) var presetLoadingStates: [String: Bool] = [:]
+    private var effectMetadataLastFetched: [String: Date] = [:]
+    private let effectMetadataRefreshInterval: TimeInterval = 300 // 5 minute cache
     
     // User interaction tracking for optimistic updates
     private var lastUserInput: [String: Date] = [:]
@@ -115,7 +217,16 @@ class DeviceControlViewModel: ObservableObject {
     // State change batching for performance
     private var pendingDeviceUpdates: [String: WLEDDevice] = [:]
     private var batchUpdateTimer: Timer?
-    private let batchUpdateInterval: TimeInterval = 0.2 // 200ms batching window for better performance
+    private let batchUpdateInterval: TimeInterval = 0.15 // Reduced to 150ms for better responsiveness
+    
+    // Performance optimization: Device state cache
+    private var deviceStateCache: [String: (device: WLEDDevice, lastUpdate: Date)] = [:]
+    private let cacheExpirationInterval: TimeInterval = 5.0 // 5 seconds cache expiration
+    
+    // Optimized device filtering with memoization
+    private var cachedFilteredDevices: [WLEDDevice] = []
+    private var lastFilterUpdate: Date = .distantPast
+    private let filterUpdateThrottle: TimeInterval = 0.1 // 100ms throttle for filtering
     
     // MARK: - App Lifecycle Management
     
@@ -153,6 +264,7 @@ class DeviceControlViewModel: ObservableObject {
                     devices[index].lastSeen = Date()
                     print("✅ Immediate check: \(device.name) is online")
                 }
+                clearError()
             }
             
         } catch {
@@ -162,6 +274,7 @@ class DeviceControlViewModel: ObservableObject {
                     devices[index].isOnline = false
                     print("❌ Immediate check: \(device.name) is offline")
                 }
+                presentError(.deviceOffline(deviceName: device.name))
             }
         }
     }
@@ -723,7 +836,7 @@ class DeviceControlViewModel: ObservableObject {
             let stateUpdate = WLEDStateUpdate(
                 on: targetState,
                 bri: device.brightness,
-                seg: [SegmentUpdate(col: [rgb])]
+                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])]
             )
             
             // Send to device via API
@@ -748,12 +861,15 @@ class DeviceControlViewModel: ObservableObject {
                     devices[index].isOn = targetState
                     devices[index].isOnline = true
                     devices[index].lastSeen = Date()
+                    
+                    // Sync to widget
+                    WidgetDataSync.shared.syncDevice(devices[index])
                 }
                 
                 // Force UI update by triggering objectWillChange
                 objectWillChange.send()
                 
-                errorMessage = nil
+                clearError()
                 
                 print("✅ Toggle successful for device \(device.id): \(targetState ? "ON" : "OFF")")
             }
@@ -766,6 +882,7 @@ class DeviceControlViewModel: ObservableObject {
             await coreDataManager.saveDevice(updatedDevice)
             
         } catch {
+            let mappedError = mapToWLEDError(error, device: device)
             // Handle toggle failure
             await MainActor.run {
                 // Revert optimistic state
@@ -782,17 +899,13 @@ class DeviceControlViewModel: ObservableObject {
                 // Force UI update by triggering objectWillChange
                 objectWillChange.send()
                 
-                // Only mark offline for connection errors, not busy/timeout
-                if error.localizedDescription.lowercased().contains("connection") || 
-                   error.localizedDescription.lowercased().contains("unreachable") {
+                if case .deviceOffline = mappedError {
                     if let index = devices.firstIndex(where: { $0.id == device.id }) {
                         devices[index].isOnline = false
                     }
-                    errorMessage = "Connection lost to device: \(device.name)"
-                } else {
-                    // For other errors (busy, timeout), keep device online
-                    print("❌ Toggle failed but keeping device online: \(error.localizedDescription)")
                 }
+                
+                presentError(mappedError)
             }
         }
     }
@@ -811,12 +924,12 @@ class DeviceControlViewModel: ObservableObject {
                 webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
             }
             
-            // Optimistic local update
             await MainActor.run {
                 if let index = devices.firstIndex(where: { $0.id == device.id }) {
                     devices[index].brightness = brightness
                     devices[index].isOnline = true
                 }
+                clearError()
             }
             
             // Persist the change
@@ -827,8 +940,8 @@ class DeviceControlViewModel: ObservableObject {
             await coreDataManager.saveDevice(updatedDevice)
             
         } catch {
-            // Handle error but don't mark device offline for brightness failures
-            print("Brightness update failed: \(error.localizedDescription)")
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
         }
     }
     
@@ -840,6 +953,53 @@ class DeviceControlViewModel: ObservableObject {
             var updatedDevice = currentDevice
             updatedDevice.currentColor = color
             return updatedDevice
+        }
+    }
+    
+    /// Apply CCT (Correlated Color Temperature) to a device
+    /// - Parameters:
+    ///   - device: The WLED device
+    ///   - temperature: Temperature slider value (0.0-1.0, where 0=warm, 1=cool)
+    ///   - withColor: Optional RGB color to set along with CCT
+    func applyCCT(to device: WLEDDevice, temperature: Double, withColor: [Int]? = nil) async {
+        markUserInteraction(device.id)
+        let usesKelvin = segmentUsesKelvinCCT(for: device)
+        let cct: Int = usesKelvin ? Segment.kelvinValue(fromNormalized: temperature) : Segment.eightBitValue(fromNormalized: temperature)
+        
+        do {
+            if let color = withColor {
+                _ = try await apiService.setColor(for: device, color: color, cct: cct)
+            } else {
+                if usesKelvin {
+                    _ = try await apiService.setCCT(for: device, cctKelvin: cct)
+                } else {
+                    _ = try await apiService.setCCT(for: device, cct: cct)
+                }
+            }
+            
+            if isRealTimeEnabled {
+                let segment = SegmentUpdate(id: 0, col: withColor != nil ? [[withColor![0], withColor![1], withColor![2]]] : nil, cct: cct)
+                let stateUpdate = WLEDStateUpdate(seg: [segment])
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            }
+            
+            await MainActor.run {
+                if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                    self.devices[index].temperature = temperature
+                    self.devices[index].isOnline = true
+                }
+                self.clearError()
+            }
+            
+            var updatedDevice = device
+            updatedDevice.temperature = temperature
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+            
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
         }
     }
     
@@ -869,7 +1029,7 @@ class DeviceControlViewModel: ObservableObject {
             let stateUpdate = WLEDStateUpdate(
                 on: updatedDevice.isOn,
                 bri: updatedDevice.brightness,
-                seg: [SegmentUpdate(col: [rgb])]
+                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])]
             )
             
             _ = try await apiService.updateState(for: device, state: stateUpdate)
@@ -884,8 +1044,11 @@ class DeviceControlViewModel: ObservableObject {
                 if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                     self.devices[index] = updatedDevice
                     self.devices[index].isOnline = true // Ensure device stays online after successful update
+                    
+                    // Sync to widget
+                    WidgetDataSync.shared.syncDevice(self.devices[index])
                 }
-                self.errorMessage = nil
+                self.clearError()
             }
             
             // Persist to Core Data
@@ -894,26 +1057,18 @@ class DeviceControlViewModel: ObservableObject {
             // DO NOT call refreshDeviceState here - it causes race conditions with user input
             
         } catch {
-            // Log error but don't immediately mark device offline
-            // Only mark offline for specific connection errors, not busy/timeout errors
+            let mappedError = mapToWLEDError(error, device: device)
             await MainActor.run {
-                // Only show error message, don't mark offline unless it's a connection error
-                if error.localizedDescription.lowercased().contains("connection") || 
-                   error.localizedDescription.lowercased().contains("network") ||
-                   error.localizedDescription.lowercased().contains("unreachable") {
-                    self.errorMessage = "Connection lost to device: \(device.name)"
+                if case .deviceOffline = mappedError {
                     if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                         self.devices[index].isOnline = false
                     }
                 } else {
-                    // For other errors (busy, timeout, etc.), just log but keep device online
-                    print("Device update failed (keeping online): \(error.localizedDescription)")
-                    // Revert to previous state if needed
                     if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                        // Keep the device state as-is instead of marking offline
                         self.devices[index].isOnline = true
                     }
                 }
+                self.presentError(mappedError)
             }
         }
     }
@@ -957,11 +1112,22 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
     
-    private func refreshDeviceState(_ device: WLEDDevice) async {
+    func refreshDeviceState(_ device: WLEDDevice) async {
         // Skip refresh for off-subnet devices to avoid timeouts/energy drain
         if !isIPInCurrentSubnets(device.ipAddress) { return }
         do {
             let response = try await apiService.getState(for: device)
+            
+            // Detect and cache capabilities using CapabilityDetector
+            if let seglc = response.info.leds.seglc {
+                let capabilities = await capabilityDetector.detect(deviceId: device.id, seglc: seglc)
+                // Cache locally for synchronous access from MainActor
+                await MainActor.run {
+                    self.deviceCapabilities[device.id] = capabilities
+                }
+            }
+            
+            await fetchEffectMetadataIfNeeded(for: device)
             
             await MainActor.run {
                 if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
@@ -972,19 +1138,49 @@ class DeviceControlViewModel: ObservableObject {
                     updatedDevice.lastSeen = Date()
                     
                     // Update color if available
-                    if let segment = response.state.segments.first,
-                       let colors = segment.colors,
-                       let firstColor = colors.first,
-                       firstColor.count >= 3 {
-                        updatedDevice.currentColor = Color(
-                            red: Double(firstColor[0]) / 255.0,
-                            green: Double(firstColor[1]) / 255.0,
-                            blue: Double(firstColor[2]) / 255.0
-                        )
+                    if let segment = response.state.segments.first {
+                        // Check if segment has CCT (white temperature)
+                        if let normalized = segment.cctNormalized {
+                            updatedDevice.temperature = normalized
+                        } else if let colors = segment.colors,
+                               let firstColor = colors.first,
+                               firstColor.count >= 3 {
+                            updatedDevice.currentColor = Color(
+                                red: Double(firstColor[0]) / 255.0,
+                                green: Double(firstColor[1]) / 255.0,
+                                blue: Double(firstColor[2]) / 255.0
+                            )
+                        }
                     }
                     
                     self.devices[index] = updatedDevice
+                    
+                    // Sync to widget
+                    WidgetDataSync.shared.syncDevice(updatedDevice)
                 }
+
+                // Capture CCT format per segment for future Kelvin support
+                var segmentFormats = self.segmentCCTFormats[device.id] ?? [:]
+                for (idx, segment) in response.state.segments.enumerated() {
+                    let segmentIdentifier = segment.id ?? idx
+                    segmentFormats[segmentIdentifier] = segment.cctIsKelvin
+                }
+                self.segmentCCTFormats[device.id] = segmentFormats
+
+                // Capture effect state per segment for UI binding
+                var segmentStates = self.effectStates[device.id] ?? [:]
+                for (idx, segment) in response.state.segments.enumerated() {
+                    let segmentIdentifier = segment.id ?? idx
+                    let cached = segmentStates[segmentIdentifier] ?? .default
+                    let newState = DeviceEffectState(
+                        effectId: segment.fx ?? cached.effectId,
+                        speed: segment.sx ?? cached.speed,
+                        intensity: segment.ix ?? cached.intensity,
+                        paletteId: segment.pal ?? cached.paletteId
+                    )
+                    segmentStates[segmentIdentifier] = newState
+                }
+                self.effectStates[device.id] = segmentStates
             }
             
             // Update persistence
@@ -1004,16 +1200,210 @@ class DeviceControlViewModel: ObservableObject {
                     blue: Double(firstColor[2]) / 255.0
                 )
             }
+
+            if let normalized = response.state.segments.first?.cctNormalized {
+                persistDevice.temperature = normalized
+            }
             
             await coreDataManager.saveDevice(persistDevice)
             
+            clearError()
+            
         } catch {
-            // Don't update UI for background refresh failures
-            // Connection monitor will handle offline detection
-            // Avoid spamming logs on timeouts
+            let mappedError = mapToWLEDError(error, device: device)
+            if case .deviceOffline = mappedError {
+                presentError(mappedError)
+            }
         }
     }
 
+    // MARK: - Capability Helpers
+    func supportsCCT(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        // Use local cache for synchronous access from MainActor
+        guard let capabilities = deviceCapabilities[device.id],
+              let segmentCap = capabilities.capabilities(for: segmentId) else {
+            return false // Fallback if not yet detected
+        }
+        return segmentCap.supportsCCT
+    }
+    
+    func supportsWhite(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        // Use local cache for synchronous access from MainActor
+        guard let capabilities = deviceCapabilities[device.id],
+              let segmentCap = capabilities.capabilities(for: segmentId) else {
+            return false // Fallback if not yet detected
+        }
+        return segmentCap.supportsWhite
+    }
+    
+    func supportsRGB(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        // Use local cache for synchronous access from MainActor
+        guard let capabilities = deviceCapabilities[device.id],
+              let segmentCap = capabilities.capabilities(for: segmentId) else {
+            return true // Default to true for RGB
+        }
+        return segmentCap.supportsRGB
+    }
+    
+    func getSegmentCount(for device: WLEDDevice) -> Int {
+        guard let capabilities = deviceCapabilities[device.id] else {
+            return 1 // Default to single segment
+        }
+        return capabilities.segments.count
+    }
+    
+    func hasMultipleSegments(for device: WLEDDevice) -> Bool {
+        return getSegmentCount(for: device) > 1
+    }
+    
+    func getRawEffectMetadata(for device: WLEDDevice) -> [String]? {
+        rawEffectMetadata[device.id]
+    }
+    
+    private func fetchEffectMetadataIfNeeded(for device: WLEDDevice) async {
+        let now = Date()
+        let lastFetch = effectMetadataLastFetched[device.id] ?? .distantPast
+        guard now.timeIntervalSince(lastFetch) > effectMetadataRefreshInterval else { return }
+        do {
+            let metadataLines = try await apiService.fetchEffectMetadata(for: device)
+            effectMetadataLastFetched[device.id] = now
+            rawEffectMetadata[device.id] = metadataLines
+            if let bundle = EffectMetadataParser.parse(lines: metadataLines) {
+                effectMetadataBundles[device.id] = bundle
+            }
+        } catch {
+            // Silently ignore metadata fetch failures to avoid impacting main flow
+        }
+    }
+    
+    func effectMetadata(for device: WLEDDevice) -> EffectMetadataBundle? {
+        effectMetadataBundles[device.id]
+    }
+    
+    func currentEffectState(for device: WLEDDevice, segmentId: Int = 0) -> DeviceEffectState {
+        effectStates[device.id]?[segmentId] ?? .default
+    }
+    
+    func segmentUsesKelvinCCT(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        segmentCCTFormats[device.id]?[segmentId] ?? false
+    }
+
+    func setEffect(for device: WLEDDevice, segmentId: Int = 0, effectId: Int) async {
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        state.effectId = effectId
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId)
+    }
+    
+    func updateEffectSpeed(for device: WLEDDevice, segmentId: Int = 0, speed: Int) async {
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        state.speed = max(0, min(255, speed))
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId)
+    }
+    
+    func updateEffectIntensity(for device: WLEDDevice, segmentId: Int = 0, intensity: Int) async {
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        state.intensity = max(0, min(255, intensity))
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId)
+    }
+    
+    func updateEffectPalette(for device: WLEDDevice, segmentId: Int = 0, paletteId: Int) async {
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        state.paletteId = max(0, paletteId)
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId)
+    }
+    
+    private func updateEffectStateCache(_ state: DeviceEffectState, deviceId: String, segmentId: Int) {
+        var segmentStates = effectStates[deviceId] ?? [:]
+        segmentStates[segmentId] = state
+        effectStates[deviceId] = segmentStates
+    }
+    
+    private func applyEffectState(_ state: DeviceEffectState, to device: WLEDDevice, segmentId: Int) async {
+        do {
+            _ = try await apiService.setEffect(
+                state.effectId,
+                forSegment: segmentId,
+                speed: state.speed,
+                intensity: state.intensity,
+                palette: state.paletteId,
+                device: device
+            )
+            clearError()
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+        }
+    }
+    
+    private func updateDevice(_ deviceId: String, with state: WLEDState) {
+        if let index = devices.firstIndex(where: { $0.id == deviceId }) {
+            var updatedDevice = devices[index]
+            updatedDevice.brightness = state.brightness
+            updatedDevice.isOn = state.isOn
+            updatedDevice.state = state
+            updatedDevice.lastSeen = Date()
+            if let segment = state.segments.first {
+                if let colors = segment.colors,
+                   let firstColor = colors.first,
+                   firstColor.count >= 3 {
+                    updatedDevice.currentColor = Color(
+                        red: Double(firstColor[0]) / 255.0,
+                        green: Double(firstColor[1]) / 255.0,
+                        blue: Double(firstColor[2]) / 255.0
+                    )
+                }
+                if let normalized = segment.cctNormalized {
+                    updatedDevice.temperature = normalized
+                }
+            }
+            devices[index] = updatedDevice
+            deviceStateCache[deviceId] = (updatedDevice, Date())
+            Task.detached(priority: .background) {
+                await CoreDataManager.shared.saveDevice(updatedDevice)
+            }
+        }
+    }
+    
+    private func stateUpdate(from state: WLEDState) -> WLEDStateUpdate {
+        let segments = state.segments.map { segment in
+            SegmentUpdate(
+                id: segment.id,
+                start: segment.start,
+                stop: segment.stop,
+                len: segment.len,
+                grp: segment.grp,
+                spc: segment.spc,
+                ofs: segment.ofs,
+                on: segment.on,
+                bri: segment.bri,
+                col: segment.colors,
+                cct: segment.cct,
+                fx: segment.fx,
+                sx: segment.sx,
+                ix: segment.ix,
+                pal: segment.pal,
+                sel: segment.sel,
+                rev: segment.rev,
+                mi: segment.mi,
+                cln: segment.cln,
+                frz: segment.frz
+            )
+        }
+        return WLEDStateUpdate(
+            on: state.isOn,
+            bri: state.brightness,
+            seg: segments
+        )
+    }
+    
     // MARK: - Refresh Coalescing
     private var _lastRefreshRequested: Date?
     
@@ -1142,17 +1532,97 @@ class DeviceControlViewModel: ObservableObject {
     // MARK: - Error Handling
     
     func dismissError() {
+        clearError()
+    }
+    
+    private func clearError() {
+        currentError = nil
         errorMessage = nil
+    }
+    
+    private func presentError(_ error: WLEDError) {
+        if currentError == error { return }
+        currentError = error
+        errorMessage = error.message
+    }
+    
+    private func resolvedDeviceName(for device: WLEDDevice?, providedName: String?) -> String? {
+        if let provided = providedName, !provided.isEmpty { return provided }
+        return device?.name
+    }
+    
+    private func mapToWLEDError(_ error: Error, device: WLEDDevice?) -> WLEDError {
+        if let apiError = error as? WLEDAPIError {
+            switch apiError {
+            case .deviceOffline(let name), .deviceUnreachable(let name):
+                return .deviceOffline(deviceName: resolvedDeviceName(for: device, providedName: name))
+            case .timeout, .maxRetriesExceeded:
+                return .timeout(deviceName: device?.name)
+            case .invalidResponse, .decodingError, .encodingError:
+                return .invalidResponse
+            case .invalidURL:
+                return .apiError(message: "Invalid device URL configuration.")
+            case .unsupportedOperation(let operation):
+                return .apiError(message: "Operation \(operation) is not supported on this device.")
+            case .deviceBusy(let name):
+                let resolved = resolvedDeviceName(for: device, providedName: name) ?? "Device"
+                return .apiError(message: "\(resolved) is busy. Try again shortly.")
+            case .networkError(let underlying):
+                return .apiError(message: underlying.localizedDescription)
+            case .httpError:
+                return .apiError(message: apiError.errorDescription ?? "HTTP error")
+            case .invalidConfiguration:
+                return .apiError(message: "Invalid configuration. Check API settings.")
+            }
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut:
+                return .timeout(deviceName: device?.name)
+            case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+                return .deviceOffline(deviceName: device?.name)
+            default:
+                return .apiError(message: urlError.localizedDescription)
+            }
+        }
+        return .apiError(message: error.localizedDescription)
     }
 
     // MARK: - Gradient Helpers (foundation)
 
-    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int) async {
+    /// Apply gradient stops across the LED strip
+    /// - Parameters:
+    ///   - device: The WLED device
+    ///   - stops: Gradient stops to apply
+    ///   - ledCount: Number of LEDs
+    ///   - stopTemperatures: Optional mapping of stop IDs to temperature values (0.0-1.0)
+    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil) async {
         let gradient = LEDGradient(stops: stops)
         let frame = GradientSampler.sample(gradient, ledCount: ledCount)
         var intent = ColorIntent(deviceId: device.id, mode: .perLED)
         intent.segmentId = 0
         intent.perLEDHex = frame
+        
+        // Option 1: Check if all stops have the same temperature, send CCT if they do
+        if let tempMap = stopTemperatures, !tempMap.isEmpty {
+            // Collect all temperatures from stops that have them
+            let temperatures = stops.compactMap { stop -> Double? in
+                tempMap[stop.id]
+            }
+            
+            // If all stops with temperatures share the same temperature, use it
+            if !temperatures.isEmpty {
+                let firstTemp = temperatures[0]
+                let allSame = temperatures.allSatisfy { abs($0 - firstTemp) < 0.001 }
+                
+                if allSame {
+                    // Convert temperature (0.0-1.0) to CCT (0-255)
+                    let cct = Int(round(firstTemp * 255.0))
+                    intent.cct = cct
+                }
+            }
+        }
+        
         await colorPipeline.apply(intent, to: device)
     }
 
@@ -1194,10 +1664,11 @@ class DeviceControlViewModel: ObservableObject {
             // Persist to Core Data
             await coreDataManager.saveDevice(updatedDevice)
             
+            clearError()
+            
         } catch {
-            print("Failed to rename device: \(error.localizedDescription)")
-            // Even if the API call fails, we could still update locally
-            // but for now we'll just log the error
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
         }
     }
     
@@ -1310,7 +1781,7 @@ class DeviceControlViewModel: ObservableObject {
         if scene.effectsEnabled {
             // If base colors are available, set them via segment update first
             if let baseA = scene.primaryStops.first?.color.toRGBArray() {
-                let seg = SegmentUpdate(id: 0, col: [baseA])
+                let seg = SegmentUpdate(id: 0, col: [[baseA[0], baseA[1], baseA[2]]])
                 let st = WLEDStateUpdate(seg: [seg])
                 _ = try? await apiService.updateState(for: device, state: st)
             }
@@ -1342,5 +1813,70 @@ class DeviceControlViewModel: ObservableObject {
             let ledCount = device.state?.segments.first?.len ?? 120
             await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops, ledCount: ledCount)
         }
+    }
+    
+    func presets(for device: WLEDDevice) -> [WLEDPreset] {
+        presetsCache[device.id] ?? []
+    }
+    
+    func isLoadingPresets(for device: WLEDDevice) -> Bool {
+        presetLoadingStates[device.id] ?? false
+    }
+    
+    func nextPresetId(for device: WLEDDevice) -> Int {
+        let existing = Set(presets(for: device).map { $0.id })
+        var candidate = 1
+        while existing.contains(candidate) {
+            candidate += 1
+        }
+        return candidate
+    }
+    
+    func loadPresets(for device: WLEDDevice, force: Bool = false) async {
+        if presetsCache[device.id] != nil && !force { return }
+        presetLoadingStates[device.id] = true
+        do {
+            let presets = try await apiService.fetchPresets(for: device)
+            presetsCache[device.id] = presets
+            clearError()
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+        }
+        presetLoadingStates[device.id] = false
+    }
+    
+    func refreshPresets(for device: WLEDDevice) async {
+        await loadPresets(for: device, force: true)
+    }
+    
+    func applyPreset(_ preset: WLEDPreset, to device: WLEDDevice, transition: Int? = nil) async {
+        markUserInteraction(device.id)
+        do {
+            let state = try await apiService.applyPreset(preset.id, to: device, transition: transition)
+            updateDevice(device.id, with: state)
+            clearError()
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+        }
+    }
+    
+    func savePreset(name: String, quickLoad: Bool, for device: WLEDDevice, presetId: Int? = nil) async {
+        markUserInteraction(device.id)
+        presetLoadingStates[device.id] = true
+        do {
+            let response = try await apiService.getState(for: device)
+            let stateUpdate = stateUpdate(from: response.state)
+            let id = presetId ?? nextPresetId(for: device)
+            let request = WLEDPresetSaveRequest(id: id, name: name, quickLoad: quickLoad, state: stateUpdate)
+            try await apiService.savePreset(request, to: device)
+            presetsCache[device.id] = try await apiService.fetchPresets(for: device)
+            clearError()
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+        }
+        presetLoadingStates[device.id] = false
     }
 } 

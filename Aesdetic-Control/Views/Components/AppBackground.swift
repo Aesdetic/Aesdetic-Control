@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 // Singleton to cache and preload background image
 @MainActor

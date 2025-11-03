@@ -63,6 +63,8 @@ struct SceneRow: View {
             .padding(.vertical, 8)
             .background(Color.blue)
             .cornerRadius(8)
+            .accessibilityLabel("Apply \(scene.name)")
+            .accessibilityHint("Loads this scene on the selected device.")
         }
         .padding()
         .background(Color.white.opacity(0.1))

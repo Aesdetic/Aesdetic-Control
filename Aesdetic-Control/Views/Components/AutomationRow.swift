@@ -80,6 +80,9 @@ struct AutomationRow: View {
                 set: { onToggle($0) }
             ))
             .tint(.green)
+        .accessibilityLabel("\(automation.name) automation")
+        .accessibilityValue(automation.enabled ? "Enabled" : "Disabled")
+        .accessibilityHint(automation.enabled ? "Double tap to disable this automation." : "Double tap to enable this automation.")
         }
         .padding()
         .background(Color.white.opacity(0.1))

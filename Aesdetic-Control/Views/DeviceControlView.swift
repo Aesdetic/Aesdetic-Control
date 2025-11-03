@@ -260,7 +260,7 @@ struct EmptyStateView: View {
         VStack(spacing: 24) {
             // Icon
             Image(systemName: "lightbulb.slash")
-                .font(.system(size: 64))
+                .font(.system(.largeTitle, design: .rounded))
                 .foregroundColor(.gray)
             
             // Title and Description
@@ -327,7 +327,7 @@ struct ScanningStateView: View {
                     
                     // Inner icon
                     Image(systemName: "wifi")
-                        .font(.system(size: 32, weight: .medium))
+                        .font(.title.weight(.medium))
                         .foregroundColor(.blue)
                 }
             }

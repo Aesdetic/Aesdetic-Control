@@ -7,7 +7,6 @@
 
 import Foundation
 import SwiftUI
-import UIKit
 
 struct WLEDDevice: Identifiable, Hashable {
     let id: String // mac address
@@ -16,13 +15,12 @@ struct WLEDDevice: Identifiable, Hashable {
     var isOnline: Bool
     var brightness: Int // 0-255 from API
     var currentColor: Color // Derived from state
+    var temperature: Double? // Color temperature (0.0-1.0, from CCT 0-255)
     var productType: ProductType
     var location: DeviceLocation
     var lastSeen: Date
     var state: WLEDState?
     
-    // TODO: Add custom product image support
-    // var productImage: String? // Asset name for custom product image
     
     // Computed property for device on/off state
     var isOn: Bool {
@@ -58,13 +56,14 @@ struct WLEDDevice: Identifiable, Hashable {
         hasher.combine(id)
     }
     
-    init(id: String, name: String, ipAddress: String, isOnline: Bool = false, brightness: Int = 0, currentColor: Color = .black, productType: ProductType = .generic, location: DeviceLocation = .all, lastSeen: Date = Date(), state: WLEDState? = nil) {
+    init(id: String, name: String, ipAddress: String, isOnline: Bool = false, brightness: Int = 0, currentColor: Color = .black, temperature: Double? = nil, productType: ProductType = .generic, location: DeviceLocation = .all, lastSeen: Date = Date(), state: WLEDState? = nil) {
         self.id = id
         self.name = name
         self.ipAddress = ipAddress
         self.isOnline = isOnline
         self.brightness = brightness
         self.currentColor = currentColor
+        self.temperature = temperature
         self.productType = productType
         self.location = location
         self.lastSeen = lastSeen
@@ -98,6 +97,9 @@ struct Info: Codable {
 
 struct LedInfo: Codable {
     let count: Int
+    // Segment LED capabilities (array) - optional, present on newer WLED builds
+    // Bit 2 (0b100) indicates CCT/temperature capability for the segment.
+    let seglc: [Int]?
 }
 
 struct WLEDState: Codable {
@@ -124,6 +126,7 @@ struct Segment: Codable {
     let on: Bool?
     let bri: Int?
     let colors: [[Int]]?
+    let cct: Int?  // Color temperature (0-255 relative or Kelvin)
     let fx: Int?
     let sx: Int?
     let ix: Int?
@@ -132,11 +135,52 @@ struct Segment: Codable {
     let rev: Bool?
     let mi: Bool?
     let cln: Int?
+    /// Freeze flag: true = freeze segment (stop animations), false = resume
+    let frz: Bool?
+
+    private static let kelvinMin: Double = 1000.0
+    private static let kelvinMax: Double = 20000.0
+    private static let kelvinRange: Double = kelvinMax - kelvinMin
+
+    static func kelvinValue(fromNormalized normalized: Double) -> Int {
+        let clamped = min(max(normalized, 0.0), 1.0)
+        return Int(round(kelvinMin + clamped * kelvinRange))
+    }
+
+    static func eightBitValue(fromNormalized normalized: Double) -> Int {
+        let clamped = min(max(normalized, 0.0), 1.0)
+        return Int(round(clamped * 255.0))
+    }
+
+    var cctIsKelvin: Bool {
+        guard let cct = cct else { return false }
+        return cct >= 1000
+    }
+
+    var cctKelvinValue: Int? {
+        cctIsKelvin ? cct : nil
+    }
+
+    var cctEightBitValue: Int? {
+        guard let cct = cct, !cctIsKelvin else { return nil }
+        return cct
+    }
+
+    var cctNormalized: Double? {
+        guard let cct = cct else { return nil }
+        if cctIsKelvin {
+            let value = min(max(Double(cct), Self.kelvinMin), Self.kelvinMax)
+            return (value - Self.kelvinMin) / Self.kelvinRange
+        } else {
+            return Double(cct) / 255.0
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, start, stop, len, grp, spc, ofs, on, bri
         case colors = "col"
-        case fx, sx, ix, pal, sel, rev, mi, cln
+        case cct
+        case fx, sx, ix, pal, sel, rev, mi, cln, frz
     }
 }
 

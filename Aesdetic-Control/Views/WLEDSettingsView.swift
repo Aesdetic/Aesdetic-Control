@@ -272,7 +272,7 @@ struct WLEDSettingsView: View {
                     }) {
                         Image(systemName: isEditingName ? "xmark" : "pencil")
                             .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                     }
                 }
             }
@@ -284,10 +284,10 @@ struct WLEDSettingsView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(.white)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                         Text("Refresh")
                             .foregroundColor(.white)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -396,7 +396,7 @@ struct WLEDSettingsView: View {
                         .cornerRadius(10)
                 }
                 .sensorySuccess(trigger: UUID())
-                Button(action: { WLEDAPIService.shared.clearCache() }) {
+                Button(action: { Task { await WLEDAPIService.shared.clearCache() } }) {
                     Text("Clear Cache")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.black)

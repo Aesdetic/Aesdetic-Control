@@ -16,19 +16,25 @@ protocol WLEDAPIServiceProtocol {
     func updateState(for device: WLEDDevice, state: WLEDStateUpdate) async throws -> WLEDResponse
     func setPower(for device: WLEDDevice, isOn: Bool) async throws -> WLEDResponse
     func setBrightness(for device: WLEDDevice, brightness: Int) async throws -> WLEDResponse
-    func setColor(for device: WLEDDevice, color: [Int]) async throws -> WLEDResponse
+    func setColor(for device: WLEDDevice, color: [Int], cct: Int?, white: Int?) async throws -> WLEDResponse
+    func setCCT(for device: WLEDDevice, cct: Int) async throws -> WLEDResponse
+    func setCCT(for device: WLEDDevice, cctKelvin: Int) async throws -> WLEDResponse
+    func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset]
+    func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws
     func setSegmentPixels(
         for device: WLEDDevice,
         segmentId: Int?,
         startIndex: Int,
         hexColors: [String],
+        cct: Int?,
         afterChunk: (() async -> Void)?
     ) async throws
+    func fetchEffectMetadata(for device: WLEDDevice) async throws -> [String]
 }
 
 // MARK: - WLEDAPIService
 
-class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
+actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     static let shared = WLEDAPIService()
     
     private let urlSession: URLSession
@@ -36,16 +42,41 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     
+    // Performance optimization: Request batching and caching
+    private var requestCache: [String: (response: WLEDResponse, timestamp: Date)] = [:]
+    private let cacheExpirationInterval: TimeInterval = 2.0 // 2 seconds cache
+    private let maxConcurrentRequests = 6 // Limit concurrent requests for better performance
+    private let maxCacheSize = 50 // Maximum number of cached responses
+    private var lastCacheEviction: Date = .distantPast
+    private let cacheEvictionInterval: TimeInterval = 10.0 // Only evict every 10 seconds
+    
     private init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10.0
-        config.timeoutIntervalForResource = 30.0
+        config.timeoutIntervalForRequest = 8.0 // Reduced timeout for better responsiveness
+        config.timeoutIntervalForResource = 20.0
+        config.httpMaximumConnectionsPerHost = 4 // Limit connections per host
+        config.requestCachePolicy = .useProtocolCachePolicy
         self.urlSession = URLSession(configuration: config)
     }
     
     // MARK: - API Methods
     
     func getState(for device: WLEDDevice) async throws -> WLEDResponse {
+        let cacheKey = "\(device.id)_state"
+        let now = Date()
+        
+        // Only evict cache periodically to avoid performance issues
+        if now.timeIntervalSince(lastCacheEviction) > cacheEvictionInterval {
+            evictCacheIfNeeded()
+            lastCacheEviction = now
+        }
+        
+        // Check cache first
+        if let cached = requestCache[cacheKey],
+           now.timeIntervalSince(cached.timestamp) < cacheExpirationInterval {
+            return cached.response
+        }
+        
         guard let url = URL(string: device.jsonEndpoint) else {
             throw WLEDAPIError.invalidURL
         }
@@ -55,7 +86,12 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         do {
             let (data, response) = try await urlSession.data(for: request)
             try validateHTTPResponse(response, device: device)
-            return try parseResponse(data: data, device: device)
+            let wledResponse = try parseResponse(data: data, device: device)
+            
+            // Cache the response
+            requestCache[cacheKey] = (wledResponse, now)
+            
+            return wledResponse
         } catch {
             throw handleError(error, device: device)
         }
@@ -85,7 +121,13 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 return createSuccessResponse(for: device)
             }
             
-            return try parseResponse(data: data, device: device)
+            let wledResponse = try parseResponse(data: data, device: device)
+            
+            // Optimistic update: Bypass cache immediately after successful POST
+            // This ensures fresh data is shown after user actions
+            bypassCache(for: device.id)
+            
+            return wledResponse
         } catch {
             throw handleError(error, device: device)
         }
@@ -101,14 +143,133 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try await updateState(for: device, state: stateUpdate)
     }
     
-    func setColor(for device: WLEDDevice, color: [Int]) async throws -> WLEDResponse {
+    func setColor(for device: WLEDDevice, color: [Int], cct: Int? = nil, white: Int? = nil) async throws -> WLEDResponse {
         guard color.count >= 3 else {
             throw WLEDAPIError.invalidConfiguration
         }
         
-        let segment = SegmentUpdate(id: 0, col: [color])
+        // WLED expects col as [[Int]] where the inner array is [R, G, B] or [R, G, B, W]
+        // For RGB strips: [[255, 165, 0]]
+        // For RGBW strips: [[255, 165, 0, 128]] (where last value is white component 0-255)
+        // CCT: 0-255 (0=warm, 255=cool) for RGBCCT strips
+        
+        let colorArray: [Int]
+        if let whiteValue = white {
+            // RGBW: Include white channel as 4th element
+            colorArray = [color[0], color[1], color[2], max(0, min(255, whiteValue))]
+        } else {
+            // RGB: Standard 3-element array
+            colorArray = [color[0], color[1], color[2]]
+        }
+        
+        let segment = SegmentUpdate(id: 0, col: [colorArray], cct: cct)
         let stateUpdate = WLEDStateUpdate(seg: [segment])
         return try await updateState(for: device, state: stateUpdate)
+    }
+    
+    /// Set CCT (Correlated Color Temperature) for a WLED device
+    /// - Parameters:
+    ///   - device: The WLED device
+    ///   - cct: Color temperature (0-255, 0=warm ~2700K, 255=cool ~6500K)
+    /// - Returns: Updated device state
+    func setCCT(for device: WLEDDevice, cct: Int) async throws -> WLEDResponse {
+        guard cct >= 0 && cct <= 255 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        return try await setCCTInternal(for: device, cct: cct)
+    }
+    
+    func setCCT(for device: WLEDDevice, cctKelvin: Int) async throws -> WLEDResponse {
+        guard cctKelvin >= 1000 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        return try await setCCTInternal(for: device, cct: cctKelvin)
+    }
+    
+    private func setCCTInternal(for device: WLEDDevice, cct: Int) async throws -> WLEDResponse {
+        let segment = SegmentUpdate(id: 0, cct: cct)
+        let stateUpdate = WLEDStateUpdate(seg: [segment])
+        return try await updateState(for: device, state: stateUpdate)
+    }
+
+    func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset] {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/presets") else {
+            throw WLEDAPIError.invalidURL
+        }
+        let request = URLRequest(url: url)
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            let json = try JSONSerialization.jsonObject(with: data, options: [])
+            guard let dictionary = json as? [String: Any] else { return [] }
+            var presets: [WLEDPreset] = []
+            for (key, value) in dictionary {
+                guard let id = Int(key), let presetDict = value as? [String: Any] else { continue }
+                let name = presetDict["n"] as? String ?? "Preset \(id)"
+                let quickLoad = presetDict["ql"] as? Bool
+                var segment: SegmentUpdate? = nil
+                if let win = presetDict["win"] {
+                    if let winData = try? JSONSerialization.data(withJSONObject: win, options: []) {
+                        if let stateUpdate = try? decoder.decode(WLEDStateUpdate.self, from: winData) {
+                            segment = stateUpdate.seg?.first
+                        }
+                    }
+                }
+                let preset = WLEDPreset(id: id, name: name, quickLoad: quickLoad, segment: segment)
+                presets.append(preset)
+            }
+            return presets.sorted { $0.id < $1.id }
+        } catch {
+            throw handleError(error, device: device)
+        }
+    }
+    
+    func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws {
+        guard request.id >= 0 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        guard let url = URL(string: "http://\(device.ipAddress)/json/presets") else {
+            throw WLEDAPIError.invalidURL
+        }
+        var httpRequest = URLRequest(url: url)
+        httpRequest.httpMethod = "POST"
+        httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = PresetStorePayload(ps: [String(request.id): PresetStoreBody(n: request.name, ql: request.quickLoad, win: request.state)])
+        httpRequest.httpBody = try encoder.encode(body)
+        do {
+            let (_, response) = try await urlSession.data(for: httpRequest)
+            try validateHTTPResponse(response, device: device)
+        } catch {
+            throw handleError(error, device: device)
+        }
+    }
+
+    func fetchEffectMetadata(for device: WLEDDevice) async throws -> [String] {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/fxdata") else {
+            throw WLEDAPIError.invalidURL
+        }
+
+        let request = URLRequest(url: url)
+
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            let rawString: String
+            if let utf8 = String(data: data, encoding: .utf8) {
+                rawString = utf8
+            } else if let ascii = String(data: data, encoding: .ascii) {
+                rawString = ascii
+            } else {
+                throw WLEDAPIError.decodingError(DecodingError.dataCorrupted(DecodingError.Context(codingPath: [], debugDescription: "Unable to decode fxdata string")))
+            }
+            let lines = rawString
+                .components(separatedBy: CharacterSet.newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return lines
+        } catch {
+            throw handleError(error, device: device)
+        }
     }
 
     // MARK: - UDP Sync Controls
@@ -164,10 +325,11 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         segmentId: Int? = nil,
         startIndex: Int = 0,
         hexColors: [String],
+        cct: Int? = nil,
         afterChunk: (() async -> Void)? = nil
     ) async throws {
         guard !hexColors.isEmpty else { return }
-        let bodies = Self.buildSegmentPixelBodies(segmentId: segmentId, startIndex: startIndex, hexColors: hexColors, chunkSize: 256)
+        let bodies = Self.buildSegmentPixelBodies(segmentId: segmentId, startIndex: startIndex, hexColors: hexColors, cct: cct, chunkSize: 256)
         for body in bodies {
             _ = try await postState(device, body: body)
             if let cb = afterChunk { await cb() }
@@ -175,7 +337,7 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     // Helper to build chunked POST bodies
-    internal static func buildSegmentPixelBodies(segmentId: Int?, startIndex: Int, hexColors: [String], chunkSize: Int = 256) -> [[String: Any]] {
+    internal static func buildSegmentPixelBodies(segmentId: Int?, startIndex: Int, hexColors: [String], cct: Int? = nil, chunkSize: Int = 256) -> [[String: Any]] {
         guard !hexColors.isEmpty else { return [] }
         var out: [[String: Any]] = []
         let total = hexColors.count
@@ -185,6 +347,10 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let chunk = Array(hexColors[idx..<end])
             var seg: [String: Any] = ["i": [startIndex + idx] + chunk]
             if let sid = segmentId { seg["id"] = sid }
+            // Add CCT to segment if provided (only on first chunk to avoid redundancy)
+            if let cctValue = cct, idx == 0 {
+                seg["cct"] = cctValue
+            }
             let body: [String: Any]
             if segmentId != nil { body = ["seg": [seg]] }
             else { body = ["seg": seg] }
@@ -484,7 +650,7 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 name: device.name,
                 mac: device.id,
                 ver: "0.14.0",
-                leds: LedInfo(count: 30)
+                leds: LedInfo(count: 30, seglc: nil)
             ),
             state: WLEDState(
                 brightness: device.brightness,
@@ -702,17 +868,66 @@ class WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     
     // MARK: - Cache Management for ResourceManager
     
-    func getCacheSize() -> Int {
-        // Return cache size in bytes
-        return 0 // Simple implementation
+    func getCacheSize() async -> Int {
+        return requestCache.count
     }
     
-    func clearCache() {
-        // Clear any cached data
+    func clearCache() async {
+        requestCache.removeAll()
         urlSession.configuration.urlCache?.removeAllCachedResponses()
     }
     
-    func cleanup() {
-        clearCache()
+    func cleanup() async {
+        await clearCache()
     }
+    
+    // MARK: - Advanced Cache Management
+    
+    /// Bypass cache for a specific device after successful POST operations
+    private func bypassCache(for deviceId: String) {
+        let cacheKey = "\(deviceId)_state"
+        requestCache.removeValue(forKey: cacheKey)
+        
+        #if DEBUG
+        logger.debug("Cache bypassed for device: \(deviceId)")
+        #endif
+    }
+    
+    /// Evict expired entries and enforce cache size limits
+    private func evictCacheIfNeeded() {
+        let now = Date()
+        
+        // Remove expired entries efficiently
+        let expiredKeys = requestCache.compactMap { (key, value) in
+            now.timeIntervalSince(value.timestamp) >= cacheExpirationInterval ? key : nil
+        }
+        
+        for key in expiredKeys {
+            requestCache.removeValue(forKey: key)
+        }
+        
+        // If still over limit, remove oldest entries efficiently
+        if requestCache.count > maxCacheSize {
+            let sortedEntries = requestCache.sorted { $0.value.timestamp < $1.value.timestamp }
+            let entriesToRemove = sortedEntries.prefix(requestCache.count - maxCacheSize)
+            
+            for (key, _) in entriesToRemove {
+                requestCache.removeValue(forKey: key)
+            }
+            
+            #if DEBUG
+            logger.debug("Cache evicted \(entriesToRemove.count) entries, current size: \(self.requestCache.count)")
+            #endif
+        }
+    }
+} 
+
+private struct PresetStorePayload: Encodable {
+    let ps: [String: PresetStoreBody]
+}
+
+private struct PresetStoreBody: Encodable {
+    let n: String
+    let ql: Bool?
+    let win: WLEDStateUpdate?
 } 

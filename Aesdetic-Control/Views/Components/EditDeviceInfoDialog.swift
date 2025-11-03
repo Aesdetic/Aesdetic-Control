@@ -395,11 +395,11 @@ struct IconPickerView: View {
                         Group {
                             if sfSymbolIcons.contains(selectedIcon) {
                                 Image(systemName: selectedIcon)
-                                    .font(.system(size: 60))
+                                    .font(.system(.largeTitle, design: .rounded))
                                     .foregroundColor(.white)
                             } else {
                                 Text(selectedIcon)
-                                    .font(.system(size: 60))
+                                    .font(.system(.largeTitle, design: .rounded))
                             }
                         }
                         .frame(width: 100, height: 100)
@@ -429,7 +429,7 @@ struct IconPickerView: View {
                                 dismiss()
                             }) {
                                 Image(systemName: icon)
-                                    .font(.system(size: 24))
+                                    .font(.title2)
                                     .foregroundColor(.white)
                                     .frame(width: 50, height: 50)
                                     .background(
@@ -503,7 +503,7 @@ struct LocationButton: View {
             VStack(spacing: 8) {
                 // Icon - Use SF Symbols for default locations
                 Image(systemName: iconName)
-                    .font(.system(size: 24))
+                    .font(.title2)
                     .foregroundColor(isSelected ? .black : .white)
                 
                 // Label
@@ -567,11 +567,11 @@ struct CustomLocationButton: View {
                 Group {
                     if isSFSymbol(location.icon) {
                         Image(systemName: location.icon)
-                            .font(.system(size: 24))
+                            .font(.title2)
                             .foregroundColor(isSelected ? .black : .white)
                     } else {
                         Text(location.icon)
-                            .font(.system(size: 24))
+                            .font(.title2)
                             .foregroundColor(isSelected ? .black : .white)
                     }
                 }

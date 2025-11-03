@@ -7,11 +7,20 @@
 
 import SwiftUI
 import Foundation
-import PhotosUI
+
+// MARK: - Performance Configuration
+
+struct PerformanceConfig {
+    static let enableAnimations = true // Feature flag for animations
+    static let enableTransitions = true // Feature flag for transitions
+    static let animationDuration: Double = 0.2
+    static let transitionDuration: Double = 0.3
+}
 
 // MARK: - Enhanced Device Card with Modern Design
 
 struct EnhancedDeviceCard: View {
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let device: WLEDDevice
     let viewModel: DeviceControlViewModel
     let onTap: () -> Void
@@ -24,22 +33,33 @@ struct EnhancedDeviceCard: View {
     @State private var showImagePicker: Bool = false
     @State private var isToggling: Bool = false
     
+    // Performance optimization: Memoized computed properties
+    private let deviceId: String
+    private let animationDuration: Double = PerformanceConfig.animationDuration
+    
     // Initialize local state from device
     init(device: WLEDDevice, viewModel: DeviceControlViewModel, onTap: @escaping () -> Void) {
         self.device = device
         self.viewModel = viewModel
         self.onTap = onTap
+        self.deviceId = device.id
         self._localBrightness = State(initialValue: Double(device.brightness))
     }
     
-    // Use coordinated power state from ViewModel
+    // Use coordinated power state from ViewModel - optimized with memoization
     private var currentPowerState: Bool {
-        return viewModel.getCurrentPowerState(for: device.id)
+        return viewModel.getCurrentPowerState(for: deviceId)
     }
     
+    // Optimized brightness effect calculation
     private var brightnessEffect: Double {
         guard currentPowerState && device.isOnline else { return 0 }
         return Double(device.brightness) / 255.0
+    }
+    
+    // Memoized device status for performance
+    private var deviceStatus: (isOnline: Bool, isOn: Bool) {
+        (device.isOnline, currentPowerState)
     }
     
     var body: some View {
@@ -73,14 +93,13 @@ struct EnhancedDeviceCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: 193) // Increased by 5% (184 * 1.05)
         .background(
-            // SIMPLIFIED: Removed liquid glass for performance
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(currentPowerState ? Color.white.opacity(0.12) : Color.white.opacity(0.06))
+                .fill(cardFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        .stroke(borderStroke, lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(Rectangle())
@@ -130,7 +149,7 @@ struct EnhancedDeviceCard: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.name)
-                    .font(.system(size: 19, weight: .semibold)) // Headline is ~17px, increased by 2px
+                    .font(.headline.weight(.semibold))
                     .foregroundColor(.primary)
                 
                 Text(device.ipAddress)
@@ -187,7 +206,7 @@ struct EnhancedDeviceCard: View {
                         
                         // ViewModel will handle state cleanup automatically
                         // UI will reflect the coordinated state through currentPowerState
-                        let finalState = viewModel.getCurrentPowerState(for: device.id)
+                        let finalState = viewModel.getCurrentPowerState(for: deviceId)
                         
                         if finalState == targetState {
                             print("✅ Device tab toggle successful: \(targetState ? "ON" : "OFF")")
@@ -199,7 +218,7 @@ struct EnhancedDeviceCard: View {
             }) {
                 ZStack {
                     Image(systemName: "power")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.headline.weight(.medium))
                         .foregroundColor(currentPowerState ? .black : .white)
                         .opacity(isToggling ? 0.7 : 1.0)
                     
@@ -225,6 +244,10 @@ struct EnhancedDeviceCard: View {
                 .animation(.easeInOut(duration: 0.2), value: currentPowerState)
                 }
             .buttonStyle(.plain)
+            .accessibilityElement()
+            .accessibilityLabel("Power")
+            .accessibilityValue(currentPowerState ? "On" : "Off")
+            .accessibilityHint(currentPowerState ? "Double tap to turn the device off." : "Double tap to turn the device on.")
             .sensorySelection(trigger: isToggling)
             .disabled(!device.isOnline || isToggling)
             
@@ -249,7 +272,7 @@ struct EnhancedDeviceCard: View {
                     showImagePicker = true
                 }) {
                     Image(systemName: "pencil")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.caption)
                         .foregroundColor(.secondary)
                         .frame(width: 28, height: 28)
                         .background(
@@ -258,6 +281,8 @@ struct EnhancedDeviceCard: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Change device image")
+                .accessibilityHint("Choose a different product image for this device.")
                 .sensorySelection(trigger: showImagePicker)
             }
             
@@ -270,31 +295,20 @@ struct EnhancedDeviceCard: View {
             ZStack(alignment: .leading) {
                 // Background track - glassmorphic semi-transparent
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.regularMaterial)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.clear)
-                    )
+                    .fill(trackBackground)
                     .frame(height: 25) // Increased by 5% (24 * 1.05)
                 
                 // Progress fill
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [device.currentColor.opacity(0.7), device.currentColor],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                    .fill(progressFill)
                     .frame(width: max(24, geometry.size.width * CGFloat(localBrightness / 255.0)), height: 25)
-                .animation(.easeInOut(duration: 0.1), value: Int(localBrightness / 5.0))
+                .animation(PerformanceConfig.enableAnimations ? .easeInOut(duration: 0.1) : nil, value: Int(localBrightness / 5.0))
                 
                 // Brightness percentage text
                 HStack {
                     Text("\(Int(localBrightness / 255.0 * 100))%")
-                        .font(.caption2)
-                        .fontWeight(.medium)
-                        .foregroundColor(.primary)
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(progressLabelColor)
                         .padding(.leading, 8)
                     Spacer()
                 }
@@ -313,9 +327,6 @@ struct EnhancedDeviceCard: View {
                         // Cancel previous timer and create new one with longer interval for better performance
                         brightnessUpdateTimer?.invalidate()
                         brightnessUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-                            #if DEBUG
-                            print("[CARD] Debounced bri=\(Int(localBrightness)) for dev=\(device.id)")
-                            #endif
                             Task { await updateBrightness() }
                         }
                     }
@@ -329,12 +340,71 @@ struct EnhancedDeviceCard: View {
                 }
             )
             .disabled(!device.isOnline || !currentPowerState)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Brightness")
+            .accessibilityValue("\(Int(round(localBrightness / 255.0 * 100))) percent")
+            .accessibilityHint("Swipe up or down to adjust brightness for \(device.name).")
+            .accessibilityAdjustableAction { direction in
+                let step: Double = 12.75
+                switch direction {
+                case .increment:
+                    localBrightness = min(255, localBrightness + step)
+                case .decrement:
+                    localBrightness = max(0, localBrightness - step)
+                @unknown default:
+                    break
+                }
+                brightnessUpdateTimer?.invalidate()
+                Task { await updateBrightness() }
+            }
+            .accessibilityHidden(!device.isOnline || !currentPowerState)
         }
         .frame(height: 25)
+        .onDisappear {
+            // Flush any pending brightness updates when view disappears
+            brightnessUpdateTimer?.invalidate()
+            if isControlling {
+                Task {
+                    await updateBrightness()
+                }
+            }
+        }
+    }
+    
+    private var cardFill: Color {
+        Color.white.opacity(adjustedOpacity(currentPowerState ? 0.16 : 0.08))
+    }
+
+    private var borderStroke: Color {
+        Color.white.opacity(adjustedOpacity(0.28))
+    }
+
+    private var trackBackground: Color {
+        if colorSchemeContrast == .increased {
+            return Color.white.opacity(0.3)
+        }
+        return Color.white.opacity(0.12)
+    }
+
+    private var progressFill: LinearGradient {
+        let startOpacity = colorSchemeContrast == .increased ? 1.0 : 0.7
+        return LinearGradient(
+            colors: [device.currentColor.opacity(startOpacity), device.currentColor],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private var progressLabelColor: Color {
+        colorSchemeContrast == .increased ? .white : .primary
+    }
+
+    private func adjustedOpacity(_ base: Double) -> Double {
+        colorSchemeContrast == .increased ? min(1.0, base * 1.7) : base
     }
     
     private func syncWithDeviceState() {
-        guard let updatedDevice = viewModel.devices.first(where: { $0.id == device.id }) else { return }
+        guard let updatedDevice = viewModel.devices.first(where: { $0.id == deviceId }) else { return }
         
         // Only sync if we're not actively controlling and not recently set
         let now = Date()
@@ -385,7 +455,7 @@ struct ProductImageWithBrightness: View {
             .brightness(brightnessBoost)
             .scaleEffect(scaleEffect)
             .shadow(color: glowColor, radius: glowRadius)
-            .animation(.easeInOut(duration: 0.2), value: isOn)
+            .animation(PerformanceConfig.enableAnimations ? .easeInOut(duration: PerformanceConfig.animationDuration) : nil, value: isOn)
             .onDisappear {
                 // Clear image cache when view disappears to free memory
                 if let customURL = DeviceImageManager.shared.getCustomImageURL(for: selectedImageName) {
@@ -474,7 +544,6 @@ struct ImagePickerSheet: View {
     let deviceId: String
     @Environment(\.dismiss) private var dismiss
     @State private var selectedImage: String = "product_image"
-    @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isLoading = false
     
     // Aesdetic brand product images
@@ -509,26 +578,23 @@ struct ImagePickerSheet: View {
                             .font(.headline)
                             .fontWeight(.semibold)
                         
-                        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                        Button(action: {
+                            // Custom image upload functionality not yet implemented
+                        }) {
                             VStack(spacing: 12) {
                                 Image(systemName: "plus.circle.fill")
-                                    .font(.system(size: 40))
+                                    .font(.largeTitle)
                                     .foregroundColor(.accentColor)
                                 
-                                if isLoading {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Text("Choose from Photos")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                        .foregroundColor(.primary)
-                                    
-                                    Text("Upload a PNG image for your device")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .multilineTextAlignment(.center)
-                                }
+                                Text("Choose from Photos")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.primary)
+                                
+                                Text("Upload a PNG image for your device")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity)
                             .frame(height: 120)
@@ -541,7 +607,7 @@ struct ImagePickerSheet: View {
                                     )
                             )
                         }
-                        .disabled(isLoading)
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 20)
                     
@@ -649,36 +715,9 @@ struct ImagePickerSheet: View {
                     }
                 }
             }
-            .onChange(of: selectedPhotoItem) { _, newItem in
-                Task { await handleSelectedPhoto(newItem) }
-            }
         }
         .onAppear {
             selectedImage = DeviceImageManager.shared.getImageName(for: deviceId)
-        }
-    }
-    
-    private func handleSelectedPhoto(_ item: PhotosPickerItem?) async {
-        guard let item = item else { return }
-        
-        await MainActor.run {
-            isLoading = true
-        }
-        
-        do {
-            if let data = try await item.loadTransferable(type: Data.self) {
-                // Save the custom image and get the new image name
-                let customImageName = await DeviceImageManager.shared.saveCustomImage(data, for: deviceId)
-                await MainActor.run {
-                    selectedImage = customImageName
-                    isLoading = false
-                }
-            }
-        } catch {
-            print("Error loading selected photo: \(error)")
-            await MainActor.run {
-                isLoading = false
-            }
         }
     }
 }

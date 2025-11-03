@@ -7,7 +7,6 @@
 
 import Foundation
 import SwiftUI
-import UIKit
 
 // MARK: - API Request Models
 
@@ -71,6 +70,8 @@ struct SegmentUpdate: Codable {
     let on: Bool?
     let bri: Int?
     let col: [[Int]]?
+    /// Color temperature (0-255, 0=warm, 255=cool)
+    let cct: Int?
 
     // Effect
     let fx: Int?
@@ -97,6 +98,7 @@ struct SegmentUpdate: Codable {
         on: Bool? = nil,
         bri: Int? = nil,
         col: [[Int]]? = nil,
+        cct: Int? = nil,
         fx: Int? = nil,
         sx: Int? = nil,
         ix: Int? = nil,
@@ -117,6 +119,7 @@ struct SegmentUpdate: Codable {
         self.on = on
         self.bri = bri
         self.col = col
+        self.cct = cct
         self.fx = fx
         self.sx = sx
         self.ix = ix
@@ -163,6 +166,13 @@ struct WLEDPreset: Codable, Identifiable {
     let name: String
     let quickLoad: Bool?
     let segment: SegmentUpdate?
+}
+
+struct WLEDPresetSaveRequest {
+    let id: Int
+    let name: String
+    let quickLoad: Bool?
+    let state: WLEDStateUpdate?
 }
 
 /// Model for WLED playlist management (future use)

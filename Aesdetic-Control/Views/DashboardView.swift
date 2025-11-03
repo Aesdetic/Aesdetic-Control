@@ -16,8 +16,6 @@ struct DashboardView: View {
     @State private var navigationPath = NavigationPath()
     @State private var selectedDevice: WLEDDevice?
     
-    // TEMP: Minimal debug mode to isolate background/layout issues
-    @State private var debugMinimalMode: Bool = true
     // Safe area helper for consistent top spacing (avoids status indicators overlap)
     private var topSafeAreaInset: CGFloat {
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
@@ -99,7 +97,7 @@ struct DashboardView: View {
                                 .aspectRatio(contentMode: .fit)
                         } else {
                             Image(systemName: "sparkles")
-                                .font(.system(size: 20, weight: .medium))
+                                .font(.title3.weight(.medium))
                                 .foregroundColor(.white)
                         }
                     }
@@ -190,7 +188,7 @@ struct DashboardView: View {
                 } else {
                     // Fallback sparkles icon
                     Image(systemName: "sparkles")
-                        .font(.system(size: 20, weight: .medium))
+                        .font(.title3.weight(.medium))
                         .foregroundColor(.white)
                 }
             }
@@ -205,7 +203,7 @@ struct DashboardView: View {
     private func greetingSection(geometry: GeometryProxy) -> some View {
         HStack {
             Text(dashboardViewModel.currentGreeting)
-                .font(.system(size: 38, weight: .heavy, design: .rounded))
+                .font(.largeTitle.bold())
                 .foregroundColor(.white)
                 .id(dashboardViewModel.currentGreeting)
                 .animation(fastAnimation, value: dashboardViewModel.currentGreeting)
@@ -220,7 +218,7 @@ struct DashboardView: View {
     private func motivationalSection(geometry: GeometryProxy) -> some View {
         HStack {
             Text(dashboardViewModel.currentQuote)
-                .font(.system(size: 28, weight: .light))
+                .font(.title2)
                 .foregroundColor(.gray)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
@@ -354,7 +352,7 @@ struct SceneAutomationButton: View {
         Button(action: onToggle) {
             HStack(spacing: 8) {
                 Image(systemName: "clock")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.headline.weight(.semibold))
                     .foregroundColor(.white)
                     .frame(width: 22, height: 22)
 
@@ -448,14 +446,14 @@ struct StatisticItem: View {
         HStack(spacing: 12) {
             // Large Number (left side)
             Text(number)
-                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .font(.title.bold())
                 .foregroundColor(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             
             // Description Text (right side, left-aligned)
             Text(label)
-                .font(.system(size: 12, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundColor(.white.opacity(0.7))
                 .multilineTextAlignment(.leading)
                 .lineLimit(2)
@@ -546,13 +544,13 @@ struct MiniDeviceCard: View {
                         // Device info on the left
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.name)
-                                .font(.system(size: 18, weight: .semibold)) // Increased from 16 to 18
+                                .font(.headline.weight(.semibold))
                                 .foregroundColor(.white)
                     .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             
                             Text(device.location.displayName)
-                                .font(.system(size: 14, weight: .medium)) // Increased from 12 to 14
+                                .font(.subheadline.weight(.medium))
                                 .foregroundColor(.white.opacity(0.7))
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -659,7 +657,7 @@ struct MiniDeviceCard: View {
         }) {
             ZStack {
                 Image(systemName: "power")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.headline.weight(.medium))
                     .foregroundColor(currentPowerState ? .black : .white)
                     .opacity(isToggling ? 0.7 : 1.0)
                 
@@ -700,7 +698,7 @@ struct AddSceneButton: View {
         }) {
             HStack(spacing: 8) {
                 Image(systemName: "plus.circle")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.headline.weight(.semibold))
                     .foregroundColor(.white)
                     .frame(width: 22, height: 22)
                 
@@ -723,7 +721,6 @@ struct AddSceneButton: View {
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showAddScene) {
-            // TODO: Add scene creation sheet
             Text("Add Scene - Coming Soon")
                 .presentationDetents([.medium])
         }
@@ -740,7 +737,7 @@ struct AddAutomationButton: View {
         }) {
             HStack(spacing: 8) {
                 Image(systemName: "plus.circle")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.headline.weight(.semibold))
                     .foregroundColor(.white)
                     .frame(width: 22, height: 22)
                 
@@ -763,7 +760,6 @@ struct AddAutomationButton: View {
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showAddAutomation) {
-            // TODO: Add automation creation sheet
             Text("Add Automation - Coming Soon")
                 .presentationDetents([.medium])
         }

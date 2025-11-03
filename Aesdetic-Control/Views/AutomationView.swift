@@ -27,7 +27,7 @@ struct AutomationView: View {
                     // Header
                     HStack {
                         Text("Automation")
-                            .font(.system(size: 38, weight: .heavy, design: .rounded))
+                            .font(.largeTitle.bold())
                             .foregroundColor(.white)
                         
                         Spacer()
@@ -79,7 +79,7 @@ struct AutomationView: View {
     private func headerSection(geometry: GeometryProxy) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Automation")
-                .font(.system(size: 44, weight: .heavy, design: .rounded))
+                .font(.largeTitle.bold())
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
@@ -131,9 +131,9 @@ struct AutomationView: View {
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                         Text("Create")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.headline)
                     }
                     .foregroundColor(.black)
                     .padding(.horizontal, 16)

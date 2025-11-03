@@ -10,7 +10,6 @@ import Network
 import Combine
 import SwiftUI
 import SystemConfiguration.CaptiveNetwork
-import UIKit
 import os.log
 
 @available(iOS 14.0, *)

@@ -1,5 +1,4 @@
 import Foundation
-import UIKit
 import SwiftUI
 import Combine
 
@@ -121,24 +120,26 @@ class ResourceManager: ObservableObject {
     }
     
     private func updatePerformanceMetrics() {
-        // Simple performance heuristic based on memory usage and cache size
-        let memoryScore = max(0, 100 - memoryUsage)
-        let cacheScore = getCacheEfficiencyScore()
-        
-        let overallScore = (memoryScore + cacheScore) / 2
-        
-        DispatchQueue.main.async {
-            self.isPerformanceOptimized = overallScore > 70
+        Task {
+            // Simple performance heuristic based on memory usage and cache size
+            let memoryScore = max(0, 100 - memoryUsage)
+            let cacheScore = await getCacheEfficiencyScore()
             
-            if !self.isPerformanceOptimized {
-                self.performPerformanceOptimization()
+            let overallScore = (memoryScore + cacheScore) / 2
+            
+            DispatchQueue.main.async {
+                self.isPerformanceOptimized = overallScore > 70
+                
+                if !self.isPerformanceOptimized {
+                    self.performPerformanceOptimization()
+                }
             }
         }
     }
     
-    private func getCacheEfficiencyScore() -> Double {
+    private func getCacheEfficiencyScore() async -> Double {
         // Evaluate cache efficiency across all services
-        let apiCacheSize = WLEDAPIService.shared.getCacheSize()
+        let apiCacheSize = await WLEDAPIService.shared.getCacheSize()
         let coreDataCacheSize = CoreDataManager.shared.getContextSize()
         
         // Score based on cache size vs optimal size
@@ -236,7 +237,9 @@ class ResourceManager: ObservableObject {
         CoreDataManager.shared.clearMemoryCache()
         
         // API cache cleanup
-        WLEDAPIService.shared.clearCache()
+        Task {
+            await WLEDAPIService.shared.clearCache()
+        }
         
         // WebSocket cleanup
         WLEDWebSocketManager.shared.cleanupInactiveConnections()
@@ -336,24 +339,21 @@ class ResourceManager: ObservableObject {
         }
     }
     
-    func getResourceReport() -> (memoryUsage: Double, cacheSize: Int, isOptimized: Bool) {
+    func getResourceReport() async -> (memoryUsage: Double, cacheSize: Int, isOptimized: Bool) {
+        let cacheSize = await WLEDAPIService.shared.getCacheSize()
         return (
             memoryUsage: memoryUsage,
-            cacheSize: getCacheSize(),
+            cacheSize: cacheSize,
             isOptimized: isPerformanceOptimized
         )
-    }
-    
-    private func getCacheSize() -> Int {
-        return cleanupHandlers.count // Simplified cache size metric
     }
 }
 
 // MARK: - Protocol for Cleanup Capable Services
 
 protocol CleanupCapable {
-    func clearCache()
-    func getCacheSize() -> Int
+    func clearCache() async
+    func getCacheSize() async -> Int
 }
 
 // MARK: - Notification Extensions

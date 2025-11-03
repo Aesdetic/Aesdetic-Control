@@ -192,13 +192,13 @@ struct ComprehensiveSettingsView: View {
                     }) {
                         Image(systemName: isEditingName ? "xmark" : "pencil")
                             .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.headline.weight(.medium))
                     }
                     
                     Button(action: { Task { await loadState() } }) {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.headline.weight(.medium))
                     }
                 }
             }
@@ -218,9 +218,9 @@ struct ComprehensiveSettingsView: View {
                     }) {
                         HStack(spacing: 8) {
                             Image(systemName: category.icon)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                             Text(category.rawValue)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                         }
                         .foregroundColor(selectedSettingsCategory == category ? .black : .white)
                         .padding(.horizontal, 16)
@@ -714,7 +714,7 @@ struct ComprehensiveSettingsView: View {
                                 .cornerRadius(10)
                         }
                         
-                        Button(action: { WLEDAPIService.shared.clearCache() }) {
+                        Button(action: { Task { await WLEDAPIService.shared.clearCache() } }) {
                             Text("Clear Cache")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(.black)
@@ -925,18 +925,18 @@ struct SettingsButton: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .foregroundColor(.white.opacity(0.7))
-                .font(.system(size: 16, weight: .medium))
+                .font(.headline.weight(.medium))
                 .frame(width: 20)
             
             Text(title)
                 .foregroundColor(.white)
-                .font(.system(size: 16, weight: .medium))
+                .font(.headline.weight(.medium))
             
             Spacer()
             
             Image(systemName: "chevron.right")
                 .foregroundColor(.white.opacity(0.4))
-                .font(.system(size: 12, weight: .medium))
+                .font(.caption.weight(.medium))
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 16)

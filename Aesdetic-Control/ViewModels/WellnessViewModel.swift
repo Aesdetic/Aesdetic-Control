@@ -22,7 +22,7 @@ class WellnessViewModel: ObservableObject {
     }
     
     func refreshData() async {
-        // TODO: Implement data refresh
+        // Refresh mock data and update time-based features
         loadMockData()
         updateTimeBasedFeatures()
     }

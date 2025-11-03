@@ -1,7 +1,6 @@
 import Foundation
 import CoreData
 import SwiftUI
-import CoreLocation
 
 // MARK: - WLEDDeviceEntity
 @objc(WLEDDeviceEntity)
@@ -254,14 +253,16 @@ extension WLEDSegmentEntity {
             on: self.isOn,
             bri: self.brightnessInt,
             colors: self.colors,
+            cct: nil, // CCT not persisted in CoreData
             fx: self.effectInt,
             sx: self.speedInt,
             ix: self.intensityInt,
             pal: self.paletteInt,
-            sel: self.isSelected,
-            rev: self.isReversed,
-            mi: self.isMirrored,
-            cln: nil // Not persisted
+            sel: nil,
+            rev: nil,
+            mi: nil,
+            cln: nil, // Not persisted
+            frz: nil
         )
     }
 

@@ -39,7 +39,8 @@ actor ColorPipeline {
                 }
             }
             if let rgb = intent.solidRGB {
-                _ = try? await api.setColor(for: device, color: rgb)
+                // Pass CCT and white level if provided
+                _ = try? await api.setColor(for: device, color: rgb, cct: intent.cct, white: intent.whiteLevel)
             }
         case .perLED:
             if let frame = intent.perLEDHex {
@@ -50,6 +51,7 @@ actor ColorPipeline {
                     segmentId: intent.segmentId,
                     startIndex: 0,
                     hexColors: frame,
+                    cct: intent.cct,  // Pass CCT if provided
                     afterChunk: { [weak self] in
                         guard let self = self else { return }
                         await self.flushPendingBrightness(device)

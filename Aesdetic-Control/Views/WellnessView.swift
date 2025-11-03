@@ -26,7 +26,7 @@ struct WellnessView: View {
                     // Header
                     HStack {
                         Text("Wellness")
-                            .font(.system(size: 38, weight: .heavy, design: .rounded))
+                            .font(.largeTitle.bold())
                             .foregroundColor(.white)
                         
                         Spacer()
@@ -76,7 +76,7 @@ struct WellnessView: View {
     private func headerSection(geometry: GeometryProxy) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Wellness")
-                .font(.system(size: 44, weight: .heavy, design: .rounded))
+                .font(.largeTitle.bold())
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)

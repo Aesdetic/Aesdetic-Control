@@ -45,7 +45,11 @@ struct Aesdetic_ControlApp: App {
                     }
                     
                     // Prompt Local Network access immediately
-                    LocalNetworkPrompter.shared.trigger()
+                    // Trigger local network permission prompt
+                    // LocalNetworkPrompter.shared.trigger()
+                    
+                    // Listen for widget intents
+                    setupWidgetNotificationListeners()
                 }
                 .task {
                     // Warm caches shortly after launch to speed up first detail open after reinstall
@@ -59,7 +63,8 @@ struct Aesdetic_ControlApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     if newPhase == .active {
                         // When app becomes active, ensure permission prompt (if still pending)
-                        LocalNetworkPrompter.shared.trigger()
+                        // Trigger local network permission prompt
+                    // LocalNetworkPrompter.shared.trigger()
                         
                         // Immediately check device status when returning to app
                         Task { @MainActor in
@@ -99,55 +104,45 @@ struct Aesdetic_ControlApp: App {
             }
         }
     }
-}
-
-// Retained Bonjour browser to reliably trigger Local Network permission immediately
-final class LocalNetworkPrompter {
-    static let shared = LocalNetworkPrompter()
-    private var browser: NWBrowser?
-    private var udpConnection: NWConnection?
-    private var lastTrigger: Date?
-    private init() {}
     
-    func trigger() {
-        #if targetEnvironment(simulator)
-        // Simulator does not show the Local Network prompt; no-op to avoid unnecessary work
-        return
-        #else
-        // Avoid spamming: only trigger if not in the last 5 seconds
-        if let last = lastTrigger, Date().timeIntervalSince(last) < 5 { return }
-        lastTrigger = Date()
+    // MARK: - Widget Notification Listeners
+    
+    private func setupWidgetNotificationListeners() {
+        let viewModel = deviceControlViewModel // Capture for Sendable closure
         
-        // Start a short-lived Bonjour browse that reliably surfaces the system prompt
-        if browser == nil {
-            let params = NWParameters.tcp
-            let bonjour = NWBrowser.Descriptor.bonjour(type: "_wled._tcp", domain: nil)
-            let b = NWBrowser(for: bonjour, using: params)
-            browser = b
-            b.start(queue: .main)
-            Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                self?.browser?.cancel()
-                self?.browser = nil
+        // Listen for widget power toggle intents
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("WidgetTogglePower"),
+            object: nil,
+            queue: .main
+        ) { notification in
+            if let userInfo = notification.userInfo,
+               let deviceId = userInfo["deviceId"] as? String {
+                Task { @MainActor in
+                    // Access devices on MainActor to avoid Sendable closure issues
+                    if let device = viewModel.devices.first(where: { $0.id == deviceId }) {
+                        await viewModel.toggleDevicePower(device)
+                    }
+                }
             }
         }
-
-        // Also send one small UDP broadcast to trigger permission deterministically (WLED discovery port)
-        if udpConnection == nil {
-            let endpoint = NWEndpoint.hostPort(host: "255.255.255.255", port: NWEndpoint.Port(rawValue: 21324)!)
-            let conn = NWConnection(to: endpoint, using: .udp)
-            udpConnection = conn
-            conn.stateUpdateHandler = { _ in }
-            conn.start(queue: .main)
-            let payload = "{}".data(using: .utf8)!
-            conn.send(content: payload, completion: .contentProcessed { [weak self] _ in
-                Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    self?.udpConnection?.cancel()
-                    self?.udpConnection = nil
+        
+        // Listen for widget brightness set intents
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("WidgetSetBrightness"),
+            object: nil,
+            queue: .main
+        ) { notification in
+            if let userInfo = notification.userInfo,
+               let deviceId = userInfo["deviceId"] as? String,
+               let brightness = userInfo["brightness"] as? Int {
+                Task { @MainActor in
+                    // Access devices on MainActor to avoid Sendable closure issues
+                    if let device = viewModel.devices.first(where: { $0.id == deviceId }) {
+                        await viewModel.updateDeviceBrightness(device, brightness: brightness)
+                    }
                 }
-            })
+            }
         }
-        #endif
     }
 }

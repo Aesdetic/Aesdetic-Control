@@ -17,9 +17,14 @@ struct DeviceListView: View {
                         // Handle device selection for modal presentation
                         selectedDevice = device
                     }
+                    .id(device.id) // Stable identity for better performance
                     .onTapGesture {
                         selectedDevice = device
                     }
+                    .transition(PerformanceConfig.enableTransitions ? .asymmetric(
+                        insertion: .scale.combined(with: .opacity),
+                        removal: .scale.combined(with: .opacity)
+                    ) : .identity)
                 }
             }
             .padding(.horizontal, 16)

@@ -166,7 +166,7 @@ struct WiFiSetupView: View {
                 } else if availableNetworks.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "wifi.slash")
-                            .font(.system(size: 32))
+                            .font(.title.weight(.medium))
                             .foregroundColor(.white.opacity(0.5))
                         Text("No networks found")
                             .foregroundColor(.white.opacity(0.7))
@@ -230,7 +230,7 @@ struct WiFiSetupView: View {
                                                     .foregroundColor(.black)
                                             }
                                             Text(isConnecting ? "Connecting..." : "Connect")
-                                                .font(.system(size: 16, weight: .semibold))
+                                                .font(.headline.weight(.semibold))
                                                 .foregroundColor(.black)
                                         }
                                         .frame(maxWidth: .infinity)
@@ -403,13 +403,13 @@ struct WiFiNetworkRow: View {
                 // Signal strength icon
                 Image(systemName: signalStrengthIcon)
                     .foregroundColor(signalStrengthColor)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.headline)
                     .frame(width: 20)
                 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(network.ssid)
                         .foregroundColor(.white)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.headline)
                     
                     HStack(spacing: 8) {
                         Text(network.security)
@@ -433,7 +433,7 @@ struct WiFiNetworkRow: View {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.white)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.headline)
                 }
             }
             .padding(.vertical, 12)

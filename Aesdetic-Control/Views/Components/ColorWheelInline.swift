@@ -3,24 +3,32 @@ import SwiftUI
 struct ColorWheelInline: View {
     let initialColor: Color
     let canRemove: Bool
-    let onColorChange: (Color) -> Void
+    let supportsCCT: Bool
+    let supportsWhite: Bool
+    let usesKelvinCCT: Bool
+    let onColorChange: (Color, Double?, Double?) -> Void  // Color, optional temperature (0-1), optional white level (0-1)
     let onRemove: () -> Void
     let onDismiss: () -> Void
     
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var selectedColor: Color
     @State private var hue: Double = 0
     @State private var saturation: Double = 1
     @State private var brightness: Double = 1
     @State private var temperature: Double = 0.5 // 0 = orange, 0.5 = white, 1 = cool white
+    @State private var whiteLevel: Double = 0.0 // 0 = no white, 1 = full white (for RGBW strips)
     @State private var pickerPosition: CGPoint = .zero
     @State private var hexInput: String = ""
     @State private var isUsingTemperatureSlider: Bool = false
     @State private var isEditingHex: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
-    init(initialColor: Color, canRemove: Bool, onColorChange: @escaping (Color) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+    init(initialColor: Color, canRemove: Bool, supportsCCT: Bool, supportsWhite: Bool, usesKelvinCCT: Bool, onColorChange: @escaping (Color, Double?, Double?) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
         self.initialColor = initialColor
         self.canRemove = canRemove
+        self.supportsCCT = supportsCCT
+        self.supportsWhite = supportsWhite
+        self.usesKelvinCCT = usesKelvinCCT
         self.onColorChange = onColorChange
         self.onRemove = onRemove
         self.onDismiss = onDismiss
@@ -41,7 +49,7 @@ struct ColorWheelInline: View {
                 HStack {
                 Text("Color Picker")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(primaryLabelColor)
                 
                 Spacer()
                 
@@ -49,22 +57,22 @@ struct ColorWheelInline: View {
                 if isEditingHex {
                     HStack(spacing: 4) {
                         Text("#")
-                            .foregroundColor(.white.opacity(0.8))
+                            .foregroundColor(secondaryLabelColor)
                             .font(.caption)
                         
                         TextField("FF5733", text: $hexInput)
                             .font(.caption.monospaced())
-                            .foregroundColor(.white)
+                            .foregroundColor(primaryLabelColor)
                             .textFieldStyle(.plain)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.white.opacity(0.1))
+                                    .fill(fieldBackgroundColor)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    .stroke(fieldStrokeColor, lineWidth: 1)
                             )
                             .frame(width: 60)
                             .onSubmit {
@@ -84,19 +92,21 @@ struct ColorWheelInline: View {
                     }) {
                         Text("#\(hexInput)")
                             .font(.caption.monospaced())
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(tertiaryLabelColor)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.white.opacity(0.05))
+                                    .fill(chipBackgroundColor)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                    .stroke(chipStrokeColor, lineWidth: 1)
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Edit hex color")
+                    .accessibilityHint("Switches to text entry for the color code.")
                 }
                 
                 // Remove Stop Button (if can remove)
@@ -107,39 +117,43 @@ struct ColorWheelInline: View {
                     }) {
                         Text("- Remove")
                             .font(.caption)
-                            .foregroundColor(.black.opacity(0.7))
+                            .foregroundColor(inverseButtonForeground)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .frame(height: 24)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.white.opacity(0.7))
+                                    .fill(inverseButtonBackground)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    .stroke(fieldStrokeColor, lineWidth: 1)
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Remove gradient stop")
+                    .accessibilityHint("Deletes the selected stop from the gradient.")
                 }
                 
                 Button(action: { onDismiss() }) {
                     Image(systemName: "xmark")
                         .font(.caption)
-                        .foregroundColor(.black.opacity(0.7))
+                        .foregroundColor(inverseButtonForeground)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 4)
                         .frame(width: 24, height: 24)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.white.opacity(0.7))
+                                .fill(inverseButtonBackground)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                .stroke(fieldStrokeColor, lineWidth: 1)
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Close color picker")
+                .accessibilityHint("Dismisses the inline color picker.")
             }
             
             // Custom 2D Rectangular Color Gradient Picker
@@ -149,7 +163,7 @@ struct ColorWheelInline: View {
             savedColorsSection
         }
         .padding(20)
-        .background(Color.white.opacity(0.1))
+        .background(containerBackgroundColor)
         .cornerRadius(16)
         .onTapGesture {
             // Block dismissal when tapping inside the color picker container
@@ -157,6 +171,7 @@ struct ColorWheelInline: View {
         }
         .onAppear {
             extractHSV(from: initialColor)
+            extractTemperature(from: initialColor)
             updatePickerPosition()
             updateHexInput()
         }
@@ -229,16 +244,17 @@ struct ColorWheelInline: View {
             }
             .frame(height: 200)
             
-            // Temperature Slider with Visual Gradient
+            // Temperature Slider with Visual Gradient (shown only if device supports CCT)
+            if supportsCCT {
             VStack(spacing: 6) {
                 HStack {
                     Image(systemName: "thermometer.sun")
                         .foregroundColor(.orange)
                     Text("Temperature")
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(secondaryLabelColor)
                     Spacer()
                     Text(temperatureText)
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(secondaryLabelColor)
                 }
                 .font(.caption)
                 
@@ -283,6 +299,95 @@ struct ColorWheelInline: View {
                 }
                 .frame(height: 20)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(usesKelvinCCT ? "Color temperature" : "Color temperature")
+            .accessibilityValue(temperatureText)
+            .accessibilityHint(usesKelvinCCT ? "Adjusts the light's color temperature in Kelvin." : "Adjusts between warm and cool white.")
+            .accessibilityAdjustableAction { direction in
+                let step: Double = 0.05
+                switch direction {
+                case .increment:
+                    temperature = min(1, temperature + step)
+                case .decrement:
+                    temperature = max(0, temperature - step)
+                @unknown default:
+                    break
+                }
+                isUsingTemperatureSlider = true
+                applyTemperatureShift()
+                applyColorToDevice()
+            }
+            }
+            
+            // White Channel Slider (shown only if device supports white channel - RGBW strips)
+            if supportsWhite {
+            VStack(spacing: 6) {
+                HStack {
+                    Image(systemName: "circle.fill")
+                        .foregroundColor(.white)
+                    Text("White Channel")
+                        .foregroundColor(secondaryLabelColor)
+                    Spacer()
+                    Text(whiteLevelText)
+                        .foregroundColor(secondaryLabelColor)
+                }
+                .font(.caption)
+                
+                // Custom slider with white gradient
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        // Gradient from no white to full white
+                        LinearGradient(
+                            colors: [
+                                Color.black.opacity(0.3),  // No white
+                                Color.white                 // Full white
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(height: 6)
+                        .cornerRadius(3)
+                        
+                        // Slider thumb
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 20, height: 20)
+                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                            .offset(x: CGFloat(whiteLevel) * (geometry.size.width - 20))
+                    }
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let newValue = Double(value.location.x / geometry.size.width)
+                                whiteLevel = max(0, min(1, newValue))
+                                // Don't apply during drag, just update preview
+                            }
+                            .onEnded { _ in
+                                // Apply color to device only on release
+                                applyColorToDevice()
+                            }
+                    )
+                }
+                .frame(height: 20)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("White channel")
+            .accessibilityValue(whiteLevelText)
+            .accessibilityHint("Blends in neutral white LEDs.")
+            .accessibilityAdjustableAction { direction in
+                let step: Double = 0.05
+                switch direction {
+                case .increment:
+                    whiteLevel = min(1, whiteLevel + step)
+                case .decrement:
+                    whiteLevel = max(0, whiteLevel - step)
+                @unknown default:
+                    break
+                }
+                applyColorToDevice()
+            }
+            }
             
         }
     }
@@ -294,7 +399,7 @@ struct ColorWheelInline: View {
             HStack {
                 Text("Saved Colors")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(secondaryLabelColor)
                 
                 Spacer()
             }
@@ -307,6 +412,8 @@ struct ColorWheelInline: View {
                             let color = Color(hex: colorHex)
                             selectedColor = color
                             extractHSV(from: color)
+                            // Reset temperature flag when using saved color
+                            isUsingTemperatureSlider = false
                             applyColorToDevice()
                         }) {
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -314,7 +421,7 @@ struct ColorWheelInline: View {
                                 .frame(width: 29, height: 29)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                        .stroke(Color.white.opacity(adjustedOpacity(0.3)), lineWidth: 1)
                                 )
                         }
                         .contextMenu {
@@ -324,24 +431,28 @@ struct ColorWheelInline: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        .accessibilityLabel("Saved color \(index + 1)")
+                        .accessibilityHint("Applies the stored color to the device.")
                     }
                     
                     // Add new color button (only show if under max limit)
                     if savedColors.count < 8 {
                         Button(action: saveCurrentColor) {
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color.white.opacity(0.1))
+                                .fill(chipBackgroundColor)
                                 .frame(width: 29, height: 29)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                        .stroke(Color.white.opacity(adjustedOpacity(0.3)), lineWidth: 1)
                                 )
                                 .overlay(
                                     Image(systemName: "plus")
                                         .font(.caption)
-                                        .foregroundColor(.white.opacity(0.7))
+                                        .foregroundColor(tertiaryLabelColor)
                                 )
                         }
+                        .accessibilityLabel("Save current color")
+                        .accessibilityHint("Adds the current selection to saved colors.")
                     }
                 }
                 .padding(.horizontal, 4)
@@ -352,17 +463,24 @@ struct ColorWheelInline: View {
     // MARK: - Helper Functions
     
     private var temperatureText: String {
-        // Convert temperature slider (0-1) to Kelvin range (2700K-6500K)
-        // Based on WLED's exact CCT values: #FFA000 (2700K) to #CBDBFF (6500K)
-        let kelvin = Int(2700 + (temperature * (6500 - 2700)))
-        
-        if temperature < 0.3 {
-            return "\(kelvin)K (Warm)"
-        } else if temperature < 0.7 {
-            return "\(kelvin)K (Neutral)"
-        } else {
-            return "\(kelvin)K (Cool)"
+        if usesKelvinCCT {
+            let kelvin = Segment.kelvinValue(fromNormalized: temperature)
+            return "\(kelvin)K"
         }
+        let eightBit = Segment.eightBitValue(fromNormalized: temperature)
+        if temperature < 0.3 {
+            return "CCT \(eightBit) (Warm)"
+        } else if temperature < 0.7 {
+            return "CCT \(eightBit) (Neutral)"
+        } else {
+            return "CCT \(eightBit) (Cool)"
+        }
+    }
+    
+    private var whiteLevelText: String {
+        // Convert white level (0-1) to percentage
+        let percentage = Int(whiteLevel * 100)
+        return "\(percentage)%"
     }
     
     private func updateColor() {
@@ -389,6 +507,78 @@ struct ColorWheelInline: View {
         hue = Double(h)
         saturation = Double(s)
         brightness = Double(b)
+    }
+    
+    private func extractTemperature(from color: Color) {
+        // Reverse the temperature calculation to find which CCT temperature matches this color
+        let rgb = color.toRGBArray()
+        guard rgb.count >= 3 else { return }
+        
+        let r = Double(rgb[0]) / 255.0
+        let g = Double(rgb[1]) / 255.0
+        let b = Double(rgb[2]) / 255.0
+        
+        // WLED's CCT colors:
+        // #FFA000 = RGB(255, 160, 0)
+        // #FFF1EA = RGB(255, 241, 234)
+        // #CBDBFF = RGB(203, 219, 255)
+        
+        // Warm white (2700K): #FFA000 = (1.0, 0.627, 0.0)
+        let warmR: Double = 1.0
+        let warmG: Double = 0.627
+        let warmB: Double = 0.0
+        
+        // Neutral white (4000K): #FFF1EA = (1.0, 0.945, 0.918)
+        let neutralR: Double = 1.0
+        let neutralG: Double = 0.945
+        let neutralB: Double = 0.918
+        
+        // Cool white (6500K): #CBDBFF = (0.796, 0.859, 1.0)
+        let coolR: Double = 0.796
+        let coolG: Double = 0.859
+        let coolB: Double = 1.0
+        
+        // Calculate distance to each CCT point
+        let distToWarm = sqrt(pow(r - warmR, 2) + pow(g - warmG, 2) + pow(b - warmB, 2))
+        let distToNeutral = sqrt(pow(r - neutralR, 2) + pow(g - neutralG, 2) + pow(b - neutralB, 2))
+        let distToCool = sqrt(pow(r - coolR, 2) + pow(g - coolG, 2) + pow(b - coolB, 2))
+        
+        // Find the closest CCT temperature
+        let minDist = min(distToWarm, distToNeutral, distToCool)
+        
+        if minDist == distToWarm {
+            // Closest to warm white (2700K), check if in warm-neutral range
+            if g > 0.7 && b > 0.5 {
+                // Interpolate between warm and neutral
+                temperature = 0.25 // Estimate based on color position
+            } else {
+                temperature = 0.0
+            }
+        } else if minDist == distToNeutral {
+            // Check if closer to warm or cool side
+            if distToWarm < distToCool {
+                // Interpolate in warm-neutral range (0.0 to 0.5)
+                let factor = distToWarm / (distToWarm + distToNeutral)
+                temperature = 0.5 * factor
+            } else {
+                // Interpolate in neutral-cool range (0.5 to 1.0)
+                let factor = distToCool / (distToCool + distToNeutral)
+                temperature = 0.5 + (0.5 * factor)
+            }
+        } else {
+            // Closest to cool white (6500K)
+            if g > 0.8 && r > 0.7 {
+                // Interpolate between neutral and cool
+                temperature = 0.75 // Estimate based on color position
+            } else {
+                temperature = 1.0
+            }
+        }
+        
+        // If the color is clearly a CCT white (low saturation), set isUsingTemperatureSlider to true
+        if saturation < 0.3 {
+            isUsingTemperatureSlider = true
+        }
     }
     
     // Apple's exact spectrum position calculation
@@ -484,9 +674,11 @@ struct ColorWheelInline: View {
     
     private func applyColorToDevice() {
         // Apply color using WLED-accurate conversion
-        // For RGBWW strips: The color picker should detect when temperature slider
-        // is being used and send appropriate WW/CW channel commands instead of RGB
-        onColorChange(selectedColor)
+        // For RGBW strips: Pass white level (0-1) if white channel is supported
+        // For RGBCCT strips: Pass temperature (0-1) if temperature slider is being used
+        let temperatureValue = isUsingTemperatureSlider ? temperature : nil
+        let whiteLevelValue = supportsWhite && whiteLevel > 0.0 ? whiteLevel : nil
+        onColorChange(selectedColor, temperatureValue, whiteLevelValue)
         
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -550,6 +742,8 @@ struct ColorWheelInline: View {
         let color = Color(hex: cleanHex)
         selectedColor = color
         extractHSV(from: color)
+        // Reset temperature flag when using hex input
+        isUsingTemperatureSlider = false
         applyColorToDevice()
     }
     
@@ -557,4 +751,52 @@ struct ColorWheelInline: View {
         hexInput = selectedColor.toHex().replacingOccurrences(of: "#", with: "")
     }
 }
+
+
+private extension ColorWheelInline {
+    var containerBackgroundColor: Color {
+        Color.white.opacity(adjustedOpacity(0.12))
+    }
+
+    var primaryLabelColor: Color {
+        .white
+    }
+
+    var secondaryLabelColor: Color {
+        colorSchemeContrast == .increased ? .white : .white.opacity(0.8)
+    }
+
+    var tertiaryLabelColor: Color {
+        colorSchemeContrast == .increased ? .white.opacity(0.95) : .white.opacity(0.7)
+    }
+
+    var fieldBackgroundColor: Color {
+        Color.white.opacity(adjustedOpacity(0.1))
+    }
+
+    var fieldStrokeColor: Color {
+        Color.white.opacity(adjustedOpacity(0.2))
+    }
+
+    var chipBackgroundColor: Color {
+        Color.white.opacity(adjustedOpacity(0.05))
+    }
+
+    var chipStrokeColor: Color {
+        Color.white.opacity(adjustedOpacity(0.12))
+    }
+
+    var inverseButtonBackground: Color {
+        Color.white.opacity(adjustedOpacity(0.75))
+    }
+
+    var inverseButtonForeground: Color {
+        Color.black.opacity(colorSchemeContrast == .increased ? 0.9 : 0.7)
+    }
+
+    func adjustedOpacity(_ base: Double) -> Double {
+        colorSchemeContrast == .increased ? min(1.0, base * 1.6) : base
+    }
+}
+
 

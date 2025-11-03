@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import Network
 import os.log
-import UIKit // Added for UIApplication notifications
+import UIKit
 
 /// Manages WebSocket connections to WLED devices for real-time state updates
 @MainActor
@@ -78,6 +78,8 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     
     // MARK: - Initialization
     private init() {
+        // Use separate URLSession for WebSocket connections to avoid conflicts with HTTP API
+        // This prevents WebSocket reconnects from being starved by HTTP connection limits
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 8
         config.timeoutIntervalForResource = 20
