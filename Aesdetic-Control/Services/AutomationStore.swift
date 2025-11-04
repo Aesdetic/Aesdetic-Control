@@ -124,7 +124,14 @@ class AutomationStore: ObservableObject {
             automations = try JSONDecoder().decode([Automation].self, from: data)
             logger.info("Loaded \(self.automations.count) automations")
         } catch {
-            logger.error("Failed to load automations: \(error.localizedDescription)")
+            // File doesn't exist on first launch - this is expected, not an error
+            let nsError = error as NSError
+            // NSFileReadNoSuchFileError = 260 (file not found)
+            if nsError.domain == NSCocoaErrorDomain && nsError.code == 260 {
+                logger.debug("No automations file found (first launch) - will create on save")
+            } else {
+                logger.error("Failed to load automations: \(error.localizedDescription)")
+            }
             automations = []
         }
     }

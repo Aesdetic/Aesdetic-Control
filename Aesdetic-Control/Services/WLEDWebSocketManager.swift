@@ -517,7 +517,8 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
                 // Send update on main thread
                 Task { @MainActor in
                     self.deviceStateSubject.send(deviceUpdate)
-                    self.logger.debug("Received state update for device: \(deviceId)")
+                    // Only log state updates in verbose mode to reduce console spam
+                    // Uncomment below for debugging: self.logger.debug("Received state update for device: \(deviceId)")
                 }
                 
             } catch {

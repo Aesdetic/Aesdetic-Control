@@ -308,8 +308,8 @@ class DeviceControlViewModel: ObservableObject {
             let memoryUsageMB = Double(memoryInfo.resident_size) / 1024.0 / 1024.0
             print("Memory usage: \(String(format: "%.2f", memoryUsageMB)) MB")
             
-            // Warn if memory usage is high
-            if memoryUsageMB > 100 {
+            // Warn if memory usage is high (raised threshold to 200MB for iOS apps)
+            if memoryUsageMB > 200 {
                 print("⚠️ High memory usage detected: \(String(format: "%.2f", memoryUsageMB)) MB")
             }
         }

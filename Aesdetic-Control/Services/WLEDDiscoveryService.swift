@@ -443,8 +443,19 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             logger.info("🎉 Found WLED device via \(source): \(device.name) at \(device.ipAddress)")
             addOrUpdateDevice(device)
         case .failure(let error):
-            // Only log significant errors, not routine timeouts
-            if !(error.localizedDescription.contains("timeout") || error.localizedDescription.contains("unreachable")) {
+            // Suppress expected failures during network scanning:
+            // - Timeouts (most IPs don't have WLED devices)
+            // - Connection refused/not reachable (normal during scan)
+            // - Already scanned (no need to log)
+            let errorDesc = error.localizedDescription.lowercased()
+            let isExpectedFailure = errorDesc.contains("timeout") ||
+                                   errorDesc.contains("unreachable") ||
+                                   errorDesc.contains("could not connect") ||
+                                   errorDesc.contains("already scanned") ||
+                                   errorDesc.contains("not a wled device")
+            
+            // Only log unexpected errors (e.g., decoding errors, invalid responses)
+            if !isExpectedFailure {
                 logger.debug("Device check failed via \(source): \(error.localizedDescription)")
             }
         }
@@ -622,7 +633,13 @@ extension WLEDDiscoveryService: NetServiceBrowserDelegate {
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
-        logger.error("❌ NetService search failed: \(errorDict)")
+        // Error -72008 (kCFNetServiceErrorNotFound) is normal when no mDNS services are found
+        let errorCode = errorDict["NSNetServicesErrorCode"]?.intValue ?? 0
+        if errorCode == -72008 {
+            logger.debug("mDNS search completed (no services found) - this is normal")
+        } else {
+            logger.error("❌ NetService search failed: \(errorDict)")
+        }
     }
 }
 
