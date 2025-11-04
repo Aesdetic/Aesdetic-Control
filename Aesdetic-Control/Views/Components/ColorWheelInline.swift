@@ -302,6 +302,7 @@ struct ColorWheelInline: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(usesKelvinCCT ? "Color temperature" : "Color temperature")
             .accessibilityValue(temperatureText)
+            .accessibilityIdentifier("CCTTemperatureSlider") // For UI testing
             .accessibilityHint(usesKelvinCCT ? "Adjusts the light's color temperature in Kelvin." : "Adjusts between warm and cool white.")
             .accessibilityAdjustableAction { direction in
                 let step: Double = 0.05

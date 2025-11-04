@@ -65,6 +65,14 @@ enum GradientSampler {
         return result
     }
 
+    /// Interpolate between gradient stops in sRGB color space
+    /// - Parameters:
+    ///   - stops: Sorted gradient stops
+    ///   - t: Position along gradient (0.0-1.0)
+    /// - Returns: Interpolated Color in sRGB space
+    /// 
+    /// Note: Uses Color.lerp() which performs linear RGB interpolation in sRGB space.
+    /// No gamma correction applied - WLED handles gamma internally.
     private static func interpolateColor(stops: [GradientStop], t: Double) -> Color {
         let t = max(0.0, min(1.0, t))
         if t <= stops.first!.position { return stops.first!.color }
@@ -79,6 +87,15 @@ enum GradientSampler {
         return Color.lerp(a.color, b.color, localT)
     }
     
+    /// Sample a color from gradient stops at a specific position (0.0-1.0)
+    /// - Parameters:
+    ///   - t: Position along the gradient (0.0 = start, 1.0 = end)
+    ///   - stops: Array of gradient stops to sample from
+    /// - Returns: SwiftUI Color in sRGB space (ready for conversion to hex/RGB)
+    /// 
+    /// Note: Uses sRGB interpolation (no gamma correction). WLED handles gamma internally.
+    /// Used by GradientBar for tap-to-add-stop functionality and visual preview.
+    /// Consistent with `sample()` method - all colors use the same sRGB color system.
     static func sampleColor(at t: Double, stops: [GradientStop]) -> Color {
         let sorted = stops.sorted { $0.position < $1.position }
         guard !sorted.isEmpty else { return .white }

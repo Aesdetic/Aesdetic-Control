@@ -176,6 +176,48 @@ struct TransitionPane: View {
                     .accessibilityValue("\(currentGradientA.stops.count) color stops")
                     .accessibilityHint("Double tap to adjust colors in gradient A.")
                     .padding(.horizontal, 16)
+                    
+                    // Inline color picker for Gradient A
+                    if showWheel && wheelTarget == "A", let selectedId = selectedA {
+                        let currentStops = currentGradientA.stops
+                        let canRemove = currentStops.count > 1
+                        let supportsCCT = viewModel.supportsCCT(for: device, segmentId: 0)
+                        let supportsWhite = viewModel.supportsWhite(for: device, segmentId: 0)
+                        let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: 0)
+                        
+                        ColorWheelInline(
+                            initialColor: wheelInitial,
+                            canRemove: canRemove,
+                            supportsCCT: supportsCCT,
+                            supportsWhite: supportsWhite,
+                            usesKelvinCCT: usesKelvin,
+                            onColorChange: { color, temperature, whiteLevel in
+                                if let idx = currentGradientA.stops.firstIndex(where: { $0.id == selectedId }) {
+                                    var updatedStops = currentGradientA.stops
+                                    updatedStops[idx].hexColor = color.toHex()
+                                    gradientA = LEDGradient(stops: updatedStops)
+                                    stopsA = updatedStops
+                                    Task { await applyNow(stops: updatedStops) }
+                                }
+                            },
+                            onRemove: {
+                                if currentGradientA.stops.count > 1, let id = selectedA {
+                                    var updatedStops = currentGradientA.stops
+                                    updatedStops.removeAll { $0.id == id }
+                                    gradientA = LEDGradient(stops: updatedStops)
+                                    stopsA = updatedStops
+                                    selectedA = nil
+                                    Task { await applyNow(stops: updatedStops) }
+                                }
+                                showWheel = false
+                            },
+                            onDismiss: {
+                                showWheel = false
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.horizontal, 16)
+                    }
 
                     // B Brightness
                     VStack(spacing: 6) {
@@ -198,7 +240,7 @@ struct TransitionPane: View {
                     }
                     .padding(.horizontal, 16)
 
-                    // B Gradient (edit does not stream automatically)
+                    // B Gradient (with preview capability)
                     GradientBar(
                 gradient: Binding(
                     get: { currentGradientB },
@@ -225,10 +267,12 @@ struct TransitionPane: View {
                     gradientB = LEDGradient(stops: src)
                     stopsB = src
                     selectedB = new.id
+                    throttleApplyB(stops: src, phase: .changed)
                 },
-                onStopsChanged: { stops, _ in
+                onStopsChanged: { stops, phase in
                     gradientB = LEDGradient(stops: stops)
                     stopsB = stops
+                    throttleApplyB(stops: stops, phase: phase)
                 }
                     )
                     .frame(height: 56)
@@ -237,6 +281,48 @@ struct TransitionPane: View {
                     .accessibilityValue("\((currentGradientB.stops.isEmpty ? currentGradientA.stops.count : currentGradientB.stops.count)) color stops")
                     .accessibilityHint("Double tap to adjust colors in gradient B.")
                     .padding(.horizontal, 16)
+                    
+                    // Inline color picker for Gradient B
+                    if showWheel && wheelTarget == "B", let selectedId = selectedB {
+                        let currentStops = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
+                        let canRemove = currentStops.count > 1
+                        let supportsCCT = viewModel.supportsCCT(for: device, segmentId: 0)
+                        let supportsWhite = viewModel.supportsWhite(for: device, segmentId: 0)
+                        let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: 0)
+                        
+                        ColorWheelInline(
+                            initialColor: wheelInitial,
+                            canRemove: canRemove,
+                            supportsCCT: supportsCCT,
+                            supportsWhite: supportsWhite,
+                            usesKelvinCCT: usesKelvin,
+                            onColorChange: { color, temperature, whiteLevel in
+                                var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
+                                if let idx = src.firstIndex(where: { $0.id == selectedId }) {
+                                    src[idx].hexColor = color.toHex()
+                                    gradientB = LEDGradient(stops: src)
+                                    stopsB = src
+                                    Task { await applyNowB(stops: src) }
+                                }
+                            },
+                            onRemove: {
+                                var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
+                                if src.count > 1, let id = selectedB {
+                                    src.removeAll { $0.id == id }
+                                    gradientB = LEDGradient(stops: src)
+                                    stopsB = src
+                                    selectedB = nil
+                                    Task { await applyNowB(stops: src) }
+                                }
+                                showWheel = false
+                            },
+                            onDismiss: {
+                                showWheel = false
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.horizontal, 16)
+                    }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
@@ -264,46 +350,6 @@ struct TransitionPane: View {
                 gradientB = LEDGradient(stops: [])
                 stopsB = []
             }
-        }
-        .sheet(isPresented: $showWheel) {
-            ColorWheelSheet(initial: wheelInitial, canRemove: true, onRemoveStop: {
-                if wheelTarget == "A" {
-                    if currentGradientA.stops.count > 1, let id = selectedA {
-                        var updatedStops = currentGradientA.stops
-                        updatedStops.removeAll { $0.id == id }
-                        gradientA = LEDGradient(stops: updatedStops)
-                        stopsA = updatedStops
-                        selectedA = nil
-                        Task { await applyNow(stops: updatedStops) }
-                    }
-                } else {
-                    var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
-                    if src.count > 1, let id = selectedB {
-                        src.removeAll { $0.id == id }
-                        gradientB = LEDGradient(stops: src)
-                        stopsB = src
-                        selectedB = nil
-                    }
-                }
-            }, onDone: { color in
-                if wheelTarget == "A" {
-                    if let id = selectedA, let idx = currentGradientA.stops.firstIndex(where: { $0.id == id }) {
-                        var updatedStops = currentGradientA.stops
-                        updatedStops[idx].hexColor = color.toHex()
-                        gradientA = LEDGradient(stops: updatedStops)
-                        stopsA = updatedStops
-                        Task { await applyNow(stops: updatedStops) }
-                    }
-                } else {
-                    if let id = selectedB,
-                       var src = Optional(currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops),
-                       let idx = src.firstIndex(where: { $0.id == id }) {
-                        src[idx].hexColor = color.toHex()
-                        gradientB = LEDGradient(stops: src)
-                        stopsB = src
-                    }
-                }
-            })
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeviceUpdated"))) { _ in
             if let d = viewModel.devices.first(where: { $0.id == device.id }) {
@@ -334,8 +380,37 @@ struct TransitionPane: View {
             Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
         }
     }
+    
+    // Separate work item for Gradient B to avoid conflicts
+    @State private var applyWorkItemB: DispatchWorkItem? = nil
+    
+    private func throttleApplyB(stops: [GradientStop], phase: DragPhase) {
+        let ledCount = device.state?.segments.first?.len ?? 120
+        if phase == .changed {
+            applyWorkItemB?.cancel()
+            let work = DispatchWorkItem {
+                Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
+            }
+            applyWorkItemB = work
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                work.perform()
+            }
+        } else {
+            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
+        }
+    }
 
     private func applyNow(stops: [GradientStop]) async {
+        let ledCount = device.state?.segments.first?.len ?? 120
+        if stops.count == 1 {
+            await viewModel.updateDeviceColor(device, color: stops[0].color)
+        } else {
+            await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
+        }
+    }
+    
+    private func applyNowB(stops: [GradientStop]) async {
         let ledCount = device.state?.segments.first?.len ?? 120
         if stops.count == 1 {
             await viewModel.updateDeviceColor(device, color: stops[0].color)
