@@ -22,8 +22,9 @@ struct GradientBar: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 // Rail background with current gradient
+                // Always sort stops before creating LinearGradient to avoid SwiftUI ordering errors
                 LinearGradient(
-                    gradient: Gradient(stops: gradient.stops.map { .init(color: $0.color, location: $0.position) }),
+                    gradient: Gradient(stops: gradient.stops.sorted { $0.position < $1.position }.map { .init(color: $0.color, location: $0.position) }),
                     startPoint: .leading,
                     endPoint: .trailing
                 )
@@ -37,6 +38,8 @@ struct GradientBar: View {
                     // Insert new stop at tap position (white by default)
                     let new = GradientStop(position: t, hexColor: "FFFFFF")
                     gradient.stops.append(new)
+                    // Sort stops immediately to prevent LinearGradient ordering errors
+                    gradient.stops.sort { $0.position < $1.position }
                     onTapAnywhere(t, nil)
                 }
 
@@ -52,6 +55,8 @@ struct GradientBar: View {
                                     let nx = max(0, min(w, g.location.x - handleWidth / 2))
                                     if let idx = gradient.stops.firstIndex(where: { $0.id == stop.id }) {
                                         gradient.stops[idx].position = Double(nx / w)
+                                        // Sort stops during drag to prevent LinearGradient ordering errors
+                                        gradient.stops.sort { $0.position < $1.position }
                                         onStopsChanged(gradient.stops, .changed)
                                     }
                                 }

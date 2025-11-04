@@ -27,16 +27,39 @@ struct LEDGradient: Identifiable, Codable, Hashable {
 }
 
 enum GradientSampler {
+    /// Sample a gradient across LED count, returning hex color strings
+    /// - Parameters:
+    ///   - gradient: The gradient to sample
+    ///   - ledCount: Number of LEDs to sample for
+    ///   - gamma: Parameter kept for backward compatibility (ignored - WLED handles gamma correction internally)
+    /// - Returns: Array of hex color strings ready for WLED API
+    /// 
+    /// Note: WLED applies gamma correction internally by default, so we send sRGB colors directly.
+    /// This ensures consistent colors whether using 1 stop or multiple stops.
     static func sample(_ gradient: LEDGradient, ledCount: Int, gamma: Double = 2.2) -> [String] {
         guard ledCount > 0 else { return [] }
         let stops = gradient.stops.sorted { $0.position < $1.position }
-        guard stops.count >= 2 else { return Array(repeating: (stops.first?.hexColor ?? "000000"), count: ledCount) }
+        
+        // Handle single stop: WLED applies gamma correction internally, so send sRGB directly
+        guard stops.count >= 2 else {
+            let hex = stops.first?.hexColor ?? "000000"
+            return Array(repeating: hex, count: ledCount)
+        }
 
+        // Fast path: If all stops have the same color, skip interpolation
+        // WLED applies gamma correction internally, so send sRGB directly
+        let firstColor = stops.first?.hexColor
+        if stops.allSatisfy({ $0.hexColor == firstColor }) {
+            return Array(repeating: (firstColor ?? "000000"), count: ledCount)
+        }
+
+        // Normal path: interpolate colors in sRGB space
+        // WLED will apply gamma correction internally, so we send sRGB colors
         var result: [String] = []
         for i in 0..<ledCount {
             let t = Double(i) / Double(max(ledCount - 1, 1))
-            var c = interpolateColor(stops: stops, t: t)
-            c = applyGamma(c, gamma)
+            let c = interpolateColor(stops: stops, t: t)
+            // Send sRGB color directly - WLED handles gamma correction internally
             result.append(c.toHex())
         }
         return result
@@ -61,19 +84,6 @@ enum GradientSampler {
         guard !sorted.isEmpty else { return .white }
         if sorted.count == 1 { return sorted[0].color }
         return interpolateColor(stops: sorted, t: t)
-    }
-
-    private static func applyGamma(_ color: Color, _ gamma: Double) -> Color {
-        let rgb = color.toRGBArray()
-        func correct(_ v: Int) -> Double {
-            let n = max(0.0, min(1.0, Double(v) / 255.0))
-            return pow(n, 1.0 / max(0.0001, gamma))
-        }
-        return Color(
-            red: correct(rgb[0]),
-            green: correct(rgb[1]),
-            blue: correct(rgb[2])
-        )
     }
 }
 
