@@ -1,0 +1,304 @@
+---
+description: Critical patterns for WLED CCT temperature slider implementation and color handling
+globs: **/*.swift
+alwaysApply: true
+---
+
+# WLED CCT Temperature Slider & Color Handling Rules
+
+## Critical Issues Fixed & Patterns to Follow
+
+### 1. Temperature Slider Application Pattern
+
+**❌ NEVER:** Send CCT-only updates without per-LED colors in single-stop mode
+```swift
+// ❌ DON'T: This doesn't work reliably in 1-tab mode
+await viewModel.applyCCT(to: device, temperature: temp, withColor: nil, segmentId: segmentId)
+```
+
+**✅ ALWAYS:** Use ColorPipeline with per-LED colors AND CCT (same pattern for both 1-tab and 2-tab modes)
+```swift
+// ✅ DO: Use ColorPipeline with perLEDHex + CCT for consistent behavior
+let gradient = LEDGradient(stops: stops)
+let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+intent.segmentId = segmentId
+intent.perLEDHex = frame
+intent.cct = Int(round(temp * 255.0))  // Convert temperature (0.0-1.0) to CCT (0-255)
+await viewModel.applyColorIntent(intent, to: device)
+```
+
+**Why:** WLED requires per-LED colors when setting CCT. Sending CCT-only without per-LED colors doesn't apply reliably, especially in single-stop (1-tab) mode.
+
+---
+
+### 2. Temperature Slider Interaction Pattern
+
+**❌ NEVER:** Apply changes during drag gesture
+```swift
+// ❌ DON'T: Applying during drag causes excessive network requests
+.onChanged { value in
+    temperature = newValue
+    applyColorToDevice()  // Don't apply here!
+}
+```
+
+**✅ ALWAYS:** Apply only on release (onEnded)
+```swift
+// ✅ DO: Update preview during drag, apply on release
+.gesture(
+    DragGesture(minimumDistance: 0)
+        .onChanged { value in
+            temperature = max(0, min(1, newValue))
+            isUsingTemperatureSlider = true
+            applyTemperatureShift()  // Only update visual preview
+        }
+        .onEnded { _ in
+            updateHexInput()  // Update hex input AFTER slider is released
+            applyColorToDevice()  // Apply to device only on release
+        }
+)
+```
+
+**Why:** Matches brightness slider behavior, prevents excessive network requests, improves performance.
+
+---
+
+### 3. Hex Input onChange Protection
+
+**❌ NEVER:** Allow hex input onChange to trigger during temperature slider drag
+```swift
+// ❌ DON'T: This triggers applyColorToDevice() during drag
+.onChange(of: hexInput) { _, newValue in
+    if isValidHex(newValue) {
+        applyHexColor()  // This calls applyColorToDevice()!
+    }
+}
+```
+
+**✅ ALWAYS:** Check temperature slider flag before auto-applying hex changes
+```swift
+// ✅ DO: Prevent hex onChange from triggering during temperature slider drag
+.onChange(of: hexInput) { _, newValue in
+    if isValidHex(newValue) && !isUsingTemperatureSlider {
+        applyHexColor()
+    }
+}
+```
+
+**Why:** `applyTemperatureShift()` calls `updateHexInput()`, which triggers `onChange`. Without protection, this causes premature application during drag.
+
+---
+
+### 4. Color Space Handling (sRGB Conversion)
+
+**❌ NEVER:** Extract RGB values directly from Color without explicit sRGB conversion
+```swift
+// ❌ DON'T: This may return P3 color space values on wide-gamut displays
+let components = color.cgColor.components
+let rgb = [Int(components[0] * 255), ...]
+```
+
+**✅ ALWAYS:** Explicitly convert to sRGB before extracting RGB values
+```swift
+// ✅ DO: Force conversion to sRGB before extracting RGB
+func toRGBArray() -> [Int] {
+    guard let cgColor = self.cgColor,
+          let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+          let sRGBColor = cgColor.converted(to: sRGBColorSpace, intent: .defaultIntent, options: nil),
+          let components = sRGBColor.components, components.count >= 3 else {
+        // Fallback to UIColor.getRed() for sRGB extraction
+        let uiColor = UIColor(self)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        if uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            return [Int((red * 255).rounded()), Int((green * 255).rounded()), Int((blue * 255).rounded())]
+        }
+        return [0, 0, 0]
+    }
+    return [Int((components[0] * 255).rounded()), Int((components[1] * 255).rounded()), Int((components[2] * 255).rounded())]
+}
+```
+
+**Why:** SwiftUI `Color` objects may be in Display P3 color space on wide-gamut displays. WLED expects sRGB values. Direct extraction can return P3 values, causing orange (#FFA000) to appear yellow.
+
+---
+
+### 5. JSON Encoding for CCT Updates
+
+**❌ NEVER:** Allow `col` field to be encoded as `null` when sending CCT-only updates
+```swift
+// ❌ DON'T: Default JSONEncoder encodes nil optionals as "col": null
+// WLED ignores CCT if col field is present (even as null)
+let segment = SegmentUpdate(id: segmentId, col: nil, cct: cct, fx: 0)
+// JSON: {"col": null, "cct": 116}  // WLED will ignore CCT!
+```
+
+**✅ ALWAYS:** Implement custom encoding to omit `col` field when nil
+```swift
+// ✅ DO: Custom encode() to omit col field when nil
+struct SegmentUpdate: Codable {
+    let col: [[Int]]?
+    let cct: Int?
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        // Only encode col if it's not nil - omits field completely when nil
+        if let col = col {
+            try container.encode(col, forKey: .col)
+        }
+        // Explicitly don't encode col if nil - this omits it from JSON
+        
+        try cct.map { try container.encode($0, forKey: .cct) }
+        // ... encode other fields
+    }
+}
+```
+
+**Why:** WLED prioritizes `col` over `cct` if `col` is present, even as `null`. Omitting `col` completely ensures WLED uses CCT.
+
+---
+
+### 6. WebSocket State Update Protection
+
+**❌ NEVER:** Allow WebSocket state updates to overwrite CCT-based colors
+```swift
+// ❌ DON'T: WebSocket updates may include old RGB colors that override CCT
+if let segment = state.segments.first,
+   let colors = segment.colors,
+   let firstColor = colors.first {
+    updatedDevice.currentColor = Color(red: ..., green: ..., blue: ...)
+    // This overwrites CCT-based color!
+}
+```
+
+**✅ ALWAYS:** Check for active CCT before updating color from WebSocket
+```swift
+// ✅ DO: Skip RGB color updates when CCT is active
+if let segment = state.segments.first,
+   let colors = segment.colors,
+   let firstColor = colors.first,
+   firstColor.count >= 3 {
+    // Only update color if CCT is not active
+    let hasActiveCCT = updatedDevice.temperature != nil && updatedDevice.temperature! > 0
+    if !hasActiveCCT {
+        updatedDevice.currentColor = Color(.sRGB, red: ..., green: ..., blue: ...)
+    }
+}
+```
+
+**Why:** WLED may send state updates with old RGB colors. If CCT is active, these RGB values should be ignored to preserve the CCT-based color.
+
+---
+
+### 7. Optimistic Color Updates for CCT
+
+**✅ ALWAYS:** Update local device color optimistically when applying CCT
+```swift
+// ✅ DO: Calculate and set CCT-based color immediately
+func applyCCT(to device: WLEDDevice, temperature: Double, ...) async {
+    // ... send CCT to WLED ...
+    
+    await MainActor.run {
+        if let index = devices.firstIndex(where: { $0.id == device.id }) {
+            devices[index].temperature = temperature
+            
+            // Calculate CCT-based color optimistically
+            let r: CGFloat, g: CGFloat, b: CGFloat
+            if temperature <= 0.5 {
+                let factor = temperature * 2.0
+                r = 1.0
+                g = 0.627 + (factor * (0.945 - 0.627))
+                b = 0.0 + (factor * (0.918 - 0.0))
+            } else {
+                let factor = (temperature - 0.5) * 2.0
+                r = 1.0 - (factor * (1.0 - 0.796))
+                g = 0.945 - (factor * (0.945 - 0.859))
+                b = 0.918 + (factor * (1.0 - 0.918))
+            }
+            
+            devices[index].currentColor = Color(.sRGB, red: Double(r), green: Double(g), blue: Double(b), opacity: 1.0)
+        }
+    }
+}
+```
+
+**Why:** Prevents WebSocket state updates from overwriting CCT color with old RGB values. Ensures UI shows correct color immediately.
+
+---
+
+### 8. CCT Temperature Calculation
+
+**✅ ALWAYS:** Use WLED's exact CCT color values for consistency
+```swift
+// ✅ DO: Match WLED's CCT color calculation
+// Temperature range: 0 = #FFA000 (2700K), 0.5 = #FFF1EA (4000K), 1 = #CBDBFF (6500K)
+let r: CGFloat, g: CGFloat, b: CGFloat
+if temperature <= 0.5 {
+    // Warm to neutral range (0.0 to 0.5)
+    let factor = temperature * 2.0
+    r = 1.0
+    g = 0.627 + (factor * (0.945 - 0.627))  // #FFA000 to #FFF1EA
+    b = 0.0 + (factor * (0.918 - 0.0))
+} else {
+    // Neutral to cool range (0.5 to 1.0)
+    let factor = (temperature - 0.5) * 2.0
+    r = 1.0 - (factor * (1.0 - 0.796))      // #FFF1EA to #CBDBFF
+    g = 0.945 - (factor * (0.945 - 0.859))
+    b = 0.918 + (factor * (1.0 - 0.918))
+}
+```
+
+**Why:** Ensures app color matches what WLED will produce from CCT, preventing visual discrepancies.
+
+---
+
+### 9. User Input Protection Window
+
+**✅ ALWAYS:** Mark user interaction when applying CCT to prevent WebSocket overwrites
+```swift
+// ✅ DO: Mark user interaction before applying CCT
+func applyCCT(to device: WLEDDevice, temperature: Double, ...) async {
+    markUserInteraction(device.id)  // Prevents WebSocket overwrites for 1.5 seconds
+    // ... apply CCT ...
+}
+```
+
+**Why:** Provides 1.5-second protection window during which WebSocket state updates are ignored, preventing conflicts.
+
+---
+
+### 10. Consistency Between 1-Tab and 2-Tab Modes
+
+**✅ ALWAYS:** Use the same ColorPipeline approach for both modes
+```swift
+// ✅ DO: Both modes use ColorPipeline with perLEDHex + CCT
+// 1-tab mode (single stop):
+let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+intent.perLEDHex = frame
+intent.cct = cct
+await viewModel.applyColorIntent(intent, to: device)
+
+// 2-tab mode (multiple stops):
+// Same pattern - applyGradientStopsAcrossStrip uses ColorPipeline with perLEDHex + CCT
+```
+
+**Why:** Ensures consistent behavior. Previously, 1-tab mode used `applyCCT()` (CCT-only) while 2-tab mode used ColorPipeline (per-LED + CCT), causing different behavior.
+
+---
+
+## Summary Checklist
+
+When implementing temperature slider functionality:
+
+- [ ] Use ColorPipeline with perLEDHex + CCT (not CCT-only)
+- [ ] Apply only on release (onEnded), not during drag (onChanged)
+- [ ] Protect hex input onChange from triggering during temperature slider drag
+- [ ] Explicitly convert colors to sRGB before extracting RGB values
+- [ ] Use custom JSON encoding to omit `col` field when sending CCT-only updates
+- [ ] Check for active CCT before updating color from WebSocket state updates
+- [ ] Update local device color optimistically when applying CCT
+- [ ] Use WLED's exact CCT color calculation values
+- [ ] Mark user interaction when applying CCT
+- [ ] Use consistent ColorPipeline approach for both 1-tab and 2-tab modes
