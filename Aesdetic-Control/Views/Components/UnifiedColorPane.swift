@@ -145,47 +145,115 @@ struct UnifiedColorPane: View {
             .padding(.horizontal, 16)
             
             // Inline color picker
-            if showWheel, let selectedId = selectedStopId {
-                let supportsCCT = viewModel.supportsCCT(for: device, segmentId: segmentId)
-                let supportsWhite = viewModel.supportsWhite(for: device, segmentId: segmentId)
-                let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: segmentId)
-                ColorWheelInline(
-                    initialColor: wheelInitial,
-                    canRemove: currentGradient.stops.count > 1,
-                    supportsCCT: supportsCCT,
-                    supportsWhite: supportsWhite,
-                    usesKelvinCCT: usesKelvin,
-                    onColorChange: { color, temperature, whiteLevel in
-                        if let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) {
-                            var updatedGradient = currentGradient
-                            updatedGradient.stops[idx].hexColor = color.toHex()
-                            gradient = updatedGradient
-                            // Store temperature for this stop if provided
-                            if let temp = temperature {
-                                stopTemperatures[selectedId] = temp
-                            } else {
-                                stopTemperatures.removeValue(forKey: selectedId)
+            // In 1-tab mode (single stop), automatically select the first stop if none selected
+            if showWheel {
+                // Ensure selectedStopId is set in 1-tab mode
+                let effectiveSelectedId = selectedStopId ?? currentGradient.stops.first?.id
+                
+                if let selectedId = effectiveSelectedId {
+                    let supportsCCT = viewModel.supportsCCT(for: device, segmentId: segmentId)
+                    let supportsWhite = viewModel.supportsWhite(for: device, segmentId: segmentId)
+                    let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: segmentId)
+                    ColorWheelInline(
+                        initialColor: wheelInitial,
+                        canRemove: currentGradient.stops.count > 1,
+                        supportsCCT: supportsCCT,
+                        supportsWhite: supportsWhite,
+                        usesKelvinCCT: usesKelvin,
+                        onColorChange: { color, temperature, whiteLevel in
+                            // Use the selectedId (already unwrapped, so guaranteed non-nil)
+                            guard let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) else {
+                                // If no stop found, create/update the first stop
+                                var updatedGradient = currentGradient
+                                if updatedGradient.stops.isEmpty {
+                                    let newStop = GradientStop(position: 0.0, hexColor: color.toHex())
+                                    updatedGradient.stops = [newStop]
+                                    if let temp = temperature {
+                                        stopTemperatures[newStop.id] = temp
+                                    }
+                                } else {
+                                    let stop = updatedGradient.stops[0]
+                                    if let temp = temperature {
+                                        stopTemperatures[stop.id] = temp
+                                    } else {
+                                        updatedGradient.stops[0].hexColor = color.toHex()
+                                        stopTemperatures.removeValue(forKey: stop.id)
+                                    }
+                                }
+                                gradient = updatedGradient
+                                Task { await applyNow(stops: updatedGradient.stops) }
+                                return
                             }
-                            // TODO: Store white level for RGBW support
-                            // For now, white level is handled via the color itself
-                            Task { await applyNow(stops: updatedGradient.stops) }
-                        }
-                    },
-                    onRemove: {
-                        if currentGradient.stops.count > 1 {
+                            
                             var updatedGradient = currentGradient
-                            updatedGradient.stops.removeAll { $0.id == selectedId }
-                            // Clean up temperature tracking for removed stop
-                            stopTemperatures.removeValue(forKey: selectedId)
-                            gradient = updatedGradient
-                            selectedStopId = nil
-                            Task { await applyNow(stops: updatedGradient.stops) }
-                        }
-                    },
-                    onDismiss: { showWheel = false }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .padding(.horizontal, 16)
+                            
+                            // CRITICAL FIX: When temperature slider is active, don't update hexColor
+                            // The hex color should match what WLED will produce from CCT
+                            // For CCT 0 (warm), WLED produces #FFA000 (orange)
+                            // We should store that hex color instead of extracting from Color object
+                            if let temp = temperature {
+                                // Store temperature for this stop FIRST, before calling applyNow
+                                stopTemperatures[selectedId] = temp
+                                
+                                print("🔵 onColorChange: Stored temperature \(temp) for stopId \(selectedId)")
+                                print("🔵 onColorChange: stopTemperatures=\(stopTemperatures)")
+                                
+                                // Calculate expected hex color from CCT temperature
+                                // This matches WLED's CCT color calculation
+                                let r: CGFloat
+                                let g: CGFloat
+                                let b: CGFloat
+                                
+                                if temp <= 0.5 {
+                                    // Warm to neutral range (0.0 to 0.5)
+                                    let factor = temp * 2.0
+                                    r = 1.0
+                                    g = 0.627 + (factor * (0.945 - 0.627))
+                                    b = 0.0 + (factor * (0.918 - 0.0))
+                                } else {
+                                    // Neutral to cool range (0.5 to 1.0)
+                                    let factor = (temp - 0.5) * 2.0
+                                    r = 1.0 - (factor * (1.0 - 0.796))
+                                    g = 0.945 - (factor * (0.945 - 0.859))
+                                    b = 0.918 + (factor * (1.0 - 0.918))
+                                }
+                                
+                                // Convert to hex directly from RGB values (no Color conversion)
+                                let redInt = Int((r * 255).rounded())
+                                let greenInt = Int((g * 255).rounded())
+                                let blueInt = Int((b * 255).rounded())
+                                updatedGradient.stops[idx].hexColor = String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+                                
+                                // Update gradient state
+                                gradient = updatedGradient
+                                
+                                print("🔵 onColorChange: Calling applyNow with stops.count=\(updatedGradient.stops.count)")
+                                // Apply immediately - temperature slider should work in real-time
+                                Task { await applyNow(stops: updatedGradient.stops) }
+                            } else {
+                                // No temperature: use extracted hex color
+                                updatedGradient.stops[idx].hexColor = color.toHex()
+                                stopTemperatures.removeValue(forKey: selectedId)
+                                gradient = updatedGradient
+                                Task { await applyNow(stops: updatedGradient.stops) }
+                            }
+                        },
+                        onRemove: {
+                            if currentGradient.stops.count > 1 {
+                                var updatedGradient = currentGradient
+                                updatedGradient.stops.removeAll { $0.id == selectedId }
+                                // Clean up temperature tracking for removed stop
+                                stopTemperatures.removeValue(forKey: selectedId)
+                                gradient = updatedGradient
+                                selectedStopId = nil
+                                Task { await applyNow(stops: updatedGradient.stops) }
+                            }
+                        },
+                        onDismiss: { showWheel = false }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.horizontal, 16)
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -253,16 +321,49 @@ struct UnifiedColorPane: View {
         if stops.count == 1 {
             // For single color, check if temperature/CCT should be used
             let stop = stops[0]
-            if let temperature = stopTemperatures[stop.id] {
-                // Temperature slider is being used - send CCT instead of RGB per-LED
-                // Convert color to RGB array for CCT method
-                let color = stop.color
-                let rgb = color.toRGBArray()
-                guard rgb.count >= 3 else { return }
-                
-                // Apply CCT with the color (WLED will use CCT for RGBW/RGBCW strips)
-                await viewModel.applyCCT(to: device, temperature: temperature, withColor: [rgb[0], rgb[1], rgb[2]])
+            
+            // Debug logging
+            print("🔵 applyNow: stops.count=\(stops.count), stop.id=\(stop.id)")
+            print("🔵 applyNow: stopTemperatures.keys=\(Array(stopTemperatures.keys))")
+            print("🔵 applyNow: stopTemperatures=\(stopTemperatures)")
+            
+            // Check all stop IDs in stopTemperatures to find a match
+            // This handles cases where the stop ID might have changed
+            var foundTemperature: Double? = nil
+            
+            // First, try exact match
+            if let temp = stopTemperatures[stop.id] {
+                foundTemperature = temp
+                print("🔵 applyNow: Found exact match - temperature \(temp) for stop \(stop.id)")
             } else {
+                // If no exact match, check if there's only one temperature stored (common in 1-tab mode)
+                if stopTemperatures.count == 1, let temp = stopTemperatures.values.first {
+                    foundTemperature = temp
+                    print("🔵 applyNow: Found single temperature value \(temp) (fallback for 1-tab mode)")
+                } else {
+                    print("⚠️ applyNow: No temperature found for stop \(stop.id)")
+                }
+            }
+            
+            if let temp = foundTemperature {
+                print("🔵 applyNow: Applying CCT with temperature \(temp)")
+                // CRITICAL FIX: Use ColorPipeline with per-LED colors AND CCT (same as 2-tab mode)
+                // This ensures CCT is applied correctly - WLED needs per-LED colors when CCT is set
+                let gradient = LEDGradient(stops: stops)
+                let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+                
+                // Convert temperature (0.0-1.0) to CCT (0-255)
+                let cct = Int(round(temp * 255.0))
+                
+                var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+                intent.segmentId = segmentId
+                intent.perLEDHex = frame
+                intent.cct = cct  // Set CCT in intent (same as 2-tab mode)
+                
+                print("🔵 applyNow: Using ColorPipeline with perLEDHex count=\(frame.count), cct=\(cct)")
+                await viewModel.applyColorIntent(intent, to: device)
+            } else {
+                print("🔵 applyNow: Applying RGB color (no temperature)")
                 // Standard RGB color mode - use ColorPipeline
                 let gradient = LEDGradient(stops: stops)
                 let frame = GradientSampler.sample(gradient, ledCount: ledCount)

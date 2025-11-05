@@ -500,15 +500,25 @@ class DeviceControlViewModel: ObservableObject {
                 updatedDevice.lastSeen = stateUpdate.timestamp
                 
                 // Update color if available from segments
+                // CRITICAL: Don't overwrite color if device has active CCT temperature
+                // WebSocket state updates may include old RGB colors that would override CCT
                 if let segment = state.segments.first,
                    let colors = segment.colors,
                    let firstColor = colors.first,
                    firstColor.count >= 3 {
-                    updatedDevice.currentColor = Color(
-                        red: Double(firstColor[0]) / 255.0,
-                        green: Double(firstColor[1]) / 255.0,
-                        blue: Double(firstColor[2]) / 255.0
-                    )
+                    // Only update color if CCT is not active (temperature is nil or 0)
+                    // If CCT is active, we should use the CCT-based color, not RGB from WebSocket
+                    let hasActiveCCT = updatedDevice.temperature != nil && updatedDevice.temperature! > 0
+                    if !hasActiveCCT {
+                        updatedDevice.currentColor = Color(
+                            .sRGB,
+                            red: Double(firstColor[0]) / 255.0,
+                            green: Double(firstColor[1]) / 255.0,
+                            blue: Double(firstColor[2]) / 255.0
+                        )
+                    } else {
+                        print("🔵 handleWebSocketStateUpdate: Skipping color update - CCT is active (temp=\(updatedDevice.temperature!))")
+                    }
                 }
             }
         }
@@ -961,25 +971,47 @@ class DeviceControlViewModel: ObservableObject {
     ///   - device: The WLED device
     ///   - temperature: Temperature slider value (0.0-1.0, where 0=warm, 1=cool)
     ///   - withColor: Optional RGB color to set along with CCT
-    func applyCCT(to device: WLEDDevice, temperature: Double, withColor: [Int]? = nil) async {
+    func applyCCT(to device: WLEDDevice, temperature: Double, withColor: [Int]? = nil, segmentId: Int = 0) async {
         markUserInteraction(device.id)
-        let usesKelvin = segmentUsesKelvinCCT(for: device)
+        let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: segmentId)
         let cct: Int = usesKelvin ? Segment.kelvinValue(fromNormalized: temperature) : Segment.eightBitValue(fromNormalized: temperature)
         
         do {
             if let color = withColor {
                 _ = try await apiService.setColor(for: device, color: color, cct: cct)
             } else {
+                // CRITICAL: When sending CCT-only, we must send ONLY CCT (no RGB)
+                // However, if the device doesn't support CCT or has it disabled,
+                // WLED will ignore the CCT value. As a fallback, we can send the RGB
+                // color that WLED would produce from CCT, but ONLY if CCT fails.
+                // For now, try CCT-only first (correct approach)
                 if usesKelvin {
-                    _ = try await apiService.setCCT(for: device, cctKelvin: cct)
+                    _ = try await apiService.setCCT(for: device, cctKelvin: cct, segmentId: segmentId)
                 } else {
-                    _ = try await apiService.setCCT(for: device, cct: cct)
+                    _ = try await apiService.setCCT(for: device, cct: cct, segmentId: segmentId)
                 }
+                
+                // TODO: If device doesn't support CCT, we might need to send RGB fallback
+                // For CCT 0 (warm), WLED produces #FFA000 (orange)
+                // For CCT 255 (cool), WLED produces #CBDBFF (cool white)
+                // This would require checking device capabilities first
             }
             
             if isRealTimeEnabled {
-                let segment = SegmentUpdate(id: 0, col: withColor != nil ? [[withColor![0], withColor![1], withColor![2]]] : nil, cct: cct)
+                // CRITICAL: When sending CCT via WebSocket, ensure col is NOT included
+                // WLED uses col if present, even if cct is also present
+                // Only include col if withColor is explicitly provided
+                let segment = SegmentUpdate(
+                    id: segmentId,
+                    col: nil,  // Explicitly nil - JSON encoder will omit this field
+                    cct: cct,
+                    fx: 0  // Disable effects to allow CCT to work
+                )
                 let stateUpdate = WLEDStateUpdate(seg: [segment])
+                
+                // Debug logging
+                print("🔵 WebSocket CCT update: segmentId=\(segmentId), cct=\(cct), col=nil")
+                
                 webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
             }
             
@@ -987,6 +1019,38 @@ class DeviceControlViewModel: ObservableObject {
                 if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                     self.devices[index].temperature = temperature
                     self.devices[index].isOnline = true
+                    
+                    // CRITICAL FIX: Update local device color optimistically based on CCT
+                    // This prevents WebSocket state updates from overwriting with old RGB colors
+                    // Use the same calculation as ColorWheelInline.applyTemperatureShift()
+                    let r: CGFloat
+                    let g: CGFloat
+                    let b: CGFloat
+                    
+                    if temperature <= 0.5 {
+                        // Warm to neutral range (0.0 to 0.5)
+                        let factor = temperature * 2.0
+                        r = 1.0
+                        g = 0.627 + (factor * (0.945 - 0.627))
+                        b = 0.0 + (factor * (0.918 - 0.0))
+                    } else {
+                        // Neutral to cool range (0.5 to 1.0)
+                        let factor = (temperature - 0.5) * 2.0
+                        r = 1.0 - (factor * (1.0 - 0.796))
+                        g = 0.945 - (factor * (0.945 - 0.859))
+                        b = 0.918 + (factor * (1.0 - 0.918))
+                    }
+                    
+                    // Create Color in sRGB space explicitly
+                    self.devices[index].currentColor = Color(
+                        .sRGB,
+                        red: Double(r),
+                        green: Double(g),
+                        blue: Double(b),
+                        opacity: 1.0
+                    )
+                    
+                    print("🔵 applyCCT: Updated local device color optimistically for CCT-based color")
                 }
                 self.clearError()
             }
@@ -1280,6 +1344,11 @@ class DeviceControlViewModel: ObservableObject {
         effectMetadataBundles[device.id]
     }
     
+    /// Public method to load effect metadata (triggers fetch if needed)
+    func loadEffectMetadata(for device: WLEDDevice) async {
+        await fetchEffectMetadataIfNeeded(for: device)
+    }
+    
     func currentEffectState(for device: WLEDDevice, segmentId: Int = 0) -> DeviceEffectState {
         effectStates[device.id]?[segmentId] ?? .default
     }
@@ -1292,6 +1361,16 @@ class DeviceControlViewModel: ObservableObject {
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.effectId = effectId
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId)
+    }
+    
+    /// Disable effects for a device/segment (set fx: 0)
+    /// This allows CCT and solid colors to work properly
+    func disableEffect(for device: WLEDDevice, segmentId: Int = 0) async {
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        state.effectId = 0  // Effect ID 0 = effects disabled
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
         await applyEffectState(state, to: device, segmentId: segmentId)
     }

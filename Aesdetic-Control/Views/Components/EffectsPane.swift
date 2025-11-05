@@ -6,6 +6,9 @@ struct EffectsPane: View {
     let device: WLEDDevice
     let segmentId: Int
     
+    @State private var isApplyingEffect: Bool = false
+    @State private var isLoadingMetadata: Bool = false
+    
     private var metadataBundle: EffectMetadataBundle? {
         viewModel.effectMetadata(for: device)
     }
@@ -22,6 +25,10 @@ struct EffectsPane: View {
         viewModel.currentEffectState(for: device, segmentId: segmentId)
     }
     
+    private var isEffectEnabled: Bool {
+        currentState.effectId > 0
+    }
+    
     private var activeEffectMetadata: EffectMetadata? {
         effectOptions.first(where: { $0.id == currentState.effectId })
     }
@@ -30,7 +37,13 @@ struct EffectsPane: View {
         Binding(
             get: { currentState.effectId },
             set: { newValue in
-                Task { await viewModel.setEffect(for: device, segmentId: segmentId, effectId: newValue) }
+                isApplyingEffect = true
+                Task {
+                    await viewModel.setEffect(for: device, segmentId: segmentId, effectId: newValue)
+                    await MainActor.run {
+                        isApplyingEffect = false
+                    }
+                }
             }
         )
     }
@@ -39,7 +52,13 @@ struct EffectsPane: View {
         Binding(
             get: { Double(currentState.speed) },
             set: { newValue in
-                Task { await viewModel.updateEffectSpeed(for: device, segmentId: segmentId, speed: Int(newValue.rounded())) }
+                isApplyingEffect = true
+                Task {
+                    await viewModel.updateEffectSpeed(for: device, segmentId: segmentId, speed: Int(newValue.rounded()))
+                    await MainActor.run {
+                        isApplyingEffect = false
+                    }
+                }
             }
         )
     }
@@ -48,7 +67,13 @@ struct EffectsPane: View {
         Binding(
             get: { Double(currentState.intensity) },
             set: { newValue in
-                Task { await viewModel.updateEffectIntensity(for: device, segmentId: segmentId, intensity: Int(newValue.rounded())) }
+                isApplyingEffect = true
+                Task {
+                    await viewModel.updateEffectIntensity(for: device, segmentId: segmentId, intensity: Int(newValue.rounded()))
+                    await MainActor.run {
+                        isApplyingEffect = false
+                    }
+                }
             }
         )
     }
@@ -57,7 +82,13 @@ struct EffectsPane: View {
         Binding(
             get: { currentState.paletteId },
             set: { newValue in
-                Task { await viewModel.updateEffectPalette(for: device, segmentId: segmentId, paletteId: newValue) }
+                isApplyingEffect = true
+                Task {
+                    await viewModel.updateEffectPalette(for: device, segmentId: segmentId, paletteId: newValue)
+                    await MainActor.run {
+                        isApplyingEffect = false
+                    }
+                }
             }
         )
     }
@@ -98,28 +129,90 @@ struct EffectsPane: View {
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
-                if effectOptions.isEmpty {
-                    ProgressView()
-                        .progressViewStyle(.circular)
+                
+                // Effect On/Off Toggle (like native WLED)
+                Button(action: {
+                    isApplyingEffect = true
+                    Task {
+                        if isEffectEnabled {
+                            // Turn effects OFF (set fx: 0)
+                            await viewModel.disableEffect(for: device, segmentId: segmentId)
+                        } else {
+                            // Turn effects ON (set to first available effect or effect 1)
+                            let defaultEffectId = effectOptions.first?.id ?? 1
+                            await viewModel.setEffect(for: device, segmentId: segmentId, effectId: defaultEffectId)
+                        }
+                        await MainActor.run {
+                            isApplyingEffect = false
+                        }
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        if isApplyingEffect {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: isEffectEnabled ? "power" : "poweroff")
+                                .font(.caption)
+                        }
+                        Text(isEffectEnabled ? "ON" : "OFF")
+                            .font(.caption.weight(.medium))
+                    }
+                    .foregroundColor(isEffectEnabled ? .white : .white.opacity(0.6))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isEffectEnabled ? Color.white.opacity(0.15) : Color.white.opacity(0.08))
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isApplyingEffect)
+                
+                if effectOptions.isEmpty && !isApplyingEffect {
+                    if isLoadingMetadata {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                    } else {
+                        // Metadata not loaded yet - show nothing or a small indicator
+                        EmptyView()
+                    }
                 }
             }
             
-            if effectOptions.isEmpty {
-                fallbackEffectPicker
+            if isEffectEnabled {
+                if effectOptions.isEmpty {
+                    fallbackEffectPicker
+                } else {
+                    effectPicker
+                }
+                
+                if showsSpeed {
+                    sliderRow(label: speedLabel, value: speedBinding)
+                }
+                
+                if showsIntensity {
+                    sliderRow(label: intensityLabel, value: intensityBinding)
+                }
+                
+                if supportsPalette, !paletteOptions.isEmpty {
+                    palettePicker
+                }
             } else {
-                effectPicker
-            }
-            
-            if showsSpeed {
-                sliderRow(label: speedLabel, value: speedBinding)
-            }
-            
-            if showsIntensity {
-                sliderRow(label: intensityLabel, value: intensityBinding)
-            }
-            
-            if supportsPalette, !paletteOptions.isEmpty {
-                palettePicker
+                VStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .font(.title2)
+                        .foregroundColor(.white.opacity(0.4))
+                    Text("Effects disabled")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                    Text("Toggle ON to enable effects")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
             }
         }
         .padding(16)
@@ -127,6 +220,14 @@ struct EffectsPane: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(backgroundFill)
         )
+        .task {
+            // Load effect metadata when pane appears
+            if effectOptions.isEmpty {
+                isLoadingMetadata = true
+                await viewModel.loadEffectMetadata(for: device)
+                isLoadingMetadata = false
+            }
+        }
     }
     
     private var effectPicker: some View {
@@ -142,6 +243,7 @@ struct EffectsPane: View {
             }
             .pickerStyle(.menu)
             .tint(.white)
+            .disabled(isApplyingEffect)
             .accessibilityHint("Selects a lighting effect.")
         }
     }
@@ -159,6 +261,7 @@ struct EffectsPane: View {
             }
             Slider(value: value, in: 0...255, step: 1)
                 .tint(.white)
+                .disabled(isApplyingEffect)
                 .accessibilityLabel(label)
                 .accessibilityValue("\(Int(value.wrappedValue))")
                 .accessibilityHint("Adjusts \(label.lowercased()) for the current effect.")
@@ -178,6 +281,7 @@ struct EffectsPane: View {
             }
             .pickerStyle(.menu)
             .tint(.white)
+            .disabled(isApplyingEffect)
             .accessibilityHint("Selects a color palette for the current effect.")
         }
     }
@@ -191,6 +295,7 @@ struct EffectsPane: View {
                 Text("Mode \(currentState.effectId)")
                     .foregroundColor(.white)
             }
+            .disabled(isApplyingEffect)
         }
     }
 }

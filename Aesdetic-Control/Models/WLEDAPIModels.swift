@@ -130,6 +130,48 @@ struct SegmentUpdate: Codable {
         self.cln = cln
         self.frz = frz
     }
+    
+    // CRITICAL: Custom encoding to omit col when nil
+    // WLED ignores CCT if col is present (even as null)
+    // So we must completely omit col when sending CCT-only updates
+    enum CodingKeys: String, CodingKey {
+        case id, start, stop, len, grp, spc, ofs
+        case on, bri, col, cct
+        case fx, sx, ix, pal
+        case sel, rev, mi, cln, frz
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        // Only encode col if it's not nil
+        // This ensures CCT-only updates don't include col: null
+        if let col = col {
+            try container.encode(col, forKey: .col)
+        }
+        // Explicitly don't encode col if nil - this omits it from JSON
+        
+        // Encode all other fields if they're not nil
+        try id.map { try container.encode($0, forKey: .id) }
+        try start.map { try container.encode($0, forKey: .start) }
+        try stop.map { try container.encode($0, forKey: .stop) }
+        try len.map { try container.encode($0, forKey: .len) }
+        try grp.map { try container.encode($0, forKey: .grp) }
+        try spc.map { try container.encode($0, forKey: .spc) }
+        try ofs.map { try container.encode($0, forKey: .ofs) }
+        try on.map { try container.encode($0, forKey: .on) }
+        try bri.map { try container.encode($0, forKey: .bri) }
+        try cct.map { try container.encode($0, forKey: .cct) }
+        try fx.map { try container.encode($0, forKey: .fx) }
+        try sx.map { try container.encode($0, forKey: .sx) }
+        try ix.map { try container.encode($0, forKey: .ix) }
+        try pal.map { try container.encode($0, forKey: .pal) }
+        try sel.map { try container.encode($0, forKey: .sel) }
+        try rev.map { try container.encode($0, forKey: .rev) }
+        try mi.map { try container.encode($0, forKey: .mi) }
+        try cln.map { try container.encode($0, forKey: .cln) }
+        try frz.map { try container.encode($0, forKey: .frz) }
+    }
 }
 
 // MARK: - API Response Models (Extended)

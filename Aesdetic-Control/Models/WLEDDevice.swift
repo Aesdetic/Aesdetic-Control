@@ -388,15 +388,12 @@ extension Color {
     }
     
     func toHex() -> String {
-        guard let components = self.cgColor?.components, components.count >= 3 else {
-            return "000000"
-        }
-        
-        let r = Int(components[0] * 255.0)
-        let g = Int(components[1] * 255.0)
-        let b = Int(components[2] * 255.0)
-        
-        return String(format: "%02X%02X%02X", r, g, b)
+        // CRITICAL FIX: Use toRGBArray() which correctly extracts sRGB values
+        // DO NOT use cgColor.components directly - it may be in P3 color space
+        // on wide-gamut displays, giving wrong hex values (orange #FFA000 → yellow #FFFF00)
+        let rgb = self.toRGBArray()
+        guard rgb.count >= 3 else { return "000000" }
+        return String(format: "%02X%02X%02X", rgb[0], rgb[1], rgb[2])
     }
     
     func toRGBArray() -> [Int] {
@@ -411,27 +408,34 @@ extension Color {
         if self == .purple { return [128, 0, 128] }
         if self == .pink { return [255, 192, 203] }
         
-        // For custom colors, try cgColor first
-        if let components = self.cgColor?.components, components.count >= 3 {
-            let r = Int(components[0] * 255.0)
-            let g = Int(components[1] * 255.0)
-            let b = Int(components[2] * 255.0)
-            return [r, g, b]
+        // CRITICAL FIX: Force conversion to sRGB before extracting RGB values
+        // This ensures we always get sRGB values, even if Color was created in P3 space
+        guard let cgColor = self.cgColor,
+              let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let sRGBColor = cgColor.converted(to: sRGBColorSpace, intent: .defaultIntent, options: nil),
+              let components = sRGBColor.components, components.count >= 3 else {
+            // Fallback: try UIColor.getRed() if CGColor conversion fails
+            let uiColor = UIColor(self)
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            
+            if uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+                return [
+                    Int((red * 255).rounded()),
+                    Int((green * 255).rounded()),
+                    Int((blue * 255).rounded())
+                ]
+            }
+            return [0, 0, 0] // Black fallback
         }
         
-        // Fallback to UIColor for better compatibility
-        let uiColor = UIColor(self)
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        
-        uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        
-        let redInt = Int((red * 255).rounded())
-        let greenInt = Int((green * 255).rounded())
-        let blueInt = Int((blue * 255).rounded())
+        // Extract sRGB components (guaranteed to be in sRGB color space)
+        let redInt = Int((components[0] * 255).rounded())
+        let greenInt = Int((components[1] * 255).rounded())
+        let blueInt = Int((components[2] * 255).rounded())
         
         return [redInt, greenInt, blueInt]
     }
-} 
+}

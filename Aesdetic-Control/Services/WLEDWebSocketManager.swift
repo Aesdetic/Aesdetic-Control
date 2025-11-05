@@ -322,6 +322,15 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         
         do {
             let jsonData = try JSONEncoder().encode(update)
+            
+            // Debug logging to see what's actually being sent
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+                print("🔵 WebSocket sending to \(deviceId): \(jsonString)")
+                if let seg = update.seg?.first {
+                    print("🔵 Segment: id=\(seg.id ?? -1), col=\(seg.col?.description ?? "nil"), cct=\(seg.cct ?? -1), fx=\(seg.fx ?? -1)")
+                }
+            }
+            
             let message = URLSessionWebSocketTask.Message.data(jsonData)
             
             webSocketTask.send(message) { [weak self] error in

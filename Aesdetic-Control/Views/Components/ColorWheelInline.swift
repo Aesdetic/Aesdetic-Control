@@ -80,8 +80,8 @@ struct ColorWheelInline: View {
                                 isEditingHex = false
                             }
                             .onChange(of: hexInput) { _, newValue in
-                                // Auto-apply when valid hex is entered
-                                if isValidHex(newValue) {
+                                // Auto-apply when valid hex is entered, but NOT during temperature slider drag
+                                if isValidHex(newValue) && !isUsingTemperatureSlider {
                                     applyHexColor()
                                 }
                             }
@@ -286,14 +286,26 @@ struct ColorWheelInline: View {
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
                                 let newValue = Double(value.location.x / geometry.size.width)
+                                let oldTemp = temperature
                                 temperature = max(0, min(1, newValue))
                                 isUsingTemperatureSlider = true
-                                // Only update color preview during drag, don't apply to device
+                                // Only update visual preview during drag, don't apply to device
+                                print("🔵 Temperature slider: onChanged - temp changed from \(oldTemp) to \(temperature), NOT applying to device")
                                 applyTemperatureShift()
                             }
-                            .onEnded { _ in
-                                // Apply color to device only on release
+                            .onEnded { value in
+                                // Apply to device only when drag ends (on release)
+                                print("🔵 Temperature slider: onEnded - temp=\(temperature), NOW applying to device")
+                                print("🔵 Temperature slider: isUsingTemperatureSlider=\(isUsingTemperatureSlider)")
+                                // CRITICAL: Set flag BEFORE updating hex input to prevent onChange from triggering
+                                // Then update hex input AFTER setting flag
+                                let wasUsingTemp = isUsingTemperatureSlider
+                                updateHexInput()
+                                // Ensure flag is still set after updateHexInput
+                                isUsingTemperatureSlider = true
+                                print("🔵 Temperature slider: About to call applyColorToDevice()")
                                 applyColorToDevice()
+                                print("🔵 Temperature slider: Finished calling applyColorToDevice()")
                             }
                     )
                 }
@@ -490,6 +502,8 @@ struct ColorWheelInline: View {
             return
         }
         
+        // HSV colors are device-independent, so we can use standard Color initializer
+        // The critical sRGB conversion happens when extracting RGB values (toHex/toRGBArray)
         // Use full brightness (1.0) for accurate color representation
         // Brightness will be controlled by WLED device separately
         selectedColor = Color(hue: hue, saturation: saturation, brightness: 1.0)
@@ -668,18 +682,30 @@ struct ColorWheelInline: View {
             b = 0.918 + (factor * (1.0 - 0.918))    // 0.918 to 1.0
         }
         
-        selectedColor = Color(red: r, green: g, blue: b)
+        // CRITICAL FIX: Create Color in sRGB color space explicitly to prevent display color space conversion
+        // Without .sRGB, Color(red:green:blue:) creates color in display's native color space (P3 on wide-gamut)
+        // This causes orange (#FFA000) to appear yellow when extracted later
+        selectedColor = Color(.sRGB, red: Double(r), green: Double(g), blue: Double(b), opacity: 1.0)
         extractHSV(from: selectedColor)
-        updateHexInput()
+        // Don't update hexInput during temperature slider drag - it triggers onChange and applies prematurely
+        // Hex input will be updated when slider is released
     }
     
     private func applyColorToDevice() {
+        print("🔵 applyColorToDevice() called - isUsingTemperatureSlider=\(isUsingTemperatureSlider), temperature=\(temperature)")
+        // CRITICAL FIX: Ensure we always send sRGB color to WLED
+        // Convert selectedColor to hex string (which uses toRGBArray() for correct sRGB extraction)
+        // Then recreate Color from hex to ensure sRGB consistency
+        let hexString = selectedColor.toHex()
+        let sRGBColor = Color(hex: hexString)  // Color(hex:) creates sRGB color explicitly
+        
         // Apply color using WLED-accurate conversion
         // For RGBW strips: Pass white level (0-1) if white channel is supported
         // For RGBCCT strips: Pass temperature (0-1) if temperature slider is being used
         let temperatureValue = isUsingTemperatureSlider ? temperature : nil
         let whiteLevelValue = supportsWhite && whiteLevel > 0.0 ? whiteLevel : nil
-        onColorChange(selectedColor, temperatureValue, whiteLevelValue)
+        print("🔵 applyColorToDevice() calling onColorChange - tempValue=\(temperatureValue?.description ?? "nil")")
+        onColorChange(sRGBColor, temperatureValue, whiteLevelValue)
         
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)

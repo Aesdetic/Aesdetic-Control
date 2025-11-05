@@ -17,8 +17,8 @@ protocol WLEDAPIServiceProtocol {
     func setPower(for device: WLEDDevice, isOn: Bool) async throws -> WLEDResponse
     func setBrightness(for device: WLEDDevice, brightness: Int) async throws -> WLEDResponse
     func setColor(for device: WLEDDevice, color: [Int], cct: Int?, white: Int?) async throws -> WLEDResponse
-    func setCCT(for device: WLEDDevice, cct: Int) async throws -> WLEDResponse
-    func setCCT(for device: WLEDDevice, cctKelvin: Int) async throws -> WLEDResponse
+    func setCCT(for device: WLEDDevice, cct: Int, segmentId: Int) async throws -> WLEDResponse
+    func setCCT(for device: WLEDDevice, cctKelvin: Int, segmentId: Int) async throws -> WLEDResponse
     func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset]
     func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws
     func setSegmentPixels(
@@ -57,6 +57,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         config.httpMaximumConnectionsPerHost = 4 // Limit connections per host
         config.requestCachePolicy = .useProtocolCachePolicy
         self.urlSession = URLSession(configuration: config)
+        
+        // Configure JSON encoder to omit nil values
+        // This ensures CCT-only updates don't include col: null
+        self.encoder.outputFormatting = [.prettyPrinted]
     }
     
     // MARK: - API Methods
@@ -172,23 +176,41 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     ///   - device: The WLED device
     ///   - cct: Color temperature (0-255, 0=warm ~2700K, 255=cool ~6500K)
     /// - Returns: Updated device state
-    func setCCT(for device: WLEDDevice, cct: Int) async throws -> WLEDResponse {
+    func setCCT(for device: WLEDDevice, cct: Int, segmentId: Int = 0) async throws -> WLEDResponse {
         guard cct >= 0 && cct <= 255 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        return try await setCCTInternal(for: device, cct: cct)
+        return try await setCCTInternal(for: device, cct: cct, segmentId: segmentId)
     }
     
-    func setCCT(for device: WLEDDevice, cctKelvin: Int) async throws -> WLEDResponse {
+    func setCCT(for device: WLEDDevice, cctKelvin: Int, segmentId: Int = 0) async throws -> WLEDResponse {
         guard cctKelvin >= 1000 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        return try await setCCTInternal(for: device, cct: cctKelvin)
+        return try await setCCTInternal(for: device, cct: cctKelvin, segmentId: segmentId)
     }
     
-    private func setCCTInternal(for device: WLEDDevice, cct: Int) async throws -> WLEDResponse {
-        let segment = SegmentUpdate(id: 0, cct: cct)
+    private func setCCTInternal(for device: WLEDDevice, cct: Int, segmentId: Int = 0) async throws -> WLEDResponse {
+        // CRITICAL: When setting CCT, we must also disable effects (fx: 0) 
+        // Otherwise WLED may keep using effect colors instead of CCT
+        // Also ensure col is NOT included - WLED ignores CCT if col is present
+        let segment = SegmentUpdate(id: segmentId, cct: cct, fx: 0)
         let stateUpdate = WLEDStateUpdate(seg: [segment])
+        
+        // Debug logging
+        if let jsonData = try? encoder.encode(stateUpdate),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+            print("🔵 Setting CCT: segmentId=\(segmentId), cct=\(cct)")
+            print("🔵 JSON: \(jsonString)")
+            
+            // Verify col is NOT in the JSON
+            if jsonString.contains("\"col\"") {
+                print("⚠️ WARNING: col field found in CCT JSON! This will cause WLED to ignore CCT.")
+            } else {
+                print("✅ Confirmed: col field is NOT in JSON (correct)")
+            }
+        }
+        
         return try await updateState(for: device, state: stateUpdate)
     }
 
