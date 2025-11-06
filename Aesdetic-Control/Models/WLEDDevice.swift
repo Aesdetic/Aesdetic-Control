@@ -438,4 +438,57 @@ extension Color {
         
         return [redInt, greenInt, blueInt]
     }
+    
+    /// Calculate RGB color components from CCT temperature (0.0-1.0)
+    /// Uses WLED's exact CCT color values for consistency
+    /// - Parameter temperature: Normalized temperature value (0.0 = warm/2700K, 1.0 = cool/6500K)
+    /// - Returns: Tuple of (r, g, b) CGFloat values in range 0.0-1.0
+    static func cctColorComponents(temperature: Double) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+        let clampedTemp = max(0.0, min(1.0, temperature))
+        
+        if clampedTemp <= 0.5 {
+            // Warm to neutral range (0.0 to 0.5)
+            // Interpolate between #FFA000 and #FFF1EA
+            let factor = clampedTemp * 2.0
+            
+            // #FFA000 = RGB(255, 160, 0) = (1.0, 0.627, 0.0)
+            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
+            return (
+                r: 1.0,
+                g: 0.627 + (factor * (0.945 - 0.627)),
+                b: 0.0 + (factor * (0.918 - 0.0))
+            )
+        } else {
+            // Neutral to cool range (0.5 to 1.0)
+            // Interpolate between #FFF1EA and #CBDBFF
+            let factor = (clampedTemp - 0.5) * 2.0
+            
+            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
+            // #CBDBFF = RGB(203, 219, 255) = (0.796, 0.859, 1.0)
+            return (
+                r: 1.0 - (factor * (1.0 - 0.796)),
+                g: 0.945 - (factor * (0.945 - 0.859)),
+                b: 0.918 + (factor * (1.0 - 0.918))
+            )
+        }
+    }
+    
+    /// Create a Color from CCT temperature
+    /// - Parameter temperature: Normalized temperature value (0.0 = warm/2700K, 1.0 = cool/6500K)
+    /// - Returns: Color in sRGB color space
+    static func color(fromCCTTemperature temperature: Double) -> Color {
+        let components = cctColorComponents(temperature: temperature)
+        return Color(.sRGB, red: Double(components.r), green: Double(components.g), blue: Double(components.b), opacity: 1.0)
+    }
+    
+    /// Convert CCT temperature to hex color string
+    /// - Parameter temperature: Normalized temperature value (0.0 = warm/2700K, 1.0 = cool/6500K)
+    /// - Returns: Hex color string (e.g., "FFA000")
+    static func hexColor(fromCCTTemperature temperature: Double) -> String {
+        let components = cctColorComponents(temperature: temperature)
+        let redInt = Int((components.r * 255).rounded())
+        let greenInt = Int((components.g * 255).rounded())
+        let blueInt = Int((components.b * 255).rounded())
+        return String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+    }
 }

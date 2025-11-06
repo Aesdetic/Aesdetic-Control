@@ -95,7 +95,9 @@ class ResourceManager: ObservableObject {
     }
     
     private func handleMemoryWarning() {
+        #if DEBUG
         print("⚠️ Memory Warning Received - Performing Emergency Cleanup")
+        #endif
         isLowMemoryWarning = true
         
         // Immediate cleanup

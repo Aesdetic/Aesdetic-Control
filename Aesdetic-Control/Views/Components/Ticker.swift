@@ -23,6 +23,11 @@ final class Ticker: ObservableObject {
         timer?.invalidate()
         timer = nil
     }
+    
+    deinit {
+        timer?.invalidate()
+        timer = nil
+    }
 }
 
 

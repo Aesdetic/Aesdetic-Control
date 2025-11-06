@@ -142,13 +142,21 @@ class DeviceControlViewModel: ObservableObject {
     
     @Published var devices: [WLEDDevice] = [] {
         didSet {
-            // Only update metrics if devices actually changed
-            if devices.count != oldValue.count || 
-               !devices.elementsEqual(oldValue, by: { $0.id == $1.id && $0.isOnline == $1.isOnline }) {
+            // Optimized: Quick check for count change first (O(1))
+            guard devices.count == oldValue.count else {
+                // Count changed - invalidate cache
+                cachedFilteredDevices = []
+                lastFilterUpdate = .distantPast
+                return
+            }
+            
+            // Only do comparison if count is same (short-circuit optimization)
+            // Check if any device ID or online status changed - stops at first difference
+            let hasChanges = zip(devices, oldValue).contains { $0.id != $1.id || $0.isOnline != $1.isOnline }
+            if hasChanges {
                 // Invalidate filter cache when devices change
                 cachedFilteredDevices = []
                 lastFilterUpdate = .distantPast
-                // Update handled by WebSocketManager directly
             }
         }
     }
@@ -310,7 +318,9 @@ class DeviceControlViewModel: ObservableObject {
             
             // Warn if memory usage is high (raised threshold to 200MB for iOS apps)
             if memoryUsageMB > 200 {
+                #if DEBUG
                 print("⚠️ High memory usage detected: \(String(format: "%.2f", memoryUsageMB)) MB")
+                #endif
             }
         }
     }
@@ -517,7 +527,11 @@ class DeviceControlViewModel: ObservableObject {
                             blue: Double(firstColor[2]) / 255.0
                         )
                     } else {
-                        print("🔵 handleWebSocketStateUpdate: Skipping color update - CCT is active (temp=\(updatedDevice.temperature!))")
+                        #if DEBUG
+                        if let temp = updatedDevice.temperature {
+                            print("🔵 handleWebSocketStateUpdate: Skipping color update - CCT is active (temp=\(temp))")
+                        }
+                        #endif
                     }
                 }
             }
@@ -991,10 +1005,10 @@ class DeviceControlViewModel: ObservableObject {
                     _ = try await apiService.setCCT(for: device, cct: cct, segmentId: segmentId)
                 }
                 
-                // TODO: If device doesn't support CCT, we might need to send RGB fallback
+                // Note: If device doesn't support CCT, WLED will ignore the CCT value
+                // The device capabilities are checked via supportsCCT() before calling this function
                 // For CCT 0 (warm), WLED produces #FFA000 (orange)
                 // For CCT 255 (cool), WLED produces #CBDBFF (cool white)
-                // This would require checking device capabilities first
             }
             
             if isRealTimeEnabled {
@@ -1010,7 +1024,9 @@ class DeviceControlViewModel: ObservableObject {
                 let stateUpdate = WLEDStateUpdate(seg: [segment])
                 
                 // Debug logging
+                #if DEBUG
                 print("🔵 WebSocket CCT update: segmentId=\(segmentId), cct=\(cct), col=nil")
+                #endif
                 
                 webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
             }
@@ -1020,37 +1036,14 @@ class DeviceControlViewModel: ObservableObject {
                     self.devices[index].temperature = temperature
                     self.devices[index].isOnline = true
                     
-                    // CRITICAL FIX: Update local device color optimistically based on CCT
-                    // This prevents WebSocket state updates from overwriting with old RGB colors
-                    // Use the same calculation as ColorWheelInline.applyTemperatureShift()
-                    let r: CGFloat
-                    let g: CGFloat
-                    let b: CGFloat
+                       // CRITICAL FIX: Update local device color optimistically based on CCT
+                       // This prevents WebSocket state updates from overwriting with old RGB colors
+                       // Use shared CCT color calculation utility
+                       self.devices[index].currentColor = Color.color(fromCCTTemperature: temperature)
                     
-                    if temperature <= 0.5 {
-                        // Warm to neutral range (0.0 to 0.5)
-                        let factor = temperature * 2.0
-                        r = 1.0
-                        g = 0.627 + (factor * (0.945 - 0.627))
-                        b = 0.0 + (factor * (0.918 - 0.0))
-                    } else {
-                        // Neutral to cool range (0.5 to 1.0)
-                        let factor = (temperature - 0.5) * 2.0
-                        r = 1.0 - (factor * (1.0 - 0.796))
-                        g = 0.945 - (factor * (0.945 - 0.859))
-                        b = 0.918 + (factor * (1.0 - 0.918))
-                    }
-                    
-                    // Create Color in sRGB space explicitly
-                    self.devices[index].currentColor = Color(
-                        .sRGB,
-                        red: Double(r),
-                        green: Double(g),
-                        blue: Double(b),
-                        opacity: 1.0
-                    )
-                    
+                    #if DEBUG
                     print("🔵 applyCCT: Updated local device color optimistically for CCT-based color")
+                    #endif
                 }
                 self.clearError()
             }

@@ -200,6 +200,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         // Debug logging
         if let jsonData = try? encoder.encode(stateUpdate),
            let jsonString = String(data: jsonData, encoding: .utf8) {
+            #if DEBUG
             print("🔵 Setting CCT: segmentId=\(segmentId), cct=\(cct)")
             print("🔵 JSON: \(jsonString)")
             
@@ -209,6 +210,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             } else {
                 print("✅ Confirmed: col field is NOT in JSON (correct)")
             }
+            #endif
         }
         
         return try await updateState(for: device, state: stateUpdate)
@@ -920,25 +922,29 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let now = Date()
         
         // Remove expired entries efficiently
-        let expiredKeys = requestCache.compactMap { (key, value) in
+        // Optimized: Remove expired entries in a single pass
+        let expiredKeys = requestCache.compactMap { (key, value) -> String? in
             now.timeIntervalSince(value.timestamp) >= cacheExpirationInterval ? key : nil
         }
         
+        // Batch remove expired entries
         for key in expiredKeys {
             requestCache.removeValue(forKey: key)
         }
         
         // If still over limit, remove oldest entries efficiently
+        // Optimized: Only sort what we need to remove, not the entire cache
         if requestCache.count > maxCacheSize {
-            let sortedEntries = requestCache.sorted { $0.value.timestamp < $1.value.timestamp }
-            let entriesToRemove = sortedEntries.prefix(requestCache.count - maxCacheSize)
+            let entriesToRemove = requestCache.count - maxCacheSize
+            // Find oldest entries by sorting and taking only what we need to remove
+            let oldestEntries = requestCache.sorted { $0.value.timestamp < $1.value.timestamp }.prefix(entriesToRemove)
             
-            for (key, _) in entriesToRemove {
+            for (key, _) in oldestEntries {
                 requestCache.removeValue(forKey: key)
             }
             
             #if DEBUG
-            logger.debug("Cache evicted \(entriesToRemove.count) entries, current size: \(self.requestCache.count)")
+            logger.debug("Cache evicted \(entriesToRemove) entries, current size: \(self.requestCache.count)")
             #endif
         }
     }

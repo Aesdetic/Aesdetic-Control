@@ -48,7 +48,8 @@ struct DashboardView: View {
     private func updateMemoizedStats() {
         let devices = deviceControlViewModel.devices
         let total = devices.count
-        let online = devices.filter { $0.isOnline }.count
+        // Optimized: Use reduce instead of filter+count (single pass, better performance)
+        let online = devices.reduce(0) { $0 + ($1.isOnline ? 1 : 0) }
         let offline = total - online
         
         memoizedDeviceStats = (total: total, online: online, offline: offline)
@@ -291,7 +292,8 @@ struct DashboardView: View {
             group.addTask { await dashboardViewModel.updateCurrentGreeting() }
             for await _ in group { }
         }
-        DispatchQueue.main.async { recomputeDerivedIfNeeded() }
+        // Already on MainActor (function is @MainActor), no need for async dispatch
+        recomputeDerivedIfNeeded()
     }
 }
 

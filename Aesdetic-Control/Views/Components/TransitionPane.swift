@@ -236,25 +236,10 @@ struct TransitionPane: View {
                                 if let idx = currentGradientA.stops.firstIndex(where: { $0.id == selectedId }) {
                                     var updatedStops = currentGradientA.stops
                                     
-                                    // Handle temperature if provided (same pattern as UnifiedColorPane)
-                                    if let temp = temperature {
-                                        // Calculate expected hex color from CCT temperature
-                                        let r: CGFloat, g: CGFloat, b: CGFloat
-                                        if temp <= 0.5 {
-                                            let factor = temp * 2.0
-                                            r = 1.0
-                                            g = 0.627 + (factor * (0.945 - 0.627))
-                                            b = 0.0 + (factor * (0.918 - 0.0))
-                                        } else {
-                                            let factor = (temp - 0.5) * 2.0
-                                            r = 1.0 - (factor * (1.0 - 0.796))
-                                            g = 0.945 - (factor * (0.945 - 0.859))
-                                            b = 0.918 + (factor * (1.0 - 0.918))
-                                        }
-                                        let redInt = Int((r * 255).rounded())
-                                        let greenInt = Int((g * 255).rounded())
-                                        let blueInt = Int((b * 255).rounded())
-                                        updatedStops[idx].hexColor = String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+                                       // Handle temperature if provided
+                                       if let temp = temperature {
+                                           // Use shared CCT color calculation utility
+                                           updatedStops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
                                     } else {
                                         updatedStops[idx].hexColor = color.toHex()
                                     }
@@ -374,25 +359,10 @@ struct TransitionPane: View {
                             onColorChange: { color, temperature, whiteLevel in
                                 var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
                                 if let idx = src.firstIndex(where: { $0.id == selectedId }) {
-                                    // Handle temperature if provided (same pattern as UnifiedColorPane)
-                                    if let temp = temperature {
-                                        // Calculate expected hex color from CCT temperature
-                                        let r: CGFloat, g: CGFloat, b: CGFloat
-                                        if temp <= 0.5 {
-                                            let factor = temp * 2.0
-                                            r = 1.0
-                                            g = 0.627 + (factor * (0.945 - 0.627))
-                                            b = 0.0 + (factor * (0.918 - 0.0))
-                                        } else {
-                                            let factor = (temp - 0.5) * 2.0
-                                            r = 1.0 - (factor * (1.0 - 0.796))
-                                            g = 0.945 - (factor * (0.945 - 0.859))
-                                            b = 0.918 + (factor * (1.0 - 0.918))
-                                        }
-                                        let redInt = Int((r * 255).rounded())
-                                        let greenInt = Int((g * 255).rounded())
-                                        let blueInt = Int((b * 255).rounded())
-                                        src[idx].hexColor = String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+                                       // Handle temperature if provided
+                                       if let temp = temperature {
+                                           // Use shared CCT color calculation utility
+                                           src[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
                                     } else {
                                         src[idx].hexColor = color.toHex()
                                     }

@@ -195,39 +195,20 @@ struct UnifiedColorPane: View {
                                 // Store temperature for this stop FIRST, before calling applyNow
                                 stopTemperatures[selectedId] = temp
                                 
+                                #if DEBUG
                                 print("🔵 onColorChange: Stored temperature \(temp) for stopId \(selectedId)")
                                 print("🔵 onColorChange: stopTemperatures=\(stopTemperatures)")
+                                #endif
                                 
-                                // Calculate expected hex color from CCT temperature
-                                // This matches WLED's CCT color calculation
-                                let r: CGFloat
-                                let g: CGFloat
-                                let b: CGFloat
-                                
-                                if temp <= 0.5 {
-                                    // Warm to neutral range (0.0 to 0.5)
-                                    let factor = temp * 2.0
-                                    r = 1.0
-                                    g = 0.627 + (factor * (0.945 - 0.627))
-                                    b = 0.0 + (factor * (0.918 - 0.0))
-                                } else {
-                                    // Neutral to cool range (0.5 to 1.0)
-                                    let factor = (temp - 0.5) * 2.0
-                                    r = 1.0 - (factor * (1.0 - 0.796))
-                                    g = 0.945 - (factor * (0.945 - 0.859))
-                                    b = 0.918 + (factor * (1.0 - 0.918))
-                                }
-                                
-                                // Convert to hex directly from RGB values (no Color conversion)
-                                let redInt = Int((r * 255).rounded())
-                                let greenInt = Int((g * 255).rounded())
-                                let blueInt = Int((b * 255).rounded())
-                                updatedGradient.stops[idx].hexColor = String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+                                // Use shared CCT color calculation utility
+                                updatedGradient.stops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
                                 
                                 // Update gradient state
                                 gradient = updatedGradient
                                 
+                                #if DEBUG
                                 print("🔵 onColorChange: Calling applyNow with stops.count=\(updatedGradient.stops.count)")
+                                #endif
                                 // Apply immediately - temperature slider should work in real-time
                                 Task { await applyNow(stops: updatedGradient.stops) }
                             } else {
@@ -322,31 +303,41 @@ struct UnifiedColorPane: View {
             // For single color, check if temperature/CCT should be used
             let stop = stops[0]
             
+            #if DEBUG
             // Debug logging
             print("🔵 applyNow: stops.count=\(stops.count), stop.id=\(stop.id)")
             print("🔵 applyNow: stopTemperatures.keys=\(Array(stopTemperatures.keys))")
             print("🔵 applyNow: stopTemperatures=\(stopTemperatures)")
+            #endif
             
             // Check all stop IDs in stopTemperatures to find a match
             // This handles cases where the stop ID might have changed
             var foundTemperature: Double? = nil
             
             // First, try exact match
-            if let temp = stopTemperatures[stop.id] {
-                foundTemperature = temp
-                print("🔵 applyNow: Found exact match - temperature \(temp) for stop \(stop.id)")
-            } else {
-                // If no exact match, check if there's only one temperature stored (common in 1-tab mode)
-                if stopTemperatures.count == 1, let temp = stopTemperatures.values.first {
+                if let temp = stopTemperatures[stop.id] {
                     foundTemperature = temp
-                    print("🔵 applyNow: Found single temperature value \(temp) (fallback for 1-tab mode)")
+                    #if DEBUG
+                    print("🔵 applyNow: Found exact match - temperature \(temp) for stop \(stop.id)")
+                    #endif
                 } else {
-                    print("⚠️ applyNow: No temperature found for stop \(stop.id)")
+                    // If no exact match, check if there's only one temperature stored (common in 1-tab mode)
+                    if stopTemperatures.count == 1, let temp = stopTemperatures.values.first {
+                        foundTemperature = temp
+                        #if DEBUG
+                        print("🔵 applyNow: Found single temperature value \(temp) (fallback for 1-tab mode)")
+                        #endif
+                    } else {
+                        #if DEBUG
+                        print("⚠️ applyNow: No temperature found for stop \(stop.id)")
+                        #endif
+                    }
                 }
-            }
-            
-            if let temp = foundTemperature {
-                print("🔵 applyNow: Applying CCT with temperature \(temp)")
+                
+                if let temp = foundTemperature {
+                    #if DEBUG
+                    print("🔵 applyNow: Applying CCT with temperature \(temp)")
+                    #endif
                 // CRITICAL FIX: Use ColorPipeline with per-LED colors AND CCT (same as 2-tab mode)
                 // This ensures CCT is applied correctly - WLED needs per-LED colors when CCT is set
                 let gradient = LEDGradient(stops: stops)
@@ -357,13 +348,17 @@ struct UnifiedColorPane: View {
                 
                 var intent = ColorIntent(deviceId: device.id, mode: .perLED)
                 intent.segmentId = segmentId
-                intent.perLEDHex = frame
-                intent.cct = cct  // Set CCT in intent (same as 2-tab mode)
-                
-                print("🔵 applyNow: Using ColorPipeline with perLEDHex count=\(frame.count), cct=\(cct)")
-                await viewModel.applyColorIntent(intent, to: device)
-            } else {
-                print("🔵 applyNow: Applying RGB color (no temperature)")
+                    intent.perLEDHex = frame
+                    intent.cct = cct  // Set CCT in intent (same as 2-tab mode)
+                    
+                    #if DEBUG
+                    print("🔵 applyNow: Using ColorPipeline with perLEDHex count=\(frame.count), cct=\(cct)")
+                    #endif
+                    await viewModel.applyColorIntent(intent, to: device)
+                } else {
+                    #if DEBUG
+                    print("🔵 applyNow: Applying RGB color (no temperature)")
+                    #endif
                 // Standard RGB color mode - use ColorPipeline
                 let gradient = LEDGradient(stops: stops)
                 let frame = GradientSampler.sample(gradient, ledCount: ledCount)

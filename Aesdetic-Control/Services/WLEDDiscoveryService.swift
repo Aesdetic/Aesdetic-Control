@@ -104,6 +104,10 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         
         logger.info("⏹️ Stopping WLED discovery")
         
+        // Clean up timer
+        deviceUpdateTimer?.invalidate()
+        deviceUpdateTimer = nil
+        
         // Stop mDNS discovery
         netServiceBrowser?.stop()
         netServiceBrowser = nil

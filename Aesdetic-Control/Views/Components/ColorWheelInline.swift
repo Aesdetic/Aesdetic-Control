@@ -290,20 +290,28 @@ struct ColorWheelInline: View {
                                 temperature = max(0, min(1, newValue))
                                 isUsingTemperatureSlider = true
                                 // Only update visual preview during drag, don't apply to device
+                                #if DEBUG
                                 print("🔵 Temperature slider: onChanged - temp changed from \(oldTemp) to \(temperature), NOT applying to device")
+                                #endif
                                 applyTemperatureShift()
                             }
                             .onEnded { value in
                                 // Apply to device only when drag ends (on release)
+                                #if DEBUG
                                 print("🔵 Temperature slider: onEnded - temp=\(temperature), NOW applying to device")
                                 print("🔵 Temperature slider: isUsingTemperatureSlider=\(isUsingTemperatureSlider)")
+                                #endif
                                 // CRITICAL: Update hex input AFTER slider is released (not during drag)
                                 updateHexInput()
                                 // Ensure flag is still set after updateHexInput
                                 isUsingTemperatureSlider = true
+                                #if DEBUG
                                 print("🔵 Temperature slider: About to call applyColorToDevice()")
+                                #endif
                                 applyColorToDevice()
+                                #if DEBUG
                                 print("🔵 Temperature slider: Finished calling applyColorToDevice()")
+                                #endif
                             }
                     )
                 }
@@ -654,43 +662,18 @@ struct ColorWheelInline: View {
         // Temperature range: 0 = #FFA000 (2700K), 0.5 = #FFF1EA (4000K), 1 = #CBDBFF (6500K)
         // Based on WLED's native CCT color values
         
-        let r: CGFloat
-        let g: CGFloat  
-        let b: CGFloat
-        
-        if temperature <= 0.5 {
-            // Warm to neutral range (0.0 to 0.5)
-            // Interpolate between #FFA000 and #FFF1EA
-            let factor = temperature * 2.0 // 0 to 1
-            
-            // #FFA000 = RGB(255, 160, 0) = (1.0, 0.627, 0.0)
-            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
-            r = 1.0
-            g = 0.627 + (factor * (0.945 - 0.627))  // 0.627 to 0.945
-            b = 0.0 + (factor * (0.918 - 0.0))      // 0.0 to 0.918
-        } else {
-            // Neutral to cool range (0.5 to 1.0)
-            // Interpolate between #FFF1EA and #CBDBFF
-            let factor = (temperature - 0.5) * 2.0 // 0 to 1
-            
-            // #FFF1EA = RGB(255, 241, 234) = (1.0, 0.945, 0.918)
-            // #CBDBFF = RGB(203, 219, 255) = (0.796, 0.859, 1.0)
-            r = 1.0 - (factor * (1.0 - 0.796))      // 1.0 to 0.796
-            g = 0.945 - (factor * (0.945 - 0.859))  // 0.945 to 0.859
-            b = 0.918 + (factor * (1.0 - 0.918))    // 0.918 to 1.0
-        }
-        
-        // CRITICAL FIX: Create Color in sRGB color space explicitly to prevent display color space conversion
-        // Without .sRGB, Color(red:green:blue:) creates color in display's native color space (P3 on wide-gamut)
-        // This causes orange (#FFA000) to appear yellow when extracted later
-        selectedColor = Color(.sRGB, red: Double(r), green: Double(g), blue: Double(b), opacity: 1.0)
+        // Use shared CCT color calculation utility
+        let components = Color.cctColorComponents(temperature: temperature)
+        selectedColor = Color(.sRGB, red: Double(components.r), green: Double(components.g), blue: Double(components.b), opacity: 1.0)
         extractHSV(from: selectedColor)
         // Don't update hexInput during temperature slider drag - it triggers onChange and applies prematurely
         // Hex input will be updated when slider is released
     }
     
     private func applyColorToDevice() {
+        #if DEBUG
         print("🔵 applyColorToDevice() called - isUsingTemperatureSlider=\(isUsingTemperatureSlider), temperature=\(temperature)")
+        #endif
         // CRITICAL FIX: Ensure we always send sRGB color to WLED
         // Convert selectedColor to hex string (which uses toRGBArray() for correct sRGB extraction)
         // Then recreate Color from hex to ensure sRGB consistency
@@ -702,7 +685,9 @@ struct ColorWheelInline: View {
         // For RGBCCT strips: Pass temperature (0-1) if temperature slider is being used
         let temperatureValue = isUsingTemperatureSlider ? temperature : nil
         let whiteLevelValue = supportsWhite && whiteLevel > 0.0 ? whiteLevel : nil
+        #if DEBUG
         print("🔵 applyColorToDevice() calling onColorChange - tempValue=\(temperatureValue?.description ?? "nil")")
+        #endif
         onColorChange(sRGBColor, temperatureValue, whiteLevelValue)
         
         // Haptic feedback

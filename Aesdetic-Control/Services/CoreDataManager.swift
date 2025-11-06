@@ -29,7 +29,9 @@ class CoreDataManager: ObservableObject {
                 
                 // For now, we'll continue without Core Data rather than crash
                 // In a production app, we might want to create an in-memory store as fallback
+                #if DEBUG
                 print("⚠️ Continuing without persistent storage. App functionality will be limited.")
+                #endif
             } else {
                 print("✅ Core Data loaded successfully")
             }

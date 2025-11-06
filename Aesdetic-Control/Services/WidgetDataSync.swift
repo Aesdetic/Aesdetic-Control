@@ -21,7 +21,9 @@ class WidgetDataSync {
     /// Sync device data to shared UserDefaults for widget access
     func syncDevice(_ device: WLEDDevice) {
         guard let sharedDefaults = UserDefaults(suiteName: appGroupID) else {
+            #if DEBUG
             print("⚠️ Failed to access App Group UserDefaults")
+            #endif
             return
         }
         
