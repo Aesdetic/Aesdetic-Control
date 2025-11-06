@@ -297,9 +297,7 @@ struct ColorWheelInline: View {
                                 // Apply to device only when drag ends (on release)
                                 print("🔵 Temperature slider: onEnded - temp=\(temperature), NOW applying to device")
                                 print("🔵 Temperature slider: isUsingTemperatureSlider=\(isUsingTemperatureSlider)")
-                                // CRITICAL: Set flag BEFORE updating hex input to prevent onChange from triggering
-                                // Then update hex input AFTER setting flag
-                                let wasUsingTemp = isUsingTemperatureSlider
+                                // CRITICAL: Update hex input AFTER slider is released (not during drag)
                                 updateHexInput()
                                 // Ensure flag is still set after updateHexInput
                                 isUsingTemperatureSlider = true

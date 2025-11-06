@@ -54,50 +54,80 @@ struct TransitionPane: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Toggle("Enable Transition", isOn: Binding(get: {
-                    transitionOn
-                }, set: { v in
-                    if v {
+                Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+                
+                // Transition On/Off Toggle (like EffectsPane)
+                Button(action: {
+                    if transitionOn {
+                        // Turn transitions OFF
+                        transitionOn = false
+                        Task {
+                            await viewModel.stopTransitionAndRevertToA(device: device)
+                            await viewModel.applyGradientStopsAcrossStrip(device, stops: currentGradientA.stops, ledCount: device.state?.segments.first?.len ?? 120)
+                        }
+                    } else {
+                        // Turn transitions ON
+                        transitionOn = true
                         // Make B a deep copy of A on first enable
                         if currentGradientB.stops.isEmpty { 
                             let copiedStops = currentGradientA.stops.map { GradientStop(position: $0.position, hexColor: $0.hexColor) }
                             stopsB = copiedStops
                             gradientB = LEDGradient(stops: copiedStops)
                         }
-                    } else {
-                        Task {
-                            await viewModel.stopTransitionAndRevertToA(device: device)
-                            await viewModel.applyGradientStopsAcrossStrip(device, stops: currentGradientA.stops, ledCount: device.state?.segments.first?.len ?? 120)
-                        }
                     }
-                    transitionOn = v
-                }))
-                .tint(.white)
-                .foregroundColor(.white)
-                .accessibilityHint("Turns automated gradient transitions on or off.")
-                Spacer()
-                Button("Start") {
-                    let gA = currentGradientA
-                    let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
-                    Task { await viewModel.startTransition(from: gA, aBrightness: Int(aBrightness), to: gB, bBrightness: Int(bBrightness), durationSec: durationSec, device: device) }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: transitionOn ? "power" : "poweroff")
+                            .font(.caption)
+                        Text(transitionOn ? "ON" : "OFF")
+                            .font(.caption.weight(.medium))
+                    }
+                    .foregroundColor(transitionOn ? .white : .white.opacity(0.6))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(transitionOn ? Color.white.opacity(0.15) : Color.white.opacity(0.08))
+                    )
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(!transitionOn)
-                .accessibilityHint("Begins the transition using the selected gradients.")
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
 
-            // Collapsible Transition Controls
+            // Transition Controls
             if transitionOn {
-                VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Start Button
+                    Button("Start Transition") {
+                        let gA = currentGradientA
+                        let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
+                        Task { await viewModel.startTransition(from: gA, aBrightness: Int(aBrightness), to: gB, bBrightness: Int(bBrightness), durationSec: durationSec, device: device) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityHint("Begins the transition using the selected gradients.")
+                    
                     // Duration (mm:ss)
-                    VStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 6) {
                         let minutes = Int(durationSec) / 60
                         let seconds = Int(durationSec) % 60
-                        HStack { Text(String(format: "Duration  %02d:%02d", minutes, seconds)).foregroundColor(.white); Spacer() }
+                        HStack {
+                            Text("Duration")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                            Spacer()
+                            Text(String(format: "%02d:%02d", minutes, seconds))
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                         Slider(value: $durationSec, in: 2...120, step: 1)
+                            .tint(.white)
                             .accessibilityLabel("Transition duration")
                             .accessibilityValue(String(format: "%d minutes %d seconds", minutes, seconds))
                             .accessibilityHint("Controls how long the gradient transition runs.")
@@ -113,12 +143,20 @@ struct TransitionPane: View {
                                 }
                             }
                     }
-                    .padding(.horizontal, 16)
 
                     // A Brightness
-                    VStack(spacing: 6) {
-                        HStack { Text("A Brightness").foregroundColor(.white); Spacer(); Text("\(Int(round(aBrightness/255.0*100)))%").foregroundColor(.white.opacity(0.8)) }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("A Brightness")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                            Spacer()
+                            Text("\(Int(round(aBrightness/255.0*100)))%")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                         Slider(value: $aBrightness, in: 0...255, step: 1)
+                            .tint(.white)
                             .accessibilityLabel("Gradient A brightness")
                             .accessibilityValue("\(Int(round(aBrightness/255.0*100))) percent")
                             .accessibilityHint("Controls the brightness of gradient A during transitions.")
@@ -134,48 +172,51 @@ struct TransitionPane: View {
                                 }
                             }
                     }
-                    .padding(.horizontal, 16)
 
                     // A Gradient
-                    GradientBar(
-                        gradient: Binding(
-                            get: { currentGradientA },
-                            set: { newGradient in
-                                gradientA = newGradient
-                                stopsA = newGradient.stops
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Gradient A")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                        GradientBar(
+                            gradient: Binding(
+                                get: { currentGradientA },
+                                set: { newGradient in
+                                    gradientA = newGradient
+                                    stopsA = newGradient.stops
+                                }
+                            ),
+                            selectedStopId: $selectedA,
+                            onTapStop: { id in
+                                wheelTarget = "A"; selectedA = id
+                                if let idx = currentGradientA.stops.firstIndex(where: { $0.id == id }) { 
+                                    wheelInitial = currentGradientA.stops[idx].color
+                                    showWheel = true 
+                                }
+                            },
+                            onTapAnywhere: { t, _ in
+                                let c = GradientSampler.sampleColor(at: t, stops: currentGradientA.stops)
+                                let new = GradientStop(position: t, hexColor: c.toHex())
+                                var updatedStops = currentGradientA.stops
+                                updatedStops.append(new)
+                                updatedStops.sort { $0.position < $1.position }
+                                gradientA = LEDGradient(stops: updatedStops)
+                                stopsA = updatedStops
+                                selectedA = new.id
+                                throttleApply(stops: updatedStops, phase: .changed)
+                            },
+                            onStopsChanged: { stops, phase in
+                                gradientA = LEDGradient(stops: stops)
+                                stopsA = stops
+                                throttleApply(stops: stops, phase: phase)
                             }
-                        ),
-                        selectedStopId: $selectedA,
-                        onTapStop: { id in
-                            wheelTarget = "A"; selectedA = id
-                            if let idx = currentGradientA.stops.firstIndex(where: { $0.id == id }) { 
-                                wheelInitial = currentGradientA.stops[idx].color
-                                showWheel = true 
-                            }
-                        },
-                        onTapAnywhere: { t, _ in
-                            let c = GradientSampler.sampleColor(at: t, stops: currentGradientA.stops)
-                            let new = GradientStop(position: t, hexColor: c.toHex())
-                            var updatedStops = currentGradientA.stops
-                            updatedStops.append(new)
-                            updatedStops.sort { $0.position < $1.position }
-                            gradientA = LEDGradient(stops: updatedStops)
-                            stopsA = updatedStops
-                            selectedA = new.id
-                            throttleApply(stops: updatedStops, phase: .changed)
-                        },
-                        onStopsChanged: { stops, phase in
-                            gradientA = LEDGradient(stops: stops)
-                            stopsA = stops
-                            throttleApply(stops: stops, phase: phase)
-                        }
-                    )
-                    .frame(height: 56)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Gradient A editor")
-                    .accessibilityValue("\(currentGradientA.stops.count) color stops")
-                    .accessibilityHint("Double tap to adjust colors in gradient A.")
-                    .padding(.horizontal, 16)
+                        )
+                        .frame(height: 56)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Gradient A editor")
+                        .accessibilityValue("\(currentGradientA.stops.count) color stops")
+                        .accessibilityHint("Double tap to adjust colors in gradient A.")
+                    }
                     
                     // Inline color picker for Gradient A
                     if showWheel && wheelTarget == "A", let selectedId = selectedA {
@@ -194,7 +235,30 @@ struct TransitionPane: View {
                             onColorChange: { color, temperature, whiteLevel in
                                 if let idx = currentGradientA.stops.firstIndex(where: { $0.id == selectedId }) {
                                     var updatedStops = currentGradientA.stops
-                                    updatedStops[idx].hexColor = color.toHex()
+                                    
+                                    // Handle temperature if provided (same pattern as UnifiedColorPane)
+                                    if let temp = temperature {
+                                        // Calculate expected hex color from CCT temperature
+                                        let r: CGFloat, g: CGFloat, b: CGFloat
+                                        if temp <= 0.5 {
+                                            let factor = temp * 2.0
+                                            r = 1.0
+                                            g = 0.627 + (factor * (0.945 - 0.627))
+                                            b = 0.0 + (factor * (0.918 - 0.0))
+                                        } else {
+                                            let factor = (temp - 0.5) * 2.0
+                                            r = 1.0 - (factor * (1.0 - 0.796))
+                                            g = 0.945 - (factor * (0.945 - 0.859))
+                                            b = 0.918 + (factor * (1.0 - 0.918))
+                                        }
+                                        let redInt = Int((r * 255).rounded())
+                                        let greenInt = Int((g * 255).rounded())
+                                        let blueInt = Int((b * 255).rounded())
+                                        updatedStops[idx].hexColor = String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+                                    } else {
+                                        updatedStops[idx].hexColor = color.toHex()
+                                    }
+                                    
                                     gradientA = LEDGradient(stops: updatedStops)
                                     stopsA = updatedStops
                                     Task { await applyNow(stops: updatedStops) }
@@ -216,13 +280,21 @@ struct TransitionPane: View {
                             }
                         )
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .padding(.horizontal, 16)
                     }
 
                     // B Brightness
-                    VStack(spacing: 6) {
-                        HStack { Text("B Brightness").foregroundColor(.white); Spacer(); Text("\(Int(round(bBrightness/255.0*100)))%").foregroundColor(.white.opacity(0.8)) }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("B Brightness")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                            Spacer()
+                            Text("\(Int(round(bBrightness/255.0*100)))%")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                         Slider(value: $bBrightness, in: 0...255, step: 1)
+                            .tint(.white)
                             .accessibilityLabel("Gradient B brightness")
                             .accessibilityValue("\(Int(round(bBrightness/255.0*100))) percent")
                             .accessibilityHint("Controls the brightness of gradient B during transitions.")
@@ -238,49 +310,52 @@ struct TransitionPane: View {
                                 }
                             }
                     }
-                    .padding(.horizontal, 16)
 
                     // B Gradient (with preview capability)
-                    GradientBar(
-                gradient: Binding(
-                    get: { currentGradientB },
-                    set: { newGradient in
-                        gradientB = newGradient
-                        stopsB = newGradient.stops
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Gradient B")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                        GradientBar(
+                            gradient: Binding(
+                                get: { currentGradientB },
+                                set: { newGradient in
+                                    gradientB = newGradient
+                                    stopsB = newGradient.stops
+                                }
+                            ),
+                            selectedStopId: $selectedB,
+                            onTapStop: { id in
+                                wheelTarget = "B"; selectedB = id
+                                let currentStops = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
+                                if let idx = currentStops.firstIndex(where: { $0.id == id }) {
+                                    wheelInitial = currentStops[idx].color
+                                    showWheel = true
+                                }
+                            },
+                            onTapAnywhere: { t, _ in
+                                var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
+                                let c = GradientSampler.sampleColor(at: t, stops: src)
+                                let new = GradientStop(position: t, hexColor: c.toHex())
+                                src.append(new)
+                                src.sort { $0.position < $1.position }
+                                gradientB = LEDGradient(stops: src)
+                                stopsB = src
+                                selectedB = new.id
+                                throttleApplyB(stops: src, phase: .changed)
+                            },
+                            onStopsChanged: { stops, phase in
+                                gradientB = LEDGradient(stops: stops)
+                                stopsB = stops
+                                throttleApplyB(stops: stops, phase: phase)
+                            }
+                        )
+                        .frame(height: 56)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Gradient B editor")
+                        .accessibilityValue("\((currentGradientB.stops.isEmpty ? currentGradientA.stops.count : currentGradientB.stops.count)) color stops")
+                        .accessibilityHint("Double tap to adjust colors in gradient B.")
                     }
-                ),
-                selectedStopId: $selectedB,
-                onTapStop: { id in
-                    wheelTarget = "B"; selectedB = id
-                    let currentStops = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
-                    if let idx = currentStops.firstIndex(where: { $0.id == id }) {
-                        wheelInitial = currentStops[idx].color
-                        showWheel = true
-                    }
-                },
-                onTapAnywhere: { t, _ in
-                    var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
-                    let c = GradientSampler.sampleColor(at: t, stops: src)
-                    let new = GradientStop(position: t, hexColor: c.toHex())
-                    src.append(new)
-                    src.sort { $0.position < $1.position }
-                    gradientB = LEDGradient(stops: src)
-                    stopsB = src
-                    selectedB = new.id
-                    throttleApplyB(stops: src, phase: .changed)
-                },
-                onStopsChanged: { stops, phase in
-                    gradientB = LEDGradient(stops: stops)
-                    stopsB = stops
-                    throttleApplyB(stops: stops, phase: phase)
-                }
-                    )
-                    .frame(height: 56)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Gradient B editor")
-                    .accessibilityValue("\((currentGradientB.stops.isEmpty ? currentGradientA.stops.count : currentGradientB.stops.count)) color stops")
-                    .accessibilityHint("Double tap to adjust colors in gradient B.")
-                    .padding(.horizontal, 16)
                     
                     // Inline color picker for Gradient B
                     if showWheel && wheelTarget == "B", let selectedId = selectedB {
@@ -299,7 +374,29 @@ struct TransitionPane: View {
                             onColorChange: { color, temperature, whiteLevel in
                                 var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
                                 if let idx = src.firstIndex(where: { $0.id == selectedId }) {
-                                    src[idx].hexColor = color.toHex()
+                                    // Handle temperature if provided (same pattern as UnifiedColorPane)
+                                    if let temp = temperature {
+                                        // Calculate expected hex color from CCT temperature
+                                        let r: CGFloat, g: CGFloat, b: CGFloat
+                                        if temp <= 0.5 {
+                                            let factor = temp * 2.0
+                                            r = 1.0
+                                            g = 0.627 + (factor * (0.945 - 0.627))
+                                            b = 0.0 + (factor * (0.918 - 0.0))
+                                        } else {
+                                            let factor = (temp - 0.5) * 2.0
+                                            r = 1.0 - (factor * (1.0 - 0.796))
+                                            g = 0.945 - (factor * (0.945 - 0.859))
+                                            b = 0.918 + (factor * (1.0 - 0.918))
+                                        }
+                                        let redInt = Int((r * 255).rounded())
+                                        let greenInt = Int((g * 255).rounded())
+                                        let blueInt = Int((b * 255).rounded())
+                                        src[idx].hexColor = String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+                                    } else {
+                                        src[idx].hexColor = color.toHex()
+                                    }
+                                    
                                     gradientB = LEDGradient(stops: src)
                                     stopsB = src
                                     Task { await applyNowB(stops: src) }
@@ -321,22 +418,31 @@ struct TransitionPane: View {
                             }
                         )
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .padding(.horizontal, 16)
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
+            } else {
+                // Effects disabled state (like EffectsPane)
+                VStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.title2)
+                        .foregroundColor(.white.opacity(0.4))
+                    Text("Transitions disabled")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                    Text("Toggle ON to enable transitions")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
             }
         }
-        .padding(.vertical, 20)
+        .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(backgroundFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(colorSchemeContrast == .increased ? 0.3 : 0.12), lineWidth: 1)
-                )
         )
-        .padding(.horizontal, 20)
         .task {
             // Initialize gradients on first appearance
             if gradientA == nil {
