@@ -213,6 +213,14 @@ class DeviceControlViewModel: ObservableObject {
     
     // Add this dictionary to coordinate with UI-level optimistic state
     private var uiToggleStates: [String: Bool] = [:]
+
+    // Pending rename tracking to prevent WebSocket rollbacks
+    private struct PendingRename {
+        let targetName: String
+        let initiatedAt: Date
+    }
+    private var pendingRenames: [String: PendingRename] = [:]
+    private let renameProtectionWindow: TimeInterval = 8.0
     
     // Real-time control state
     @Published var isRealTimeEnabled: Bool = true
@@ -539,7 +547,27 @@ class DeviceControlViewModel: ObservableObject {
         
         // Update device info if available (always safe to update)
         if let info = stateUpdate.info {
-            if updatedDevice.name != info.name {
+            let deviceId = stateUpdate.deviceId
+            if let pending = pendingRenames[deviceId] {
+                let elapsed = Date().timeIntervalSince(pending.initiatedAt)
+                if info.name == pending.targetName {
+                    // Rename confirmed by device - accept and clear pending state
+                    if updatedDevice.name != info.name {
+                        updatedDevice.name = info.name
+                        hasSignificantChanges = true
+                    }
+                    pendingRenames.removeValue(forKey: deviceId)
+                } else if elapsed < renameProtectionWindow {
+                    // Skip applying stale name while rename is in flight
+                } else {
+                    // Rename appears to have failed or timed out - clear pending and accept info name
+                    pendingRenames.removeValue(forKey: deviceId)
+                    if updatedDevice.name != info.name {
+                        updatedDevice.name = info.name
+                        hasSignificantChanges = true
+                    }
+                }
+            } else if updatedDevice.name != info.name {
                 updatedDevice.name = info.name
                 hasSignificantChanges = true
             }
@@ -1698,7 +1726,7 @@ class DeviceControlViewModel: ObservableObject {
         await colorPipeline.apply(intent, to: device)
     }
 
-    func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 20, aBrightness: Int? = nil, bBrightness: Int? = nil) async {
+    func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 60, aBrightness: Int? = nil, bBrightness: Int? = nil) async {
         await transitionRunner.start(
             device: device,
             from: from,
@@ -1719,6 +1747,7 @@ class DeviceControlViewModel: ObservableObject {
         do {
             // First, update the WLED device configuration
             _ = try await apiService.updateConfig(for: device, name: name)
+            pendingRenames[device.id] = PendingRename(targetName: name, initiatedAt: Date())
             
             // Then update locally
             var updatedDevice = device
@@ -1739,6 +1768,7 @@ class DeviceControlViewModel: ObservableObject {
             clearError()
             
         } catch {
+            pendingRenames.removeValue(forKey: device.id)
             let mappedError = mapToWLEDError(error, device: device)
             presentError(mappedError)
         }
@@ -1787,14 +1817,14 @@ class DeviceControlViewModel: ObservableObject {
         await colorPipeline.apply(intent, to: device)
     }
     
-    func startTransition(from: LEDGradient, aBrightness: Int, to: LEDGradient, bBrightness: Int, durationSec: Double, device: WLEDDevice) async {
+    func startTransition(from: LEDGradient, aBrightness: Int, to: LEDGradient, bBrightness: Int, durationSec: Double, device: WLEDDevice, fps: Int = 60) async {
         // Use existing transitionRunner with brightness tweening
         await transitionRunner.start(
             device: device,
             from: from,
             to: to,
             durationSec: durationSec,
-            fps: 20,
+            fps: fps,
             segmentId: 0,
             aBrightness: aBrightness,
             bBrightness: bBrightness,
@@ -1877,7 +1907,7 @@ class DeviceControlViewModel: ObservableObject {
                 from: gA,
                 to: gB,
                 durationSec: dur,
-                fps: 20,
+                fps: 60,
                 aBrightness: scene.aBrightness,
                 bBrightness: scene.bBrightness
             )

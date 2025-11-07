@@ -496,6 +496,12 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         case .data(let data):
             parseStateUpdate(from: data, deviceId: deviceId)
         case .string(let text):
+            // Handle "pong" response to "ping" (health check) - don't try to parse as JSON
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "pong" {
+                // Silently handle pong - it's just a health check response
+                return
+            }
+            
             guard let data = text.data(using: .utf8) else { return }
             parseStateUpdate(from: data, deviceId: deviceId)
         @unknown default:
@@ -507,6 +513,13 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         // Parse on background thread to avoid blocking main thread
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            
+            // Check if this is a "pong" message before trying to parse as JSON
+            if let text = String(data: data, encoding: .utf8),
+               text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "pong" {
+                // Silently handle pong - it's just a health check response
+                return
+            }
             
             do {
                 let response = try JSONDecoder().decode(WLEDResponse.self, from: data)
@@ -533,6 +546,13 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
                 }
                 
             } catch {
+                // Check if this is a "pong" message (might have been missed earlier)
+                if let text = String(data: data, encoding: .utf8),
+                   text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "pong" {
+                    // Silently handle pong - don't log as error
+                    return
+                }
+                
                 // Log parsing errors but don't spam - only log once per minute per device
                 let now = Date()
                 let lastErrorKey = "lastParseError_\(deviceId)"
@@ -549,9 +569,13 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
                     
                     // Try to get raw message for debugging
                     if let rawMessage = String(data: data, encoding: .utf8) {
+                        #if DEBUG
                         self.logger.debug("Failed to parse WebSocket message for device \(deviceId). Raw message: \(rawMessage)")
+                        #endif
                     } else {
+                        #if DEBUG
                         self.logger.debug("Failed to parse WebSocket message for device \(deviceId): \(error.localizedDescription)")
+                        #endif
                     }
                 }
             }

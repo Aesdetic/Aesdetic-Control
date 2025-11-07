@@ -8,6 +8,8 @@ struct EffectsPane: View {
     
     @State private var isApplyingEffect: Bool = false
     @State private var isLoadingMetadata: Bool = false
+    @State private var isSavingPreset = false
+    @State private var showSaveSuccess = false
     
     private var metadataBundle: EffectMetadataBundle? {
         viewModel.effectMetadata(for: device)
@@ -124,11 +126,47 @@ struct EffectsPane: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Effects", systemImage: "sparkles")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Spacer()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Label("Effects", systemImage: "sparkles")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Spacer()
+                
+                // Preset button (only when effects are ON)
+                if isEffectEnabled {
+                    Button(action: {
+                        Task {
+                            await saveEffectPresetDirectly()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            if isSavingPreset {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(.white)
+                            } else if showSaveSuccess {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            } else {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.caption)
+                            }
+                            Text("Preset")
+                                .font(.caption.weight(.medium))
+                        }
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white.opacity(0.1))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isApplyingEffect || isSavingPreset)
+                }
                 
                 // Effect On/Off Toggle (like native WLED)
                 Button(action: {
@@ -169,7 +207,7 @@ struct EffectsPane: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isApplyingEffect)
-                
+
                 if effectOptions.isEmpty && !isApplyingEffect {
                     if isLoadingMetadata {
                         ProgressView()
@@ -179,6 +217,12 @@ struct EffectsPane: View {
                         EmptyView()
                     }
                 }
+                }
+                
+                // Explanatory subtext
+                Text("Animated patterns like Fire, Rainbow, and more")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
             }
             
             if isEffectEnabled {
@@ -199,20 +243,6 @@ struct EffectsPane: View {
                 if supportsPalette, !paletteOptions.isEmpty {
                     palettePicker
                 }
-            } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .font(.title2)
-                        .foregroundColor(.white.opacity(0.4))
-                    Text("Effects disabled")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                    Text("Toggle ON to enable effects")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.5))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
             }
         }
         .padding(16)
@@ -303,6 +333,68 @@ struct EffectsPane: View {
 private extension EffectsPane {
     var backgroundFill: Color {
         Color.white.opacity(colorSchemeContrast == .increased ? 0.12 : 0.06)
+    }
+    
+    // MARK: - Direct Preset Saving
+    
+    func saveEffectPresetDirectly() async {
+        await MainActor.run {
+            isSavingPreset = true
+            showSaveSuccess = false
+        }
+        
+        let presetName = "Effect Preset \(Date().formatted(date: .omitted, time: .shortened))"
+        var preset = WLEDEffectPreset(
+            name: presetName,
+            deviceId: device.id,
+            effectId: currentState.effectId,
+            speed: currentState.speed,
+            intensity: currentState.intensity,
+            paletteId: currentState.paletteId,
+            brightness: device.brightness
+        )
+        
+        // STEP 1: Save locally FIRST (immediate feedback, works even if WLED is offline)
+        await MainActor.run {
+            PresetsStore.shared.addEffectPreset(preset)
+            isSavingPreset = false
+            showSaveSuccess = true
+            
+            // Hide success indicator after 2 seconds
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await MainActor.run {
+                    showSaveSuccess = false
+                }
+            }
+        }
+        
+        // STEP 2: Try to sync to WLED device in background (non-blocking)
+        Task.detached(priority: .background) {
+            do {
+                let apiService = WLEDAPIService.shared
+                let existingPresets = try await apiService.fetchPresets(for: device)
+                let usedIds = Set(existingPresets.map { $0.id })
+                let presetId = (1...250).first { !usedIds.contains($0) } ?? 1
+                
+                let savedId = try await apiService.saveEffectPreset(preset, to: device, presetId: presetId)
+                
+                // Update local preset with WLED ID if sync succeeded
+                await MainActor.run {
+                    preset.wledPresetId = savedId
+                    PresetsStore.shared.updateEffectPreset(preset)
+                }
+                
+                #if DEBUG
+                print("✅ Effect preset synced to WLED device: ID \(savedId)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to sync effect preset to WLED (saved locally): \(error.localizedDescription)")
+                #endif
+                // Preset is still saved locally, just not synced to WLED
+            }
+        }
     }
 }
 

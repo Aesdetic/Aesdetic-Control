@@ -55,11 +55,47 @@ struct TransitionPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Spacer()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Spacer()
+                
+                // Preset button (only when transitions are ON)
+                if transitionOn {
+                    Button(action: {
+                        Task {
+                            await saveTransitionPresetDirectly()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            if isSavingPreset {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(.white)
+                            } else if showSaveSuccess {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            } else {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.caption)
+                            }
+                            Text("Preset")
+                                .font(.caption.weight(.medium))
+                        }
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white.opacity(0.1))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isSavingPreset)
+                }
                 
                 // Transition On/Off Toggle (like EffectsPane)
                 Button(action: {
@@ -96,23 +132,17 @@ struct TransitionPane: View {
                     )
                 }
                 .buttonStyle(.plain)
+                }
+                
+                // Explanatory subtext
+                Text("Smoothly blend between two color gradients over time")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
             }
 
             // Transition Controls
             if transitionOn {
                 VStack(alignment: .leading, spacing: 12) {
-                    // Start Button
-                    Button("Start Transition") {
-                        let gA = currentGradientA
-                        let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
-                        Task { await viewModel.startTransition(from: gA, aBrightness: Int(aBrightness), to: gB, bBrightness: Int(bBrightness), durationSec: durationSec, device: device) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.white)
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityHint("Begins the transition using the selected gradients.")
-                    
                     // Duration (mm:ss)
                     VStack(alignment: .leading, spacing: 6) {
                         let minutes = Int(durationSec) / 60
@@ -391,21 +421,20 @@ struct TransitionPane: View {
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
-            } else {
-                // Effects disabled state (like EffectsPane)
-                VStack(spacing: 8) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.title2)
-                        .foregroundColor(.white.opacity(0.4))
-                    Text("Transitions disabled")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                    Text("Toggle ON to enable transitions")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.5))
+            }
+            
+            // Bottom button: Start Transition
+            if transitionOn {
+                Button("Start Transition") {
+                    let gA = currentGradientA
+                    let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
+                    Task { await viewModel.startTransition(from: gA, aBrightness: Int(aBrightness), to: gB, bBrightness: Int(bBrightness), durationSec: durationSec, device: device) }
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.white)
+                .foregroundColor(.black)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
+                .accessibilityHint("Begins the transition using the selected gradients.")
             }
         }
         .padding(16)
@@ -459,6 +488,8 @@ struct TransitionPane: View {
     
     // Separate work item for Gradient B to avoid conflicts
     @State private var applyWorkItemB: DispatchWorkItem? = nil
+    @State private var isSavingPreset = false
+    @State private var showSaveSuccess = false
     
     private func throttleApplyB(stops: [GradientStop], phase: DragPhase) {
         let ledCount = device.state?.segments.first?.len ?? 120
@@ -499,5 +530,68 @@ struct TransitionPane: View {
 private extension TransitionPane {
     var backgroundFill: Color {
         Color.white.opacity(colorSchemeContrast == .increased ? 0.12 : 0.06)
+    }
+    
+    // MARK: - Direct Preset Saving
+    
+    func saveTransitionPresetDirectly() async {
+        await MainActor.run {
+            isSavingPreset = true
+            showSaveSuccess = false
+        }
+        
+        let presetName = "Transition \(Date().formatted(date: .omitted, time: .shortened))"
+        let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
+        var preset = TransitionPreset(
+            name: presetName,
+            deviceId: device.id,
+            gradientA: currentGradientA,
+            brightnessA: Int(aBrightness),
+            gradientB: gB,
+            brightnessB: Int(bBrightness),
+            durationSec: durationSec
+        )
+        
+        // STEP 1: Save locally FIRST (immediate feedback, works even if WLED is offline)
+        await MainActor.run {
+            PresetsStore.shared.addTransitionPreset(preset)
+            isSavingPreset = false
+            showSaveSuccess = true
+            
+            // Hide success indicator after 2 seconds
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await MainActor.run {
+                    showSaveSuccess = false
+                }
+            }
+        }
+        
+        // STEP 2: Try to sync to WLED device in background (non-blocking)
+        Task.detached(priority: .background) {
+            do {
+                let apiService = WLEDAPIService.shared
+                let existingPlaylists = try await apiService.fetchPlaylists(for: device)
+                let usedIds = Set(existingPlaylists.map { $0.id })
+                let playlistId = (1...16).first { !usedIds.contains($0) } ?? 1
+                
+                let savedId = try await apiService.saveTransitionPreset(preset, to: device, playlistId: playlistId)
+                
+                // Update local preset with WLED ID if sync succeeded
+                await MainActor.run {
+                    preset.wledPlaylistId = savedId
+                    PresetsStore.shared.updateTransitionPreset(preset)
+                }
+                
+                #if DEBUG
+                print("✅ Transition preset synced to WLED device: Playlist ID \(savedId)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to sync transition preset to WLED (saved locally): \(error.localizedDescription)")
+                #endif
+                // Preset is still saved locally, just not synced to WLED
+            }
+        }
     }
 }

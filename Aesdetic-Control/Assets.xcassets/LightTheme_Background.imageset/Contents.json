@@ -1,12 +1,11 @@
 {
   "images" : [
     {
-      "filename" : "LightTheme_Background 1.png",
+      "filename" : "LightTheme_Background.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
-      "filename" : "LightTheme_Background.png",
       "idiom" : "universal",
       "scale" : "2x"
     },

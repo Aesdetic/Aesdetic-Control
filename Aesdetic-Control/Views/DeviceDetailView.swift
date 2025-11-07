@@ -43,13 +43,8 @@ struct DeviceDetailView: View {
                     dismissColorPicker = false
                 }
             }
-            .sheet(isPresented: $showSaveSceneDialog) {
-                SaveSceneDialog(device: device, onSave: { scene in
-                    scenesStore.add(scene)
-                })
-            }
             .sheet(isPresented: $showAddAutomation) {
-                AddAutomationDialog(device: device, scenes: scenesStore.scenes) { automation in
+                AddAutomationDialog(device: device, scenes: []) { automation in
                     automationStore.add(automation)
                 }
             }
@@ -288,7 +283,7 @@ struct DeviceDetailView: View {
     private var tabItems: [(title: String, icon: String)] {
         [
             ("Colors", "paintbrush.fill"),
-            ("Scenes", "rectangle.stack.fill"),
+            ("Presets", "rectangle.stack.fill"),
             ("Automation", "clock.fill"),
             ("Sync", "arrow.triangle.2.circlepath")
         ]
@@ -301,8 +296,8 @@ struct DeviceDetailView: View {
         switch selectedTab {
         case "Colors":
             colorsTabContent
-        case "Scenes":
-            scenesTabContent
+        case "Presets":
+            presetsTabContent
         case "Automation":
             automationTabContent
         case "Sync":
@@ -327,9 +322,6 @@ struct DeviceDetailView: View {
             
             // Effects Section
             effectsSection
-            
-            // Presets Section
-            presetsSection
         }
     }
     
@@ -366,24 +358,9 @@ struct DeviceDetailView: View {
         )
     }
     
-    private var scenesTabContent: some View {
-        VStack(spacing: 16) {
-            // Save Current State Button
-            Button("Save Current as Scene") {
-                showSaveSceneDialog = true
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .accessibilityHint("Stores the current device state as a new scene.")
-            
-            // Scenes List
-            ForEach(scenesStore.scenes.filter { $0.deviceId == device.id }) { scene in
-                SceneRow(scene: scene) {
-                    Task {
-                        await viewModel.applyScene(scene, to: device)
-                    }
-                }
-            }
-        }
+    private var presetsTabContent: some View {
+        PresetsListView(device: device)
+            .environmentObject(viewModel)
     }
     
     private var automationTabContent: some View {
@@ -399,7 +376,7 @@ struct DeviceDetailView: View {
             ForEach(automationStore.automations.filter { $0.deviceId == device.id }) { automation in
                 AutomationRow(
                     automation: automation,
-                    scenes: scenesStore.scenes,
+                    scenes: [],
                     onToggle: { enabled in
                         var updated = automation
                         updated.enabled = enabled
@@ -529,11 +506,6 @@ struct DeviceDetailView: View {
     
     private var effectsSection: some View {
         EffectsPane(device: device, segmentId: selectedSegmentId)
-            .environmentObject(viewModel)
-    }
-    
-    private var presetsSection: some View {
-        PresetsPane(device: device)
             .environmentObject(viewModel)
     }
     

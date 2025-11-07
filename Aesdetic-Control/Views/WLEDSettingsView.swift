@@ -206,7 +206,14 @@ struct WLEDSettingsView: View {
     @State private var nightLightMode: Int = 0
     @State private var nightLightTargetBri: Int = 0
     @State private var isEditingName: Bool = false
-    @State private var editingName: String = ""
+    @State private var currentName: String
+    @State private var editingName: String
+
+    init(device: WLEDDevice) {
+        self.device = device
+        _currentName = State(initialValue: device.name)
+        _editingName = State(initialValue: device.name)
+    }
 
     var body: some View {
         ScrollView {
@@ -225,6 +232,17 @@ struct WLEDSettingsView: View {
         .navigationTitle("Config")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadState() }
+        .onReceive(viewModel.$devices) { devices in
+            if let updated = devices.first(where: { $0.id == device.id }) {
+                let newName = updated.name
+                if newName != currentName {
+                    currentName = newName
+                    if !isEditingName {
+                        editingName = newName
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Sections
@@ -237,7 +255,7 @@ struct WLEDSettingsView: View {
                     .font(.headline.weight(.medium))
                     .foregroundColor(.white.opacity(0.8))
                 
-                HStack {
+                HStack(spacing: 12) {
                     if isEditingName {
                         TextField("Device Name", text: $editingName)
                             .textFieldStyle(.plain)
@@ -245,34 +263,57 @@ struct WLEDSettingsView: View {
                             .font(.title3.weight(.semibold))
                             .onSubmit {
                                 Task {
-                                    await viewModel.renameDevice(device, to: editingName)
-                                    isEditingName = false
+                                    await commitDeviceRename()
                                 }
                             }
                             .onAppear {
-                                editingName = device.name
+                                editingName = currentName
                             }
                     } else {
-                        Text(device.name)
+                        Text(currentName)
                             .font(.title3.weight(.semibold))
                             .foregroundColor(.white)
                     }
                     
                     Spacer()
                     
-                    Button(action: {
-                        if isEditingName {
-                            // Cancel editing
-                            isEditingName = false
-                        } else {
-                            // Start editing
-                            isEditingName = true
-                            editingName = device.name
+                    if isEditingName {
+                        HStack(spacing: 8) {
+                            Button(action: {
+                                Task { await commitDeviceRename() }
+                            }) {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.white)
+                                    .font(.subheadline.weight(.medium))
+                                    .frame(width: 32, height: 32)
+                                    .background(Color.white.opacity(0.2))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(editingName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            
+                            Button(action: {
+                                editingName = currentName
+                                isEditingName = false
+                            }) {
+                                Image(systemName: "xmark")
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .font(.subheadline.weight(.medium))
+                                    .frame(width: 32, height: 32)
+                                    .background(Color.white.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
                         }
-                    }) {
-                        Image(systemName: isEditingName ? "xmark" : "pencil")
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.subheadline.weight(.medium))
+                    } else {
+                        Button(action: {
+                            isEditingName = true
+                            editingName = currentName
+                        }) {
+                            Image(systemName: "pencil")
+                                .foregroundColor(.white.opacity(0.7))
+                                .font(.subheadline.weight(.medium))
+                        }
                     }
                 }
             }
@@ -498,6 +539,28 @@ struct WLEDSettingsView: View {
         }
     }
 
+    @MainActor
+    private func commitDeviceRename() async {
+        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmed.isEmpty else {
+            editingName = device.name
+            isEditingName = false
+            return
+        }
+
+        guard trimmed != currentName else {
+            editingName = currentName
+            isEditingName = false
+            return
+        }
+
+        await viewModel.renameDevice(device, to: trimmed)
+        currentName = trimmed
+        editingName = trimmed
+        isEditingName = false
+    }
+
     private func settingsButton(_ title: String) -> some View {
         Text(title)
             .font(.headline.weight(.semibold))
@@ -524,6 +587,13 @@ struct WLEDSettingsView: View {
                 isOn = resp.state.isOn
                 brightnessDouble = Double(resp.state.brightness) / 255.0 * 100.0
                 if let len = resp.state.segments.first?.len { segStop = len }
+                let newName = resp.info.name
+                if currentName != newName {
+                    currentName = newName
+                    if !isEditingName {
+                        editingName = newName
+                    }
+                }
             }
         } catch { }
     }

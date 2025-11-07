@@ -1,4 +1,3 @@
-//
 //  WLEDAPIModels.swift
 //  Aesdetic-Control
 //

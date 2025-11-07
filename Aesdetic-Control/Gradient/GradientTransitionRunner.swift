@@ -18,7 +18,7 @@ actor GradientTransitionRunner {
         from: LEDGradient,
         to: LEDGradient,
         durationSec: Double,
-        fps: Int = 24,
+        fps: Int = 60,
         segmentId: Int = 0,
         onProgress: ((Double) -> Void)? = nil
     ) async {
@@ -40,7 +40,7 @@ actor GradientTransitionRunner {
         from: LEDGradient,
         to: LEDGradient,
         durationSec: Double,
-        fps: Int = 24,
+        fps: Int = 60,
         segmentId: Int = 0,
         aBrightness: Int?,
         bBrightness: Int?,

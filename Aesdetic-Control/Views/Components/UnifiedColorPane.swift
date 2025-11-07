@@ -14,6 +14,8 @@ struct UnifiedColorPane: View {
     @State private var briUI: Double
     @State private var applyWorkItem: DispatchWorkItem? = nil
     @State private var stopTemperatures: [UUID: Double] = [:]  // Track temperature (0-1) for each stop
+    @State private var isSavingPreset = false
+    @State private var showSaveSuccess = false
 
     init(device: WLEDDevice, dismissColorPicker: Binding<Bool>, segmentId: Int = 0) {
         self.device = device
@@ -39,6 +41,47 @@ struct UnifiedColorPane: View {
 
     var body: some View {
         VStack(spacing: 16) {
+            // Header with Preset button (matching Transition/Effects style)
+            HStack {
+                Label("Colors", systemImage: "paintbrush.fill")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+                
+                Button(action: {
+                    Task {
+                        await saveColorPresetDirectly()
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        if isSavingPreset {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(.white)
+                        } else if showSaveSuccess {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        } else {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.caption)
+                        }
+                        Text("Preset")
+                            .font(.caption.weight(.medium))
+                    }
+                    .foregroundColor(.white.opacity(0.8))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.1))
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isSavingPreset)
+            }
+            .padding(.horizontal, 16)
+            
             // Brightness with percent label; apply on release
             VStack(spacing: 6) {
                 HStack {
@@ -399,6 +442,65 @@ private extension UnifiedColorPane {
 
     func adjustedOpacity(_ base: Double) -> Double {
         colorSchemeContrast == .increased ? min(1.0, base * 1.7) : base
+    }
+    
+    // MARK: - Direct Preset Saving
+    
+    func saveColorPresetDirectly() async {
+        await MainActor.run {
+            isSavingPreset = true
+            showSaveSuccess = false
+        }
+        
+        let presetName = "Color Preset \(Date().formatted(date: .omitted, time: .shortened))"
+        var preset = ColorPreset(
+            name: presetName,
+            gradientStops: currentGradient.stops,
+            brightness: Int(briUI),
+            temperature: stopTemperatures.values.first ?? (stopTemperatures.isEmpty ? nil : 0.5)
+        )
+        
+        // STEP 1: Save locally FIRST (immediate feedback, works even if WLED is offline)
+        await MainActor.run {
+            PresetsStore.shared.addColorPreset(preset)
+            isSavingPreset = false
+            showSaveSuccess = true
+            
+            // Hide success indicator after 2 seconds
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await MainActor.run {
+                    showSaveSuccess = false
+                }
+            }
+        }
+        
+        // STEP 2: Try to sync to WLED device in background (non-blocking)
+        Task.detached(priority: .background) {
+            do {
+                let apiService = WLEDAPIService.shared
+                let existingPresets = try await apiService.fetchPresets(for: device)
+                let usedIds = Set(existingPresets.map { $0.id })
+                let presetId = (1...250).first { !usedIds.contains($0) } ?? 1
+                
+                let savedId = try await apiService.saveColorPreset(preset, to: device, presetId: presetId)
+                
+                // Update local preset with WLED ID if sync succeeded
+                await MainActor.run {
+                    preset.wledPresetId = savedId
+                    PresetsStore.shared.updateColorPreset(preset)
+                }
+                
+                #if DEBUG
+                print("✅ Color preset synced to WLED device: ID \(savedId)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to sync color preset to WLED (saved locally): \(error.localizedDescription)")
+                #endif
+                // Preset is still saved locally, just not synced to WLED
+            }
+        }
     }
 }
 
