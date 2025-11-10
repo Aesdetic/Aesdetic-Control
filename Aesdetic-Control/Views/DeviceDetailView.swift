@@ -18,6 +18,9 @@ struct DeviceDetailView: View {
     @State private var isToggling: Bool = false
     @State private var dismissColorPicker: Bool = false
     @State private var selectedSegmentId: Int = 0  // Track selected segment for multi-segment devices
+    @State private var presetRenameContext: PresetRenameContext?
+    @State private var presetRenameEditedName: String = ""
+    @FocusState private var isPresetRenameFieldFocused: Bool
     
     // Use coordinated power state from ViewModel
     private var currentPowerState: Bool {
@@ -38,6 +41,46 @@ struct DeviceDetailView: View {
             .presentationDragIndicator(.hidden)
             .presentationBackground(.ultraThinMaterial)
             .navigationBarHidden(true)
+            .overlay {
+                if let renameContext = presetRenameContext {
+                    GeometryReader { proxy in
+                        let maxCardWidth = min(proxy.size.width - 48, 360)
+                        ZStack {
+                            Rectangle()
+                                .fill(Color.black.opacity(0.08))
+                                .background(.ultraThinMaterial)
+                                .blur(radius: 2)
+                                .ignoresSafeArea()
+                                .onTapGesture {
+                                    cancelPresetRename()
+                                }
+                            EditPresetNamePopup(
+                                currentName: renameContext.currentName,
+                                editedName: $presetRenameEditedName,
+                                isPresented: Binding(
+                                    get: { presetRenameContext != nil },
+                                    set: { isPresented in
+                                        if !isPresented {
+                                            cancelPresetRename()
+                                        }
+                                    }
+                                ),
+                                isTextFieldFocused: $isPresetRenameFieldFocused,
+                                onSave: { newName in
+                                    applyPresetRename(newName, for: renameContext)
+                                },
+                                onCancel: {
+                                    cancelPresetRename()
+                                }
+                            )
+                            .frame(maxWidth: maxCardWidth)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: presetRenameContext != nil)
+                }
+            }
             .onChange(of: dismissColorPicker) { _, newValue in
                 if newValue {
                     dismissColorPicker = false
@@ -359,7 +402,7 @@ struct DeviceDetailView: View {
     }
     
     private var presetsTabContent: some View {
-        PresetsListView(device: device)
+        PresetsListView(device: device, onRequestRename: startPresetRename)
             .environmentObject(viewModel)
     }
     
@@ -421,14 +464,60 @@ struct DeviceDetailView: View {
                     .foregroundColor(.white)
                 Spacer()
                 Stepper("\(udpnNetwork)", value: $udpnNetwork, in: 0...255)
-                .onChange(of: udpnNetwork) { _, newValue in
-                    Task {
-                        await viewModel.setUDPSync(device, send: nil, recv: nil, network: newValue)
+                    .onChange(of: udpnNetwork) { _, newValue in
+                        Task {
+                            await viewModel.setUDPSync(device, send: nil, recv: nil, network: newValue)
+                        }
                     }
-                }
             }
         }
         .padding()
+    }
+    
+    // MARK: - Preset Rename Handling
+
+    private func startPresetRename(_ context: PresetRenameContext) {
+        presetRenameContext = context
+        presetRenameEditedName = context.currentName
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            isPresetRenameFieldFocused = true
+        }
+    }
+    
+    private func applyPresetRename(_ newName: String, for context: PresetRenameContext) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            cancelPresetRename()
+            return
+        }
+        
+        let store = PresetsStore.shared
+        
+        switch context {
+        case .color(let preset):
+            guard preset.name != trimmed else { break }
+            var updated = preset
+            updated.name = trimmed
+            store.updateColorPreset(updated)
+        case .transition(let preset):
+            guard preset.name != trimmed else { break }
+            var updated = preset
+            updated.name = trimmed
+            store.updateTransitionPreset(updated)
+        case .effect(let preset):
+            guard preset.name != trimmed else { break }
+            var updated = preset
+            updated.name = trimmed
+            store.updateEffectPreset(updated)
+        }
+        
+        cancelPresetRename()
+    }
+    
+    private func cancelPresetRename() {
+        isPresetRenameFieldFocused = false
+        presetRenameContext = nil
+        presetRenameEditedName = ""
     }
     
     // MARK: - Colors Tab Helper Views

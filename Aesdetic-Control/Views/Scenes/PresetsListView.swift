@@ -4,6 +4,7 @@ struct PresetsListView: View {
     @ObservedObject var store = PresetsStore.shared
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
+    let onRequestRename: (PresetRenameContext) -> Void
     
     var body: some View {
         ScrollView {
@@ -71,7 +72,7 @@ struct PresetsListView: View {
                             }
                         }
                     }, onEdit: {
-                        // Edit handled in row
+                        onRequestRename(.color(preset))
                     }, onDelete: {
                         store.removeColorPreset(preset.id)
                     })
@@ -138,7 +139,7 @@ struct PresetsListView: View {
                                 }
                             }
                         }, onEdit: {
-                            // Edit handled in row
+                            onRequestRename(.transition(preset))
                         }, onDelete: {
                             store.removeTransitionPreset(preset.id)
                         })
@@ -153,7 +154,7 @@ struct PresetsListView: View {
             // Effects Subsection
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("WLED Effects")
+                    Text("Animations")
                         .font(.subheadline.weight(.medium))
                         .foregroundColor(.white.opacity(0.8))
                     Spacer()
@@ -199,7 +200,7 @@ struct PresetsListView: View {
                                 }
                             }
                         }, onEdit: {
-                            // Edit handled in row
+                            onRequestRename(.effect(preset))
                         }, onDelete: {
                             store.removeEffectPreset(preset.id)
                         })
@@ -234,15 +235,10 @@ struct ColorPresetRow: View {
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
-    
-    @State private var showEditPopup = false
-    @State private var editedName: String = ""
-    @FocusState private var isTextFieldFocused: Bool
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Header row: Name + Edit icon
-            HStack {
+            HStack(spacing: 8) {
                 Text(preset.name)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
@@ -251,12 +247,19 @@ struct ColorPresetRow: View {
                 Spacer()
                 
                 Button(action: {
-                    editedName = preset.name
-                    showEditPopup = true
-                    // Focus text field after a brief delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        isTextFieldFocused = true
-                    }
+                    onDelete()
+                }) {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: {
+                    onEdit()
                 }) {
                     Image(systemName: "pencil")
                         .font(.caption)
@@ -268,54 +271,33 @@ struct ColorPresetRow: View {
                 .buttonStyle(.plain)
             }
             
-            // Content row: Gradient Preview + Action buttons
-            HStack(spacing: 12) {
-                // Simple Gradient Preview (no tabs/handles) with brightness indicator
-                ZStack(alignment: .bottomTrailing) {
-                    LinearGradient(
-                        gradient: Gradient(stops: gradientStops),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(height: 34)
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-                    
-                    // Brightness indicator inside preview (bottom right)
-                    HStack(spacing: 4) {
-                        Image(systemName: "sun.max.fill")
-                            .font(.system(size: 10))
-                        Text(brightnessString)
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundColor(.white.opacity(0.9))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.black.opacity(0.4))
-                    )
-                    .padding(4)
-                }
+            // Simple Gradient Preview (no tabs/handles) with brightness indicator
+            ZStack(alignment: .bottomTrailing) {
+                LinearGradient(
+                    gradient: Gradient(stops: gradientStops),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 34)
+                .frame(maxWidth: .infinity)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
                 
-                // Action buttons
-                HStack(spacing: 8) {
-                    // Delete button (trash icon only)
-                    Button(action: {
-                        onDelete()
-                    }) {
-                        Image(systemName: "trash")
-                            .font(.body)
-                            .foregroundColor(.red.opacity(0.9))
-                            .frame(width: 40, height: 40)
-                            .background(Color.red.opacity(0.15))
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
+                // Brightness indicator inside preview (bottom right)
+                HStack(spacing: 4) {
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 10))
+                    Text(brightnessString)
+                        .font(.system(size: 11, weight: .medium))
                 }
+                .foregroundColor(brightnessLabelColor)
+                .opacity(0.7)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .padding(4)
             }
         }
         .padding(.vertical, 10)
@@ -330,26 +312,6 @@ struct ColorPresetRow: View {
         .accessibilityLabel("Color preset \(preset.name)")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: Text("Apply"), handleApply)
-        .overlay {
-            // Popup overlay for editing name
-            if showEditPopup {
-                EditPresetNamePopup(
-                    currentName: preset.name,
-                    editedName: $editedName,
-                    isPresented: $showEditPopup,
-                    isTextFieldFocused: $isTextFieldFocused,
-                    onSave: { newName in
-                        var updatedPreset = preset
-                        updatedPreset.name = newName
-                        PresetsStore.shared.updateColorPreset(updatedPreset)
-                        showEditPopup = false
-                    },
-                    onCancel: {
-                        showEditPopup = false
-                    }
-                )
-            }
-        }
     }
     
     private func handleApply() {
@@ -368,6 +330,29 @@ struct ColorPresetRow: View {
         let percent = Double(preset.brightness) / 255.0 * 100.0
         return "\(Int(round(percent)))%"
     }
+    
+    private var brightnessLabelColor: Color {
+        guard let trailingStop = preset.gradientStops.max(by: { $0.position < $1.position }) else {
+            return .white
+        }
+        let sanitizedHex = trailingStop.hexColor
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard sanitizedHex.count >= 6 else {
+            return .white
+        }
+        let rHex = String(sanitizedHex.prefix(2))
+        let gHex = String(sanitizedHex.dropFirst(2).prefix(2))
+        let bHex = String(sanitizedHex.dropFirst(4).prefix(2))
+        let r = Double(Int(rHex, radix: 16) ?? 0) / 255.0
+        let g = Double(Int(gHex, radix: 16) ?? 0) / 255.0
+        let b = Double(Int(bHex, radix: 16) ?? 0) / 255.0
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if luminance > 0.82 {
+            return Color(.sRGB, white: 0.42)
+        } else {
+            return .white
+        }
+    }
 }
 
 struct TransitionPresetRow: View {
@@ -376,27 +361,35 @@ struct TransitionPresetRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     
-    @State private var showEditPopup = false
-    @State private var editedName: String = ""
-    @FocusState private var isTextFieldFocused: Bool
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Header row: Name + Edit icon
-            HStack {
+            // Header row aligning with color preset styling
+            HStack(spacing: 8) {
                 Text(preset.name)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
+                Text("\(Int(round(preset.durationSec)))s")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                
                 Spacer()
                 
                 Button(action: {
-                    editedName = preset.name
-                    showEditPopup = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        isTextFieldFocused = true
-                    }
+                    onDelete()
+                }) {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: {
+                    onEdit()
                 }) {
                     Image(systemName: "pencil")
                         .font(.caption)
@@ -408,59 +401,12 @@ struct TransitionPresetRow: View {
                 .buttonStyle(.plain)
             }
             
-            // Content row: Icon + Action buttons
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.title3)
-                    .foregroundColor(.blue)
-                    .frame(width: 48, height: 48)
-                    .background(Color.blue.opacity(0.15))
-                    .cornerRadius(10)
-                
-                Spacer()
-                
-                // Action buttons
-                HStack(spacing: 8) {
-                    // Delete button (trash icon only)
-                    Button(action: {
-                        onDelete()
-                    }) {
-                        Image(systemName: "trash")
-                            .font(.body)
-                            .foregroundColor(.red.opacity(0.9))
-                            .frame(width: 40, height: 40)
-                            .background(Color.red.opacity(0.15))
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                    
-                    // Apply button (tick icon only)
-                    Button(action: {
-                        onApply()
-                    }) {
-                        Image(systemName: "checkmark")
-                            .font(.body.weight(.semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 40, height: 40)
-                            .background(Color.white.opacity(0.2))
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                }
+            // Gradient preview (two bars side by side)
+            HStack(spacing: 4) {
+                gradientPreview(for: preset.gradientA, brightness: preset.brightnessA)
+                gradientPreview(for: preset.gradientB, brightness: preset.brightnessB)
             }
-            
-            // Details row
-            HStack(spacing: 12) {
-                Label("\(Int(preset.durationSec))s", systemImage: "clock")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-                
-                Label("A→B", systemImage: "arrow.right")
-                    .font(.caption)
-                    .foregroundColor(.blue.opacity(0.8))
-                
-                Spacer()
-            }
+            .onTapGesture(perform: handleApply)
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
@@ -468,24 +414,82 @@ struct TransitionPresetRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.white.opacity(0.06))
         )
-        .overlay {
-            if showEditPopup {
-                EditPresetNamePopup(
-                    currentName: preset.name,
-                    editedName: $editedName,
-                    isPresented: $showEditPopup,
-                    isTextFieldFocused: $isTextFieldFocused,
-                    onSave: { newName in
-                        var updatedPreset = preset
-                        updatedPreset.name = newName
-                        PresetsStore.shared.updateTransitionPreset(updatedPreset)
-                        showEditPopup = false
-                    },
-                    onCancel: {
-                        showEditPopup = false
-                    }
-                )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture(perform: handleApply)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Transition preset \(preset.name)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: Text("Apply"), handleApply)
+    }
+    
+    private func handleApply() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        onApply()
+    }
+    
+    @ViewBuilder
+    private func gradientPreview(for gradient: LEDGradient, brightness: Int) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            LinearGradient(gradient: Gradient(stops: gradientStops(for: gradient)),
+                            startPoint: .leading,
+                            endPoint: .trailing)
+            .frame(height: 34)
+            .frame(maxWidth: .infinity)
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+            
+            HStack(spacing: 4) {
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 10))
+                Text(brightnessString(for: brightness))
+                    .font(.system(size: 11, weight: .medium))
             }
+            .foregroundColor(brightnessLabelColor(for: gradient))
+            .opacity(0.7)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .padding(4)
+        }
+    }
+    
+    private func gradientStops(for gradient: LEDGradient) -> [Gradient.Stop] {
+        gradient.stops
+            .sorted { $0.position < $1.position }
+            .map { stop in
+                let location = max(0.0, min(1.0, stop.position))
+                return Gradient.Stop(color: Color(hex: stop.hexColor), location: location)
+            }
+    }
+    
+    private func brightnessString(for brightness: Int) -> String {
+        let clamped = max(0, min(255, brightness))
+        return "\(Int(round(Double(clamped) / 255.0 * 100.0)))%"
+    }
+    
+    private func brightnessLabelColor(for gradient: LEDGradient) -> Color {
+        guard let trailingStop = gradient.stops.max(by: { $0.position < $1.position }) else {
+            return .white
+        }
+        let sanitizedHex = trailingStop.hexColor
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard sanitizedHex.count >= 6 else {
+            return .white
+        }
+        let rHex = String(sanitizedHex.prefix(2))
+        let gHex = String(sanitizedHex.dropFirst(2).prefix(2))
+        let bHex = String(sanitizedHex.dropFirst(4).prefix(2))
+        let r = Double(Int(rHex, radix: 16) ?? 0) / 255.0
+        let g = Double(Int(gHex, radix: 16) ?? 0) / 255.0
+        let b = Double(Int(bHex, radix: 16) ?? 0) / 255.0
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if luminance > 0.82 {
+            return Color(.sRGB, white: 0.42)
+        } else {
+            return .white
         }
     }
 }
@@ -496,27 +500,41 @@ struct EffectPresetRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     
-    @State private var showEditPopup = false
-    @State private var editedName: String = ""
-    @FocusState private var isTextFieldFocused: Bool
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Header row: Name + Edit icon
-            HStack {
+            // Header row
+            HStack(spacing: 8) {
                 Text(preset.name)
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
+                Text("FX \(preset.effectId)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                
+                if let palette = preset.paletteId {
+                    Text("Pal \(palette)")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                
                 Spacer()
                 
                 Button(action: {
-                    editedName = preset.name
-                    showEditPopup = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        isTextFieldFocused = true
-                    }
+                    onDelete()
+                }) {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: {
+                    onEdit()
                 }) {
                     Image(systemName: "pencil")
                         .font(.caption)
@@ -528,57 +546,51 @@ struct EffectPresetRow: View {
                 .buttonStyle(.plain)
             }
             
-            // Content row: Icon + Action buttons
-            HStack(spacing: 12) {
-                Image(systemName: "sparkles")
-                    .font(.title3)
-                    .foregroundColor(.yellow)
-                    .frame(width: 48, height: 48)
-                    .background(Color.yellow.opacity(0.15))
-                    .cornerRadius(10)
+            // Gradient preview styled like transition presets
+            ZStack(alignment: .bottomTrailing) {
+                LinearGradient(colors: effectPreviewColors,
+                                startPoint: .leading,
+                                endPoint: .trailing)
+                .frame(height: 34)
+                .frame(maxWidth: .infinity)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
                 
-                Spacer()
-                
-                // Action buttons
-                HStack(spacing: 8) {
-                    // Delete button (trash icon only)
-                    Button(action: {
-                        onDelete()
-                    }) {
-                        Image(systemName: "trash")
-                            .font(.body)
-                            .foregroundColor(.red.opacity(0.9))
-                            .frame(width: 40, height: 40)
-                            .background(Color.red.opacity(0.15))
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                    
-                    // Apply button (tick icon only)
-                    Button(action: {
-                        onApply()
-                    }) {
-                        Image(systemName: "checkmark")
-                            .font(.body.weight(.semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 40, height: 40)
-                            .background(Color.white.opacity(0.2))
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
+                HStack(spacing: 4) {
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 10))
+                    Text(brightnessString)
+                        .font(.system(size: 11, weight: .medium))
                 }
+                .foregroundColor(brightnessLabelColor)
+                .opacity(0.7)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .padding(4)
             }
+            .onTapGesture(perform: handleApply)
             
             // Details row
             HStack(spacing: 12) {
-                Text("Effect \(preset.effectId)")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-                
-                if preset.speed != nil || preset.intensity != nil {
-                    Label("Custom", systemImage: "slider.horizontal.3")
+                if let speed = preset.speed {
+                    Label("Speed \(speed)", systemImage: "gauge")
                         .font(.caption)
-                        .foregroundColor(.yellow.opacity(0.8))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                
+                if let intensity = preset.intensity {
+                    Label("Intensity \(intensity)", systemImage: "wave.3.backward")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                
+                if preset.brightness < 255 {
+                    Label("\(Int(round(Double(preset.brightness) / 255.0 * 100.0)))%", systemImage: "sun.max")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
                 }
                 
                 Spacer()
@@ -590,24 +602,77 @@ struct EffectPresetRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.white.opacity(0.06))
         )
-        .overlay {
-            if showEditPopup {
-                EditPresetNamePopup(
-                    currentName: preset.name,
-                    editedName: $editedName,
-                    isPresented: $showEditPopup,
-                    isTextFieldFocused: $isTextFieldFocused,
-                    onSave: { newName in
-                        var updatedPreset = preset
-                        updatedPreset.name = newName
-                        PresetsStore.shared.updateEffectPreset(updatedPreset)
-                        showEditPopup = false
-                    },
-                    onCancel: {
-                        showEditPopup = false
-                    }
-                )
-            }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture(perform: handleApply)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Effect preset \(preset.name)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: Text("Apply"), handleApply)
+    }
+    
+    private func handleApply() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        onApply()
+    }
+    
+    private var effectPreviewColors: [Color] {
+        effectPreviewHexColors.map { Color(hex: $0) }
+    }
+    
+    private var effectPreviewHexColors: [String] {
+        if let paletteId = preset.paletteId {
+            return paletteGradientHex(for: paletteId)
+        }
+        switch preset.effectId % 4 {
+        case 0:
+            return ["#4F38FF", "#FF7CC3"]
+        case 1:
+            return ["#1FB1FF", "#66FFDA"]
+        case 2:
+            return ["#FF8A4C", "#FFD66B"]
+        default:
+            return ["#AC72FF", "#72E1FF"]
+        }
+    }
+    
+    private func paletteGradientHex(for paletteId: Int) -> [String] {
+        switch paletteId % 6 {
+        case 0:
+            return ["#FF9A9E", "#FAD0C4"]
+        case 1:
+            return ["#A18CD1", "#FBC2EB"]
+        case 2:
+            return ["#84FAB0", "#8FD3F4"]
+        case 3:
+            return ["#F6D365", "#FDA085"]
+        case 4:
+            return ["#89F7FE", "#66A6FF"]
+        default:
+            return ["#FDEB71", "#F8D800"]
+        }
+    }
+    
+    private var brightnessString: String {
+        let percent = Double(preset.brightness) / 255.0 * 100.0
+        return "\(Int(round(percent)))%"
+    }
+    
+    private var brightnessLabelColor: Color {
+        guard let hex = effectPreviewHexColors.last else { return .white }
+        let sanitized = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard sanitized.count >= 6 else { return .white }
+        let rHex = String(sanitized.prefix(2))
+        let gHex = String(sanitized.dropFirst(2).prefix(2))
+        let bHex = String(sanitized.dropFirst(4).prefix(2))
+        let r = Double(Int(rHex, radix: 16) ?? 0) / 255.0
+        let g = Double(Int(gHex, radix: 16) ?? 0) / 255.0
+        let b = Double(Int(bHex, radix: 16) ?? 0) / 255.0
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if luminance > 0.82 {
+            return Color(.sRGB, white: 0.42)
+        } else {
+            return .white
         }
     }
 }
@@ -623,90 +688,108 @@ struct EditPresetNamePopup: View {
     let onCancel: () -> Void
     
     var body: some View {
-        ZStack {
-            // Background overlay (darker for better contrast)
-            Color.black.opacity(0.6)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    onCancel()
-                }
+        VStack(spacing: 20) {
+            Text("Edit Preset Name")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.top, 4)
             
-            // Popup content
-            VStack(spacing: 20) {
-                Text("Edit Preset Name")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .padding(.top, 4)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Preset Name")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundColor(.white.opacity(0.9))
-                    
-                    TextField("Enter preset name", text: $editedName)
-                        .textFieldStyle(.plain)
-                        .font(.body)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.white.opacity(0.15))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                        )
-                        .focused($isTextFieldFocused)
-                        .submitLabel(.done)
-                        .onSubmit {
-                            if !editedName.isEmpty && editedName != currentName {
-                                onSave(editedName)
-                            }
-                        }
-                }
-                
-                HStack(spacing: 12) {
-                    Button("Cancel") {
-                        onCancel()
-                    }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Preset Name")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.white.opacity(0.9))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.15))
-                    .cornerRadius(10)
-                    
-                    Button("Save") {
+                
+                TextField("Enter preset name", text: $editedName)
+                    .textFieldStyle(.plain)
+                    .font(.body)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.15))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+                    .focused($isTextFieldFocused)
+                    .submitLabel(.done)
+                    .onSubmit {
                         if !editedName.isEmpty && editedName != currentName {
                             onSave(editedName)
                         }
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.25))
-                    .cornerRadius(10)
-                    .disabled(editedName.isEmpty || editedName == currentName)
-                }
             }
-            .padding(24)
-            .frame(maxWidth: 320)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white.opacity(0.12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-            )
-            .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 15)
+            
+            HStack(spacing: 12) {
+                Button(action: {
+                    onCancel()
+                }) {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.white.opacity(0.9))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.white.opacity(0.15))
+                        .cornerRadius(10)
+                        .contentShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: {
+                    if !editedName.isEmpty && editedName != currentName {
+                        onSave(editedName)
+                    }
+                }) {
+                    Text("Save")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.white.opacity(0.25))
+                        .cornerRadius(10)
+                        .contentShape(RoundedRectangle(cornerRadius: 10))
+                        .opacity(editedName.isEmpty || editedName == currentName ? 0.4 : 1.0)
+                }
+                .buttonStyle(.plain)
+                .disabled(editedName.isEmpty || editedName == currentName)
+            }
         }
+        .padding(24)
+        .frame(maxWidth: 320)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 15)
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isPresented)
         .onAppear {
             editedName = currentName
+        }
+    }
+}
+
+// MARK: - Rename Helpers
+
+enum PresetRenameContext {
+    case color(ColorPreset)
+    case transition(TransitionPreset)
+    case effect(WLEDEffectPreset)
+    
+    var currentName: String {
+        switch self {
+        case .color(let preset):
+            return preset.name
+        case .transition(let preset):
+            return preset.name
+        case .effect(let preset):
+            return preset.name
         }
     }
 }

@@ -16,10 +16,19 @@ struct UnifiedColorPane: View {
     @State private var stopTemperatures: [UUID: Double] = [:]  // Track temperature (0-1) for each stop
     @State private var isSavingPreset = false
     @State private var showSaveSuccess = false
+    @State private var isAdjustingBrightness = false
 
+    private var liveDevice: WLEDDevice? {
+        viewModel.devices.first(where: { $0.id == device.id })
+    }
+    
+    private var activeDevice: WLEDDevice {
+        liveDevice ?? device
+    }
+    
     init(device: WLEDDevice, dismissColorPicker: Binding<Bool>, segmentId: Int = 0) {
         self.device = device
-        self._dismissColorPicker = dismissColorPicker
+        _dismissColorPicker = dismissColorPicker
         self.segmentId = segmentId
         _briUI = State(initialValue: Double(device.brightness))
         
@@ -34,8 +43,8 @@ struct UnifiedColorPane: View {
     // Direct gradient access (no longer lazy)
     private var currentGradient: LEDGradient {
         gradient ?? LEDGradient(stops: [
-            GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
-            GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
+            GradientStop(position: 0.0, hexColor: activeDevice.currentColor.toHex()),
+            GradientStop(position: 1.0, hexColor: activeDevice.currentColor.toHex())
         ])
     }
 
@@ -92,6 +101,7 @@ struct UnifiedColorPane: View {
                         .foregroundColor(secondaryLabelColor)
                 }
                 Slider(value: $briUI, in: 0...255, step: 1, onEditingChanged: { editing in
+                    isAdjustingBrightness = editing
                     if !editing {
                         DispatchQueue.main.async {
                             Task { await viewModel.updateDeviceBrightness(device, brightness: Int(briUI)) }
@@ -293,33 +303,64 @@ struct UnifiedColorPane: View {
         .task {
             // Refresh device state on first appearance
             await viewModel.refreshDeviceState(device)
-            
-            // Initialize gradient from updated device color
-            if gradient == nil {
-                let colorHex = device.currentColor.toHex()
-                gradient = LEDGradient(stops: [
-                    GradientStop(position: 0.0, hexColor: colorHex),
-                    GradientStop(position: 1.0, hexColor: colorHex)
-                ])
+            if let latestStops = viewModel.gradientStops(for: device.id), !latestStops.isEmpty {
+                applyIncomingGradient(latestStops)
+            } else {
+                syncGradientIfNeeded(with: activeDevice.currentColor)
+            }
+            if !isAdjustingBrightness {
+                briUI = Double(activeDevice.brightness)
             }
         }
         .onAppear {
-            briUI = Double(device.brightness)
-            
-            // Sync gradient from device's current color
-            let colorHex = device.currentColor.toHex()
-            let currentColorHex = gradient?.stops.first?.hexColor ?? ""
-            if currentColorHex != colorHex {
-                gradient = LEDGradient(stops: [
-                    GradientStop(position: 0.0, hexColor: colorHex),
-                    GradientStop(position: 1.0, hexColor: colorHex)
-                ])
+            if let latestStops = viewModel.gradientStops(for: device.id), !latestStops.isEmpty {
+                applyIncomingGradient(latestStops)
+            } else {
+                syncGradientIfNeeded(with: activeDevice.currentColor)
             }
+            briUI = Double(activeDevice.brightness)
         }
         .onChange(of: dismissColorPicker) { _, newValue in
             if newValue {
                 showWheel = false
             }
+        }
+        .onChange(of: viewModel.latestGradientStops[device.id] ?? []) { _, newStops in
+            guard !newStops.isEmpty else { return }
+            applyIncomingGradient(newStops)
+        }
+        .onChange(of: liveDevice?.currentColor.toHex()) { _, newHex in
+            guard let hex = newHex else { return }
+            syncGradientIfNeeded(with: Color(hex: hex))
+        }
+        .onChange(of: liveDevice?.brightness) { _, newBrightness in
+            guard let brightness = newBrightness, !isAdjustingBrightness else { return }
+            briUI = Double(brightness)
+        }
+    }
+
+    private func applyIncomingGradient(_ stops: [GradientStop]) {
+        let currentStops = gradient?.stops ?? []
+        if currentStops == stops { return }
+        gradient = LEDGradient(stops: stops)
+        selectedStopId = nil
+        stopTemperatures = [:]
+    }
+
+    private func syncGradientIfNeeded(with color: Color) {
+        let hex = color.toHex()
+        let shouldReplace: Bool
+        if let existing = gradient {
+            let uniqueHexes = Set(existing.stops.map { $0.hexColor.uppercased() })
+            shouldReplace = uniqueHexes.count <= 1 && (uniqueHexes.first ?? "") != hex.uppercased()
+        } else {
+            shouldReplace = true
+        }
+        if shouldReplace {
+            gradient = LEDGradient(stops: [
+                GradientStop(position: 0.0, hexColor: hex),
+                GradientStop(position: 1.0, hexColor: hex)
+            ])
         }
     }
 

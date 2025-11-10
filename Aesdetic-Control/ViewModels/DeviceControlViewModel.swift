@@ -191,8 +191,11 @@ class DeviceControlViewModel: ObservableObject {
     @Published private(set) var segmentCCTFormats: [String: [Int: Bool]] = [:]
     @Published private(set) var presetsCache: [String: [WLEDPreset]] = [:]
     @Published private(set) var presetLoadingStates: [String: Bool] = [:]
+    @Published private(set) var latestGradientStops: [String: [GradientStop]] = [:]
     private var effectMetadataLastFetched: [String: Date] = [:]
     private let effectMetadataRefreshInterval: TimeInterval = 300 // 5 minute cache
+    
+    private let gradientDefaultsPrefix = "latestGradientStops."
     
     // User interaction tracking for optimistic updates
     private var lastUserInput: [String: Date] = [:]
@@ -1697,6 +1700,9 @@ class DeviceControlViewModel: ObservableObject {
     ///   - ledCount: Number of LEDs
     ///   - stopTemperatures: Optional mapping of stop IDs to temperature values (0.0-1.0)
     func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil) async {
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        latestGradientStops[device.id] = sortedStops
+        persistLatestGradient(sortedStops, for: device.id)
         let gradient = LEDGradient(stops: stops)
         let frame = GradientSampler.sample(gradient, ledCount: ledCount)
         var intent = ColorIntent(deviceId: device.id, mode: .perLED)
@@ -1795,6 +1801,9 @@ class DeviceControlViewModel: ObservableObject {
     
     // MARK: - Gradient Application with Independent Brightness
     func applyGradientA(_ gradient: LEDGradient, aBrightness: Int?, to device: WLEDDevice) async {
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        latestGradientStops[device.id] = sortedStops
+        persistLatestGradient(sortedStops, for: device.id)
         // Apply gradient with optional brightness override
         let ledCount = device.state?.segments.first?.len ?? 120
         let frame = GradientSampler.sample(gradient, ledCount: ledCount)
@@ -1810,6 +1819,27 @@ class DeviceControlViewModel: ObservableObject {
     func applyGradientB(_ gradient: LEDGradient, bBrightness: Int?, to device: WLEDDevice) async {
         // Secondary gradient for transitions - same as A for now
         await applyGradientA(gradient, aBrightness: bBrightness, to: device)
+    }
+    
+    func gradientStops(for deviceId: String) -> [GradientStop]? {
+        if let stops = latestGradientStops[deviceId], !stops.isEmpty {
+            return stops
+        }
+        if let persisted = loadPersistedGradient(for: deviceId), !persisted.isEmpty {
+            latestGradientStops[deviceId] = persisted
+            return persisted
+        }
+        return nil
+    }
+    
+    private func persistLatestGradient(_ stops: [GradientStop], for deviceId: String) {
+        guard let data = try? JSONEncoder().encode(stops) else { return }
+        UserDefaults.standard.set(data, forKey: gradientDefaultsPrefix + deviceId)
+    }
+    
+    private func loadPersistedGradient(for deviceId: String) -> [GradientStop]? {
+        guard let data = UserDefaults.standard.data(forKey: gradientDefaultsPrefix + deviceId) else { return nil }
+        return try? JSONDecoder().decode([GradientStop].self, from: data)
     }
     
     func applyColorIntent(_ intent: ColorIntent, to device: WLEDDevice) async {
