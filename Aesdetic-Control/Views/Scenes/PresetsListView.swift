@@ -44,6 +44,7 @@ struct PresetsListView: View {
                     ForEach(colorPresets) { preset in
                         ColorPresetRow(preset: preset, onApply: {
                         Task {
+                            await viewModel.cancelActiveTransitionIfNeeded(for: device)
                             // Try WLED preset ID first (if synced), otherwise apply directly
                             if let presetId = preset.wledPresetId {
                                 let apiService = WLEDAPIService.shared
@@ -172,6 +173,7 @@ struct PresetsListView: View {
                         ForEach(effectPresets) { preset in
                             EffectPresetRow(preset: preset, onApply: {
                             Task {
+                                await viewModel.cancelActiveTransitionIfNeeded(for: device)
                                 // Try WLED preset ID first (if synced), otherwise apply directly
                                 if let presetId = preset.wledPresetId {
                                     let apiService = WLEDAPIService.shared
@@ -370,7 +372,7 @@ struct TransitionPresetRow: View {
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
-                Text("\(Int(round(preset.durationSec)))s")
+                Text(formattedDuration)
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
                 
@@ -491,6 +493,17 @@ struct TransitionPresetRow: View {
         } else {
             return .white
         }
+    }
+    
+    private var formattedDuration: String {
+        let total = Int(preset.durationSec.rounded(.toNearestOrAwayFromZero))
+        if total <= 0 { return "Instant" }
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        if hours == 0 && minutes == 0 { return "<1 min" }
+        if hours == 0 { return "\(minutes) min" }
+        if minutes == 0 { return "\(hours) hr" }
+        return "\(hours) hr \(minutes) min"
     }
 }
 

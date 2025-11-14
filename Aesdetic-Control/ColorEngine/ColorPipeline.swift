@@ -68,7 +68,8 @@ actor ColorPipeline {
     }
 
     func cancelUploads(for deviceId: String) {
-        // Placeholder for future cooperative cancellation
+        uploadingPixels.remove(deviceId)
+        pendingBri.removeValue(forKey: deviceId)
     }
 }
 

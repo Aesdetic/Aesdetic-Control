@@ -10,18 +10,127 @@ import Combine
 import SwiftUI
 import os.log
 
+extension OSLog {
+    private static var subsystem = "com.aesdetic.control"
+    static let effects = OSLog(subsystem: subsystem, category: "effects")
+}
+
 struct DeviceEffectState {
     var effectId: Int
     var speed: Int
     var intensity: Int
-    var paletteId: Int
+    var paletteId: Int?  // Optional: omit when sending custom colors
+    var isEnabled: Bool
     
-    static let `default` = DeviceEffectState(effectId: 0, speed: 128, intensity: 128, paletteId: 0)
+    static let `default` = DeviceEffectState(effectId: 0, speed: 128, intensity: 128, paletteId: nil, isEnabled: false)
 }
 
 @MainActor
 class DeviceControlViewModel: ObservableObject {
     static let shared = DeviceControlViewModel()
+    private static let maxEffectColorSlots = 3
+    private static let gradientFriendlyEffectIds: Set<Int> = [
+        1,   // Blink
+        2,   // Breathe
+        3,   // Wipe
+        4,   // Wipe Random
+        7,   // Rainbow
+        8,   // Rainbow Cycle
+        20,  // Gradient
+        22,  // Chase
+        25,  // Running
+        27,  // Scanner
+        29,  // Fade
+        34,  // Railway
+        74,  // Candle Multi
+        46   // Running dual
+    ]
+    
+    private static let fallbackGradientFriendlyEffects: [EffectMetadata] = [
+        EffectMetadata(
+            id: 1,
+            name: "Blink Gradient",
+            description: "Blink through gradient colors.",
+            parameters: [],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 2,
+            name: "Breathe Gradient",
+            description: "Breathe between gradient colors.",
+            parameters: [],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 3,
+            name: "Color Wipe",
+            description: "Wipe across using gradient colors.",
+            parameters: [],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 20,
+            name: "Gradient Cycle",
+            description: "Cycle through gradient colors smoothly.",
+            parameters: [],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 22,
+            name: "Chase Gradient",
+            description: "Gradient chase effect.",
+            parameters: [],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 46,
+            name: "Running Gradient",
+            description: "Running lights with gradient colors.",
+            parameters: [],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 74,
+            name: "Candle Multi",
+            description: "Warm flicker with gradient palette.",
+            parameters: [],
+            supportsPalette: true,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        )
+    ]
+    
+    private static func colors(for gradient: LEDGradient, slotCount: Int) -> [[Int]] {
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let clampedSlots = max(1, min(maxEffectColorSlots, slotCount))
+        guard !sortedStops.isEmpty else {
+            return Array(repeating: [255, 255, 255], count: clampedSlots)
+        }
+
+        if clampedSlots == 1 {
+            let rgb = sortedStops.first!.color.toRGBArray()
+            return [[rgb[0], rgb[1], rgb[2]]]
+        }
+
+        let positions = (0..<clampedSlots).map { Double($0) / Double(clampedSlots - 1) }
+        return positions.map { t in
+            let color = GradientSampler.sampleColor(at: t, stops: sortedStops)
+            let rgb = color.toRGBArray()
+            return [rgb[0], rgb[1], rgb[2]]
+        }
+    }
     
     // MARK: - Device Sorting
     
@@ -192,10 +301,15 @@ class DeviceControlViewModel: ObservableObject {
     @Published private(set) var presetsCache: [String: [WLEDPreset]] = [:]
     @Published private(set) var presetLoadingStates: [String: Bool] = [:]
     @Published private(set) var latestGradientStops: [String: [GradientStop]] = [:]
+    @Published private(set) var latestEffectGradientStops: [String: [GradientStop]] = [:]
+    @Published private(set) var latestTransitionDurations: [String: Double] = [:]
     private var effectMetadataLastFetched: [String: Date] = [:]
+    private var lastGradientBeforeEffect: [String: [GradientStop]] = [:]
     private let effectMetadataRefreshInterval: TimeInterval = 300 // 5 minute cache
     
     private let gradientDefaultsPrefix = "latestGradientStops."
+    private let effectGradientDefaultsPrefix = "latestEffectGradientStops."
+    private let transitionDurationDefaultsPrefix = "latestTransitionDurations."
     
     // User interaction tracking for optimistic updates
     private var lastUserInput: [String: Date] = [:]
@@ -520,17 +634,43 @@ class DeviceControlViewModel: ObservableObject {
                 updatedDevice.isOnline = true
                 updatedDevice.lastSeen = stateUpdate.timestamp
                 
+                // Update effect state from WebSocket (always safe to update)
+                if let segment = state.segments.first {
+                    let segmentId = segment.id ?? 0
+                    var segmentStates = effectStates[stateUpdate.deviceId] ?? [:]
+                    let cached = segmentStates[segmentId] ?? .default
+                    let fxValue = segment.fx ?? cached.effectId
+                    let newEffectState = DeviceEffectState(
+                        effectId: fxValue,
+                        speed: segment.sx ?? cached.speed,
+                        intensity: segment.ix ?? cached.intensity,
+                        paletteId: segment.pal ?? cached.paletteId,
+                        isEnabled: fxValue != 0
+                    )
+                    segmentStates[segmentId] = newEffectState
+                    effectStates[stateUpdate.deviceId] = segmentStates
+                    
+                    #if DEBUG
+                    if fxValue != 0 {
+                        os_log("[Effects][WS] Device %{public}@ segment %d: fx=%d sx=%d ix=%d pal=%@", log: OSLog.effects, type: .debug, updatedDevice.name, segmentId, fxValue, newEffectState.speed, newEffectState.intensity, String(describing: newEffectState.paletteId))
+                    }
+                    #endif
+                }
+                
                 // Update color if available from segments
-                // CRITICAL: Don't overwrite color if device has active CCT temperature
-                // WebSocket state updates may include old RGB colors that would override CCT
+                // CRITICAL: Don't overwrite color if device has active CCT temperature OR active effect
+                // WebSocket state updates may include old RGB colors that would override CCT or effects
                 if let segment = state.segments.first,
                    let colors = segment.colors,
                    let firstColor = colors.first,
                    firstColor.count >= 3 {
-                    // Only update color if CCT is not active (temperature is nil or 0)
-                    // If CCT is active, we should use the CCT-based color, not RGB from WebSocket
+                    let segmentId = segment.id ?? 0
+                    let effectState = effectStates[stateUpdate.deviceId]?[segmentId]
+                    let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
                     let hasActiveCCT = updatedDevice.temperature != nil && updatedDevice.temperature! > 0
-                    if !hasActiveCCT {
+                    
+                    // Only update color if neither CCT nor effect is active
+                    if !hasActiveCCT && !hasActiveEffect {
                         updatedDevice.currentColor = Color(
                             .sRGB,
                             red: Double(firstColor[0]) / 255.0,
@@ -539,8 +679,11 @@ class DeviceControlViewModel: ObservableObject {
                         )
                     } else {
                         #if DEBUG
-                        if let temp = updatedDevice.temperature {
+                        if hasActiveCCT, let temp = updatedDevice.temperature {
                             print("🔵 handleWebSocketStateUpdate: Skipping color update - CCT is active (temp=\(temp))")
+                        }
+                        if hasActiveEffect, let fx = effectState?.effectId {
+                            print("🔵 handleWebSocketStateUpdate: Skipping color update - Effect is active (fx=\(fx))")
                         }
                         #endif
                     }
@@ -1260,11 +1403,13 @@ class DeviceControlViewModel: ObservableObject {
                 for (idx, segment) in response.state.segments.enumerated() {
                     let segmentIdentifier = segment.id ?? idx
                     let cached = segmentStates[segmentIdentifier] ?? .default
+                    let fxValue = segment.fx ?? cached.effectId
                     let newState = DeviceEffectState(
-                        effectId: segment.fx ?? cached.effectId,
+                        effectId: fxValue,
                         speed: segment.sx ?? cached.speed,
                         intensity: segment.ix ?? cached.intensity,
-                        paletteId: segment.pal ?? cached.paletteId
+                        paletteId: segment.pal ?? cached.paletteId,
+                        isEnabled: fxValue != 0
                     )
                     segmentStates[segmentIdentifier] = newState
                 }
@@ -1367,6 +1512,74 @@ class DeviceControlViewModel: ObservableObject {
     func effectMetadata(for device: WLEDDevice) -> EffectMetadataBundle? {
         effectMetadataBundles[device.id]
     }
+
+    func colorSafeEffects(for device: WLEDDevice) -> [EffectMetadata] {
+        guard let bundle = effectMetadata(for: device) else {
+            return DeviceControlViewModel.fallbackGradientFriendlyEffects
+        }
+        let filtered = bundle.effects.filter { metadata in
+            guard !metadata.isSoundReactive else { return false }
+            let supportsGradient = metadata.supportsPalette || metadata.colorSlotCount >= 2
+            return supportsGradient || DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
+        }
+        let list = filtered.isEmpty ? DeviceControlViewModel.fallbackGradientFriendlyEffects : filtered
+        return list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+    
+    func colorSafeEffectOptions(for device: WLEDDevice) -> [EffectMetadata] {
+        let effects = colorSafeEffects(for: device)
+        return effects.isEmpty ? DeviceControlViewModel.fallbackGradientFriendlyEffects : effects
+    }
+    
+    func applyColorSafeEffect(
+        _ effectId: Int,
+        with gradient: LEDGradient,
+        segmentId: Int = 0,
+        device: WLEDDevice
+    ) async {
+        await cancelActiveTransitionIfNeeded(for: device)
+        await colorPipeline.cancelUploads(for: device.id)
+        
+        // Release realtime mode and wait a bit to ensure it's fully released
+        await apiService.releaseRealtimeOverride(for: device)
+        try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds to ensure realtime is fully released
+        
+        markUserInteraction(device.id)
+        if lastGradientBeforeEffect[device.id] == nil {
+            let baseline = gradientStops(for: device.id) ?? [
+                GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
+                GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
+            ]
+            lastGradientBeforeEffect[device.id] = baseline
+        }
+        let availableEffects = colorSafeEffectOptions(for: device)
+        guard let metadata = availableEffects.first(where: { $0.id == effectId }) else {
+            #if DEBUG
+            os_log("[Effects] Requested effect %d not found in catalog", effectId)
+            #endif
+            return
+        }
+        let slotCount = min(DeviceControlViewModel.maxEffectColorSlots,
+                            max(2, metadata.colorSlotCount))
+        let colorArray = DeviceControlViewModel.colors(for: gradient, slotCount: slotCount)
+        #if DEBUG
+        os_log("[Effects] Applying effect %{public}@ (id %d) with %d colors to device %{public}@", metadata.name, effectId, colorArray.count, device.name)
+        os_log("[Effects]   gradient input stops=%{public@}", log: OSLog.effects, type: .debug, gradient.stops.map { $0.hexColor }.description)
+        for (index, rgb) in colorArray.enumerated() {
+            os_log("[Effects]   color[%d] = (%d,%d,%d)", index, rgb[0], rgb[1], rgb[2])
+        }
+        #endif
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        state.effectId = effectId
+        // Don't set palette when we're providing custom colors - let WLED use the colors directly
+        // Only use palette if the effect supports it and we're NOT providing colors
+        state.paletteId = nil  // Omit palette when sending colors
+        state.isEnabled = true
+        updateEffectGradient(gradient, for: device)
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: colorArray, turnOn: true)
+        logEffectApplication(effectId: effectId, device: device, colors: colorArray)
+    }
     
     /// Public method to load effect metadata (triggers fetch if needed)
     func loadEffectMetadata(for device: WLEDDevice) async {
@@ -1382,24 +1595,45 @@ class DeviceControlViewModel: ObservableObject {
     }
 
     func setEffect(for device: WLEDDevice, segmentId: Int = 0, effectId: Int) async {
+        await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.effectId = effectId
+        state.paletteId = nil // ensure palette reset for color-slot effects
+        state.isEnabled = true
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: true)
     }
     
     /// Disable effects for a device/segment (set fx: 0)
     /// This allows CCT and solid colors to work properly
     func disableEffect(for device: WLEDDevice, segmentId: Int = 0) async {
+        os_log("[Effects] Disabling effect for device %{public}@, segment %d", log: OSLog.effects, type: .debug, device.name, segmentId)
+        await cancelActiveTransitionIfNeeded(for: device)
+        await colorPipeline.cancelUploads(for: device.id)
+        await apiService.releaseRealtimeOverride(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.effectId = 0  // Effect ID 0 = effects disabled
+        state.isEnabled = false
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil)
+        let stops = gradientStops(for: device.id) ?? [
+            GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
+            GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
+        ]
+        updateEffectGradient(LEDGradient(stops: stops), for: device)
+        latestEffectGradientStops[device.id] = stops
+        #if DEBUG
+        os_log("[Effects] Disabled effect on %{public}@", device.name)
+        #endif
+        let ledCount = device.state?.segments.first?.len ?? 120
+        await applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, disableActiveEffect: false)
+        lastGradientBeforeEffect.removeValue(forKey: device.id)
     }
     
     func updateEffectSpeed(for device: WLEDDevice, segmentId: Int = 0, speed: Int) async {
+        await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.speed = max(0, min(255, speed))
@@ -1408,6 +1642,7 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func updateEffectIntensity(for device: WLEDDevice, segmentId: Int = 0, intensity: Int) async {
+        await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.intensity = max(0, min(255, intensity))
@@ -1416,11 +1651,12 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func updateEffectPalette(for device: WLEDDevice, segmentId: Int = 0, paletteId: Int) async {
+        await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
-        state.paletteId = max(0, paletteId)
+        state.paletteId = max(0, paletteId)  // Only set palette when explicitly requested (no colors)
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId)
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil)
     }
     
     private func updateEffectStateCache(_ state: DeviceEffectState, deviceId: String, segmentId: Int) {
@@ -1429,18 +1665,91 @@ class DeviceControlViewModel: ObservableObject {
         effectStates[deviceId] = segmentStates
     }
     
-    private func applyEffectState(_ state: DeviceEffectState, to device: WLEDDevice, segmentId: Int) async {
+    private func applyEffectState(_ state: DeviceEffectState, to device: WLEDDevice, segmentId: Int, colors: [[Int]]? = nil, turnOn: Bool? = nil) async {
         do {
-            _ = try await apiService.setEffect(
+            #if DEBUG
+            os_log("[Effects] Sending fx=%d speed=%d intensity=%d palette=%@ turnOn=%@ colors=%@ to device %{public}@ segment %d", log: OSLog.effects, type: .debug, state.effectId, state.speed, state.intensity, String(describing: state.paletteId), String(describing: turnOn), String(describing: colors), device.name, segmentId)
+            #endif
+            
+            let responseState = try await apiService.setEffect(
                 state.effectId,
                 forSegment: segmentId,
                 speed: state.speed,
                 intensity: state.intensity,
                 palette: state.paletteId,
-                device: device
+                colors: colors,
+                device: device,
+                turnOn: turnOn
             )
+            
+            #if DEBUG
+            print("[Effects][API] Initial response has \(responseState.segments.count) segment(s)")
+            #endif
+            
+            // WLED's POST /json/state might not return segments, so fetch state separately to verify
+            var verifiedSegments = responseState.segments
+            if responseState.segments.isEmpty {
+                #if DEBUG
+                print("[Effects][API] Response missing segments, fetching fresh state to verify...")
+                #endif
+                do {
+                    // Small delay to let WLED process the update
+                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    let verifiedResponse = try await apiService.getState(for: device)
+                    verifiedSegments = verifiedResponse.state.segments
+                    #if DEBUG
+                    print("[Effects][API] Fresh state fetch returned \(verifiedSegments.count) segment(s)")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[Effects][WARNING] Failed to fetch fresh state for verification: \(error.localizedDescription)")
+                    #endif
+                }
+            }
+            
+            #if DEBUG
+            if let seg = verifiedSegments.first(where: { ($0.id ?? 0) == segmentId }) ?? verifiedSegments.first {
+                print("[Effects][API] Verified segment: fx=\(seg.fx ?? -1) pal=\(seg.pal ?? -1) sx=\(seg.sx ?? -1) ix=\(seg.ix ?? -1) on=\(seg.on ?? false)")
+                print("[Effects][API] Verified colors: \(String(describing: seg.colors))")
+                
+                // Verify effect was actually applied
+                if let returnedFx = seg.fx {
+                    if returnedFx == 0 {
+                        print("[Effects][WARNING] ⚠️ Effect was disabled! Sent fx=\(state.effectId) but WLED returned fx=0 (disabled)")
+                    } else if returnedFx != state.effectId {
+                        print("[Effects][WARNING] ⚠️ Effect mismatch! Sent fx=\(state.effectId) but WLED returned fx=\(returnedFx)")
+                    } else {
+                        print("[Effects][SUCCESS] ✅ Effect \(state.effectId) confirmed active on device")
+                    }
+                } else {
+                    print("[Effects][WARNING] ⚠️ WLED response missing fx field!")
+                }
+            } else {
+                print("[Effects][ERROR] ❌ No segment found in verified state!")
+            }
+            #endif
+            
+            // Update cached effect state from verified response
+            await MainActor.run {
+                var segmentStates = effectStates[device.id] ?? [:]
+                if let seg = verifiedSegments.first(where: { ($0.id ?? 0) == segmentId }) ?? verifiedSegments.first {
+                    let confirmedState = DeviceEffectState(
+                        effectId: seg.fx ?? state.effectId,
+                        speed: seg.sx ?? state.speed,
+                        intensity: seg.ix ?? state.intensity,
+                        paletteId: seg.pal ?? state.paletteId,
+                        isEnabled: (seg.fx ?? 0) != 0
+                    )
+                    segmentStates[segmentId] = confirmedState
+                    effectStates[device.id] = segmentStates
+                }
+            }
+            
             clearError()
         } catch {
+            #if DEBUG
+            os_log("[Effects][ERROR] Failed to apply effect: %{public}@", log: OSLog.effects, type: .error, error.localizedDescription)
+            #endif
             let mappedError = mapToWLEDError(error, device: device)
             presentError(mappedError)
         }
@@ -1699,10 +2008,20 @@ class DeviceControlViewModel: ObservableObject {
     ///   - stops: Gradient stops to apply
     ///   - ledCount: Number of LEDs
     ///   - stopTemperatures: Optional mapping of stop IDs to temperature values (0.0-1.0)
-    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil) async {
+    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, disableActiveEffect: Bool = true) async {
+        if disableActiveEffect, currentEffectState(for: device, segmentId: 0).isEnabled {
+            os_log("[Effects] applyGradientStopsAcrossStrip detected active effect on %{public}@ (disable=%{public}@)", log: OSLog.effects, type: .debug, device.name, String(describing: disableActiveEffect))
+            await disableEffect(for: device, segmentId: 0)
+        }
         let sortedStops = stops.sorted { $0.position < $1.position }
         latestGradientStops[device.id] = sortedStops
         persistLatestGradient(sortedStops, for: device.id)
+        #if DEBUG
+        os_log("[Effects] Applying gradient to %{public}@ with %d stops (disable=%{public}@)", log: OSLog.effects, type: .debug, device.name, sortedStops.count, String(describing: disableActiveEffect))
+        if let first = sortedStops.first {
+            os_log("[Effects]   first stop=%{public}@", log: OSLog.effects, type: .debug, first.hexColor)
+        }
+        #endif
         let gradient = LEDGradient(stops: stops)
         let frame = GradientSampler.sample(gradient, ledCount: ledCount)
         var intent = ColorIntent(deviceId: device.id, mode: .perLED)
@@ -1821,6 +2140,11 @@ class DeviceControlViewModel: ObservableObject {
         await applyGradientA(gradient, aBrightness: bBrightness, to: device)
     }
     
+    func cancelActiveTransitionIfNeeded(for device: WLEDDevice) async {
+        await transitionRunner.cancel(deviceId: device.id)
+        await colorPipeline.cancelUploads(for: device.id)
+    }
+    
     func gradientStops(for deviceId: String) -> [GradientStop]? {
         if let stops = latestGradientStops[deviceId], !stops.isEmpty {
             return stops
@@ -1842,6 +2166,32 @@ class DeviceControlViewModel: ObservableObject {
         return try? JSONDecoder().decode([GradientStop].self, from: data)
     }
     
+    func transitionDuration(for deviceId: String) -> Double? {
+        if let cached = latestTransitionDurations[deviceId] {
+            return cached
+        }
+        if let persisted = loadPersistedTransitionDuration(for: deviceId) {
+            latestTransitionDurations[deviceId] = persisted
+            return persisted
+        }
+        return nil
+    }
+    
+    func setTransitionDuration(_ seconds: Double, for deviceId: String) {
+        latestTransitionDurations[deviceId] = seconds
+        persistTransitionDuration(seconds, for: deviceId)
+    }
+    
+    private func persistTransitionDuration(_ value: Double, for deviceId: String) {
+        UserDefaults.standard.set(value, forKey: transitionDurationDefaultsPrefix + deviceId)
+    }
+    
+    private func loadPersistedTransitionDuration(for deviceId: String) -> Double? {
+        let key = transitionDurationDefaultsPrefix + deviceId
+        guard UserDefaults.standard.object(forKey: key) != nil else { return nil }
+        return UserDefaults.standard.double(forKey: key)
+    }
+    
     func applyColorIntent(_ intent: ColorIntent, to device: WLEDDevice) async {
         // Public method to apply color intents via ColorPipeline
         await colorPipeline.apply(intent, to: device)
@@ -1849,6 +2199,13 @@ class DeviceControlViewModel: ObservableObject {
     
     func startTransition(from: LEDGradient, aBrightness: Int, to: LEDGradient, bBrightness: Int, durationSec: Double, device: WLEDDevice, fps: Int = 60) async {
         // Use existing transitionRunner with brightness tweening
+        if currentEffectState(for: device, segmentId: 0).isEnabled {
+            await disableEffect(for: device, segmentId: 0)
+        }
+        await colorPipeline.cancelUploads(for: device.id)
+        await apiService.releaseRealtimeOverride(for: device)
+        await transitionRunner.cancel(deviceId: device.id)
+        setTransitionDuration(durationSec, for: device.id)
         await transitionRunner.start(
             device: device,
             from: from,
@@ -1923,7 +2280,8 @@ class DeviceControlViewModel: ObservableObject {
                 speed: scene.speed,
                 intensity: scene.intensity,
                 palette: scene.paletteId,
-                device: device
+                device: device,
+                turnOn: true
             )
             return
         }
@@ -2010,5 +2368,45 @@ class DeviceControlViewModel: ObservableObject {
             presentError(mappedError)
         }
         presetLoadingStates[device.id] = false
+    }
+
+    func effectGradientStops(for deviceId: String) -> [GradientStop]? {
+        if let stops = latestEffectGradientStops[deviceId], !stops.isEmpty {
+            return stops
+        }
+        if let persisted = loadPersistedEffectGradient(for: deviceId), !persisted.isEmpty {
+            latestEffectGradientStops[deviceId] = persisted
+            return persisted
+        }
+        return nil
+    }
+    
+    func updateEffectGradient(_ gradient: LEDGradient, for device: WLEDDevice) {
+        let stops = gradient.stops.sorted { $0.position < $1.position }
+        latestEffectGradientStops[device.id] = stops
+        persistEffectGradient(stops, for: device.id)
+    }
+    
+    private func persistEffectGradient(_ stops: [GradientStop], for deviceId: String) {
+        guard let data = try? JSONEncoder().encode(stops) else { return }
+        UserDefaults.standard.set(data, forKey: effectGradientDefaultsPrefix + deviceId)
+    }
+    
+    private func loadPersistedEffectGradient(for deviceId: String) -> [GradientStop]? {
+        guard let data = UserDefaults.standard.data(forKey: effectGradientDefaultsPrefix + deviceId) else { return nil }
+        return try? JSONDecoder().decode([GradientStop].self, from: data)
+    }
+    
+    private func logEffectApplication(effectId: Int, device: WLEDDevice, colors: [[Int]]) {
+        #if DEBUG
+        if let metadata = colorSafeEffectOptions(for: device).first(where: { $0.id == effectId }) {
+            os_log("[Effects] Applied %{public}@ (%d) to %{public}@ with %d colors", metadata.name, effectId, device.name, colors.count)
+        } else {
+            os_log("[Effects] Applied effect id %d to %{public}@ with %d colors", effectId, device.name, colors.count)
+        }
+        for (index, rgb) in colors.enumerated() {
+            os_log("[Effects]   color[%d] = (%d,%d,%d)", index, rgb[0], rgb[1], rgb[2])
+        }
+        #endif
     }
 } 

@@ -25,8 +25,10 @@ struct WLEDStateUpdate: Codable {
     let ps: Int?
     /// Night Light configuration
     let nl: NightLightUpdate?
+    /// Live override release (0 disables realtime streaming)
+    let lor: Int?
     
-    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, nl: NightLightUpdate? = nil) {
+    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
         self.on = on
         self.bri = bri
         self.seg = seg
@@ -34,6 +36,7 @@ struct WLEDStateUpdate: Codable {
         self.transition = transition
         self.ps = ps
         self.nl = nl
+        self.lor = lor
     }
 }
 

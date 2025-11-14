@@ -549,7 +549,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
 
             let wledDevice = WLEDDevice(
                 id: info.mac,
-                name: "Aesdetic-LED",
+                name: info.name.isEmpty ? "Aesdetic-LED" : info.name,  // Use WLED's device name, fallback to default
                 ipAddress: ipAddress,
                 isOnline: true,
                 brightness: state.brightness,

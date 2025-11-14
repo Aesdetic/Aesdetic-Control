@@ -3,6 +3,7 @@ import SwiftUI
 
 actor GradientTransitionRunner {
     private var cancelIds: Set<String> = []
+    private var runningDeviceIds: Set<String> = []
     private let pipeline: ColorPipeline
 
     init(pipeline: ColorPipeline) {
@@ -10,7 +11,11 @@ actor GradientTransitionRunner {
     }
 
     func cancel(deviceId: String) {
-        cancelIds.insert(deviceId)
+        if runningDeviceIds.contains(deviceId) {
+            cancelIds.insert(deviceId)
+        } else {
+            cancelIds.remove(deviceId)
+        }
     }
 
     func start(
@@ -47,14 +52,23 @@ actor GradientTransitionRunner {
         onProgress: ((Double) -> Void)? = nil
     ) async {
         cancelIds.remove(device.id)
+        while runningDeviceIds.contains(device.id) {
+            await Task.yield()
+        }
+        runningDeviceIds.insert(device.id)
 
         let total = max(0.1, durationSec)
         let ledCount = device.state?.segments.first?.len ?? 120
         let frameInterval = 1.0 / Double(max(fps, 1))
         let start = Date()
+        defer {
+            runningDeviceIds.remove(device.id)
+            cancelIds.remove(device.id)
+        }
 
         while true {
             if cancelIds.contains(device.id) { break }
+            if Task.isCancelled { break }
 
             let elapsed = Date().timeIntervalSince(start)
             let tLinear = min(1.0, max(0.0, elapsed / total))
@@ -89,8 +103,6 @@ actor GradientTransitionRunner {
             let ns = UInt64(frameInterval * 1_000_000_000.0)
             try? await Task.sleep(nanoseconds: ns)
         }
-
-        cancelIds.remove(device.id)
     }
 
     private func interpolateStops(from: LEDGradient, to: LEDGradient, t: Double) -> [GradientStop] {

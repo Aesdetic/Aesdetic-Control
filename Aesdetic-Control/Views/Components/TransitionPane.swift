@@ -5,6 +5,8 @@ struct TransitionPane: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let device: WLEDDevice
     @Binding var dismissColorPicker: Bool
+    @Binding var isExpanded: Bool
+    let onActivate: () -> Void
 
     // A/B gradients (lazy initialization)
     @State private var stopsA: [GradientStop]?
@@ -24,33 +26,63 @@ struct TransitionPane: View {
     @State private var bBrightness: Double
     @State private var transitionOn: Bool = false
     @State private var applyWorkItem: DispatchWorkItem? = nil
-    @State private var durationSec: Double = 10
+    @State private var durationHours: Int = 0
+    @State private var durationMinutes: Int = 1
+    @State private var selectedStartPresetId: UUID?
+    @State private var selectedEndPresetId: UUID?
+    @State private var isApplyingTransition: Bool = false
 
-    init(device: WLEDDevice, dismissColorPicker: Binding<Bool>) {
+    init(
+        device: WLEDDevice,
+        dismissColorPicker: Binding<Bool>,
+        isExpanded: Binding<Bool>,
+        onActivate: @escaping () -> Void
+    ) {
         self.device = device
         self._dismissColorPicker = dismissColorPicker
+        self._isExpanded = isExpanded
+        self.onActivate = onActivate
         _aBrightness = State(initialValue: Double(device.brightness))
         _bBrightness = State(initialValue: Double(device.brightness))
         // Initialize gradients immediately in init to avoid main queue dispatch during rendering
-        let defaultStops = [
-            GradientStop(position: 0.0, hexColor: "FF0000"),
-            GradientStop(position: 1.0, hexColor: "0000FF")
+        let defaultStartStops = [
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFFFFF")
         ]
-        _gradientA = State(initialValue: LEDGradient(stops: defaultStops))
-        _stopsA = State(initialValue: defaultStops)
-        _gradientB = State(initialValue: LEDGradient(stops: []))
-        _stopsB = State(initialValue: [])
+        let defaultEndStops = [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ]
+        _gradientA = State(initialValue: LEDGradient(stops: defaultStartStops))
+        _stopsA = State(initialValue: defaultStartStops)
+        _gradientB = State(initialValue: LEDGradient(stops: defaultEndStops))
+        _stopsB = State(initialValue: defaultEndStops)
     }
     // Direct gradient access (no longer lazy)
     private var currentGradientA: LEDGradient {
         gradientA ?? LEDGradient(stops: [
-            GradientStop(position: 0.0, hexColor: "FF0000"),
-            GradientStop(position: 1.0, hexColor: "0000FF")
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFFFFF")
         ])
     }
     
     private var currentGradientB: LEDGradient {
-        gradientB ?? LEDGradient(stops: [])
+        gradientB ?? LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ])
+    }
+    
+    private var durationTotalSeconds: Double {
+        Double(max(0, durationHours * 3600 + durationMinutes * 60))
+    }
+    
+    private var allowedMinuteValues: [Int] {
+        durationHours >= 24 ? [0] : Array(0...59)
+    }
+    
+    private var colorPresets: [ColorPreset] {
+        PresetsStore.shared.colorPresets
     }
 
     var body: some View {
@@ -62,8 +94,8 @@ struct TransitionPane: View {
                         .foregroundColor(.white)
                     Spacer()
                 
-                // Preset button (only when transitions are ON)
-                if transitionOn {
+                // Preset button (only when transitions are ON and expanded)
+                if transitionOn && isExpanded {
                     Button(action: {
                         Task {
                             await saveTransitionPresetDirectly()
@@ -102,15 +134,15 @@ struct TransitionPane: View {
                     if transitionOn {
                         // Turn transitions OFF
                         transitionOn = false
-                        Task {
-                            await viewModel.stopTransitionAndRevertToA(device: device)
-                            await viewModel.applyGradientStopsAcrossStrip(device, stops: currentGradientA.stops, ledCount: device.state?.segments.first?.len ?? 120)
-                        }
+                        isExpanded = false
+                        Task { await stopAndRevertTransition() }
                     } else {
                         // Turn transitions ON
                         transitionOn = true
+                        isExpanded = true
+                        onActivate()
                         // Make B a deep copy of A on first enable
-                        if currentGradientB.stops.isEmpty { 
+                        if currentGradientB.stops.isEmpty {
                             let copiedStops = currentGradientA.stops.map { GradientStop(position: $0.position, hexColor: $0.hexColor) }
                             stopsB = copiedStops
                             gradientB = LEDGradient(stops: copiedStops)
@@ -134,80 +166,91 @@ struct TransitionPane: View {
                 .buttonStyle(.plain)
                 }
                 
-                // Explanatory subtext
-                Text("Smoothly blend between two color gradients over time")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+                // Explanatory subtext (only when transitions are off)
+                if !transitionOn {
+                    Text("Smoothly blend between two color gradients over time")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                }
             }
 
             // Transition Controls
-            if transitionOn {
-                VStack(alignment: .leading, spacing: 12) {
-                    // Duration (mm:ss)
-                    VStack(alignment: .leading, spacing: 6) {
-                        let minutes = Int(durationSec) / 60
-                        let seconds = Int(durationSec) % 60
-                        HStack {
-                            Text("Duration")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.7))
-                            Spacer()
-                            Text(String(format: "%02d:%02d", minutes, seconds))
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                        Slider(value: $durationSec, in: 2...120, step: 1)
-                            .tint(.white)
-                            .accessibilityLabel("Transition duration")
-                            .accessibilityValue(String(format: "%d minutes %d seconds", minutes, seconds))
-                            .accessibilityHint("Controls how long the gradient transition runs.")
-                            .accessibilityAdjustableAction { direction in
-                                let step: Double = 5
-                                switch direction {
-                                case .increment:
-                                    durationSec = min(120, durationSec + step)
-                                case .decrement:
-                                    durationSec = max(2, durationSec - step)
-                                @unknown default:
-                                    break
+            if transitionOn && isExpanded {
+                    VStack(alignment: .leading, spacing: 12) {
+                    // Duration (hh:mm)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 16) {
+                            VStack(spacing: 4) {
+                                Text("Hours")
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.6))
+                                Picker("Hours", selection: $durationHours) {
+                                    ForEach(0...24, id: \.self) { value in
+                                        Text("\(value)")
+                                            .tag(value)
+                                    }
                                 }
+                                .pickerStyle(.wheel)
+                                .frame(height: 110)
+                                .clipped()
+                                .accessibilityLabel("Transition hours")
                             }
+                            
+                            VStack(spacing: 4) {
+                                Text("Minutes")
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.6))
+                                Picker("Minutes", selection: $durationMinutes) {
+                                    ForEach(allowedMinuteValues, id: \.self) { value in
+                                        Text(String(format: "%02d", value))
+                                            .tag(value)
+                                    }
+                                }
+                                .pickerStyle(.wheel)
+                                .frame(height: 110)
+                                .clipped()
+                                .accessibilityLabel("Transition minutes")
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
                     }
 
-                    // A Brightness
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("A Brightness")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.7))
+                    // Start section
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .bottom, spacing: 8) {
+                            Text("Start")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.85))
                             Spacer()
-                            Text("\(Int(round(aBrightness/255.0*100)))%")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                        Slider(value: $aBrightness, in: 0...255, step: 1)
-                            .tint(.white)
-                            .accessibilityLabel("Gradient A brightness")
-                            .accessibilityValue("\(Int(round(aBrightness/255.0*100))) percent")
-                            .accessibilityHint("Controls the brightness of gradient A during transitions.")
-                            .accessibilityAdjustableAction { direction in
-                                let step: Double = 12.75
-                                switch direction {
-                                case .increment:
-                                    aBrightness = min(255, aBrightness + step)
-                                case .decrement:
-                                    aBrightness = max(0, aBrightness - step)
-                                @unknown default:
-                                    break
-                                }
+                            HStack(spacing: 4) {
+                                Image(systemName: "sun.max.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
+                                Text("\(Int(round(aBrightness/255.0*100)))%")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
                             }
-                    }
-
-                    // A Gradient
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Gradient A")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 6) {
+                            Slider(value: $aBrightness, in: 0...255, step: 1)
+                                .tint(.white)
+                                .accessibilityLabel("Gradient A brightness")
+                                .accessibilityValue("\(Int(round(aBrightness/255.0*100))) percent")
+                                .accessibilityHint("Controls the brightness of gradient A during transitions.")
+                                .accessibilityAdjustableAction { direction in
+                                    let step: Double = 12.75
+                                    switch direction {
+                                    case .increment:
+                                        aBrightness = min(255, aBrightness + step)
+                                    case .decrement:
+                                        aBrightness = max(0, aBrightness - step)
+                                    @unknown default:
+                                        break
+                                    }
+                                }
+                        }
+                        
                         GradientBar(
                             gradient: Binding(
                                 get: { currentGradientA },
@@ -243,9 +286,21 @@ struct TransitionPane: View {
                         )
                         .frame(height: 56)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Gradient A editor")
+                        .accessibilityLabel("Start gradient editor")
                         .accessibilityValue("\(currentGradientA.stops.count) color stops")
-                        .accessibilityHint("Double tap to adjust colors in gradient A.")
+                        .accessibilityHint("Double tap to adjust colors in the starting gradient.")
+                        
+                        if !colorPresets.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(colorPresets) { preset in
+                                        presetChip(for: preset, target: .start)
+                                    }
+                                }
+                                .padding(.horizontal, 2)
+                            }
+                            .padding(.top, 4)
+                        }
                     }
                     
                     // Inline color picker for Gradient A
@@ -297,40 +352,42 @@ struct TransitionPane: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
-                    // B Brightness
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("B Brightness")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.7))
+                    // End section
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .bottom, spacing: 8) {
+                            Text("End")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.85))
                             Spacer()
-                            Text("\(Int(round(bBrightness/255.0*100)))%")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                        Slider(value: $bBrightness, in: 0...255, step: 1)
-                            .tint(.white)
-                            .accessibilityLabel("Gradient B brightness")
-                            .accessibilityValue("\(Int(round(bBrightness/255.0*100))) percent")
-                            .accessibilityHint("Controls the brightness of gradient B during transitions.")
-                            .accessibilityAdjustableAction { direction in
-                                let step: Double = 12.75
-                                switch direction {
-                                case .increment:
-                                    bBrightness = min(255, bBrightness + step)
-                                case .decrement:
-                                    bBrightness = max(0, bBrightness - step)
-                                @unknown default:
-                                    break
-                                }
+                            HStack(spacing: 4) {
+                                Image(systemName: "sun.max.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
+                                Text("\(Int(round(bBrightness/255.0*100)))%")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
                             }
-                    }
-
-                    // B Gradient (with preview capability)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Gradient B")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 6) {
+                            Slider(value: $bBrightness, in: 0...255, step: 1)
+                                .tint(.white)
+                                .accessibilityLabel("Gradient B brightness")
+                                .accessibilityValue("\(Int(round(bBrightness/255.0*100))) percent")
+                                .accessibilityHint("Controls the brightness of gradient B during transitions.")
+                                .accessibilityAdjustableAction { direction in
+                                    let step: Double = 12.75
+                                    switch direction {
+                                    case .increment:
+                                        bBrightness = min(255, bBrightness + step)
+                                    case .decrement:
+                                        bBrightness = max(0, bBrightness - step)
+                                    @unknown default:
+                                        break
+                                    }
+                                }
+                        }
+                        
                         GradientBar(
                             gradient: Binding(
                                 get: { currentGradientB },
@@ -367,9 +424,21 @@ struct TransitionPane: View {
                         )
                         .frame(height: 56)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Gradient B editor")
+                        .accessibilityLabel("End gradient editor")
                         .accessibilityValue("\((currentGradientB.stops.isEmpty ? currentGradientA.stops.count : currentGradientB.stops.count)) color stops")
-                        .accessibilityHint("Double tap to adjust colors in gradient B.")
+                        .accessibilityHint("Double tap to adjust colors in the ending gradient.")
+                        
+                        if !colorPresets.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(colorPresets) { preset in
+                                        presetChip(for: preset, target: .end)
+                                    }
+                                }
+                                .padding(.horizontal, 2)
+                            }
+                            .padding(.top, 4)
+                        }
                     }
                     
                     // Inline color picker for Gradient B
@@ -423,19 +492,63 @@ struct TransitionPane: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
             
-            // Bottom button: Start Transition
-            if transitionOn {
-                Button("Start Transition") {
-                    let gA = currentGradientA
-                    let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
-                    Task { await viewModel.startTransition(from: gA, aBrightness: Int(aBrightness), to: gB, bBrightness: Int(bBrightness), durationSec: durationSec, device: device) }
+            // Bottom button: Apply Transition + Cancel affordance
+            if transitionOn && isExpanded {
+                VStack(spacing: 8) {
+                    Button(action: applyTransition) {
+                        Group {
+                            if isApplyingTransition {
+                                ProgressView()
+                                    .progressViewStyle(.circular)
+                                    .tint(.white)
+                                    .scaleEffect(0.85)
+                            } else {
+                                Text("Apply")
+                                    .font(.callout.weight(.semibold))
+                            }
+                        }
+                        .foregroundColor(.white)
+                        .frame(height: 20)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.white.opacity(0.18))
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .opacity((durationTotalSeconds <= 0 || isApplyingTransition) ? 0.45 : 1)
+                    .accessibilityLabel("Apply transition")
+                    .accessibilityHint("Preview the transition using the selected gradients.")
+                    .disabled(durationTotalSeconds <= 0 || isApplyingTransition)
+                    
+                    if isApplyingTransition {
+                        Button(action: cancelTransition) {
+                            Text("Stop & Cancel")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.85))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color.white.opacity(0.12))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop and cancel transition")
+                        .accessibilityHint("Stops the current transition immediately.")
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .accessibilityHint("Begins the transition using the selected gradients.")
+                .transition(.opacity)
             }
+        }
+        .onAppear {
+            transitionOn = false
         }
         .padding(16)
         .background(
@@ -444,6 +557,9 @@ struct TransitionPane: View {
         )
         .task {
             // Initialize gradients on first appearance
+            if let storedDuration = viewModel.transitionDuration(for: device.id) {
+                applyIncomingDuration(storedDuration)
+            }
             if gradientA == nil {
                 gradientA = LEDGradient(stops: [
                     GradientStop(position: 0.0, hexColor: "FF0000"),
@@ -462,10 +578,103 @@ struct TransitionPane: View {
                 bBrightness = Double(d.brightness)
             }
         }
+        .onChange(of: viewModel.latestTransitionDurations[device.id]) { _, newValue in
+            if let value = newValue {
+                applyIncomingDuration(value)
+            }
+        }
         .onChange(of: dismissColorPicker) { _, newValue in
             if newValue {
                 showWheel = false
             }
+        }
+        .onChange(of: durationHours) { _, newValue in
+            if newValue >= 24 {
+                if durationHours != 24 {
+                    durationHours = 24
+                }
+                if durationMinutes != 0 {
+                    durationMinutes = 0
+                }
+            }
+            persistDurationSelection()
+        }
+        .onChange(of: durationMinutes) { _, newValue in
+            if durationHours >= 24 && newValue != 0 {
+                durationMinutes = 0
+            }
+            persistDurationSelection()
+        }
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded && transitionOn {
+                transitionOn = false
+                Task { await stopAndRevertTransition() }
+            }
+        }
+    }
+
+    private func applyIncomingDuration(_ seconds: Double) {
+        let clamped = max(0, min(seconds, 24 * 3600))
+        var hours = Int(clamped) / 3600
+        var minutes = (Int(clamped) % 3600) / 60
+        if clamped > 0, hours == 0, minutes == 0 {
+            minutes = 1
+        }
+        if hours >= 24 {
+            hours = 24
+            minutes = 0
+        }
+        durationHours = hours
+        durationMinutes = minutes
+    }
+    
+    private func persistDurationSelection() {
+        viewModel.setTransitionDuration(durationTotalSeconds, for: device.id)
+    }
+
+    private enum PresetTarget {
+        case start
+        case end
+    }
+
+    @ViewBuilder
+    private func presetChip(for preset: ColorPreset, target: PresetTarget) -> some View {
+        let isSelected = target == .start ? selectedStartPresetId == preset.id : selectedEndPresetId == preset.id
+        Button(action: {
+            applyPreset(preset, to: target)
+        }) {
+            Text(preset.name)
+                .font(.caption.weight(.medium))
+                .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.75))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(isSelected ? 0.22 : 0.12))
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.name) preset")
+        .accessibilityHint(target == .start ? "Apply to start gradient" : "Apply to end gradient")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func applyPreset(_ preset: ColorPreset, to target: PresetTarget) {
+        let sortedStops = preset.gradientStops
+            .sorted { $0.position < $1.position }
+        switch target {
+        case .start:
+            selectedStartPresetId = preset.id
+            gradientA = LEDGradient(stops: sortedStops)
+            stopsA = sortedStops
+            aBrightness = Double(preset.brightness)
+            Task { await applyNow(stops: sortedStops) }
+        case .end:
+            selectedEndPresetId = preset.id
+            gradientB = LEDGradient(stops: sortedStops)
+            stopsB = sortedStops
+            bBrightness = Double(preset.brightness)
+            Task { await applyNowB(stops: sortedStops) }
         }
     }
 
@@ -525,6 +734,67 @@ struct TransitionPane: View {
             await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
         }
     }
+    
+    private func stopAndRevertTransition() async {
+        await viewModel.stopTransitionAndRevertToA(device: device)
+        let output = await MainActor.run { () -> ([GradientStop], Int) in
+            let stops = currentGradientA.stops
+            let count = device.state?.segments.first?.len ?? 120
+            return (stops, count)
+        }
+        await viewModel.applyGradientStopsAcrossStrip(device, stops: output.0, ledCount: output.1)
+    }
+    
+    private func applyTransition() {
+        guard !isApplyingTransition else { return }
+        
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        
+        isApplyingTransition = true
+        
+        Task {
+            await viewModel.cancelActiveTransitionIfNeeded(for: device)
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            
+            let input = await MainActor.run { () -> (LEDGradient, LEDGradient, Int, Int, Double) in
+                let startGradient = currentGradientA
+                let endGradient = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
+                let startBrightness = Int(aBrightness)
+                let endBrightness = Int(bBrightness)
+                let duration = durationTotalSeconds
+                return (startGradient, endGradient, startBrightness, endBrightness, duration)
+            }
+            
+            let (startGradient, endGradient, startBrightness, endBrightness, duration) = input
+            
+            await viewModel.startTransition(
+                from: startGradient,
+                aBrightness: startBrightness,
+                to: endGradient,
+                bBrightness: endBrightness,
+                durationSec: duration,
+                device: device
+            )
+            
+            await MainActor.run {
+                isApplyingTransition = false
+            }
+        }
+    }
+    
+    private func cancelTransition() {
+        guard isApplyingTransition else { return }
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        
+        Task {
+            await viewModel.cancelActiveTransitionIfNeeded(for: device)
+            await MainActor.run {
+                isApplyingTransition = false
+            }
+        }
+    }
 }
 
 private extension TransitionPane {
@@ -542,6 +812,7 @@ private extension TransitionPane {
         
         let presetName = "Transition \(Date().formatted(date: .omitted, time: .shortened))"
         let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
+        let duration = durationTotalSeconds
         var preset = TransitionPreset(
             name: presetName,
             deviceId: device.id,
@@ -549,7 +820,7 @@ private extension TransitionPane {
             brightnessA: Int(aBrightness),
             gradientB: gB,
             brightnessB: Int(bBrightness),
-            durationSec: durationSec
+            durationSec: duration
         )
         
         // STEP 1: Save locally FIRST (immediate feedback, works even if WLED is offline)

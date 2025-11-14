@@ -21,6 +21,9 @@ struct DeviceDetailView: View {
     @State private var presetRenameContext: PresetRenameContext?
     @State private var presetRenameEditedName: String = ""
     @FocusState private var isPresetRenameFieldFocused: Bool
+    @State private var isTransitionPaneExpanded: Bool = false
+    @State private var isEffectsPaneExpanded: Bool = false
+    @State private var didResetAnimationModes: Bool = false
     
     // Use coordinated power state from ViewModel
     private var currentPowerState: Bool {
@@ -366,6 +369,9 @@ struct DeviceDetailView: View {
             // Effects Section
             effectsSection
         }
+        .onAppear {
+            resetAnimationModesIfNeeded()
+        }
     }
     
     // MARK: - Segment Picker
@@ -520,6 +526,20 @@ struct DeviceDetailView: View {
         presetRenameEditedName = ""
     }
     
+    private func resetAnimationModesIfNeeded() {
+        guard !didResetAnimationModes else { return }
+        didResetAnimationModes = true
+        let currentSegmentId = selectedSegmentId
+        Task {
+            await viewModel.cancelActiveTransitionIfNeeded(for: device)
+            await viewModel.disableEffect(for: device, segmentId: currentSegmentId)
+            await MainActor.run {
+                isTransitionPaneExpanded = false
+                isEffectsPaneExpanded = false
+            }
+        }
+    }
+    
     // MARK: - Colors Tab Helper Views
     
     
@@ -594,12 +614,37 @@ struct DeviceDetailView: View {
     }
     
     private var effectsSection: some View {
-        EffectsPane(device: device, segmentId: selectedSegmentId)
-            .environmentObject(viewModel)
+        EffectsPane(
+            device: device,
+            segmentId: selectedSegmentId,
+            isExpanded: $isEffectsPaneExpanded,
+            onActivate: {
+                if !isEffectsPaneExpanded {
+                    isEffectsPaneExpanded = true
+                }
+                if isTransitionPaneExpanded {
+                    isTransitionPaneExpanded = false
+                }
+            }
+        )
+        .environmentObject(viewModel)
     }
     
     private var transitionSection: some View {
-        TransitionPane(device: device, dismissColorPicker: $dismissColorPicker)
+        TransitionPane(
+            device: device,
+            dismissColorPicker: $dismissColorPicker,
+            isExpanded: $isTransitionPaneExpanded,
+            onActivate: {
+                if !isTransitionPaneExpanded {
+                    isTransitionPaneExpanded = true
+                }
+                if isEffectsPaneExpanded {
+                    isEffectsPaneExpanded = false
+                }
+            }
+        )
+        .environmentObject(viewModel)
     }
     
 }

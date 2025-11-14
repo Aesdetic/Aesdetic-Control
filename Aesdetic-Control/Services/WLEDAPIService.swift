@@ -21,9 +21,11 @@ protocol WLEDAPIServiceProtocol {
     func setCCT(for device: WLEDDevice, cctKelvin: Int, segmentId: Int) async throws -> WLEDResponse
     func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset]
     func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws
+    func setEffect(_ effectId: Int, forSegment segmentId: Int, speed: Int?, intensity: Int?, palette: Int?, colors: [[Int]]?, device: WLEDDevice, turnOn: Bool?) async throws -> WLEDState
+    func releaseRealtimeOverride(for device: WLEDDevice) async
     
     // Playlist management
-    func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws
+    func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws -> [WLEDPlaylist]
     func fetchPlaylists(for device: WLEDDevice) async throws -> [WLEDPlaylist]
     
     // Preset saving helpers
@@ -120,7 +122,18 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         do {
-            request.httpBody = try encoder.encode(state)
+            let jsonData = try encoder.encode(state)
+            request.httpBody = jsonData
+            
+            #if DEBUG
+            // Log the actual JSON being sent for effects debugging
+            if state.seg?.first?.fx != nil {
+                if let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print("[Effects][API] JSON payload being sent to WLED:")
+                    print(jsonString)
+                }
+            }
+            #endif
         } catch {
             throw WLEDAPIError.encodingError(error)
         }
@@ -279,7 +292,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     
     // MARK: - Playlist Management
     
-    func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws {
+    func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws -> [WLEDPlaylist] {
         guard request.id >= 0 else {
             throw WLEDAPIError.invalidConfiguration
         }
@@ -298,8 +311,29 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )])
         httpRequest.httpBody = try encoder.encode(body)
         do {
-            let (_, response) = try await urlSession.data(for: httpRequest)
+            let (data, response) = try await urlSession.data(for: httpRequest)
             try validateHTTPResponse(response, device: device)
+            let json = try JSONSerialization.jsonObject(with: data, options: [])
+            guard let dictionary = json as? [String: Any] else { return [] }
+            var playlists: [WLEDPlaylist] = []
+            for (key, value) in dictionary {
+                guard let id = Int(key), let playlistDict = value as? [String: Any] else { continue }
+                let name = playlistDict["n"] as? String ?? "Playlist \(id)"
+                let presets = playlistDict["ps"] as? [Int] ?? []
+                let durations = playlistDict["dur"] as? [Int] ?? []
+                let transitions = playlistDict["transition"] as? [Int] ?? []
+                let repeatCount = playlistDict["repeat"] as? Int
+                let playlist = WLEDPlaylist(
+                    id: id,
+                    name: name,
+                    presets: presets,
+                    duration: durations,
+                    transition: transitions,
+                    repeat: repeatCount
+                )
+                playlists.append(playlist)
+            }
+            return playlists.sorted { $0.id < $1.id }
         } catch {
             throw handleError(error, device: device)
         }
@@ -416,7 +450,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             repeat: nil  // No loop - stops at B
         )
         
-        try await savePlaylist(playlistRequest, to: device)
+        _ = try await savePlaylist(playlistRequest, to: device)
         
         return playlistId
     }
@@ -680,19 +714,83 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     ///   - device: The target WLED device
     /// - Returns: The updated WLEDState after setting the effect
     /// - Throws: WLEDAPIError if the request fails
-    func setEffect(_ effectId: Int, forSegment segmentId: Int = 0, speed: Int? = nil, 
-                  intensity: Int? = nil, palette: Int? = nil, device: WLEDDevice) async throws -> WLEDState {
+    func setEffect(_ effectId: Int, forSegment segmentId: Int = 0, speed: Int? = nil,
+                  intensity: Int? = nil, palette: Int? = nil, colors: [[Int]]? = nil,
+                  device: WLEDDevice, turnOn: Bool? = nil) async throws -> WLEDState {
+        let baseSegment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }) ?? device.state?.segments.first
+        
+        // When sending colors with effects, omit palette (pal: 0 can conflict with col)
+        // Only set palette if colors are NOT provided (let effect use palette)
+        let effectivePalette: Int? = colors != nil ? nil : palette
+        
+        // When applying effects, ensure segment is not frozen and is explicitly on
+        // Don't send segment brightness - let device brightness control it
+        // Ensure freeze is false so effects can run
         let segment = SegmentUpdate(
             id: segmentId,
+            start: baseSegment?.start,
+            stop: baseSegment?.stop,
+            len: baseSegment?.len,
+            grp: baseSegment?.grp,
+            spc: baseSegment?.spc,
+            ofs: baseSegment?.ofs,
+            on: turnOn ?? true,  // Explicitly turn on segment when applying effect
+            bri: nil,  // Don't override segment brightness - use device brightness
+            col: colors,
+            cct: nil,  // Don't send CCT when applying effects (CCT conflicts with effects)
             fx: effectId,
             sx: speed,
             ix: intensity,
-            pal: palette
+            pal: effectivePalette,
+            sel: baseSegment?.sel,
+            rev: baseSegment?.rev,
+            mi: baseSegment?.mi,
+            cln: baseSegment?.cln,
+            frz: false  // Explicitly unfreeze segment so effects can run
         )
         
-        let stateUpdate = WLEDStateUpdate(seg: [segment])
+        #if DEBUG
+        print("[Effects][API] Sending segment update: id=\(segmentId) fx=\(effectId) sx=\(speed ?? -1) ix=\(intensity ?? -1) pal=\(palette ?? -1) on=\(turnOn?.description ?? "nil") colors=\(colors?.description ?? "nil")")
+        print("[Effects][API] Segment also includes: len=\(baseSegment?.len ?? -1) start=\(baseSegment?.start ?? -1) stop=\(baseSegment?.stop ?? -1)")
+        #endif
+        
+        // Ensure device is on if we're turning on the segment
+        // Also ensure brightness is set (effects need brightness > 0 to be visible)
+        let deviceBrightness = device.brightness > 0 ? device.brightness : 255
+        let stateUpdate = WLEDStateUpdate(
+            on: turnOn == true ? true : nil,  // Turn device on if segment is being turned on
+            bri: turnOn == true ? deviceBrightness : nil,  // Ensure brightness is set when turning on
+            seg: [segment]
+        )
+        
+        #if DEBUG
+        print("[Effects][API] State update includes: on=\(String(describing: turnOn)) bri=\(turnOn == true ? deviceBrightness : -1)")
+        #endif
+        
         let response = try await updateState(for: device, state: stateUpdate)
+        
+        #if DEBUG
+        print("[Effects][API] Received response from updateState")
+        #endif
+        
         return response.state
+    }
+    
+    func releaseRealtimeOverride(for device: WLEDDevice) async {
+        #if DEBUG
+        print("[Effects][API] Releasing realtime override (lor: 0) for device \(device.name)")
+        #endif
+        let stateUpdate = WLEDStateUpdate(lor: 0)
+        do {
+            let response = try await updateState(for: device, state: stateUpdate)
+            #if DEBUG
+            print("[Effects][API] Realtime override released successfully")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[Effects][WARNING] Failed to release realtime override: \(error.localizedDescription)")
+            #endif
+        }
     }
     
     // MARK: - Batch Operations
