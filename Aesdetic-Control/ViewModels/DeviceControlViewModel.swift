@@ -30,37 +30,32 @@ class DeviceControlViewModel: ObservableObject {
     static let shared = DeviceControlViewModel()
     private static let maxEffectColorSlots = 3
     private static let gradientFriendlyEffectIds: Set<Int> = [
-        1,   // Blink
         2,   // Breathe
         3,   // Wipe
         4,   // Wipe Random
-        7,   // Rainbow
-        8,   // Rainbow Cycle
+        16,  // Saw
         20,  // Gradient
         22,  // Chase
         25,  // Running
         27,  // Scanner
+        28,  // Chase Random
         29,  // Fade
         34,  // Railway
-        74,  // Candle Multi
-        46   // Running dual
+        37,  // Running 2
+        47,  // Loading
+        54,  // Tri Chase
+        102  // Candle Multi (ID 102)
     ]
     
     private static let fallbackGradientFriendlyEffects: [EffectMetadata] = [
         EffectMetadata(
-            id: 1,
-            name: "Blink Gradient",
-            description: "Blink through gradient colors.",
-            parameters: [],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
             id: 2,
             name: "Breathe Gradient",
             description: "Breathe between gradient colors.",
-            parameters: [],
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
             supportsPalette: false,
             isSoundReactive: false,
             colorSlotCount: 3
@@ -69,7 +64,10 @@ class DeviceControlViewModel: ObservableObject {
             id: 3,
             name: "Color Wipe",
             description: "Wipe across using gradient colors.",
-            parameters: [],
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
             supportsPalette: false,
             isSoundReactive: false,
             colorSlotCount: 3
@@ -78,7 +76,10 @@ class DeviceControlViewModel: ObservableObject {
             id: 20,
             name: "Gradient Cycle",
             description: "Cycle through gradient colors smoothly.",
-            parameters: [],
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
             supportsPalette: false,
             isSoundReactive: false,
             colorSlotCount: 3
@@ -87,7 +88,106 @@ class DeviceControlViewModel: ObservableObject {
             id: 22,
             name: "Chase Gradient",
             description: "Gradient chase effect.",
-            parameters: [],
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 16,
+            name: "Saw",
+            description: "Sawtooth wave effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 27,
+            name: "Scanner",
+            description: "Scanner effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 28,
+            name: "Chase Random",
+            description: "Random chase effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 37,
+            name: "Running 2",
+            description: "Running lights variant 2 with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 4,
+            name: "Wipe Random",
+            description: "Random wipe effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 25,
+            name: "Running",
+            description: "Running lights effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 29,
+            name: "Fade",
+            description: "Fade effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 34,
+            name: "Railway",
+            description: "Railway effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
             supportsPalette: false,
             isSoundReactive: false,
             colorSlotCount: 3
@@ -96,16 +196,46 @@ class DeviceControlViewModel: ObservableObject {
             id: 46,
             name: "Running Gradient",
             description: "Running lights with gradient colors.",
-            parameters: [],
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
             supportsPalette: false,
             isSoundReactive: false,
             colorSlotCount: 3
         ),
         EffectMetadata(
-            id: 74,
+            id: 47,
+            name: "Loading",
+            description: "Loading effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 54,
+            name: "Tri Chase",
+            description: "Tri-color chase effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 102,
             name: "Candle Multi",
-            description: "Warm flicker with gradient palette.",
-            parameters: [],
+            description: "Warm flicker with gradient palette (ID 102).",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
             supportsPalette: true,
             isSoundReactive: false,
             colorSlotCount: 3

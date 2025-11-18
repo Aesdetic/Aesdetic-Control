@@ -586,15 +586,15 @@ struct ImagePickerSheet: View {
                                     .font(.largeTitle)
                                     .foregroundColor(.accentColor)
                                 
-                                Text("Choose from Photos")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.primary)
-                                
-                                Text("Upload a PNG image for your device")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
+                                    Text("Choose from Photos")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.primary)
+                                    
+                                    Text("Upload a PNG image for your device")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity)
                             .frame(height: 120)

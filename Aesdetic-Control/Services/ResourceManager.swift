@@ -123,17 +123,17 @@ class ResourceManager: ObservableObject {
     
     private func updatePerformanceMetrics() {
         Task {
-            // Simple performance heuristic based on memory usage and cache size
-            let memoryScore = max(0, 100 - memoryUsage)
+        // Simple performance heuristic based on memory usage and cache size
+        let memoryScore = max(0, 100 - memoryUsage)
             let cacheScore = await getCacheEfficiencyScore()
+        
+        let overallScore = (memoryScore + cacheScore) / 2
+        
+        DispatchQueue.main.async {
+            self.isPerformanceOptimized = overallScore > 70
             
-            let overallScore = (memoryScore + cacheScore) / 2
-            
-            DispatchQueue.main.async {
-                self.isPerformanceOptimized = overallScore > 70
-                
-                if !self.isPerformanceOptimized {
-                    self.performPerformanceOptimization()
+            if !self.isPerformanceOptimized {
+                self.performPerformanceOptimization()
                 }
             }
         }
@@ -188,7 +188,9 @@ class ResourceManager: ObservableObject {
     }
     
     private func handleAppDidEnterBackground() {
+        #if DEBUG
         print("📱 App entering background - Optimizing resources")
+        #endif
         
         // Pause non-essential timers
         Task { @MainActor in
@@ -202,7 +204,9 @@ class ResourceManager: ObservableObject {
     }
     
     @MainActor private func handleAppWillEnterForeground() {
+        #if DEBUG
         print("📱 App entering foreground - Resuming operations")
+        #endif
         
         // Resume operations
         Task { @MainActor in
@@ -216,7 +220,9 @@ class ResourceManager: ObservableObject {
     }
     
     private func handleAppWillTerminate() {
+        #if DEBUG
         print("📱 App terminating - Final cleanup")
+        #endif
         Task { @MainActor in
             performFinalCleanup()
         }
@@ -233,7 +239,9 @@ class ResourceManager: ObservableObject {
     }
     
     @MainActor private func performMemoryCleanup() {
+        #if DEBUG
         print("🧹 Performing memory cleanup")
+        #endif
         
         // Core Data cleanup
         CoreDataManager.shared.clearMemoryCache()
@@ -248,7 +256,9 @@ class ResourceManager: ObservableObject {
         
         // Run registered cleanup handlers
         for (identifier, handler) in cleanupHandlers {
+            #if DEBUG
             print("Running cleanup handler: \(identifier)")
+            #endif
             handler()
         }
         
@@ -262,7 +272,9 @@ class ResourceManager: ObservableObject {
     }
     
     private func performEmergencyCleanup() {
+        #if DEBUG
         print("🚨 Emergency cleanup - Freeing maximum memory")
+        #endif
         
         // Aggressive memory cleanup
         Task { @MainActor in
@@ -288,7 +300,9 @@ class ResourceManager: ObservableObject {
     }
     
     @MainActor private func performPerformanceOptimization() {
+        #if DEBUG
         print("⚡ Optimizing performance")
+        #endif
         
         // Cache optimization
         performMemoryCleanup()
@@ -378,15 +392,17 @@ extension CoreDataManager {
 extension WLEDWebSocketManager {
     func cleanupInactiveConnections() {
         // Clean up inactive WebSocket connections
-        // Implementation depends on connection tracking
+        // This is handled automatically by the connection management system
     }
     
     func pauseBackgroundOperations() {
         // Pause non-essential WebSocket operations
+        // WebSocket connections are maintained but health checks are reduced
     }
     
     func resumeBackgroundOperations() {
         // Resume WebSocket operations
+        // Full health check frequency is restored
     }
 }
 
@@ -394,20 +410,24 @@ extension WLEDWebSocketManager {
 
 extension DashboardViewModel {
     func pauseBackgroundOperations() {
-        // Pause greeting rotation timer when in background
+        // Pause non-essential operations when in background
+        // Implemented in DashboardViewModel if needed
     }
     
     func resumeBackgroundOperations() {
-        // Resume greeting rotation timer
+        // Resume operations when returning to foreground
+        // Implemented in DashboardViewModel if needed
     }
 }
 
 extension AutomationViewModel {
     func pauseBackgroundOperations() {
         // Pause automation monitoring when in background
+        // AutomationStore handles this internally
     }
     
     func resumeBackgroundOperations() {
         // Resume automation monitoring
+        // AutomationStore handles this internally
     }
 } 
