@@ -32,18 +32,10 @@ class DeviceControlViewModel: ObservableObject {
     private static let gradientFriendlyEffectIds: Set<Int> = [
         2,   // Breathe
         3,   // Wipe
-        4,   // Wipe Random
-        16,  // Android
-        20,  // Gradient
-        22,  // Chase
-        25,  // Running
         27,  // Scanner
         28,  // Chase 2
-        29,  // Fade
-        34,  // Railway
         37,  // Sweep
         46,  // Running dual
-        47,  // Fairy
         54,  // Lake
         102  // Candle Multi
     ]
@@ -65,66 +57,6 @@ class DeviceControlViewModel: ObservableObject {
             id: 3,
             name: "Color Wipe",
             description: "Wipe across using gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 4,
-            name: "Wipe Random",
-            description: "Random wipe using gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 16,
-            name: "Android",
-            description: "Android-style animation with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 20,
-            name: "Gradient Cycle",
-            description: "Cycle through gradient colors smoothly.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 22,
-            name: "Chase Gradient",
-            description: "Gradient chase effect.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 25,
-            name: "Running",
-            description: "Running lights with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -158,30 +90,6 @@ class DeviceControlViewModel: ObservableObject {
             colorSlotCount: 3
         ),
         EffectMetadata(
-            id: 29,
-            name: "Fade",
-            description: "Fade effect with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 34,
-            name: "Railway",
-            description: "Railway effect with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
             id: 37,
             name: "Sweep",
             description: "Sweep effect with gradient colors.",
@@ -197,18 +105,6 @@ class DeviceControlViewModel: ObservableObject {
             id: 46,
             name: "Running dual",
             description: "Running lights with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 47,
-            name: "Fairy",
-            description: "Fairy effect with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)

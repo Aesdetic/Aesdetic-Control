@@ -111,12 +111,31 @@ struct EffectsPane: View {
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
             onColorChange: { color, _, _ in
-                if canEditGradient, let id = selectedStopId,
-                   let index = effectGradient.stops.firstIndex(where: { $0.id == id }) {
-                    var stops = effectGradient.stops
-                    stops[index].hexColor = color.toHex()
-                    effectGradient = LEDGradient(stops: stops)
+                if canEditGradient {
+                    // In gradient mode, we need a selected stop
+                    // If selectedStopId is nil, try to use the first stop as fallback
+                    let targetStopId = selectedStopId ?? effectGradient.stops.first?.id
+                    
+                    if let id = targetStopId,
+                       let index = effectGradient.stops.firstIndex(where: { $0.id == id }) {
+                        // Update only the selected stop
+                        var stops = effectGradient.stops
+                        stops[index].hexColor = color.toHex()
+                        effectGradient = LEDGradient(stops: stops)
+                        // Ensure selectedStopId is set if it was nil
+                        if selectedStopId == nil {
+                            selectedStopId = id
+                        }
+                    } else {
+                        // No valid stop found - this shouldn't happen, but fallback to solid color
+                        stagedSolidColor = color
+                        effectGradient = LEDGradient(stops: [
+                            GradientStop(position: 0.0, hexColor: color.toHex()),
+                            GradientStop(position: 1.0, hexColor: color.toHex())
+                        ])
+                    }
                 } else {
+                    // Single color mode - update solid color
                     stagedSolidColor = color
                     effectGradient = LEDGradient(stops: [
                         GradientStop(position: 0.0, hexColor: color.toHex()),
@@ -215,7 +234,24 @@ struct EffectsPane: View {
         }
         .onChange(of: viewModel.latestEffectGradientStops[device.id] ?? []) { _, newStops in
             guard !newStops.isEmpty else { return }
+            // Preserve the selected stop's position before regenerating
+            let selectedPosition = selectedStopId.flatMap { id in
+                effectGradient.stops.first(where: { $0.id == id })?.position
+            }
+            
             effectGradient = preparedGradientForSlotCount(LEDGradient(stops: newStops), slotCount: slotCount)
+            
+            // Map the selected stop ID to the new stop by position
+            if let position = selectedPosition {
+                // Find the stop closest to the preserved position
+                let sortedStops = effectGradient.stops.sorted { $0.position < $1.position }
+                if let closestStop = sortedStops.min(by: { abs($0.position - position) < abs($1.position - position) }) {
+                    selectedStopId = closestStop.id
+                } else if let firstStop = sortedStops.first {
+                    selectedStopId = firstStop.id
+                }
+            }
+            
             if slotCount <= 1, let firstHex = newStops.first?.hexColor {
                 stagedSolidColor = Color(hex: firstHex)
             }
@@ -504,6 +540,11 @@ private extension EffectsPane {
     }
     
     func loadStagedGradient() {
+        // Preserve the selected stop's position before regenerating
+        let selectedPosition = selectedStopId.flatMap { id in
+            effectGradient.stops.first(where: { $0.id == id })?.position
+        }
+        
         if let baseStops = viewModel.gradientStops(for: device.id), !baseStops.isEmpty {
             #if DEBUG
             print("[EffectsPane] loadStagedGradient using device gradient: \(baseStops.map { $0.hexColor })")
@@ -524,24 +565,60 @@ private extension EffectsPane {
             print("[EffectsPane] loadStagedGradient falling back to current color: \(hex)")
             #endif
         }
+        
+        // Map the selected stop ID to the new stop by position
+        if let position = selectedPosition {
+            // Find the stop closest to the preserved position
+            let sortedStops = effectGradient.stops.sorted { $0.position < $1.position }
+            if let closestStop = sortedStops.min(by: { abs($0.position - position) < abs($1.position - position) }) {
+                selectedStopId = closestStop.id
+            } else if let firstStop = sortedStops.first {
+                selectedStopId = firstStop.id
+            } else {
+                selectedStopId = nil
+            }
+        } else {
+            // Only clear selectedStopId if we didn't have a position to preserve
+            selectedStopId = nil
+        }
+        
         if slotCount <= 1, let firstHex = effectGradient.stops.first?.hexColor {
             stagedSolidColor = Color(hex: firstHex)
             wheelInitial = stagedSolidColor
         }
         hasPendingGradientChanges = false
-        selectedStopId = nil
     }
     
     func applyStagedEffect(force: Bool) {
         guard effectSelectionId != 0 else { return }
         if !force && !hasPendingGradientChanges && currentState.isEnabled { return }
+        
+        // Preserve the selected stop's position before regenerating
+        let selectedPosition = selectedStopId.flatMap { id in
+            effectGradient.stops.first(where: { $0.id == id })?.position
+        }
+        
         let baseGradient = canEditGradient ? effectGradient : LEDGradient(stops: [
             GradientStop(position: 0.0, hexColor: stagedSolidColor.toHex())
         ])
         let preparedGradient = preparedGradientForSlotCount(baseGradient, slotCount: slotCount)
         viewModel.updateEffectGradient(preparedGradient, for: device)
+        
+        // Helper to map selected stop by position
+        let mapSelectedStop: (LEDGradient) -> Void = { gradient in
+            if let position = selectedPosition {
+                let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+                if let closestStop = sortedStops.min(by: { abs($0.position - position) < abs($1.position - position) }) {
+                    selectedStopId = closestStop.id
+                } else if let firstStop = sortedStops.first {
+                    selectedStopId = firstStop.id
+                }
+            }
+        }
+        
         if !force && !isEffectEnabled {
             effectGradient = preparedGradient
+            mapSelectedStop(preparedGradient)
             if slotCount <= 1, let firstHex = preparedGradient.stops.first?.hexColor {
                 stagedSolidColor = Color(hex: firstHex)
             }
@@ -557,6 +634,7 @@ private extension EffectsPane {
             await MainActor.run {
                 isApplyingEffect = false
                 effectGradient = preparedGradient
+                mapSelectedStop(preparedGradient)
                 if slotCount <= 1, let firstHex = preparedGradient.stops.first?.hexColor {
                     stagedSolidColor = Color(hex: firstHex)
                 }
