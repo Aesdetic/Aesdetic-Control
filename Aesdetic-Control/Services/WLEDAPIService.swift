@@ -782,7 +782,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         #endif
         let stateUpdate = WLEDStateUpdate(lor: 0)
         do {
-            let response = try await updateState(for: device, state: stateUpdate)
+            _ = try await updateState(for: device, state: stateUpdate)
             #if DEBUG
             print("[Effects][API] Realtime override released successfully")
             #endif

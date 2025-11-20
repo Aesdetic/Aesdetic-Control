@@ -35,11 +35,8 @@ struct GradientBar: View {
                     let w = max(1, geo.size.width - handleWidth)
                     let x = min(max(0, location.x - handleWidth / 2), w)
                     let t = Double(x / w)
-                    // Insert new stop at tap position (white by default)
-                    let new = GradientStop(position: t, hexColor: "FFFFFF")
-                    gradient.stops.append(new)
-                    // Sort stops immediately to prevent LinearGradient ordering errors
-                    gradient.stops.sort { $0.position < $1.position }
+                    // Don't add stop here - let onTapAnywhere handler in UnifiedColorPane do it
+                    // This prevents double-adding stops
                     onTapAnywhere(t, nil)
                 }
 

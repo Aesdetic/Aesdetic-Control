@@ -1,0 +1,21 @@
+---
+description: Keep WLED gradients/power flows aligned with native multi-segment behavior
+globs: Aesdetic-Control/ViewModels/DeviceControlViewModel.swift, Aesdetic-Control/Views/Components/UnifiedColorPane.swift, Aesdetic-Control/Views/Components/TransitionPane.swift, Aesdetic-Control/Views/Scenes/PresetsListView.swift, Aesdetic-Control/ColorEngine/ColorPipeline.swift
+alwaysApply: true
+---
+
+- **Respect real segment geometry**
+  - Use `segmentLength(for:segmentId:)` (see [DeviceControlViewModel.swift](mdc:Aesdetic-Control/ViewModels/DeviceControlViewModel.swift)) instead of hard-coding `120` or `segments.first?.len`.
+  - Always pass the active `segmentId` into `applyGradientStopsAcrossStrip` and `ColorIntent.segmentId` so multi-segment strips mirror native WLED behavior.
+
+- **Route all per-LED uploads through `ColorPipeline`**
+  - Never call `WLEDAPIService.setSegmentPixels` from views; build a `ColorIntent` and let `ColorPipeline.apply` handle brightness queuing and chunking (see [ColorPipeline.swift](mdc:Aesdetic-Control/ColorEngine/ColorPipeline.swift)).
+  - When applying CCT, set both `perLEDHex` and `intent.cct` so tunable white strips render exactly like WLED.
+
+- **Power transitions must include gradient context**
+  - When turning a device on, send the first gradient stop as a temporary color before streaming the full gradient, then call `applyGradientStopsAcrossStrip` with `disableActiveEffect` set appropriately (see `toggleDevicePower` / `setDevicePower`).
+  - After a successful power-on, reapply any cached effect state so animated strips resume the same palette/effect they had before.
+
+- **UI surfaces must not re-sample device state blindly**
+  - `UnifiedColorPane` and `TransitionPane` should rely on cached gradient stops plus `segmentId`-aware LED counts; avoid overwriting `currentColor` with `state.seg[0].col[0]` unless no gradient is stored.
+  - When a component needs per-LED samples (e.g., for previews), derive the length from the targeted segment to reflect user-configured LED preferences.

@@ -532,7 +532,11 @@ struct DeviceDetailView: View {
         let currentSegmentId = selectedSegmentId
         Task {
             await viewModel.cancelActiveTransitionIfNeeded(for: device)
-            await viewModel.disableEffect(for: device, segmentId: currentSegmentId)
+            // Only disable effect if it's actually enabled to prevent unnecessary flash
+            let effectState = viewModel.currentEffectState(for: device, segmentId: currentSegmentId)
+            if effectState.isEnabled {
+                await viewModel.disableEffect(for: device, segmentId: currentSegmentId)
+            }
             await MainActor.run {
                 isTransitionPaneExpanded = false
                 isEffectsPaneExpanded = false

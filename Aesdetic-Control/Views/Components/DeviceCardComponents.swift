@@ -179,15 +179,16 @@ struct EnhancedDeviceCard: View {
                 // Calculate target state BEFORE any state changes
                 let targetState = !currentPowerState
                 
+                // CRITICAL: Set optimistic state BEFORE calling toggleDevicePower
+                // This ensures toggleDevicePower uses the correct target state
+                viewModel.setUIOptimisticState(deviceId: device.id, isOn: targetState)
+                
                 // If device appears offline but we're trying to control it, mark it as online
                 // This handles cases where discovery set isOnline=true but UI hasn't updated yet
                 if !device.isOnline {
                     viewModel.markDeviceOnline(device.id)
                 }
                 
-                // Register UI optimistic state with ViewModel for coordination
-                // Register optimistic UI state for immediate feedback
-                // Note: This method was removed to prevent memory leaks
                 isToggling = true
                 
                 // Haptic feedback for immediate response

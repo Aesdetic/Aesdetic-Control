@@ -33,6 +33,7 @@ struct UnifiedColorPane: View {
         _briUI = State(initialValue: Double(device.brightness))
         
         // Initialize gradient from device's current color
+        // Will be restored from persisted gradient in onAppear
         let deviceColorHex = device.currentColor.toHex()
         _gradient = State(initialValue: LEDGradient(stops: [
             GradientStop(position: 0.0, hexColor: deviceColorHex),
@@ -151,13 +152,14 @@ struct UnifiedColorPane: View {
                     }
                 },
                 onTapAnywhere: { t, tapped in
+                    // Sample color from current gradient at tap position
                     let color = GradientSampler.sampleColor(at: t, stops: currentGradient.stops)
                     let new = GradientStop(position: t, hexColor: color.toHex())
                     var updatedGradient = currentGradient
                     updatedGradient.stops.append(new)
                     updatedGradient.stops.sort { $0.position < $1.position }
                     
-                    // Option 3: Inherit temperature from nearest existing stop
+                    // Inherit temperature from nearest existing stop
                     if !stopTemperatures.isEmpty {
                         // Find the nearest stop by position
                         let sortedStops = updatedGradient.stops.sorted { $0.position < $1.position }
@@ -185,6 +187,9 @@ struct UnifiedColorPane: View {
                     
                     gradient = updatedGradient
                     selectedStopId = new.id
+                    
+                    // Immediately apply the new gradient with the added stop
+                    Task { await applyNow(stops: updatedGradient.stops) }
                 },
                 onStopsChanged: { stops, phase in
                     throttleApply(stops: stops, phase: phase)
@@ -301,8 +306,7 @@ struct UnifiedColorPane: View {
                 )
         )
         .task {
-            // Refresh device state on first appearance
-            await viewModel.refreshDeviceState(device)
+            // Load persisted gradient into UI first (don't refresh state to prevent flash)
             if let latestStops = viewModel.gradientStops(for: device.id), !latestStops.isEmpty {
                 applyIncomingGradient(latestStops)
             } else {
@@ -311,6 +315,8 @@ struct UnifiedColorPane: View {
             if !isAdjustingBrightness {
                 briUI = Double(activeDevice.brightness)
             }
+            // Only refresh state for brightness/power status, not color (to prevent flash)
+            // Color is already correct from persisted gradient
         }
         .onAppear {
             if let latestStops = viewModel.gradientStops(for: device.id), !latestStops.isEmpty {
@@ -365,11 +371,20 @@ struct UnifiedColorPane: View {
     }
 
     private func throttleApply(stops: [GradientStop], phase: DragPhase) {
-        let ledCount = device.state?.segments.first?.len ?? 120
+        let task = {
+            Task {
+                await viewModel.applyGradientStopsAcrossStrip(
+                    device,
+                    segmentId: segmentId,
+                    stops: stops,
+                    stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures
+                )
+            }
+        }
         if phase == .changed {
             applyWorkItem?.cancel()
             let work = DispatchWorkItem {
-                Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures) }
+                task()
             }
             applyWorkItem = work
             Task { @MainActor in
@@ -377,12 +392,12 @@ struct UnifiedColorPane: View {
                 work.perform()
             }
         } else {
-            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures) }
+            task()
         }
     }
 
     private func applyNow(stops: [GradientStop]) async {
-        let ledCount = device.state?.segments.first?.len ?? 120
+        let ledCount = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId })?.len ?? device.state?.segments.first?.len ?? 120
         if stops.count == 1 {
             // For single color, check if temperature/CCT should be used
             let stop = stops[0]
@@ -454,7 +469,12 @@ struct UnifiedColorPane: View {
         } else {
             // For gradients with multiple stops, check if all stops share the same temperature
             // If they do, send segment-level CCT along with per-LED colors (Option 1)
-            await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures)
+            await viewModel.applyGradientStopsAcrossStrip(
+                device,
+                segmentId: segmentId,
+                stops: stops,
+                stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures
+            )
         }
     }
 }

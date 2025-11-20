@@ -679,11 +679,15 @@ struct TransitionPane: View {
     }
 
     private func throttleApply(stops: [GradientStop], phase: DragPhase) {
-        let ledCount = device.state?.segments.first?.len ?? 120
+        let applyTask = {
+            Task {
+                await viewModel.applyGradientStopsAcrossStrip(device, stops: stops)
+            }
+        }
         if phase == .changed {
             applyWorkItem?.cancel()
             let work = DispatchWorkItem {
-                Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
+                applyTask()
             }
             applyWorkItem = work
             Task { @MainActor in
@@ -691,7 +695,7 @@ struct TransitionPane: View {
                 work.perform()
             }
         } else {
-            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
+            applyTask()
         }
     }
     
@@ -701,11 +705,15 @@ struct TransitionPane: View {
     @State private var showSaveSuccess = false
     
     private func throttleApplyB(stops: [GradientStop], phase: DragPhase) {
-        let ledCount = device.state?.segments.first?.len ?? 120
+        let applyTask = {
+            Task {
+                await viewModel.applyGradientStopsAcrossStrip(device, stops: stops)
+            }
+        }
         if phase == .changed {
             applyWorkItemB?.cancel()
             let work = DispatchWorkItem {
-                Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
+                applyTask()
             }
             applyWorkItemB = work
             Task { @MainActor in
@@ -713,36 +721,30 @@ struct TransitionPane: View {
                 work.perform()
             }
         } else {
-            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount) }
+            applyTask()
         }
     }
 
     private func applyNow(stops: [GradientStop]) async {
-        let ledCount = device.state?.segments.first?.len ?? 120
         if stops.count == 1 {
             await viewModel.updateDeviceColor(device, color: stops[0].color)
         } else {
-            await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
+            await viewModel.applyGradientStopsAcrossStrip(device, stops: stops)
         }
     }
     
     private func applyNowB(stops: [GradientStop]) async {
-        let ledCount = device.state?.segments.first?.len ?? 120
         if stops.count == 1 {
             await viewModel.updateDeviceColor(device, color: stops[0].color)
         } else {
-            await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount)
+            await viewModel.applyGradientStopsAcrossStrip(device, stops: stops)
         }
     }
     
     private func stopAndRevertTransition() async {
         await viewModel.stopTransitionAndRevertToA(device: device)
-        let output = await MainActor.run { () -> ([GradientStop], Int) in
-            let stops = currentGradientA.stops
-            let count = device.state?.segments.first?.len ?? 120
-            return (stops, count)
-        }
-        await viewModel.applyGradientStopsAcrossStrip(device, stops: output.0, ledCount: output.1)
+        let stops = await MainActor.run { currentGradientA.stops }
+        await viewModel.applyGradientStopsAcrossStrip(device, stops: stops)
     }
     
     private func applyTransition() {

@@ -19,8 +19,8 @@ struct WLEDStateUpdate: Codable {
     /// Array of segment updates
     let seg: [SegmentUpdate]?
     let udpn: UDPNUpdate?
-    /// Transition time in milliseconds
-    let transition: Int?
+    /// Transition time encoded in deciseconds (`tt`), as required by WLED
+    private let transitionDeciseconds: Int?
     /// Apply preset by ID
     let ps: Int?
     /// Night Light configuration
@@ -28,15 +28,67 @@ struct WLEDStateUpdate: Codable {
     /// Live override release (0 disables realtime streaming)
     let lor: Int?
     
-    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
+    init(
+        on: Bool? = nil,
+        bri: Int? = nil,
+        seg: [SegmentUpdate]? = nil,
+        udpn: UDPNUpdate? = nil,
+        transition: Int? = nil,
+        ps: Int? = nil,
+        nl: NightLightUpdate? = nil,
+        lor: Int? = nil
+    ) {
         self.on = on
         self.bri = bri
         self.seg = seg
         self.udpn = udpn
-        self.transition = transition
+        if let transition = transition {
+            // WLED expects transition time in deciseconds (`tt` field).
+            // Round to nearest decisecond to preserve intent (e.g. 300ms → 3).
+            let deciseconds = max(0, Int((Double(transition) / 100.0).rounded()))
+            self.transitionDeciseconds = deciseconds
+        } else {
+            self.transitionDeciseconds = nil
+        }
         self.ps = ps
         self.nl = nl
         self.lor = lor
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case on, bri, seg, udpn
+        case transitionDeciseconds = "tt"
+        case ps, nl, lor
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(on, forKey: .on)
+        try container.encodeIfPresent(bri, forKey: .bri)
+        try container.encodeIfPresent(seg, forKey: .seg)
+        try container.encodeIfPresent(udpn, forKey: .udpn)
+        try container.encodeIfPresent(transitionDeciseconds, forKey: .transitionDeciseconds)
+        try container.encodeIfPresent(ps, forKey: .ps)
+        try container.encodeIfPresent(nl, forKey: .nl)
+        try container.encodeIfPresent(lor, forKey: .lor)
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.on = try container.decodeIfPresent(Bool.self, forKey: .on)
+        self.bri = try container.decodeIfPresent(Int.self, forKey: .bri)
+        self.seg = try container.decodeIfPresent([SegmentUpdate].self, forKey: .seg)
+        self.udpn = try container.decodeIfPresent(UDPNUpdate.self, forKey: .udpn)
+        self.transitionDeciseconds = try container.decodeIfPresent(Int.self, forKey: .transitionDeciseconds)
+        self.ps = try container.decodeIfPresent(Int.self, forKey: .ps)
+        self.nl = try container.decodeIfPresent(NightLightUpdate.self, forKey: .nl)
+        self.lor = try container.decodeIfPresent(Int.self, forKey: .lor)
+    }
+    
+    /// Convenience accessor for transition time in milliseconds (when decoded).
+    var transitionMilliseconds: Int? {
+        guard let transitionDeciseconds else { return nil }
+        return transitionDeciseconds * 100
     }
 }
 

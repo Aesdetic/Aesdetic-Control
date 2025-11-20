@@ -46,6 +46,9 @@ actor ColorPipeline {
             if let frame = intent.perLEDHex {
                 uploadingPixels.insert(device.id)
                 defer { uploadingPixels.remove(device.id) }
+                if let brightness = intent.brightness {
+                    await enqueuePendingBrightness(device, brightness)
+                }
                 try? await api.setSegmentPixels(
                     for: device,
                     segmentId: intent.segmentId,
