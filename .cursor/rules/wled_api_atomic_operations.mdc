@@ -1,0 +1,249 @@
+---
+description: WLED API atomic operations - prevent color flashes and state bugs by combining power/brightness with colors in single API calls
+globs: **/*.swift
+alwaysApply: true
+---
+
+# WLED API Atomic Operations Rule
+
+## ❌ NEVER: Separate API Calls for Power/Brightness + Colors
+
+**Problem:** Sending power-on/brightness separately from gradient colors creates a gap where WLED shows restored colors before gradient is applied, causing visible color flashes.
+
+```swift
+// ❌ DON'T: Two separate API calls - causes color flash
+await updateDeviceState(device) { ... isOn = true }  // Call 1: {"on": true}
+await applyGradientStopsAcrossStrip(...)  // Call 2: {"seg": [...]}
+// Gap between calls → WLED shows restored colors → Color flash!
+```
+
+**Why:** WLED processes each API call immediately. Between calls, WLED may restore its own state (colors from memory), causing a visible flash before gradient is applied.
+
+---
+
+## ✅ ALWAYS: Atomic API Calls - Combine Power/Brightness with Colors
+
+**Solution:** Include `on` and `bri` in the FIRST chunk of per-LED upload, so everything happens in ONE atomic operation.
+
+```swift
+// ✅ DO: Single atomic API call - no color flash
+await applyGradientStopsAcrossStrip(
+    device,
+    stops: persistedStops,
+    brightness: device.brightness,  // Include brightness
+    on: true  // Include power-on
+)
+// Single call: {"on": true, "bri": 255, "seg": [{"i": [...]}]}
+// No gap → No color flash!
+```
+
+**Why:** WLED receives everything in one request, processes atomically, preventing any gap where restored colors can appear.
+
+---
+
+## ✅ ALWAYS: Brightness 0% = Device Off
+
+**WLED Behavior:** WLED treats brightness 0% as "off" (`on: false`). Always handle this correctly.
+
+```swift
+// ✅ DO: Handle brightness 0% as device off
+if brightness == 0 {
+    await updateDeviceState(device) {
+        var dev = $0
+        dev.isOn = false  // CRITICAL: Turn device off
+        dev.brightness = 0
+        return dev
+    }
+    return
+}
+
+// ✅ DO: Include on=true when restoring brightness from 0%
+if wasOff && brightness > 0 {
+    await applyGradientStopsAcrossStrip(
+        ...,
+        brightness: brightness,
+        on: true  // CRITICAL: Turn device on
+    )
+    devices[index].isOn = true  // CRITICAL: Update local state
+}
+```
+
+**Why:** WLED's API treats `bri: 0` as `on: false`. If we don't handle this, UI state becomes out of sync with device state.
+
+---
+
+## ✅ ALWAYS: State Synchronization
+
+**Critical:** Always update `isOn` state based on brightness value to prevent UI bugs.
+
+```swift
+// ✅ DO: Synchronize isOn with brightness
+let shouldBeOn = brightness > 0
+await applyGradientStopsAcrossStrip(
+    ...,
+    brightness: brightness,
+    on: shouldBeOn ? true : nil  // Include on state
+)
+
+await MainActor.run {
+    devices[index].brightness = brightness
+    devices[index].isOn = shouldBeOn  // CRITICAL: Sync state
+}
+```
+
+**Why:** Prevents UI showing device as "on" when brightness is 0%, or "off" when brightness > 0%.
+
+---
+
+## ✅ ALWAYS: Power-On with Gradient Pattern
+
+**When turning device on with persisted gradient:**
+
+```swift
+// ✅ DO: Skip separate updateDeviceState, include on in gradient
+if isTurningOn, let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
+    // Skip updateDeviceState - include on in gradient instead
+    await applyGradientStopsAcrossStrip(
+        device,
+        stops: persistedStops,
+        brightness: device.brightness,
+        on: true  // CRITICAL: Include power-on
+    )
+} else if isTurningOn {
+    // No gradient - use simple power update
+    await updateDeviceState(device) { ... isOn = true }
+} else {
+    // Turning off
+    await updateDeviceState(device) { ... isOn = false }
+}
+```
+
+**Why:** Prevents color flash by combining power-on with gradient in single API call.
+
+---
+
+## ✅ ALWAYS: Brightness Changes with Gradient Pattern
+
+**When changing brightness with persisted gradient:**
+
+```swift
+// ✅ DO: Re-apply gradient with brightness, include on state
+if brightness == 0 {
+    // Turn device off
+    await updateDeviceState(device) { ... isOn = false, brightness = 0 }
+    return
+}
+
+if hasPersistedGradient {
+    await applyGradientStopsAcrossStrip(
+        device,
+        stops: persistedStops,
+        brightness: brightness,
+        on: brightness > 0 ? true : nil  // CRITICAL: Include on state
+    )
+    devices[index].isOn = brightness > 0  // CRITICAL: Sync state
+} else {
+    // No gradient - include on state in brightness update
+    let stateUpdate = WLEDStateUpdate(
+        on: brightness > 0 ? true : nil,
+        bri: brightness
+    )
+    devices[index].isOn = brightness > 0  // CRITICAL: Sync state
+}
+```
+
+**Why:** Ensures colors remain visible and state stays synchronized.
+
+---
+
+## ✅ ALWAYS: Use ColorPipeline for Per-LED Updates
+
+**For per-LED color uploads, use ColorPipeline which handles atomic operations:**
+
+```swift
+// ✅ DO: Use ColorIntent with on/brightness
+var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+intent.perLEDHex = frame
+intent.brightness = brightness  // Include brightness
+intent.on = onValue  // Include power state
+await colorPipeline.apply(intent, to: device)
+```
+
+**Why:** ColorPipeline properly includes `on` and `bri` in first chunk of per-LED upload.
+
+---
+
+## ✅ ALWAYS: Mark User Interaction Before Gradient Application
+
+**Prevent WebSocket updates from interfering:**
+
+```swift
+// ✅ DO: Mark interaction before applying gradient
+markUserInteraction(device.id)  // CRITICAL: Prevent WebSocket overwrites
+await applyGradientStopsAcrossStrip(...)
+```
+
+**Why:** Provides protection window to prevent WebSocket state updates from overwriting user changes.
+
+---
+
+## Checklist for New Features
+
+When adding new features that change power/brightness/colors:
+
+- [ ] **Atomic Operations**: Are power/brightness combined with colors in single API call?
+- [ ] **Brightness 0%**: Is brightness 0% handled as device off?
+- [ ] **State Sync**: Is `isOn` state updated based on brightness?
+- [ ] **User Interaction**: Is `markUserInteraction()` called before gradient application?
+- [ ] **Power-On**: When turning on with gradient, is `on: true` included in gradient call?
+- [ ] **Brightness Changes**: When changing brightness with gradient, is `on` state included?
+
+---
+
+## Real-World Examples
+
+### ✅ Correct: Power-On with Gradient
+```swift
+if isTurningOn, let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
+    markUserInteraction(device.id)
+    await applyGradientStopsAcrossStrip(
+        device,
+        stops: persistedStops,
+        brightness: device.brightness,
+        on: true  // ✅ Atomic operation
+    )
+    devices[index].isOn = true  // ✅ State sync
+}
+```
+
+### ✅ Correct: Brightness Change with Gradient
+```swift
+if brightness == 0 {
+    await updateDeviceState(device) { ... isOn = false, brightness = 0 }
+    return
+}
+
+if hasPersistedGradient {
+    markUserInteraction(device.id)
+    await applyGradientStopsAcrossStrip(
+        device,
+        stops: persistedStops,
+        brightness: brightness,
+        on: true  // ✅ Atomic operation
+    )
+    devices[index].isOn = true  // ✅ State sync
+}
+```
+
+### ❌ Wrong: Separate Calls
+```swift
+// ❌ DON'T: Separate calls cause color flash
+await updateDeviceState(device) { ... isOn = true }
+await applyGradientStopsAcrossStrip(...)  // Color flash!
+```
+
+---
+
+## Remember: One API Call = No Gap = No Flash
+
+The key principle: **Combine power/brightness with colors in a single atomic API call** to prevent WLED from showing restored colors between calls.

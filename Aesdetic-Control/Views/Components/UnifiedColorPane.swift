@@ -17,6 +17,8 @@ struct UnifiedColorPane: View {
     @State private var isSavingPreset = false
     @State private var showSaveSuccess = false
     @State private var isAdjustingBrightness = false
+    @State private var lastBrightnessSet: Date? = nil  // Track when brightness was last set by user
+    @State private var interpolationMode: GradientInterpolation = .linear  // Gradient interpolation mode
 
     private var liveDevice: WLEDDevice? {
         viewModel.devices.first(where: { $0.id == device.id })
@@ -38,15 +40,19 @@ struct UnifiedColorPane: View {
         _gradient = State(initialValue: LEDGradient(stops: [
             GradientStop(position: 0.0, hexColor: deviceColorHex),
             GradientStop(position: 1.0, hexColor: deviceColorHex)
-        ]))
+        ], interpolation: .linear))
     }
     
     // Direct gradient access (no longer lazy)
     private var currentGradient: LEDGradient {
-        gradient ?? LEDGradient(stops: [
+        let defaultGradient = LEDGradient(stops: [
             GradientStop(position: 0.0, hexColor: activeDevice.currentColor.toHex()),
             GradientStop(position: 1.0, hexColor: activeDevice.currentColor.toHex())
-        ])
+        ], interpolation: interpolationMode)
+        let result = gradient ?? defaultGradient
+        // Sync interpolation mode with gradient (deferred to avoid state modification during view update)
+        // This sync happens in onAppear/task instead
+        return result
     }
 
     var body: some View {
@@ -104,6 +110,8 @@ struct UnifiedColorPane: View {
                 Slider(value: $briUI, in: 0...255, step: 1, onEditingChanged: { editing in
                     isAdjustingBrightness = editing
                     if !editing {
+                        // CRITICAL: Mark when brightness was set to prevent WebSocket overwrites
+                        lastBrightnessSet = Date()
                         DispatchQueue.main.async {
                             Task { await viewModel.updateDeviceBrightness(device, brightness: Int(briUI)) }
                         }
@@ -125,13 +133,53 @@ struct UnifiedColorPane: View {
                         break
                     }
                     let brightnessValue = Int(round(briUI))
+                    // CRITICAL: Mark when brightness was set to prevent WebSocket overwrites
+                    lastBrightnessSet = Date()
                     DispatchQueue.main.async {
                         Task { await viewModel.updateDeviceBrightness(device, brightness: brightnessValue) }
                     }
                 }
             }
             .padding(.horizontal, 16)
-
+            
+            // Interpolation mode selector (only show when multiple stops)
+            if currentGradient.stops.count >= 2 {
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("Blend Style")
+                            .foregroundColor(primaryLabelColor)
+                        Spacer()
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(GradientInterpolation.allCases, id: \.self) { mode in
+                                Button(action: {
+                                    interpolationMode = mode
+                                    var updatedGradient = currentGradient
+                                    updatedGradient.interpolation = mode
+                                    gradient = updatedGradient
+                                    // Apply immediately when interpolation changes
+                                    Task { await applyNow(stops: updatedGradient.stops) }
+                                }) {
+                                    Text(mode.displayName)
+                                        .font(.caption.weight(.medium))
+                                        .foregroundColor(interpolationMode == mode ? .black : .white.opacity(0.8))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(interpolationMode == mode ? Color.white : Color.white.opacity(0.1))
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            
             GradientBar(
                 gradient: Binding(
                     get: { currentGradient },
@@ -152,8 +200,8 @@ struct UnifiedColorPane: View {
                     }
                 },
                 onTapAnywhere: { t, tapped in
-                    // Sample color from current gradient at tap position
-                    let color = GradientSampler.sampleColor(at: t, stops: currentGradient.stops)
+                    // Sample color from current gradient at tap position (use current interpolation mode)
+                    let color = GradientSampler.sampleColor(at: t, stops: currentGradient.stops, interpolation: currentGradient.interpolation)
                     let new = GradientStop(position: t, hexColor: color.toHex())
                     var updatedGradient = currentGradient
                     updatedGradient.stops.append(new)
@@ -315,6 +363,10 @@ struct UnifiedColorPane: View {
             if !isAdjustingBrightness {
                 briUI = Double(activeDevice.brightness)
             }
+            // Sync interpolation mode with gradient (safe to do in task)
+            if let currentGrad = gradient, currentGrad.interpolation != interpolationMode {
+                interpolationMode = currentGrad.interpolation
+            }
             // Only refresh state for brightness/power status, not color (to prevent flash)
             // Color is already correct from persisted gradient
         }
@@ -325,6 +377,10 @@ struct UnifiedColorPane: View {
                 syncGradientIfNeeded(with: activeDevice.currentColor)
             }
             briUI = Double(activeDevice.brightness)
+            // Sync interpolation mode with gradient (safe to do in onAppear)
+            if let currentGrad = gradient, currentGrad.interpolation != interpolationMode {
+                interpolationMode = currentGrad.interpolation
+            }
         }
         .onChange(of: dismissColorPicker) { _, newValue in
             if newValue {
@@ -340,15 +396,43 @@ struct UnifiedColorPane: View {
             syncGradientIfNeeded(with: Color(hex: hex))
         }
         .onChange(of: liveDevice?.brightness) { _, newBrightness in
-            guard let brightness = newBrightness, !isAdjustingBrightness else { return }
-            briUI = Double(brightness)
+            guard newBrightness != nil else { return }
+            
+            // CRITICAL: Don't sync if user is currently adjusting brightness
+            if isAdjustingBrightness {
+                return
+            }
+            
+            // CRITICAL: Don't sync if brightness was recently set by user (within 2 seconds)
+            // This prevents WebSocket echo updates from overwriting user changes
+            if let lastSet = lastBrightnessSet {
+                let elapsed = Date().timeIntervalSince(lastSet)
+                if elapsed < 2.0 {
+                    return
+                }
+            }
+            
+            // CRITICAL: Use effective brightness (preserved brightness if device is off)
+            // Use activeDevice so we prefer the live ViewModel copy instead of the stale snapshot
+            // This prevents UI from jumping to 0 when device is turned off
+            let effectiveBrightness = viewModel.getEffectiveBrightness(for: activeDevice)
+            let deviceBrightness = Double(effectiveBrightness)
+            
+            // CRITICAL: Only sync if difference is significant (threshold of 10)
+            // This prevents small WebSocket echo differences from causing UI jitter
+            if abs(briUI - deviceBrightness) > 10 {
+                briUI = deviceBrightness
+            }
         }
     }
 
     private func applyIncomingGradient(_ stops: [GradientStop]) {
         let currentStops = gradient?.stops ?? []
         if currentStops == stops { return }
-        gradient = LEDGradient(stops: stops)
+        // Preserve interpolation mode when updating gradient
+        let existingInterpolation = gradient?.interpolation ?? .linear
+        gradient = LEDGradient(stops: stops, interpolation: existingInterpolation)
+        interpolationMode = existingInterpolation
         selectedStopId = nil
         stopTemperatures = [:]
     }
@@ -363,28 +447,26 @@ struct UnifiedColorPane: View {
             shouldReplace = true
         }
         if shouldReplace {
+            // Preserve interpolation mode when syncing gradient
+            let existingInterpolation = gradient?.interpolation ?? .linear
             gradient = LEDGradient(stops: [
                 GradientStop(position: 0.0, hexColor: hex),
                 GradientStop(position: 1.0, hexColor: hex)
-            ])
+            ], interpolation: existingInterpolation)
+            interpolationMode = existingInterpolation
         }
     }
 
     private func throttleApply(stops: [GradientStop], phase: DragPhase) {
-        let task = {
-            Task {
-                await viewModel.applyGradientStopsAcrossStrip(
-                    device,
-                    segmentId: segmentId,
-                    stops: stops,
-                    stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures
-                )
-            }
-        }
+        // CRITICAL: Get LED count from the specific segment being targeted, not always the first segment
+        // This ensures correct color sampling for multi-segment WLED devices
+        let ledCount = device.state?.segments.first(where: { $0.id == segmentId })?.len 
+            ?? device.state?.segments.first?.len 
+            ?? 120
         if phase == .changed {
             applyWorkItem?.cancel()
             let work = DispatchWorkItem {
-                task()
+                Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures, disableActiveEffect: true, segmentId: segmentId, interpolation: currentGradient.interpolation) }
             }
             applyWorkItem = work
             Task { @MainActor in
@@ -392,88 +474,48 @@ struct UnifiedColorPane: View {
                 work.perform()
             }
         } else {
-            task()
+            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures, disableActiveEffect: true, segmentId: segmentId, interpolation: currentGradient.interpolation) }
         }
     }
 
     private func applyNow(stops: [GradientStop]) async {
-        let ledCount = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId })?.len ?? device.state?.segments.first?.len ?? 120
+        let ledCount = device.state?.segments.first(where: { $0.id == segmentId })?.len
+            ?? device.state?.segments.first?.len
+            ?? 120
+        
         if stops.count == 1 {
             // For single color, check if temperature/CCT should be used
             let stop = stops[0]
             
-            #if DEBUG
-            // Debug logging
-            print("🔵 applyNow: stops.count=\(stops.count), stop.id=\(stop.id)")
-            print("🔵 applyNow: stopTemperatures.keys=\(Array(stopTemperatures.keys))")
-            print("🔵 applyNow: stopTemperatures=\(stopTemperatures)")
-            #endif
-            
-            // Check all stop IDs in stopTemperatures to find a match
-            // This handles cases where the stop ID might have changed
+            // Check cached temperatures (1-tab mode stores a single temperature)
             var foundTemperature: Double? = nil
-            
-            // First, try exact match
-                if let temp = stopTemperatures[stop.id] {
-                    foundTemperature = temp
-                    #if DEBUG
-                    print("🔵 applyNow: Found exact match - temperature \(temp) for stop \(stop.id)")
-                    #endif
-                } else {
-                    // If no exact match, check if there's only one temperature stored (common in 1-tab mode)
-                    if stopTemperatures.count == 1, let temp = stopTemperatures.values.first {
-                        foundTemperature = temp
-                        #if DEBUG
-                        print("🔵 applyNow: Found single temperature value \(temp) (fallback for 1-tab mode)")
-                        #endif
-                    } else {
-                        #if DEBUG
-                        print("⚠️ applyNow: No temperature found for stop \(stop.id)")
-                        #endif
-                    }
-                }
-                
-                if let temp = foundTemperature {
-                    #if DEBUG
-                    print("🔵 applyNow: Applying CCT with temperature \(temp)")
-                    #endif
-                // CRITICAL FIX: Use ColorPipeline with per-LED colors AND CCT (same as 2-tab mode)
-                // This ensures CCT is applied correctly - WLED needs per-LED colors when CCT is set
-                let gradient = LEDGradient(stops: stops)
-                let frame = GradientSampler.sample(gradient, ledCount: ledCount)
-                
-                // Convert temperature (0.0-1.0) to CCT (0-255)
-                let cct = Int(round(temp * 255.0))
-                
-                var intent = ColorIntent(deviceId: device.id, mode: .perLED)
-                intent.segmentId = segmentId
-                    intent.perLEDHex = frame
-                    intent.cct = cct  // Set CCT in intent (same as 2-tab mode)
-                    
-                    #if DEBUG
-                    print("🔵 applyNow: Using ColorPipeline with perLEDHex count=\(frame.count), cct=\(cct)")
-                    #endif
-                    await viewModel.applyColorIntent(intent, to: device)
-                } else {
-                    #if DEBUG
-                    print("🔵 applyNow: Applying RGB color (no temperature)")
-                    #endif
-                // Standard RGB color mode - use ColorPipeline
-                let gradient = LEDGradient(stops: stops)
-                let frame = GradientSampler.sample(gradient, ledCount: ledCount)
-                var intent = ColorIntent(deviceId: device.id, mode: .perLED)
-                intent.segmentId = segmentId  // Use the selected segment
-                intent.perLEDHex = frame
-                await viewModel.applyColorIntent(intent, to: device)
+            if let temp = stopTemperatures[stop.id] {
+                foundTemperature = temp
+            } else if stopTemperatures.count == 1, let temp = stopTemperatures.values.first {
+                foundTemperature = temp
             }
+            
+            let gradient = LEDGradient(stops: stops)
+            let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+            var intent = ColorIntent(deviceId: device.id, mode: .perLED)
+            intent.segmentId = segmentId
+            intent.perLEDHex = frame
+            
+            if let temp = foundTemperature {
+                let cct = Int(round(temp * 255.0))
+                intent.cct = cct
+            }
+            
+            await viewModel.applyColorIntent(intent, to: device)
         } else {
-            // For gradients with multiple stops, check if all stops share the same temperature
-            // If they do, send segment-level CCT along with per-LED colors (Option 1)
             await viewModel.applyGradientStopsAcrossStrip(
                 device,
-                segmentId: segmentId,
                 stops: stops,
-                stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures
+                ledCount: ledCount,
+                stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
+                disableActiveEffect: true,
+                segmentId: segmentId,
+                interpolation: currentGradient.interpolation
             )
         }
     }

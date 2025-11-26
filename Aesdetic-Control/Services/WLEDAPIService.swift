@@ -14,8 +14,8 @@ import os.log
 protocol WLEDAPIServiceProtocol {
     func getState(for device: WLEDDevice) async throws -> WLEDResponse
     func updateState(for device: WLEDDevice, state: WLEDStateUpdate) async throws -> WLEDResponse
-    func setPower(for device: WLEDDevice, isOn: Bool) async throws -> WLEDResponse
-    func setBrightness(for device: WLEDDevice, brightness: Int) async throws -> WLEDResponse
+    func setPower(for device: WLEDDevice, isOn: Bool, transition: Int?) async throws -> WLEDResponse
+    func setBrightness(for device: WLEDDevice, brightness: Int, transition: Int?) async throws -> WLEDResponse
     func setColor(for device: WLEDDevice, color: [Int], cct: Int?, white: Int?) async throws -> WLEDResponse
     func setCCT(for device: WLEDDevice, cct: Int, segmentId: Int) async throws -> WLEDResponse
     func setCCT(for device: WLEDDevice, cctKelvin: Int, segmentId: Int) async throws -> WLEDResponse
@@ -38,6 +38,8 @@ protocol WLEDAPIServiceProtocol {
         startIndex: Int,
         hexColors: [String],
         cct: Int?,
+        on: Bool?,
+        brightness: Int?,
         afterChunk: (() async -> Void)?
     ) async throws
     func fetchEffectMetadata(for device: WLEDDevice) async throws -> [String]
@@ -159,13 +161,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
     
-    func setPower(for device: WLEDDevice, isOn: Bool) async throws -> WLEDResponse {
-        let stateUpdate = WLEDStateUpdate(on: isOn)
+    func setPower(for device: WLEDDevice, isOn: Bool, transition: Int? = nil) async throws -> WLEDResponse {
+        let stateUpdate = WLEDStateUpdate(on: isOn, transition: transition)
         return try await updateState(for: device, state: stateUpdate)
     }
     
-    func setBrightness(for device: WLEDDevice, brightness: Int) async throws -> WLEDResponse {
-        let stateUpdate = WLEDStateUpdate(bri: max(0, min(255, brightness)))
+    func setBrightness(for device: WLEDDevice, brightness: Int, transition: Int? = nil) async throws -> WLEDResponse {
+        let stateUpdate = WLEDStateUpdate(bri: max(0, min(255, brightness)), transition: transition)
         return try await updateState(for: device, state: stateUpdate)
     }
     
@@ -378,8 +380,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     /// Save a ColorPreset as a WLED preset with per-LED colors
     func saveColorPreset(_ preset: ColorPreset, to device: WLEDDevice, presetId: Int) async throws -> Int {
         let ledCount = device.state?.segments.first?.len ?? 120
-        let gradient = LEDGradient(stops: preset.gradientStops)
-        let hexColors = GradientSampler.sample(gradient, ledCount: ledCount)
+        let gradient = LEDGradient(stops: preset.gradientStops, interpolation: .linear)  // Presets use linear by default
+        let hexColors = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: gradient.interpolation)
         
         // First, send per-LED colors using setSegmentPixels
         try await setSegmentPixels(
@@ -421,7 +423,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         
         // Save Gradient A as preset
         let gradientA = preset.gradientA
-        let hexColorsA = GradientSampler.sample(gradientA, ledCount: ledCount)
+        let hexColorsA = GradientSampler.sample(gradientA, ledCount: ledCount, interpolation: gradientA.interpolation)
         try await setSegmentPixels(for: device, segmentId: 0, startIndex: 0, hexColors: hexColorsA)
         
         let stateA = WLEDStateUpdate(bri: preset.brightnessA, seg: [SegmentUpdate(id: 0, bri: preset.brightnessA)])
@@ -430,7 +432,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         
         // Save Gradient B as preset
         let gradientB = preset.gradientB
-        let hexColorsB = GradientSampler.sample(gradientB, ledCount: ledCount)
+        let hexColorsB = GradientSampler.sample(gradientB, ledCount: ledCount, interpolation: gradientB.interpolation)
         try await setSegmentPixels(for: device, segmentId: 0, startIndex: 0, hexColors: hexColorsB)
         
         let stateB = WLEDStateUpdate(bri: preset.brightnessB, seg: [SegmentUpdate(id: 0, bri: preset.brightnessB)])
@@ -588,30 +590,157 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     // MARK: - Per-LED Control
+    
+    /// Calculate optimal chunk size based on network MTU constraints
+    /// - Parameters:
+    ///   - hasSegmentId: Whether segment ID will be included in JSON
+    ///   - hasCCT: Whether CCT will be included (typically only first chunk)
+    ///   - customMTU: Optional custom MTU size (default: 1500 bytes)
+    /// - Returns: Optimal number of LEDs per chunk
+    /// 
+    /// Calculation:
+    /// - Network MTU: 1500 bytes (typical Ethernet)
+    /// - Safe payload: 1300 bytes (leaves room for HTTP headers ~200 bytes)
+    /// - JSON overhead: ~60 bytes (base structure + segment ID + CCT if present)
+    /// - Per LED: ~8 bytes ("RRGGBB", including quotes and comma)
+    /// - Optimal: (1300 - overhead) / 8 ≈ 155 LEDs (conservative)
+    private static func calculateOptimalChunkSize(hasSegmentId: Bool, hasCCT: Bool, hasOnOrBri: Bool = false, customMTU: Int? = nil) -> Int {
+        let mtu = customMTU ?? 1500  // Standard Ethernet MTU
+        let safePayload = mtu - 200  // Reserve 200 bytes for HTTP headers
+        let baseOverhead = 25  // Base JSON structure: {"seg":[{"i":[]}]}
+        let segmentIdOverhead = hasSegmentId ? 7 : 0  // "id":0,
+        let cctOverhead = hasCCT ? 10 : 0  // "cct":116,
+        let onOrBriOverhead = hasOnOrBri ? 15 : 0  // "on":true,"bri":255, (only in first chunk)
+        let startIndexOverhead = 5  // Start index in array
+        let totalOverhead = baseOverhead + segmentIdOverhead + cctOverhead + onOrBriOverhead + startIndexOverhead
+        
+        let bytesPerLED = 8  // "RRGGBB", (including quotes, comma, space)
+        let availableBytes = safePayload - totalOverhead
+        let optimalLEDs = max(1, availableBytes / bytesPerLED)
+        
+        // Clamp to reasonable bounds: minimum 50, maximum 300
+        // Minimum ensures we don't create too many tiny chunks
+        // Maximum prevents issues with very large MTUs
+        return min(300, max(50, optimalLEDs))
+    }
+    
     func setSegmentPixels(
         for device: WLEDDevice,
         segmentId: Int? = nil,
         startIndex: Int = 0,
         hexColors: [String],
         cct: Int? = nil,
+        on: Bool? = nil,
+        brightness: Int? = nil,
         afterChunk: (() async -> Void)? = nil
     ) async throws {
         guard !hexColors.isEmpty else { return }
-        let bodies = Self.buildSegmentPixelBodies(segmentId: segmentId, startIndex: startIndex, hexColors: hexColors, cct: cct, chunkSize: 256)
+        // Calculate optimal chunk size based on MTU
+        // If including on/bri, account for additional overhead
+        let hasOnOrBri = on != nil || brightness != nil
+        let optimalChunkSize = Self.calculateOptimalChunkSize(
+            hasSegmentId: segmentId != nil,
+            hasCCT: cct != nil,
+            hasOnOrBri: hasOnOrBri
+        )
+        let bodies = Self.buildSegmentPixelBodies(
+            segmentId: segmentId,
+            startIndex: startIndex,
+            hexColors: hexColors,
+            cct: cct,
+            chunkSize: optimalChunkSize,
+            on: on,
+            brightness: brightness
+        )
+        
+        #if DEBUG
+        let totalLEDs = hexColors.count
+        let chunkCount = bodies.count
+        let oldChunkSize = 256  // Previous fixed chunk size
+        let oldChunkCount = (totalLEDs + oldChunkSize - 1) / oldChunkSize  // Ceiling division
+        let improvement = oldChunkCount > chunkCount ? "↓ \(oldChunkCount - chunkCount) fewer chunks" : "same"
+        logger.debug("📦 [Chunking] \(totalLEDs) LEDs → \(chunkCount) chunk(s) @ \(optimalChunkSize)/chunk (was: \(oldChunkCount) @ \(oldChunkSize)) \(improvement)")
+        #endif
+        
         for body in bodies {
-            _ = try await postState(device, body: body)
+            _ = try await postRawState(for: device, body: body)
             if let cb = afterChunk { await cb() }
+        }
+    }
+    
+    /// Post raw JSON state update (for per-LED pixel uploads with custom body structure)
+    private func postRawState(for device: WLEDDevice, body: [String: Any]) async throws -> WLEDResponse {
+        guard let url = URL(string: device.jsonEndpoint) else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: body, options: [])
+            request.httpBody = jsonData
+            
+            #if DEBUG
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+                print("📤 [Per-LED] Sending JSON: \(jsonString)")
+            }
+            #endif
+        } catch {
+            throw WLEDAPIError.encodingError(error)
+        }
+        
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            
+            // Handle empty response for successful POST requests
+            if data.isEmpty {
+                return createSuccessResponse(for: device)
+            }
+            
+            let wledResponse = try parseResponse(data: data, device: device)
+            
+            // Optimistic update: Bypass cache immediately after successful POST
+            bypassCache(for: device.id)
+            
+            return wledResponse
+        } catch {
+            throw handleError(error, device: device)
         }
     }
 
     // Helper to build chunked POST bodies
-    internal static func buildSegmentPixelBodies(segmentId: Int?, startIndex: Int, hexColors: [String], cct: Int? = nil, chunkSize: Int = 256) -> [[String: Any]] {
+    /// - Parameters:
+    ///   - segmentId: Optional segment ID
+    ///   - startIndex: Starting LED index
+    ///   - hexColors: Array of hex color strings ("RRGGBB")
+    ///   - cct: Optional CCT value (only included in first chunk)
+    ///   - chunkSize: Number of LEDs per chunk (defaults to optimal MTU-based size)
+    /// - Returns: Array of JSON body dictionaries ready for POST requests
+    internal static func buildSegmentPixelBodies(segmentId: Int?, startIndex: Int, hexColors: [String], cct: Int? = nil, chunkSize: Int? = nil, on: Bool? = nil, brightness: Int? = nil) -> [[String: Any]] {
         guard !hexColors.isEmpty else { return [] }
+        
+        // Use provided chunk size or calculate optimal based on MTU
+        let effectiveChunkSize: Int
+        if let providedSize = chunkSize {
+            effectiveChunkSize = max(1, providedSize)  // Ensure at least 1 LED per chunk
+        } else {
+            // Calculate optimal chunk size dynamically
+            let hasOnOrBri = on != nil || brightness != nil
+            effectiveChunkSize = calculateOptimalChunkSize(
+                hasSegmentId: segmentId != nil,
+                hasCCT: cct != nil,
+                hasOnOrBri: hasOnOrBri
+            )
+        }
+        
         var out: [[String: Any]] = []
         let total = hexColors.count
         var idx = 0
         while idx < total {
-            let end = min(idx + chunkSize, total)
+            let end = min(idx + effectiveChunkSize, total)
             let chunk = Array(hexColors[idx..<end])
             var seg: [String: Any] = ["i": [startIndex + idx] + chunk]
             if let sid = segmentId { seg["id"] = sid }
@@ -619,9 +748,25 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             if let cctValue = cct, idx == 0 {
                 seg["cct"] = cctValue
             }
-            let body: [String: Any]
-            if segmentId != nil { body = ["seg": [seg]] }
-            else { body = ["seg": seg] }
+            
+            // Build body - include on/bri only in FIRST chunk to combine with gradient colors
+            var body: [String: Any] = [:]
+            
+            // CRITICAL: Include on/bri in first chunk to prevent WLED from showing restored colors
+            if idx == 0 {
+                if let onValue = on {
+                    body["on"] = onValue
+                }
+                if let briValue = brightness {
+                    body["bri"] = briValue
+                }
+            }
+            
+            // Add segment data
+            // CRITICAL: WLED API expects seg to always be an array, even for single segments without explicit IDs
+            // Always wrap seg in an array regardless of whether segmentId is nil
+            body["seg"] = [seg]
+            
             out.append(body)
             idx = end
         }
@@ -635,7 +780,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     /// - Returns: The current WLEDState of the device
     /// - Throws: WLEDAPIError if the request fails
     func getDeviceState(for device: WLEDDevice) async throws -> WLEDState {
-        let response: WLEDResponse = try await getState(for: device)
+        let response = try await getState(for: device)
         return response.state
     }
     

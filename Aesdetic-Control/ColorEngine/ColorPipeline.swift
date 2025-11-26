@@ -46,22 +46,36 @@ actor ColorPipeline {
             if let frame = intent.perLEDHex {
                 uploadingPixels.insert(device.id)
                 defer { uploadingPixels.remove(device.id) }
-                if let brightness = intent.brightness {
-                    await enqueuePendingBrightness(device, brightness)
+                
+                // CRITICAL: If brightness is set in intent, use it directly instead of pending brightness
+                // This allows brightness to be included in the first chunk along with per-LED colors
+                // This prevents WLED from showing restored colors before gradient is applied
+                let brightnessToUse: Int?
+                if let intentBrightness = intent.brightness {
+                    brightnessToUse = intentBrightness
+                    // Clear pending brightness since we're using intent brightness
+                    pendingBri.removeValue(forKey: device.id)
+                } else {
+                    brightnessToUse = nil
                 }
+                
                 try? await api.setSegmentPixels(
                     for: device,
                     segmentId: intent.segmentId,
                     startIndex: 0,
                     hexColors: frame,
                     cct: intent.cct,  // Pass CCT if provided
+                    on: intent.on,  // Pass on state if provided (for power-on)
+                    brightness: brightnessToUse,  // Pass brightness if provided
                     afterChunk: { [weak self] in
                         guard let self = self else { return }
                         await self.flushPendingBrightness(device)
                     }
                 )
-                // Final flush after upload completes
-                await flushPendingBrightness(device)
+                // Final flush after upload completes (only if brightness wasn't in intent)
+                if intent.brightness == nil {
+                    await flushPendingBrightness(device)
+                }
             }
         case .palette:
             // Minimal placeholder: rely on higher-level service methods for now

@@ -747,17 +747,58 @@ struct ComprehensiveSettingsView: View {
         isLoading = true
         defer { isLoading = false }
         
-        isOn = device.isOn
-        brightnessDouble = Double(device.brightness) / 255.0 * 100.0
-        segStart = 0
-        segStop = device.state?.segments.first?.len ?? segStop
+        // CRITICAL: Get live device from ViewModel immediately to avoid using stale snapshot
+        // The device parameter passed to this view is a snapshot and may be outdated
+        // Since viewModel is @MainActor, we can access devices directly
+        let liveDevice = await MainActor.run {
+            return viewModel.devices.first(where: { $0.id == device.id })
+        }
+        
+        guard let liveDevice = liveDevice else {
+            // Fallback to snapshot device if not found in ViewModel
+            await MainActor.run {
+                isOn = device.isOn
+                let effectiveBrightness = viewModel.getEffectiveBrightness(for: device)
+                brightnessDouble = Double(effectiveBrightness) / 255.0 * 100.0
+                segStart = 0
+                segStop = device.state?.segments.first?.len ?? segStop
+            }
+            return
+        }
+        
+        // Use live device for all state initialization
+        await MainActor.run {
+            isOn = liveDevice.isOn
+            // CRITICAL: Use effective brightness (preserved brightness if device is off)
+            let effectiveBrightness = viewModel.getEffectiveBrightness(for: liveDevice)
+            brightnessDouble = Double(effectiveBrightness) / 255.0 * 100.0
+            segStart = 0
+            segStop = liveDevice.state?.segments.first?.len ?? segStop
+        }
         
         do {
-            let resp = try await WLEDAPIService.shared.getState(for: device)
+            let resp = try await WLEDAPIService.shared.getState(for: liveDevice)
             await MainActor.run {
                 info = resp.info
                 isOn = resp.state.isOn
-                brightnessDouble = Double(resp.state.brightness) / 255.0 * 100.0
+                
+                // CRITICAL: Always use getEffectiveBrightness from live device to get the correct brightness
+                // This ensures consistency with the initial brightness set above and handles
+                // preserved brightness correctly when device is off
+                // Get the updated device from the ViewModel again to ensure we have the absolute latest state
+                if let updatedDevice = viewModel.devices.first(where: { $0.id == device.id }) {
+                    let effectiveBrightness = viewModel.getEffectiveBrightness(for: updatedDevice)
+                    brightnessDouble = Double(effectiveBrightness) / 255.0 * 100.0
+                } else {
+                    // Fallback: Use API response brightness if device not found in ViewModel
+                    let deviceBrightness = resp.state.brightness
+                    if !resp.state.isOn && deviceBrightness == 0 {
+                        let preservedBrightness = viewModel.getPreservedBrightness(for: device.id) ?? 128
+                        brightnessDouble = Double(preservedBrightness) / 255.0 * 100.0
+                    } else {
+                        brightnessDouble = Double(deviceBrightness) / 255.0 * 100.0
+                    }
+                }
                 if let len = resp.state.segments.first?.len { segStop = len }
             }
         } catch { }

@@ -12,6 +12,7 @@ struct ColorIntent: Codable {
     var segmentId: Int = 0
 
     // Core fields
+    var on: Bool? = nil                   // Power state (for combining with gradient on power-on)
     var brightness: Int? = nil            // 0...255
     var transitionMs: Int? = nil          // optional top-level transition
 

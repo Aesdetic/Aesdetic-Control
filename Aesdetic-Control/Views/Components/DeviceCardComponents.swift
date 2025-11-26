@@ -114,6 +114,23 @@ struct EnhancedDeviceCard: View {
         .onAppear {
             syncWithDeviceState()
         }
+        // CRITICAL: Watch device brightness changes directly for immediate UI sync
+        // This ensures UI follows device brightness changes without lag
+        .onChange(of: device.brightness) { oldValue, newValue in
+            // Only sync if we're not actively controlling and not recently set
+            let now = Date()
+            let canSync = !isControlling && (lastBrightnessSet == nil || now.timeIntervalSince(lastBrightnessSet!) > 1.0)
+            if canSync {
+                // CRITICAL: Use effective brightness (preserved brightness if device is off)
+                // This prevents UI from jumping to 0 when device is turned off
+                let effectiveBrightness = viewModel.getEffectiveBrightness(for: device)
+                let deviceBrightness = Double(effectiveBrightness)
+                // Reduced threshold for more responsive sync
+                if abs(localBrightness - deviceBrightness) > 5 {
+                    localBrightness = deviceBrightness
+                }
+            }
+        }
         .onDisappear {
             // Clean up timers to prevent memory leaks
             brightnessUpdateTimer?.invalidate()
@@ -409,10 +426,15 @@ struct EnhancedDeviceCard: View {
         
         // Only sync if we're not actively controlling and not recently set
         let now = Date()
-        let canSync = !isControlling && (lastBrightnessSet == nil || now.timeIntervalSince(lastBrightnessSet!) > 2.0)
+        let canSync = !isControlling && (lastBrightnessSet == nil || now.timeIntervalSince(lastBrightnessSet!) > 1.0)  // Reduced from 2.0s to 1.0s for faster sync
         if canSync {
-            let deviceBrightness = Double(updatedDevice.brightness)
-            if abs(localBrightness - deviceBrightness) > 20 {
+            // CRITICAL: Use effective brightness (preserved brightness if device is off)
+            // This prevents UI from jumping to 0 when device is turned off
+            let effectiveBrightness = viewModel.getEffectiveBrightness(for: updatedDevice)
+            let deviceBrightness = Double(effectiveBrightness)
+            // CRITICAL: Reduced threshold from 20 to 5 for more responsive UI sync
+            // This prevents UI from showing wrong brightness when device brightness changes
+            if abs(localBrightness - deviceBrightness) > 5 {
                 localBrightness = deviceBrightness
             }
         }

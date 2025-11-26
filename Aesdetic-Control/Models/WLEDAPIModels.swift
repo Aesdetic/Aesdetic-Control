@@ -10,7 +10,7 @@ import SwiftUI
 // MARK: - API Request Models
 
 /// Model for updating WLED device state via API
-/// - Note: Top-level `transition` (ms) is honored by WLED for solid/preset jumps.
+/// - Note: Transition time is stored in milliseconds internally but encoded as `tt` in deciseconds (tenths of a second) for WLED API.
 struct WLEDStateUpdate: Codable {
     /// Power state (on/off)
     let on: Bool?
@@ -19,8 +19,8 @@ struct WLEDStateUpdate: Codable {
     /// Array of segment updates
     let seg: [SegmentUpdate]?
     let udpn: UDPNUpdate?
-    /// Transition time encoded in deciseconds (`tt`), as required by WLED
-    private let transitionDeciseconds: Int?
+    /// Transition time in milliseconds (converted to deciseconds for WLED API)
+    private let transitionMilliseconds: Int?
     /// Apply preset by ID
     let ps: Int?
     /// Night Light configuration
@@ -28,36 +28,25 @@ struct WLEDStateUpdate: Codable {
     /// Live override release (0 disables realtime streaming)
     let lor: Int?
     
-    init(
-        on: Bool? = nil,
-        bri: Int? = nil,
-        seg: [SegmentUpdate]? = nil,
-        udpn: UDPNUpdate? = nil,
-        transition: Int? = nil,
-        ps: Int? = nil,
-        nl: NightLightUpdate? = nil,
-        lor: Int? = nil
-    ) {
+    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
         self.on = on
         self.bri = bri
         self.seg = seg
         self.udpn = udpn
-        if let transition = transition {
-            // WLED expects transition time in deciseconds (`tt` field).
-            // Round to nearest decisecond to preserve intent (e.g. 300ms → 3).
-            let deciseconds = max(0, Int((Double(transition) / 100.0).rounded()))
-            self.transitionDeciseconds = deciseconds
-        } else {
-            self.transitionDeciseconds = nil
-        }
+        self.transitionMilliseconds = transition
         self.ps = ps
         self.nl = nl
         self.lor = lor
     }
     
+    /// Convenience accessor for transition time in milliseconds
+    var transition: Int? {
+        return transitionMilliseconds
+    }
+    
     enum CodingKeys: String, CodingKey {
         case on, bri, seg, udpn
-        case transitionDeciseconds = "tt"
+        case transitionDeciseconds = "tt"  // WLED expects "tt" field name
         case ps, nl, lor
     }
     
@@ -67,7 +56,12 @@ struct WLEDStateUpdate: Codable {
         try container.encodeIfPresent(bri, forKey: .bri)
         try container.encodeIfPresent(seg, forKey: .seg)
         try container.encodeIfPresent(udpn, forKey: .udpn)
-        try container.encodeIfPresent(transitionDeciseconds, forKey: .transitionDeciseconds)
+        // Convert milliseconds to deciseconds (tenths of a second) for WLED API
+        if let transitionMs = transitionMilliseconds {
+            // Round to nearest decisecond to preserve intent (e.g. 300ms → 3)
+            let deciseconds = max(0, Int((Double(transitionMs) / 100.0).rounded()))
+            try container.encode(deciseconds, forKey: .transitionDeciseconds)
+        }
         try container.encodeIfPresent(ps, forKey: .ps)
         try container.encodeIfPresent(nl, forKey: .nl)
         try container.encodeIfPresent(lor, forKey: .lor)
@@ -79,16 +73,15 @@ struct WLEDStateUpdate: Codable {
         self.bri = try container.decodeIfPresent(Int.self, forKey: .bri)
         self.seg = try container.decodeIfPresent([SegmentUpdate].self, forKey: .seg)
         self.udpn = try container.decodeIfPresent(UDPNUpdate.self, forKey: .udpn)
-        self.transitionDeciseconds = try container.decodeIfPresent(Int.self, forKey: .transitionDeciseconds)
+        // Convert deciseconds back to milliseconds when decoding
+        if let deciseconds = try container.decodeIfPresent(Int.self, forKey: .transitionDeciseconds) {
+            self.transitionMilliseconds = deciseconds * 100
+        } else {
+            self.transitionMilliseconds = nil
+        }
         self.ps = try container.decodeIfPresent(Int.self, forKey: .ps)
         self.nl = try container.decodeIfPresent(NightLightUpdate.self, forKey: .nl)
         self.lor = try container.decodeIfPresent(Int.self, forKey: .lor)
-    }
-    
-    /// Convenience accessor for transition time in milliseconds (when decoded).
-    var transitionMilliseconds: Int? {
-        guard let transitionDeciseconds else { return nil }
-        return transitionDeciseconds * 100
     }
 }
 

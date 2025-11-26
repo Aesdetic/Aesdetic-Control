@@ -51,6 +51,13 @@ struct PresetsListView: View {
                                 _ = try? await apiService.applyPreset(presetId, to: device)
                             } else {
                                 // Apply preset directly using gradient stops and brightness
+                                // CRITICAL: Get LED count from segment 0 (default segment for presets)
+                                // If segmentId support is added later, this should be updated to use the specific segment
+                                let segmentId = 0  // Presets currently use segment 0
+                                let ledCount = device.state?.segments.first(where: { $0.id == segmentId })?.len 
+                                    ?? device.state?.segments.first?.len 
+                                    ?? 120
+                                
                                 // Convert temperature to stopTemperatures map if present
                                 var stopTemperatures: [UUID: Double]? = nil
                                 if let temp = preset.temperature {
@@ -61,6 +68,7 @@ struct PresetsListView: View {
                                 await viewModel.applyGradientStopsAcrossStrip(
                                     device,
                                     stops: preset.gradientStops,
+                                    ledCount: ledCount,
                                     stopTemperatures: stopTemperatures
                                 )
                                 

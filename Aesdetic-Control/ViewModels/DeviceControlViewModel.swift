@@ -32,10 +32,18 @@ class DeviceControlViewModel: ObservableObject {
     private static let gradientFriendlyEffectIds: Set<Int> = [
         2,   // Breathe
         3,   // Wipe
+        4,   // Wipe Random
+        16,  // Android
+        20,  // Gradient
+        22,  // Chase
+        25,  // Running
         27,  // Scanner
         28,  // Chase 2
+        29,  // Fade
+        34,  // Railway
         37,  // Sweep
         46,  // Running dual
+        47,  // Fairy
         54,  // Lake
         102  // Candle Multi
     ]
@@ -57,6 +65,66 @@ class DeviceControlViewModel: ObservableObject {
             id: 3,
             name: "Color Wipe",
             description: "Wipe across using gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 4,
+            name: "Wipe Random",
+            description: "Random wipe using gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 16,
+            name: "Android",
+            description: "Android-style animation with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 20,
+            name: "Gradient Cycle",
+            description: "Cycle through gradient colors smoothly.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 22,
+            name: "Chase Gradient",
+            description: "Gradient chase effect.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 25,
+            name: "Running",
+            description: "Running lights with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -90,6 +158,30 @@ class DeviceControlViewModel: ObservableObject {
             colorSlotCount: 3
         ),
         EffectMetadata(
+            id: 29,
+            name: "Fade",
+            description: "Fade effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 34,
+            name: "Railway",
+            description: "Railway effect with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
             id: 37,
             name: "Sweep",
             description: "Sweep effect with gradient colors.",
@@ -105,6 +197,18 @@ class DeviceControlViewModel: ObservableObject {
             id: 46,
             name: "Running dual",
             description: "Running lights with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 47,
+            name: "Fairy",
+            description: "Fairy effect with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -151,6 +255,18 @@ class DeviceControlViewModel: ObservableObject {
             return [[rgb[0], rgb[1], rgb[2]]]
         }
 
+        // Prefer actual stop colors whenever possible so the effect palette matches UI stops
+        if sortedStops.count >= clampedSlots {
+            let maxIndex = sortedStops.count - 1
+            let positions = (0..<clampedSlots).map { Double($0) / Double(clampedSlots - 1) }
+            let indices = positions.map { Int(round($0 * Double(maxIndex))) }
+            return indices.map { idx in
+                let rgb = sortedStops[min(maxIndex, max(0, idx))].color.toRGBArray()
+                return [rgb[0], rgb[1], rgb[2]]
+            }
+        }
+
+        // Not enough stops to fill every slot – fall back to interpolated colors
         let positions = (0..<clampedSlots).map { Double($0) / Double(clampedSlots - 1) }
         return positions.map { t in
             let color = GradientSampler.sampleColor(at: t, stops: sortedStops)
@@ -343,6 +459,10 @@ class DeviceControlViewModel: ObservableObject {
     private var lastUserInput: [String: Date] = [:]
     private let userInputProtectionWindow: TimeInterval = 1.5
     
+    // Brightness preservation: Store last brightness before turning off
+    // This allows restoring brightness when device is turned back on
+    private var lastBrightnessBeforeOff: [String: Int] = [:]
+    
     private func isUnderUserControl(_ deviceId: String) -> Bool {
         guard let lastInput = lastUserInput[deviceId] else { return false }
         return Date().timeIntervalSince(lastInput) < userInputProtectionWindow
@@ -358,7 +478,7 @@ class DeviceControlViewModel: ObservableObject {
     
     // Track when gradient was just applied to prevent WebSocket color overwrites
     private var gradientApplicationTimes: [String: Date] = [:]
-    private let gradientProtectionWindow: TimeInterval = 2.0 // 2 seconds protection after gradient application
+    private let gradientProtectionWindow: TimeInterval = 3.0 // 3 seconds protection after gradient application (increased for per-LED uploads)
     
     // Add this dictionary to coordinate with UI-level optimistic state
     private var uiToggleStates: [String: Bool] = [:]
@@ -370,13 +490,6 @@ class DeviceControlViewModel: ObservableObject {
     }
     private var pendingRenames: [String: PendingRename] = [:]
     private let renameProtectionWindow: TimeInterval = 8.0
-
-    private func reapplyActiveEffectIfNeeded(_ device: WLEDDevice, segmentId: Int = 0) async {
-        let state = currentEffectState(for: device, segmentId: segmentId)
-        guard state.isEnabled, state.effectId != 0 else { return }
-        let targetDevice = devices.first(where: { $0.id == device.id }) ?? device
-        await applyEffectState(state, to: targetDevice, segmentId: segmentId, colors: nil, turnOn: true)
-    }
     
     // Real-time control state
     @Published var isRealTimeEnabled: Bool = true
@@ -503,6 +616,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         return devices.first { $0.id == deviceId }?.isOn ?? false
     }
+    
 
     // MARK: - Initialization
     
@@ -1053,26 +1167,32 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func toggleDevicePower(_ device: WLEDDevice) async {
-        // The UI should have already registered the optimistic state via setUIOptimisticState
+        // The UI will have already registered the optimistic state.
         // The `targetState` is what the UI *wants* the device to be.
-        // If not set, calculate from current device state
         let targetState: Bool = await MainActor.run {
             if let optimisticState = uiToggleStates[device.id] {
                 return optimisticState
             } else {
                 // Fallback: get fresh device state and calculate target
                 let freshDevice = self.devices.first(where: { $0.id == device.id }) ?? device
-                let calculatedState = !freshDevice.isOn
-                // Set it for consistency
-                uiToggleStates[device.id] = calculatedState
-                return calculatedState
+                return !freshDevice.isOn
             }
         }
         
-        // CRITICAL: Get device state BEFORE optimistic update to determine if it was off
-        // The device parameter might already have optimistic state, so check the actual devices array
+        // Get device state before toggle to check if we're turning on
         let actualDeviceBeforeToggle = await MainActor.run {
             self.devices.first(where: { $0.id == device.id }) ?? device
+        }
+        let wasOff = !actualDeviceBeforeToggle.isOn
+        let isTurningOn = wasOff && targetState
+        let isTurningOff = actualDeviceBeforeToggle.isOn && !targetState
+        
+        // CRITICAL: Preserve brightness before turning off
+        // This allows restoring it when device is turned back on
+        if isTurningOff && actualDeviceBeforeToggle.brightness > 0 {
+            await MainActor.run {
+                self.lastBrightnessBeforeOff[device.id] = actualDeviceBeforeToggle.brightness
+            }
         }
         
         // Mark interaction and set pending toggle
@@ -1088,434 +1208,392 @@ class DeviceControlViewModel: ObservableObject {
         }
         toggleTimers[device.id] = timer
 
-        // Check if we're turning device ON and have a persisted gradient
-        // Use the state BEFORE optimistic update to correctly detect if device was off
-        let wasOff = !actualDeviceBeforeToggle.isOn
-        let isTurningOn = wasOff && targetState
-        let persistedStops = gradientStops(for: device.id)
-        let hasPersistedGradient = persistedStops != nil && !(persistedStops?.isEmpty ?? true)
-        
-        #if DEBUG
-        print("🔵 toggleDevicePower: device.id=\(device.id), beforeToggleState=\(actualDeviceBeforeToggle.isOn), targetState=\(targetState), wasOff=\(wasOff), isTurningOn=\(isTurningOn), hasGradient=\(hasPersistedGradient), brightness=\(actualDeviceBeforeToggle.brightness)")
-        #endif
-        
-        if isTurningOn && hasPersistedGradient {
-            // Turn device on with brightness, then apply full gradient
-            // Use brightness from before toggle, but ensure it's not too low
-            let targetBrightness: Int
-            if actualDeviceBeforeToggle.brightness == 0 {
-                // If brightness was 0, use a reasonable default
-                targetBrightness = 255
-                #if DEBUG
-                print("🔵 toggleDevicePower: Brightness was 0, using default \(targetBrightness)")
-                #endif
-            } else {
-                // Use existing brightness, but ensure it's at least 50% (128) for visibility
-                targetBrightness = max(actualDeviceBeforeToggle.brightness, 128)
-            }
+        // CRITICAL: If turning on with gradient, skip separate updateDeviceState call
+        // Include on=true in gradient application instead to prevent color flash
+        if isTurningOn, let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
+            // CRITICAL: Mark user interaction BEFORE gradient restoration to prevent WebSocket overwrites
+            markUserInteraction(device.id)
             
-            // Check if gradient is actually a solid color (all stops same color)
-            // If so, use simple solid color update (instant, no flash) - matches old behavior
-            if let persistedStops = persistedStops, !persistedStops.isEmpty {
-                let sortedStops = persistedStops.sorted { $0.position < $1.position }
-                let firstColor = sortedStops.first?.hexColor ?? "FFA000"
-                let isSolidColor = sortedStops.allSatisfy { $0.hexColor.uppercased() == firstColor.uppercased() }
+            // Get device state and LED count
+            // CRITICAL: Restore preserved brightness when turning on
+            let updatedDevice = await MainActor.run {
+                var dev = self.devices.first(where: { $0.id == device.id }) ?? device
+                dev.isOn = targetState  // Update local state optimistically
                 
-                if isSolidColor {
-                    // SOLID COLOR: Use simple solid color update (instant, no flash) - matches old behavior
-                    let rgb = hexStringToRGB(firstColor)
-                    let stateUpdate = WLEDStateUpdate(
-                        on: true,
-                        bri: targetBrightness,
-                        seg: [SegmentUpdate(
-                            id: 0,
-                            on: true,
-                            col: [[rgb.0, rgb.1, rgb.2]],  // Simple solid color
-                            cct: nil,
-                            fx: 0  // Disable any active effect
-                        )]
-                    )
-                    
-                    do {
-                        #if DEBUG
-                        print("🔵 toggleDevicePower: Solid color detected - using instant solid color update (color: #\(firstColor))")
-                        #endif
-                        
-                        _ = try await apiService.updateState(for: actualDeviceBeforeToggle, state: stateUpdate)
-                        
-                        await MainActor.run {
-                            if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                                self.devices[index].isOn = true
-                                self.devices[index].brightness = targetBrightness
-                                self.devices[index].isOnline = true
-                            }
-                        }
-                        
-                        if isRealTimeEnabled {
-                            webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                        }
-                    } catch {
-                        let mappedError = mapToWLEDError(error, device: device)
-                        await MainActor.run {
-                            self.presentError(mappedError)
-                        }
-                    }
-                } else {
-                    // ACTUAL GRADIENT: Check if effects are active to decide which method to use
-                    let effectState = await MainActor.run {
-                        self.currentEffectState(for: actualDeviceBeforeToggle, segmentId: 0)
-                    }
-                    let hasActiveEffect = effectState.isEnabled
-                    
-                    let firstColorHex = sortedStops.first?.hexColor ?? "FFA000"
-                    let firstColor = Color(hex: firstColorHex)
-                    let rgb = firstColor.toRGBArray()
-                    
-                    if hasActiveEffect {
-                        // EFFECTS ON: Use per-LED updates (needed for effects)
-                        #if DEBUG
-                        print("🔵 toggleDevicePower: Gradient + Effects ON - using per-LED updates (stops: \(sortedStops.count), effectId: \(effectState.effectId))")
-                        #endif
-                        
-                        
-                        // Power on with first color, then apply full gradient via per-LED
-                        let stateUpdate = WLEDStateUpdate(
-                            on: true,
-                            bri: targetBrightness,
-                            seg: [SegmentUpdate(
-                                id: 0,
-                                on: true,
-                                col: [[rgb[0], rgb[1], rgb[2]]],
-                                cct: nil,
-                                fx: nil  // Keep effect active
-                            )]
-                        )
-                        
-                        do {
-                            _ = try await apiService.updateState(for: actualDeviceBeforeToggle, state: stateUpdate)
-                            
-                            await MainActor.run {
-                                if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                                    self.devices[index].isOn = true
-                                    self.devices[index].brightness = targetBrightness
-                                    self.devices[index].currentColor = firstColor
-                                    self.devices[index].isOnline = true
-                                }
-                            }
-                            
-                            if isRealTimeEnabled {
-                                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                            }
-                            
-                            // Apply full gradient via per-LED updates (needed for effects)
-                            await MainActor.run {
-                                self.gradientApplicationTimes[device.id] = Date()
-                            }
-                            
-                            await applyGradientStopsAcrossStrip(
-                                actualDeviceBeforeToggle,
-                                stops: sortedStops,
-                                disableActiveEffect: false  // Keep effect active
-                            )
-                        } catch {
-                            let mappedError = mapToWLEDError(error, device: device)
-                            await MainActor.run {
-                                self.presentError(mappedError)
-                            }
-                        }
-                    } else {
-                        // EFFECTS OFF: Apply gradient synchronously to prevent flash
-                        #if DEBUG
-                        print("🔵 toggleDevicePower: Gradient + Effects OFF - applying gradient synchronously (no flash)")
-                        #endif
-                        
-                        // Power on with brightness first, then immediately apply full gradient
-                        let firstColorRGB = firstColor.toRGBArray()
-                        let powerOnStateUpdate = WLEDStateUpdate(
-                            on: true,
-                            bri: targetBrightness,
-                            seg: [SegmentUpdate(
-                                id: 0,
-                                on: true,
-                                col: [[firstColorRGB[0], firstColorRGB[1], firstColorRGB[2]]]
-                            )]
-                        )
-                        
-                        do {
-                            // Turn device on first
-                            _ = try await apiService.updateState(for: actualDeviceBeforeToggle, state: powerOnStateUpdate)
-                            
-                            await MainActor.run {
-                                if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                                    self.devices[index].isOn = true
-                                    self.devices[index].brightness = targetBrightness
-                                    self.devices[index].isOnline = true
-                                }
-                            }
-                            
-                            if isRealTimeEnabled {
-                                webSocketManager.sendStateUpdate(powerOnStateUpdate, to: device.id)
-                            }
-                            
-                            // Immediately apply full gradient synchronously (no background task)
-                            await MainActor.run {
-                                self.gradientApplicationTimes[device.id] = Date()
-                            }
-                            
-                            await applyGradientStopsAcrossStrip(
-                                actualDeviceBeforeToggle,
-                                stops: sortedStops,
-                                disableActiveEffect: false  // No effect to disable
-                            )
-                        } catch {
-                            let mappedError = mapToWLEDError(error, device: device)
-                            await MainActor.run {
-                                self.presentError(mappedError)
-                            }
-                        }
-                    }
+                // Restore preserved brightness if available, otherwise use device brightness or default
+                if let preservedBrightness = self.lastBrightnessBeforeOff[device.id], preservedBrightness > 0 {
+                    dev.brightness = preservedBrightness
+                } else if dev.brightness == 0 {
+                    // If brightness is 0 (device was off), use default brightness
+                    dev.brightness = 128  // Default to 50% brightness
                 }
-            } else {
-                // Fallback if no persisted gradient
-                let stateUpdate = WLEDStateUpdate(
-                    on: true,
-                    bri: targetBrightness
-                )
-                do {
-                    _ = try await apiService.updateState(for: actualDeviceBeforeToggle, state: stateUpdate)
-                    if isRealTimeEnabled {
-                        webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                    }
-                    await MainActor.run {
-                        if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                            self.devices[index].isOn = true
-                            self.devices[index].brightness = targetBrightness
-                            self.devices[index].isOnline = true
-                        }
-                    }
-                } catch {
-                    let mappedError = mapToWLEDError(error, device: device)
-                    await MainActor.run {
-                        self.presentError(mappedError)
-                    }
-                }
+                
+                return dev
             }
-        } else {
-            // Normal path: use updateDeviceState for turning off or when no persisted gradient
-            if !targetState {
-                // TURNING OFF: Use smooth fade transition (500ms)
-                let rgb = actualDeviceBeforeToggle.currentColor.toRGBArray()
-                let stateUpdate = WLEDStateUpdate(
-                    on: false,
-                    bri: actualDeviceBeforeToggle.brightness,
-                    seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])],
-                    transition: 500  // 500ms smooth fade-off
-                )
-                
-                do {
-                    _ = try await apiService.updateState(for: actualDeviceBeforeToggle, state: stateUpdate)
-                    
-                    if isRealTimeEnabled {
-                        webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                    }
-                    
-                    await MainActor.run {
-                        if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                            self.devices[index].isOn = false
-                            self.devices[index].isOnline = true
-                        }
-                        self.clearError()
-                    }
-                    
-                    var updatedDevice = actualDeviceBeforeToggle
-                    updatedDevice.isOn = false
-                    updatedDevice.isOnline = true
-                    updatedDevice.lastSeen = Date()
-                    await coreDataManager.saveDevice(updatedDevice)
-                } catch {
-                    let mappedError = mapToWLEDError(error, device: device)
-                    await MainActor.run {
-                        self.presentError(mappedError)
-                    }
-                }
-            } else {
-                // TURNING ON: Use smooth fade transition (300ms) for consistent behavior
-                let rgb = actualDeviceBeforeToggle.currentColor.toRGBArray()
-                let stateUpdate = WLEDStateUpdate(
-                    on: true,
-                    bri: actualDeviceBeforeToggle.brightness,
-                    seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])],
-                    transition: 300  // 300ms smooth fade-on
-                )
-                
-                do {
-                    _ = try await apiService.updateState(for: actualDeviceBeforeToggle, state: stateUpdate)
-                    
-                    if isRealTimeEnabled {
-                        webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                    }
-                    
-                    await MainActor.run {
-                        if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                            self.devices[index].isOn = true
-                            self.devices[index].isOnline = true
-                        }
-                        self.clearError()
-                    }
-                    
-                    var updatedDevice = actualDeviceBeforeToggle
-                    updatedDevice.isOn = true
-                    updatedDevice.isOnline = true
-                    updatedDevice.lastSeen = Date()
-                    await coreDataManager.saveDevice(updatedDevice)
-                } catch {
-                    let mappedError = mapToWLEDError(error, device: device)
-                    await MainActor.run {
-                        self.presentError(mappedError)
-                    }
-                }
-            }
-        }
-        
-        if targetState {
-            await reapplyActiveEffectIfNeeded(actualDeviceBeforeToggle)
-        }
-        
-        // On success, clear the pending state from the timer
-        pendingToggles.removeValue(forKey: device.id)
-        toggleTimers[device.id]?.invalidate()
-        toggleTimers.removeValue(forKey: device.id)
-        uiToggleStates.removeValue(forKey: device.id)
-    }
-    
-    // Execute the actual device toggle with proper error handling
-    private func executeDeviceToggle(_ device: WLEDDevice, targetState: Bool) async {
-        guard let pendingState = pendingToggles[device.id],
-              pendingState == targetState else {
-            // State changed since this was queued, ignore
-            return
-        }
-        
-        do {
-            // Create state update with transition for smooth fade
-            let rgb = device.currentColor.toRGBArray()
-            let transitionTime = targetState ? 300 : 500  // 300ms fade-on, 500ms fade-off
-            let stateUpdate = WLEDStateUpdate(
-                on: targetState,
-                bri: device.brightness,
-                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])],
-                transition: transitionTime
+            let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+            
+            // CRITICAL: Apply gradient WITH power-on in SAME API call (skip updateDeviceState)
+            // Include on=true and brightness in the gradient application
+            // This ensures everything happens atomically - no gap for WLED to show restored colors
+            await applyGradientStopsAcrossStrip(
+                updatedDevice,
+                stops: persistedStops,
+                ledCount: ledCount,
+                disableActiveEffect: true,  // Always disable effects during power-on restoration
+                brightness: updatedDevice.brightness,  // Apply restored brightness with gradient
+                on: true  // Include power-on in gradient application
             )
             
-            // Send to device via API
-            _ = try await apiService.updateState(for: device, state: stateUpdate)
-            
-            // Send via WebSocket for faster feedback (if connected)
-            if isRealTimeEnabled {
-                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-            }
-            
-            // Success - clear pending state and ensure device stays online
+            // Update local state optimistically
+            // CRITICAL: Also update brightness to match restored brightness value
+            // This ensures UI syncs correctly when device is turned on
             await MainActor.run {
-                pendingToggles.removeValue(forKey: device.id)
-                toggleTimers[device.id]?.invalidate()
-                toggleTimers.removeValue(forKey: device.id)
-                
-                // Clear user control window to allow future updates
-                lastUserInput.removeValue(forKey: device.id)
-                
-                // Ensure device reflects the successful toggle
-                if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                    devices[index].isOn = targetState
-                    devices[index].isOnline = true
-                    devices[index].lastSeen = Date()
-                    
-                    // Sync to widget
-                    WidgetDataSync.shared.syncDevice(devices[index])
+                if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                    self.devices[index].isOn = targetState
+                    self.devices[index].isOnline = true
+                    self.devices[index].brightness = updatedDevice.brightness  // CRITICAL: Update brightness to restored value
                 }
-                
-                // Force UI update by triggering objectWillChange
-                objectWillChange.send()
-                
-                clearError()
-                
-                print("✅ Toggle successful for device \(device.id): \(targetState ? "ON" : "OFF")")
             }
             
             // Persist the change
-            var updatedDevice = device
-            updatedDevice.isOn = targetState
-            updatedDevice.isOnline = true
-            updatedDevice.lastSeen = Date()
-            await coreDataManager.saveDevice(updatedDevice)
+            var deviceToSave = updatedDevice
+            deviceToSave.isOn = targetState
+            deviceToSave.isOnline = true
+            deviceToSave.lastSeen = Date()
+            await coreDataManager.saveDevice(deviceToSave)
             
-        } catch {
-            let mappedError = mapToWLEDError(error, device: device)
-            // Handle toggle failure
-            await MainActor.run {
-                // Revert optimistic state
-                if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                    devices[index].isOn = !targetState // Revert to original state
+            // Small delay then check if WLED restored any effects and disable them
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            
+            // Fetch actual state to check for restored effects
+            do {
+                let response = try await apiService.getState(for: device)
+                if let segment = response.state.segments.first, let fxValue = segment.fx, fxValue != 0 {
+                    // WLED restored an effect - disable it
+                    let segmentUpdate = SegmentUpdate(id: segment.id ?? 0, fx: 0, pal: 0, frz: false)
+                    let effectOffUpdate = WLEDStateUpdate(seg: [segmentUpdate])
+                    _ = try? await apiService.updateState(for: updatedDevice, state: effectOffUpdate)
+                    
+                    // Re-apply gradient to ensure it's not overwritten by effect
+                    // CRITICAL: Include on=true to ensure device stays on during gradient restoration
+                    // This prevents WebSocket updates or WLED's own state from interfering with power state
+                    await applyGradientStopsAcrossStrip(
+                        updatedDevice,
+                        stops: persistedStops,
+                        ledCount: ledCount,
+                        disableActiveEffect: true,
+                        brightness: updatedDevice.brightness,  // Apply brightness with gradient
+                        on: true  // CRITICAL: Ensure device stays on during gradient restoration
+                    )
+                }
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to check for restored effects after power-on: \(error)")
+                #endif
+            }
+        } else if isTurningOn {
+            // Turning on but no gradient - use simple power update
+            // CRITICAL: Restore preserved brightness when turning on
+            let preservedBrightness = await MainActor.run {
+                self.lastBrightnessBeforeOff[device.id]
+            }
+            
+            await updateDeviceState(device) { currentDevice in
+                var updatedDevice = currentDevice
+                updatedDevice.isOn = targetState
+                
+                // Restore preserved brightness if available
+                if let preservedBrightness = preservedBrightness, preservedBrightness > 0 {
+                    updatedDevice.brightness = preservedBrightness
+                } else if updatedDevice.brightness == 0 {
+                    // If brightness is 0 (device was off), use default brightness
+                    updatedDevice.brightness = 128  // Default to 50% brightness
                 }
                 
-                // Clear pending toggle and user control window
-                pendingToggles.removeValue(forKey: device.id)
-                toggleTimers[device.id]?.invalidate()
-                toggleTimers.removeValue(forKey: device.id)
-                lastUserInput.removeValue(forKey: device.id)
-                uiToggleStates.removeValue(forKey: device.id)
-                
-                // Force UI update by triggering objectWillChange
-                objectWillChange.send()
-                
-                if case .deviceOffline = mappedError {
-                    if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                        devices[index].isOnline = false
-                    }
-                }
-                
-                presentError(mappedError)
+                return updatedDevice
+            }
+        } else {
+            // Turning off - use simple power update
+            await updateDeviceState(device) { currentDevice in
+                var updatedDevice = currentDevice
+                updatedDevice.isOn = targetState
+                return updatedDevice
             }
         }
         
-        if targetState {
-            await reapplyActiveEffectIfNeeded(device)
+        // On success, clear the pending state from the timer
+        await MainActor.run {
+            pendingToggles.removeValue(forKey: device.id)
+            toggleTimers[device.id]?.invalidate()
+            toggleTimers.removeValue(forKey: device.id)
+            uiToggleStates.removeValue(forKey: device.id)
         }
-        clearUIOptimisticState(deviceId: device.id)
     }
+    
     
     func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int) async {
         markUserInteraction(device.id)
         
-        // Create brightness-only state update
-        let stateUpdate = WLEDStateUpdate(bri: brightness)
+        // CRITICAL: WLED treats brightness 0% as "off" (on: false)
+        // When brightness is 0%, we should turn device off
+        // When brightness goes from 0% to >0%, we should turn device on
+        let actualDevice = await MainActor.run {
+            self.devices.first(where: { $0.id == device.id }) ?? device
+        }
+        // CRITICAL: Check both power state AND brightness to detect when device is transitioning from off to on
+        // A device can have isOn=false while brightness>0 (remembered brightness), so we must check both
+        // wasOff = device is currently off (either isOn=false OR brightness==0) AND we're increasing brightness
+        let wasOff = (!actualDevice.isOn || actualDevice.brightness == 0) && brightness > 0
+        let isTurningOff = actualDevice.brightness > 0 && brightness == 0
+        let hasPersistedGradient = gradientStops(for: device.id)?.isEmpty == false
+        let activeEffectState = currentEffectState(for: device, segmentId: 0)
+        let isEffectEnabled = activeEffectState.isEnabled && activeEffectState.effectId != 0
         
-        do {
-            _ = try await apiService.updateState(for: device, state: stateUpdate)
-            
-            // Send WebSocket update if connected
-            if isRealTimeEnabled {
-                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+        // If turning off (brightness to 0%), turn device off first
+        if isTurningOff {
+            // CRITICAL: Preserve brightness before turning off
+            // This allows restoring it when brightness is increased from 0%
+            await MainActor.run {
+                if actualDevice.brightness > 0 {
+                    self.lastBrightnessBeforeOff[device.id] = actualDevice.brightness
+                }
             }
             
+            await updateDeviceState(device) { currentDevice in
+                var updatedDevice = currentDevice
+                updatedDevice.isOn = false
+                updatedDevice.brightness = 0
+                return updatedDevice
+            }
+            return
+        }
+        
+        // If restoring brightness from 0 and we have a gradient, restore the gradient instead
+        // This prevents WLED from showing a default color before gradient is applied
+        if wasOff && hasPersistedGradient {
+            if let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
+                // CRITICAL: Mark user interaction BEFORE gradient restoration to prevent WebSocket overwrites
+                // This ensures WebSocket updates don't interfere with gradient restoration
+                markUserInteraction(device.id)
+                
+                // CRITICAL: Fetch actual state from WLED to see what it restored
+                // When brightness goes to 0%, WLED might restore effects/presets when brightness comes back
+                var actualState: WLEDState?
+                do {
+                    let response = try await apiService.getState(for: device)
+                    actualState = response.state
+                    
+                    // CRITICAL: Only update state (for effect checking), NOT brightness
+                    // The brightness from WLED response is likely 0 (device was off), but we're about to apply
+                    // the user's requested brightness. Updating brightness here creates a window where
+                    // device state shows incorrect brightness, potentially causing UI inconsistencies.
+                    await MainActor.run {
+                        if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                            // Only update state, preserve current brightness (will be updated with requested value)
+                            self.devices[index].state = response.state
+                            // DO NOT update brightness here - it will be set to the requested value below
+                        }
+                    }
+                } catch {
+                    #if DEBUG
+                    print("⚠️ Failed to fetch state after brightness restoration: \(error)")
+                    #endif
+                }
+                
+                let updatedDevice = await MainActor.run {
+                    var dev = self.devices.first(where: { $0.id == device.id }) ?? device
+                    dev.brightness = brightness
+                    
+                    // CRITICAL: Update preserved brightness when restoring from 0%
+                    // This ensures brightness is preserved for future power-on operations
+                    if brightness > 0 {
+                        self.lastBrightnessBeforeOff[device.id] = brightness
+                    }
+                    
+                    return dev
+                }
+                let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+                
+                // CRITICAL: Check actual WLED state for active effects
+                // WLED might restore effects/presets when brightness comes back from 0%
+                var hasActiveEffect = false
+                if let state = actualState, let segment = state.segments.first {
+                    let fxValue = segment.fx ?? 0
+                    hasActiveEffect = fxValue != 0
+                    
+                    if hasActiveEffect {
+                        // Disable effect before applying gradient
+                        let segmentUpdate = SegmentUpdate(id: segment.id ?? 0, fx: 0, pal: 0, frz: false)
+                        let effectOffUpdate = WLEDStateUpdate(seg: [segmentUpdate])
+                        _ = try? await apiService.updateState(for: updatedDevice, state: effectOffUpdate)
+                        
+                        // Update effect state cache
+                        await MainActor.run {
+                            var segmentStates = self.effectStates[device.id] ?? [:]
+                            let segmentId = segment.id ?? 0
+                            segmentStates[segmentId] = DeviceEffectState(
+                                effectId: 0,
+                                speed: segment.sx ?? 128,
+                                intensity: segment.ix ?? 128,
+                                paletteId: segment.pal,
+                                isEnabled: false
+                            )
+                            self.effectStates[device.id] = segmentStates
+                        }
+                        
+                        // Small delay to ensure effect is disabled
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    }
+                }
+                
+                // CRITICAL: Restore gradient WITH power-on and brightness in SAME API call
+                // Include on=true when restoring from 0% brightness
+                // This ensures everything happens atomically - no gap for WLED to show restored colors
+                await applyGradientStopsAcrossStrip(
+                    updatedDevice,
+                    stops: persistedStops,
+                    ledCount: ledCount,
+                    disableActiveEffect: hasActiveEffect,  // Disable if we found an active effect
+                    brightness: brightness,  // Apply brightness with gradient
+                    on: true  // CRITICAL: Turn device on when restoring brightness from 0%
+                )
+                
+                // Update local state
+                await MainActor.run {
+                    if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                        devices[index].brightness = brightness
+                        devices[index].isOn = true  // CRITICAL: Ensure isOn is true when brightness > 0
+                        devices[index].isOnline = true
+                    }
+                    
+                    // CRITICAL: Preserve brightness for future power-on operations
+                    if brightness > 0 {
+                        self.lastBrightnessBeforeOff[device.id] = brightness
+                    }
+                    
+                    clearError()
+                }
+                
+                // Persist the change
+                var deviceToSave = updatedDevice
+                deviceToSave.brightness = brightness
+                deviceToSave.isOnline = true
+                deviceToSave.lastSeen = Date()
+                await coreDataManager.saveDevice(deviceToSave)
+                
+                return
+            }
+        }
+        
+        // Normal brightness update
+        // CRITICAL: If brightness is 0%, turn device off (WLED treats brightness 0% as off)
+        if brightness == 0 {
+            await updateDeviceState(device) { currentDevice in
+                var updatedDevice = currentDevice
+                updatedDevice.isOn = false
+                updatedDevice.brightness = 0
+                return updatedDevice
+            }
+            return
+        }
+        
+        // CRITICAL: If we have a gradient, we need to preserve it during brightness changes
+        // WLED's brightness control affects overall brightness, but per-LED colors should be preserved
+        // However, to ensure gradient colors remain visible, re-apply gradient with new brightness
+        if hasPersistedGradient, !isEffectEnabled, let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
+            // We have a gradient - re-apply it with new brightness to ensure colors are preserved
+            markUserInteraction(device.id)
+            
+            let updatedDevice = await MainActor.run {
+                var dev = self.devices.first(where: { $0.id == device.id }) ?? device
+                dev.brightness = brightness
+                return dev
+            }
+            let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+            
+            // Re-apply gradient with new brightness
+            // This ensures gradient colors are preserved and visible at the new brightness level
+            // CRITICAL: Include on=true when brightness > 0 to ensure device stays on
+            await applyGradientStopsAcrossStrip(
+                updatedDevice,
+                stops: persistedStops,
+                ledCount: ledCount,
+                disableActiveEffect: false,  // Don't disable effects during normal brightness changes
+                brightness: brightness,  // Apply brightness with gradient
+                on: true  // CRITICAL: Ensure device is on when brightness > 0
+            )
+            
+            // Update local state
             await MainActor.run {
                 if let index = devices.firstIndex(where: { $0.id == device.id }) {
                     devices[index].brightness = brightness
+                    devices[index].isOn = true  // CRITICAL: Ensure isOn is true when brightness > 0
                     devices[index].isOnline = true
                 }
+                
+                // CRITICAL: Preserve brightness for future power-on operations
+                if brightness > 0 {
+                    self.lastBrightnessBeforeOff[device.id] = brightness
+                }
+                
                 clearError()
             }
             
             // Persist the change
-            var updatedDevice = device
-            updatedDevice.brightness = brightness
-            updatedDevice.isOnline = true
-            updatedDevice.lastSeen = Date()
-            await coreDataManager.saveDevice(updatedDevice)
+            var deviceToSave = updatedDevice
+            deviceToSave.brightness = brightness
+            deviceToSave.isOn = true  // CRITICAL: Ensure isOn is true when brightness > 0
+            deviceToSave.isOnline = true
+            deviceToSave.lastSeen = Date()
+            await coreDataManager.saveDevice(deviceToSave)
             
-        } catch {
-            let mappedError = mapToWLEDError(error, device: device)
-            presentError(mappedError)
+        } else {
+            // No gradient - use simple brightness update
+            // CRITICAL: WLED treats brightness 0% as "off" (on: false)
+            // Include on state in brightness update to ensure proper state
+            let shouldBeOn = brightness > 0
+            let stateUpdate = WLEDStateUpdate(
+                on: shouldBeOn ? true : false,  // CRITICAL: Explicitly set on=false when brightness is 0%
+                bri: brightness
+            )
+            
+            do {
+                _ = try await apiService.updateState(for: device, state: stateUpdate)
+                
+                // Send WebSocket update if connected
+                if isRealTimeEnabled {
+                    webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+                }
+                
+                await MainActor.run {
+                    if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                        devices[index].brightness = brightness
+                        devices[index].isOn = shouldBeOn  // CRITICAL: Update isOn based on brightness
+                        devices[index].isOnline = true
+                    }
+                    
+                    // CRITICAL: Preserve brightness for future power-on operations
+                    if brightness > 0 {
+                        self.lastBrightnessBeforeOff[device.id] = brightness
+                    }
+                    
+                    clearError()
+                }
+                
+                // Persist the change
+                var updatedDevice = device
+                updatedDevice.brightness = brightness
+                updatedDevice.isOn = shouldBeOn  // CRITICAL: Update isOn based on brightness
+                updatedDevice.isOnline = true
+                updatedDevice.lastSeen = Date()
+                await coreDataManager.saveDevice(updatedDevice)
+                
+            } catch {
+                let mappedError = mapToWLEDError(error, device: device)
+                await MainActor.run {
+                    self.presentError(mappedError)
+                }
+            }
         }
     }
     
@@ -1611,313 +1689,138 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func setDevicePower(_ device: WLEDDevice, isOn: Bool) async {
-        // Respect user interaction protection and perform an optimistic state update via unified path
         markUserInteraction(device.id)
         
-        // Get actual device state from devices array (not optimistic state)
-        let actualDevice = await MainActor.run {
+        // Get device state before power change to check if we're turning on
+        let actualDeviceBeforeChange = await MainActor.run {
             self.devices.first(where: { $0.id == device.id }) ?? device
         }
-        
-        // Check if we're turning device ON and have a persisted gradient
-        let wasOff = !actualDevice.isOn
+        let wasOff = !actualDeviceBeforeChange.isOn
         let isTurningOn = wasOff && isOn
-        let persistedStops = gradientStops(for: device.id)
-        let hasPersistedGradient = persistedStops != nil && !(persistedStops?.isEmpty ?? true)
+        let isTurningOff = actualDeviceBeforeChange.isOn && !isOn
         
-        #if DEBUG
-        print("🔵 setDevicePower: device.id=\(device.id), actualState=\(actualDevice.isOn), isOn=\(isOn), wasOff=\(wasOff), isTurningOn=\(isTurningOn), hasGradient=\(hasPersistedGradient)")
-        #endif
+        // CRITICAL: Preserve brightness before turning off
+        // This allows restoring it when device is turned back on
+        if isTurningOff && actualDeviceBeforeChange.brightness > 0 {
+            await MainActor.run {
+                self.lastBrightnessBeforeOff[device.id] = actualDeviceBeforeChange.brightness
+            }
+        }
         
-        if isTurningOn && hasPersistedGradient {
-            // Turn device on with brightness, then apply full gradient
-            let targetBrightness = actualDevice.brightness > 0 ? actualDevice.brightness : 255
+        // CRITICAL: If turning on with gradient, skip separate updateDeviceState call
+        // Include on=true in gradient application instead to prevent color flash
+        if isTurningOn, let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
+            // CRITICAL: Mark user interaction BEFORE gradient restoration to prevent WebSocket overwrites
+            markUserInteraction(device.id)
+            
+            // Get device state and LED count
+            // CRITICAL: Restore preserved brightness when turning on
+            let updatedDevice = await MainActor.run {
+                var dev = self.devices.first(where: { $0.id == device.id }) ?? device
+                dev.isOn = isOn  // Update local state optimistically
+                
+                // Restore preserved brightness if available, otherwise use device brightness or default
+                if let preservedBrightness = self.lastBrightnessBeforeOff[device.id], preservedBrightness > 0 {
+                    dev.brightness = preservedBrightness
+                } else if dev.brightness == 0 {
+                    // If brightness is 0 (device was off), use default brightness
+                    dev.brightness = 128  // Default to 50% brightness
+                }
+                
+                return dev
+            }
+            let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+            
+            // CRITICAL: Apply gradient WITH power-on in SAME API call (skip updateDeviceState)
+            // Include on=true and brightness in the gradient application
+            // This ensures everything happens atomically - no gap for WLED to show restored colors
+            await applyGradientStopsAcrossStrip(
+                updatedDevice,
+                stops: persistedStops,
+                ledCount: ledCount,
+                disableActiveEffect: true,  // Always disable effects during power-on restoration
+                brightness: updatedDevice.brightness,  // Apply restored brightness with gradient
+                on: true  // Include power-on in gradient application
+            )
+            
+            // Update local state optimistically
+            // CRITICAL: Also update brightness to match restored brightness value
+            // This ensures UI syncs correctly when device is turned on
+            await MainActor.run {
+                if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                    self.devices[index].isOn = isOn
+                    self.devices[index].isOnline = true
+                    self.devices[index].brightness = updatedDevice.brightness  // CRITICAL: Update brightness to restored value
+                }
+            }
+            
+            // Persist the change
+            var deviceToSave = updatedDevice
+            deviceToSave.isOn = isOn
+            deviceToSave.isOnline = true
+            deviceToSave.lastSeen = Date()
+            await coreDataManager.saveDevice(deviceToSave)
+            
+            // Small delay then check if WLED restored any effects and disable them
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            
+            // Fetch actual state to check for restored effects
             do {
-                // Check if gradient is actually a solid color (all stops same color)
-                // If so, use simple solid color update (instant, no flash) - matches old behavior
-                if let persistedStops = persistedStops, !persistedStops.isEmpty {
-                    let sortedStops = persistedStops.sorted { $0.position < $1.position }
-                    let firstColor = sortedStops.first?.hexColor ?? "FFA000"
-                    let isSolidColor = sortedStops.allSatisfy { $0.hexColor.uppercased() == firstColor.uppercased() }
+                let response = try await apiService.getState(for: device)
+                if let segment = response.state.segments.first, let fxValue = segment.fx, fxValue != 0 {
+                    // WLED restored an effect - disable it
+                    let segmentUpdate = SegmentUpdate(id: segment.id ?? 0, fx: 0, pal: 0, frz: false)
+                    let effectOffUpdate = WLEDStateUpdate(seg: [segmentUpdate])
+                    _ = try? await apiService.updateState(for: updatedDevice, state: effectOffUpdate)
                     
-                    if isSolidColor {
-                        // SOLID COLOR: Use simple solid color update (instant, no flash) - matches old behavior
-                        let rgb = hexStringToRGB(firstColor)
-                        let powerOnStateUpdate = WLEDStateUpdate(
-                            on: true,
-                            bri: targetBrightness,
-                            seg: [SegmentUpdate(
-                                id: 0,
-                                on: true,
-                                col: [[rgb.0, rgb.1, rgb.2]],  // Simple solid color
-                                cct: nil,
-                                fx: 0  // Disable any active effect
-                            )]
-                        )
-                        
-                        #if DEBUG
-                        print("🔵 setDevicePower: Solid color detected - using instant solid color update (color: #\(firstColor))")
-                        #endif
-                        
-                        _ = try await apiService.updateState(for: actualDevice, state: powerOnStateUpdate)
-                        
-                        await MainActor.run {
-                            if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                                self.devices[index].isOn = true
-                                self.devices[index].brightness = targetBrightness
-                                self.devices[index].isOnline = true
-                                self.clearError()
-                            }
-                        }
-                        
-                        if isRealTimeEnabled {
-                            webSocketManager.sendStateUpdate(powerOnStateUpdate, to: device.id)
-                        }
-                        
-                        // Persist the change
-                        var updatedDevice = actualDevice
-                        updatedDevice.isOn = true
-                        updatedDevice.isOnline = true
-                        updatedDevice.lastSeen = Date()
-                        await coreDataManager.saveDevice(updatedDevice)
-                    } else {
-                        // ACTUAL GRADIENT: Check if effects are active to decide which method to use
-                        let effectState = await MainActor.run {
-                            self.currentEffectState(for: actualDevice, segmentId: 0)
-                        }
-                        let hasActiveEffect = effectState.isEnabled
-                        
-                        let firstColorHex = sortedStops.first?.hexColor ?? "FFA000"
-                        let firstColor = Color(hex: firstColorHex)
-                        let rgb = firstColor.toRGBArray()
-                        
-                        if hasActiveEffect {
-                            // EFFECTS ON: Use per-LED updates (needed for effects)
-                            #if DEBUG
-                            print("🔵 setDevicePower: Gradient + Effects ON - using per-LED updates (stops: \(sortedStops.count), effectId: \(effectState.effectId))")
-                            #endif
-                            
-                            // Power on with first color, then apply full gradient via per-LED
-                            let stateUpdate = WLEDStateUpdate(
-                                on: true,
-                                bri: targetBrightness,
-                                seg: [SegmentUpdate(
-                                    id: 0,
-                                    on: true,
-                                    col: [[rgb[0], rgb[1], rgb[2]]],
-                                    cct: nil,
-                                    fx: nil  // Keep effect active
-                                )]
-                            )
-                            
-                            do {
-                                _ = try await apiService.updateState(for: actualDevice, state: stateUpdate)
-                                
-                                await MainActor.run {
-                                    if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                                        self.devices[index].isOn = true
-                                        self.devices[index].brightness = targetBrightness
-                                        self.devices[index].currentColor = firstColor
-                                        self.devices[index].isOnline = true
-                                        self.clearError()
-                                    }
-                                }
-                                
-                                if isRealTimeEnabled {
-                                    webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                                }
-                                
-                                // Apply full gradient via per-LED updates (needed for effects)
-                                await MainActor.run {
-                                    self.gradientApplicationTimes[device.id] = Date()
-                                }
-                                
-                                await applyGradientStopsAcrossStrip(
-                                    actualDevice,
-                                    stops: sortedStops,
-                                    disableActiveEffect: false  // Keep effect active
-                                )
-                                
-                                // Persist the change
-                                var updatedDevice = actualDevice
-                                updatedDevice.isOn = true
-                                updatedDevice.isOnline = true
-                                updatedDevice.lastSeen = Date()
-                                await coreDataManager.saveDevice(updatedDevice)
-                            } catch {
-                                let mappedError = mapToWLEDError(error, device: device)
-                                await MainActor.run {
-                                    self.presentError(mappedError)
-                                }
-                            }
-                        } else {
-                            // EFFECTS OFF: Apply gradient synchronously to prevent flash
-                            #if DEBUG
-                            print("🔵 setDevicePower: Gradient + Effects OFF - applying gradient synchronously (no flash)")
-                            #endif
-                            
-                            // Power on with brightness first, then immediately apply full gradient
-                            let firstColorRGB = firstColor.toRGBArray()
-                            let powerOnStateUpdate = WLEDStateUpdate(
-                                on: true,
-                                bri: targetBrightness,
-                                seg: [SegmentUpdate(
-                                    id: 0,
-                                    on: true,
-                                    col: [[firstColorRGB[0], firstColorRGB[1], firstColorRGB[2]]]
-                                )]
-                            )
-                            
-                            do {
-                                // Turn device on first
-                                _ = try await apiService.updateState(for: actualDevice, state: powerOnStateUpdate)
-                                
-                                await MainActor.run {
-                                    if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                                        self.devices[index].isOn = true
-                                        self.devices[index].brightness = targetBrightness
-                                        self.devices[index].isOnline = true
-                                        self.clearError()
-                                    }
-                                }
-                                
-                                if isRealTimeEnabled {
-                                    webSocketManager.sendStateUpdate(powerOnStateUpdate, to: device.id)
-                                }
-                                
-                                // Immediately apply full gradient synchronously (no background task)
-                                await MainActor.run {
-                                    self.gradientApplicationTimes[device.id] = Date()
-                                }
-                                
-                                await applyGradientStopsAcrossStrip(
-                                    actualDevice,
-                                    stops: sortedStops,
-                                    disableActiveEffect: false  // No effect to disable
-                                )
-                                
-                                // Persist the change
-                                var updatedDevice = actualDevice
-                                updatedDevice.isOn = true
-                                updatedDevice.isOnline = true
-                                updatedDevice.lastSeen = Date()
-                                await coreDataManager.saveDevice(updatedDevice)
-                            } catch {
-                                let mappedError = mapToWLEDError(error, device: device)
-                                await MainActor.run {
-                                    self.presentError(mappedError)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // No persisted gradient - just turn on normally
-                    let fallbackStateUpdate = WLEDStateUpdate(
-                        on: true,
-                        bri: targetBrightness
+                    // Re-apply gradient to ensure it's not overwritten by effect
+                    // CRITICAL: Include on=true to ensure device stays on during gradient restoration
+                    // This prevents WebSocket updates or WLED's own state from interfering with power state
+                    await applyGradientStopsAcrossStrip(
+                        updatedDevice,
+                        stops: persistedStops,
+                        ledCount: ledCount,
+                        disableActiveEffect: true,
+                        brightness: updatedDevice.brightness,  // Apply brightness with gradient
+                        on: true  // CRITICAL: Ensure device stays on during gradient restoration
                     )
-                    _ = try await apiService.updateState(for: actualDevice, state: fallbackStateUpdate)
-                    
-                    if isRealTimeEnabled {
-                        webSocketManager.sendStateUpdate(fallbackStateUpdate, to: device.id)
-                    }
-                    
-                    await MainActor.run {
-                        if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                            self.devices[index].isOn = true
-                            self.devices[index].brightness = targetBrightness
-                            self.devices[index].isOnline = true
-                            self.clearError()
-                        }
-                    }
-                    
-                    var updatedDevice = actualDevice
-                    updatedDevice.isOn = true
-                    updatedDevice.isOnline = true
-                    updatedDevice.lastSeen = Date()
-                    await coreDataManager.saveDevice(updatedDevice)
                 }
             } catch {
-                let mappedError = mapToWLEDError(error, device: device)
-                presentError(mappedError)
+                #if DEBUG
+                print("⚠️ Failed to check for restored effects after power-on: \(error)")
+                #endif
+            }
+        } else if isTurningOn {
+            // Turning on but no gradient - use simple power update
+            // CRITICAL: Restore preserved brightness when turning on
+            let preservedBrightness = await MainActor.run {
+                self.lastBrightnessBeforeOff[device.id]
+            }
+            
+            await updateDeviceState(device) { currentDevice in
+                var updatedDevice = currentDevice
+                updatedDevice.isOn = isOn
+                
+                // Restore preserved brightness if available
+                if let preservedBrightness = preservedBrightness, preservedBrightness > 0 {
+                    updatedDevice.brightness = preservedBrightness
+                } else if updatedDevice.brightness == 0 {
+                    // If brightness is 0 (device was off), use default brightness
+                    updatedDevice.brightness = 128  // Default to 50% brightness
+                }
+                
+                return updatedDevice
             }
         } else {
-            // Normal path: use updateDeviceState for turning off or when no persisted gradient
-            if !isOn {
-                // TURNING OFF: Use smooth fade transition (500ms)
-                let rgb = actualDevice.currentColor.toRGBArray()
-                let stateUpdate = WLEDStateUpdate(
-                    on: false,
-                    bri: actualDevice.brightness,
-                    seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])],
-                    transition: 500  // 500ms smooth fade-off
-                )
-                
-                do {
-                    _ = try await apiService.updateState(for: actualDevice, state: stateUpdate)
-                    
-                    if isRealTimeEnabled {
-                        webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                    }
-                    
-                    await MainActor.run {
-                        if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                            self.devices[index].isOn = false
-                            self.devices[index].isOnline = true
-                            self.clearError()
-                        }
-                    }
-                    
-                    var updatedDevice = actualDevice
-                    updatedDevice.isOn = false
-                    updatedDevice.isOnline = true
-                    updatedDevice.lastSeen = Date()
-                    await coreDataManager.saveDevice(updatedDevice)
-                } catch {
-                    let mappedError = mapToWLEDError(error, device: device)
-                    await MainActor.run {
-                        self.presentError(mappedError)
-                    }
-                }
-            } else {
-                // TURNING ON: Use smooth fade transition (300ms) for consistent behavior
-                let rgb = actualDevice.currentColor.toRGBArray()
-                let stateUpdate = WLEDStateUpdate(
-                    on: true,
-                    bri: actualDevice.brightness,
-                    seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])],
-                    transition: 300  // 300ms smooth fade-on
-                )
-                
-                do {
-                    _ = try await apiService.updateState(for: actualDevice, state: stateUpdate)
-                    
-                    if isRealTimeEnabled {
-                        webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                    }
-                    
-                    await MainActor.run {
-                        if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                            self.devices[index].isOn = true
-                            self.devices[index].isOnline = true
-                            self.clearError()
-                        }
-                    }
-                    
-                    var updatedDevice = actualDevice
-                    updatedDevice.isOn = true
-                    updatedDevice.isOnline = true
-                    updatedDevice.lastSeen = Date()
-                    await coreDataManager.saveDevice(updatedDevice)
-                } catch {
-                    let mappedError = mapToWLEDError(error, device: device)
-                    await MainActor.run {
-                        self.presentError(mappedError)
-                    }
-                }
+            // Turning off or no change - use simple power update
+            await updateDeviceState(device) { currentDevice in
+                var updatedDevice = currentDevice
+                updatedDevice.isOn = isOn
+                return updatedDevice
             }
         }
     }
+    
 
     func setUDPSync(_ device: WLEDDevice, send: Bool?, recv: Bool?, network: Int? = nil) async {
         // Build UDPN update and call API; optimistic no-op on UI
@@ -1930,13 +1833,34 @@ class DeviceControlViewModel: ObservableObject {
         let updatedDevice = update(device)
         
         do {
+            // Check if we have a persisted gradient that will be restored
+            let hasPersistedGradient = gradientStops(for: device.id)?.isEmpty == false
+            
             // Create state update based on changes
-            let rgb = updatedDevice.currentColor.toRGBArray()
-            let stateUpdate = WLEDStateUpdate(
-                on: updatedDevice.isOn,
-                bri: updatedDevice.brightness,
-                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])]
-            )
+            // CRITICAL FIX: If we have a persisted gradient, DON'T send col field
+            // This prevents WLED from applying a solid color before gradient restoration
+            // WLED will preserve existing colors when only on/bri are sent
+            // However, if device is turning ON, WLED might restore its own state from memory
+            // So we still don't send col - let gradient restoration handle colors immediately after
+            let stateUpdate: WLEDStateUpdate
+            if hasPersistedGradient {
+                // Only send power and brightness - don't send color
+                // Gradient will be restored immediately after power-on completes
+                // This prevents WLED from showing its restored colors before our gradient
+                stateUpdate = WLEDStateUpdate(
+                    on: updatedDevice.isOn,
+                    bri: updatedDevice.brightness,
+                    seg: nil  // Don't send segment color - let gradient restoration handle it
+                )
+            } else {
+                // No persisted gradient - send solid color as before
+                let rgb = updatedDevice.currentColor.toRGBArray()
+                stateUpdate = WLEDStateUpdate(
+                    on: updatedDevice.isOn,
+                    bri: updatedDevice.brightness,
+                    seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])]
+                )
+            }
             
             _ = try await apiService.updateState(for: device, state: stateUpdate)
             
@@ -2043,26 +1967,53 @@ class DeviceControlViewModel: ObservableObject {
                     updatedDevice.isOnline = true
                     updatedDevice.lastSeen = Date()
                     
-                    // Update color if available
-                    if let segment = response.state.segments.first {
-                        let persistedGradientCount = self.latestGradientStops[device.id]?.count ?? 0
-                        let shouldAdoptReportedColor = persistedGradientCount <= 1
-                        // Check if segment has CCT (white temperature)
-                        if let normalized = segment.cctNormalized {
-                            updatedDevice.temperature = normalized
-                            if shouldAdoptReportedColor {
-                                updatedDevice.currentColor = Color.color(fromCCTTemperature: normalized)
+                    // CRITICAL FIX: Don't update color if device is under user control or gradient was just applied
+                    // This prevents refreshDeviceState from overwriting gradient colors during restoration
+                    let isUnderControl = self.isUnderUserControl(device.id)
+                    let gradientJustApplied: Bool
+                    if let gradientTime = self.gradientApplicationTimes[device.id] {
+                        let elapsed = Date().timeIntervalSince(gradientTime)
+                        gradientJustApplied = elapsed < self.gradientProtectionWindow
+                    } else {
+                        gradientJustApplied = false
+                    }
+                    
+                    // Only update color if device is NOT under user control AND gradient wasn't just applied
+                    if !isUnderControl && !gradientJustApplied {
+                        // Update color if available
+                        if let segment = response.state.segments.first {
+                            // Check if segment has CCT (white temperature)
+                            if let normalized = segment.cctNormalized {
+                                updatedDevice.temperature = normalized
+                            } else if let colors = segment.colors,
+                                   let firstColor = colors.first,
+                                   firstColor.count >= 3 {
+                                // Check for active effect or CCT before updating color
+                                let segmentId = segment.id ?? 0
+                                let effectState = self.effectStates[device.id]?[segmentId]
+                                let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
+                                let hasActiveCCT = updatedDevice.temperature != nil && updatedDevice.temperature! > 0
+                                
+                                // Only update color if no active effect or CCT
+                                if !hasActiveEffect && !hasActiveCCT {
+                                    updatedDevice.currentColor = Color(
+                                        .sRGB,
+                                        red: Double(firstColor[0]) / 255.0,
+                                        green: Double(firstColor[1]) / 255.0,
+                                        blue: Double(firstColor[2]) / 255.0
+                                    )
+                                }
                             }
-                        } else if let colors = segment.colors,
-                               let firstColor = colors.first,
-                               firstColor.count >= 3,
-                               shouldAdoptReportedColor {
-                            updatedDevice.currentColor = Color(
-                                red: Double(firstColor[0]) / 255.0,
-                                green: Double(firstColor[1]) / 255.0,
-                                blue: Double(firstColor[2]) / 255.0
-                            )
                         }
+                    } else {
+                        #if DEBUG
+                        if isUnderControl {
+                            print("🔵 refreshDeviceState: Skipping color update - Device under user control")
+                        }
+                        if gradientJustApplied {
+                            print("🔵 refreshDeviceState: Skipping color update - Gradient was just applied")
+                        }
+                        #endif
                     }
                     
                     self.devices[index] = updatedDevice
@@ -2108,7 +2059,10 @@ class DeviceControlViewModel: ObservableObject {
                let colors = segment.colors,
                let firstColor = colors.first,
                firstColor.count >= 3 {
+                // CRITICAL: Explicitly use .sRGB color space to prevent color mismatches on wide-gamut displays
+                // WLED sends sRGB colors, so we must use .sRGB to ensure correct color representation
                 persistDevice.currentColor = Color(
+                    .sRGB,
                     red: Double(firstColor[0]) / 255.0,
                     green: Double(firstColor[1]) / 255.0,
                     blue: Double(firstColor[2]) / 255.0
@@ -2288,28 +2242,67 @@ class DeviceControlViewModel: ObservableObject {
     
     /// Disable effects for a device/segment (set fx: 0)
     /// This allows CCT and solid colors to work properly
+    /// Note: Does NOT automatically restore gradient - caller should handle that separately if needed
     func disableEffect(for device: WLEDDevice, segmentId: Int = 0) async {
         os_log("[Effects] Disabling effect for device %{public}@, segment %d", log: OSLog.effects, type: .debug, device.name, segmentId)
         await cancelActiveTransitionIfNeeded(for: device)
         await colorPipeline.cancelUploads(for: device.id)
-        await apiService.releaseRealtimeOverride(for: device)
+        // Don't call releaseRealtimeOverride here - it can interfere with gradient application
+        // Only release realtime if we're actually switching to effects mode
         markUserInteraction(device.id)
+        
+        // CRITICAL: Get current device brightness BEFORE disabling effect
+        // When disabling effects, WLED might restore brightness to a high value (255), causing a flash
+        // We need to preserve the current brightness and include it in the effect-disable call
+        let currentDevice = await MainActor.run {
+            self.devices.first(where: { $0.id == device.id }) ?? device
+        }
+        let currentBrightness = currentDevice.brightness
+        
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.effectId = 0  // Effect ID 0 = effects disabled
         state.isEnabled = false
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil)
-        let stops = gradientStops(for: device.id) ?? [
-            GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
-            GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
-        ]
-        updateEffectGradient(LEDGradient(stops: stops), for: device)
-        latestEffectGradientStops[device.id] = stops
-        #if DEBUG
-        os_log("[Effects] Disabled effect on %{public}@", device.name)
-        #endif
-        await applyGradientStopsAcrossStrip(device, segmentId: segmentId, stops: stops, disableActiveEffect: false)
+        
+        // CRITICAL: Include brightness in effect-disable call to prevent WLED from restoring it to a high value
+        // This prevents the brightness flash that occurs when WLED restores default brightness
+        let segmentUpdate = SegmentUpdate(id: segmentId, bri: currentBrightness, fx: 0, pal: 0, frz: false)
+        let stateUpdate = WLEDStateUpdate(seg: [segmentUpdate])
+        _ = try? await apiService.updateState(for: currentDevice, state: stateUpdate)
+        
+        // CRITICAL: Restore and apply the main gradient after disabling effect
+        // This ensures the device falls back to the user's main color gradient, not a random color
+        if let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
+            let ledCount = currentDevice.state?.segments.first(where: { $0.id == segmentId })?.len 
+                ?? currentDevice.state?.segments.first?.len 
+                ?? 120
+            
+            // CRITICAL: Apply gradient with brightness atomically to prevent brightness flash
+            // Include brightness in the gradient application so it happens in one API call
+            // Use the same brightness we preserved above to ensure consistency
+            await applyGradientStopsAcrossStrip(
+                currentDevice,
+                stops: persistedStops,
+                ledCount: ledCount,
+                segmentId: segmentId,
+                brightness: currentBrightness,  // Use preserved brightness atomically
+                on: nil  // Don't change power state when disabling effects
+            )
+        } else {
+            // Fallback: Use current color if no persisted gradient exists
+            let stops = [
+                GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
+                GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
+            ]
+            updateEffectGradient(LEDGradient(stops: stops, interpolation: .linear), for: device)
+            latestEffectGradientStops[device.id] = stops
+        }
+        
         lastGradientBeforeEffect.removeValue(forKey: device.id)
+        
+        #if DEBUG
+        os_log("[Effects] Disabled effect on %{public}@ and restored main gradient", device.name)
+        #endif
     }
     
     func updateEffectSpeed(for device: WLEDDevice, segmentId: Int = 0, speed: Int) async {
@@ -2446,7 +2439,10 @@ class DeviceControlViewModel: ObservableObject {
                 if let colors = segment.colors,
                    let firstColor = colors.first,
                    firstColor.count >= 3 {
+                    // CRITICAL: Explicitly use .sRGB color space to prevent color mismatches on wide-gamut displays
+                    // WLED sends sRGB colors, so we must use .sRGB to ensure correct color representation
                     updatedDevice.currentColor = Color(
+                        .sRGB,
                         red: Double(firstColor[0]) / 255.0,
                         green: Double(firstColor[1]) / 255.0,
                         blue: Double(firstColor[2]) / 255.0
@@ -2682,44 +2678,143 @@ class DeviceControlViewModel: ObservableObject {
 
     // MARK: - Gradient Helpers (foundation)
 
-    /// Apply gradient stops across the LED strip
+    /// Apply gradient stops across the LED strip (original per-LED implementation)
     /// - Parameters:
     ///   - device: The WLED device
-    ///   - segmentId: Segment to target (default: 0)
     ///   - stops: Gradient stops to apply
+    ///   - ledCount: Number of LEDs
     ///   - stopTemperatures: Optional mapping of stop IDs to temperature values (0.0-1.0)
-    func applyGradientStopsAcrossStrip(
-        _ device: WLEDDevice,
-        segmentId: Int = 0,
-        stops: [GradientStop],
-        stopTemperatures: [UUID: Double]? = nil,
-        disableActiveEffect: Bool = true
-    ) async {
-        if disableActiveEffect, currentEffectState(for: device, segmentId: 0).isEnabled {
-            os_log("[Effects] applyGradientStopsAcrossStrip detected active effect on %{public}@ (disable=%{public}@)", log: OSLog.effects, type: .debug, device.name, String(describing: disableActiveEffect))
-            await disableEffect(for: device, segmentId: 0)
+    ///   - disableActiveEffect: Whether to disable active effects before applying gradient (default: false to avoid interference)
+    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil) async {
+        // CRITICAL: Mark user interaction BEFORE applying gradient to prevent WebSocket overwrites
+        // This ensures WebSocket updates are blocked during gradient application
+        markUserInteraction(device.id)
+        
+        // Only disable effect if explicitly requested (default false to avoid interference with normal gradient application)
+        if disableActiveEffect, currentEffectState(for: device, segmentId: segmentId).isEnabled {
+            // Simply set effect to 0 without the full disableEffect flow that causes interference
+            var state = currentEffectState(for: device, segmentId: segmentId)
+            state.effectId = 0
+            state.isEnabled = false
+            updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+            
+            // Send minimal effect-off update (no releaseRealtimeOverride, no recursive gradient call)
+            let segmentUpdate = SegmentUpdate(id: segmentId, fx: 0, pal: 0, frz: false)
+            let stateUpdate = WLEDStateUpdate(seg: [segmentUpdate])
+            _ = try? await apiService.updateState(for: device, state: stateUpdate)
         }
+        
         let sortedStops = stops.sorted { $0.position < $1.position }
         latestGradientStops[device.id] = sortedStops
         persistLatestGradient(sortedStops, for: device.id)
-        gradientApplicationTimes[device.id] = Date()
-        #if DEBUG
-        os_log("[Effects] Applying gradient to %{public}@ with %d stops (disable=%{public}@)", log: OSLog.effects, type: .debug, device.name, sortedStops.count, String(describing: disableActiveEffect))
-        if let first = sortedStops.first {
-            os_log("[Effects]   first stop=%{public}@", log: OSLog.effects, type: .debug, first.hexColor)
+        
+        // OPTIMIZATION: Single-stop solid color uses segment col field (more efficient than per-LED upload)
+        // This matches WLED's recommended approach for solid colors
+        if sortedStops.count == 1, let singleStop = sortedStops.first {
+            // Check if this is truly a solid color (no temperature variation)
+            let hasTemperature = stopTemperatures?[singleStop.id] != nil
+            let allStopsHaveSameTemp: Bool
+            if let tempMap = stopTemperatures, !tempMap.isEmpty {
+                // CRITICAL: Use sortedStops consistently (not unsorted stops) for code consistency
+                // While functionally harmless for single-stop cases, this ensures consistency throughout the function
+                let temperatures = sortedStops.compactMap { tempMap[$0.id] }
+                allStopsHaveSameTemp = temperatures.count <= 1 || temperatures.allSatisfy { abs($0 - temperatures[0]) < 0.001 }
+            } else {
+                allStopsHaveSameTemp = true
+            }
+            
+            // Use segment col field for single solid color (more efficient)
+            let rgb = Color(hex: singleStop.hexColor).toRGBArray()
+            var cct: Int? = nil
+            
+            // Handle CCT if provided and consistent
+            if hasTemperature, allStopsHaveSameTemp, let temp = stopTemperatures?[singleStop.id] {
+                cct = Int(round(temp * 255.0))
+            }
+            
+            // Build segment update with col field (WLED's efficient solid color method)
+            let segment = SegmentUpdate(
+                id: segmentId,
+                col: [[rgb[0], rgb[1], rgb[2]]],
+                cct: cct,
+                fx: disableActiveEffect ? 0 : nil
+            )
+            // CRITICAL: Include on and brightness in state update if provided
+            // This ensures power-on/brightness is applied ALONG WITH color in SAME API call
+            // This prevents WLED from showing restored colors before color is applied
+            let stateUpdate = WLEDStateUpdate(
+                on: on,  // CRITICAL: Include power state if provided (for power-on operations)
+                bri: brightness,  // Set brightness if provided
+                seg: [segment]
+            )
+            
+            do {
+                _ = try await apiService.updateState(for: device, state: stateUpdate)
+                
+                // Send WebSocket update if connected
+                if isRealTimeEnabled {
+                    webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+                }
+                
+                // Mark gradient application time to prevent WebSocket overwrites
+                await MainActor.run {
+                    self.gradientApplicationTimes[device.id] = Date()
+                    
+                    // Optimistically update the device's current color, brightness, and power state
+                    // CRITICAL: Update all state that was included in the API call to keep UI in sync
+                    if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                        self.devices[index].currentColor = Color(hex: singleStop.hexColor)
+                        if let cctValue = cct {
+                            // Update temperature if CCT was set
+                            self.devices[index].temperature = Double(cctValue) / 255.0
+                        }
+                        // CRITICAL: Update brightness if provided in API call
+                        if let brightnessValue = brightness {
+                            self.devices[index].brightness = brightnessValue
+                        }
+                        // CRITICAL: Update power state if provided in API call
+                        if let onValue = on {
+                            self.devices[index].isOn = onValue
+                        }
+                    }
+                }
+                
+                #if DEBUG
+                print("✅ [Gradient] Applied single-stop solid color via segment col field (optimized)")
+                #endif
+                return  // Early return - more efficient than per-LED upload
+            } catch {
+                // Fallback to per-LED upload if segment col fails
+                #if DEBUG
+                print("⚠️ [Gradient] Segment col update failed, falling back to per-LED upload: \(error)")
+                #endif
+                // Continue to per-LED upload below
+            }
         }
-        #endif
-        let ledCount = segmentLength(for: device, segmentId: segmentId)
-        let gradient = LEDGradient(stops: sortedStops)
-        let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+        
+        // Multi-stop gradient: Use per-LED colors (required for gradient blending)
+        // CRITICAL: Use sortedStops consistently (not unsorted stops) for code consistency and correctness
+        // This ensures gradient colors are sampled in the correct order matching temperature collection
+        let gradient = LEDGradient(stops: sortedStops, interpolation: interpolation)
+        let frame = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: interpolation)
         var intent = ColorIntent(deviceId: device.id, mode: .perLED)
         intent.segmentId = segmentId
         intent.perLEDHex = frame
-        let latestBrightness = devices.first(where: { $0.id == device.id })?.brightness ?? device.brightness
-        intent.brightness = latestBrightness
         
-        // Option 1: Check if all stops have the same temperature, send CCT if they do
+        // CRITICAL: Set on and brightness if provided
+        // This ensures power-on/brightness is applied ALONG WITH gradient colors in SAME API call
+        // This prevents WLED from showing restored colors before gradient is applied
+        if let onValue = on {
+            intent.on = onValue
+        }
+        if let bri = brightness {
+            intent.brightness = bri
+        }
+        
+        // Check if all stops have the same temperature, send CCT if they do
         if let tempMap = stopTemperatures, !tempMap.isEmpty {
+            // CRITICAL: Use sortedStops consistently (not unsorted stops) for code consistency and correctness
+            // This ensures temperatures are collected in the same order as stops are processed
             // Collect all temperatures from stops that have them
             let temperatures = sortedStops.compactMap { stop -> Double? in
                 tempMap[stop.id]
@@ -2739,26 +2834,17 @@ class DeviceControlViewModel: ObservableObject {
         }
         
         await colorPipeline.apply(intent, to: device)
-    }
-
-    private func segmentLength(for device: WLEDDevice, segmentId: Int = 0) -> Int {
-        if let segment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }) ?? device.state?.segments.first {
-            if let len = segment.len, len > 0 {
-                return len
-            }
-            if let start = segment.start, let stop = segment.stop, stop > start {
-                return stop - start
-            }
-        }
-        if let cached = deviceStateCache[device.id]?.device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }) ?? deviceStateCache[device.id]?.device.state?.segments.first {
-            if let len = cached.len, len > 0 {
-                return len
-            }
-            if let start = cached.start, let stop = cached.stop, stop > start {
-                return stop - start
+        
+        // Mark gradient application time to prevent WebSocket overwrites
+        await MainActor.run {
+            self.gradientApplicationTimes[device.id] = Date()
+            
+            // Optimistically update the device's current color to the first stop
+            if let index = self.devices.firstIndex(where: { $0.id == device.id }),
+               let firstStop = sortedStops.first {
+                self.devices[index].currentColor = Color(hex: firstStop.hexColor)
             }
         }
-        return 120
     }
 
     func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 60, aBrightness: Int? = nil, bBrightness: Int? = nil) async {
@@ -2850,8 +2936,8 @@ class DeviceControlViewModel: ObservableObject {
         latestGradientStops[device.id] = sortedStops
         persistLatestGradient(sortedStops, for: device.id)
         // Apply gradient with optional brightness override
-        let ledCount = segmentLength(for: device)
-        let frame = GradientSampler.sample(gradient, ledCount: ledCount)
+        let ledCount = device.state?.segments.first?.len ?? 120
+        let frame = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: gradient.interpolation)
         var intent = ColorIntent(deviceId: device.id, mode: .perLED)
         intent.segmentId = 0
         intent.perLEDHex = frame
@@ -3014,8 +3100,8 @@ class DeviceControlViewModel: ObservableObject {
 
         // 4) Transition vs static
         if scene.transitionEnabled, let secondary = scene.secondaryStops, let dur = scene.durationSec {
-            let gA = LEDGradient(stops: scene.primaryStops)
-            let gB = LEDGradient(stops: secondary)
+            let gA = LEDGradient(stops: scene.primaryStops, interpolation: .linear)
+            let gB = LEDGradient(stops: secondary, interpolation: .linear)
             await startSmoothABStreaming(
                 device,
                 from: gA,
@@ -3026,7 +3112,8 @@ class DeviceControlViewModel: ObservableObject {
                 bBrightness: scene.bBrightness
             )
         } else {
-            await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops)
+            let ledCount = device.state?.segments.first?.len ?? 120
+            await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops, ledCount: ledCount)
         }
     }
     
@@ -3133,5 +3220,28 @@ class DeviceControlViewModel: ObservableObject {
             os_log("[Effects]   color[%d] = (%d,%d,%d)", index, rgb[0], rgb[1], rgb[2])
         }
         #endif
+    }
+    
+    // MARK: - Brightness Preservation Helpers
+    
+    /// Get the preserved brightness for a device (brightness before it was turned off)
+    func getPreservedBrightness(for deviceId: String) -> Int? {
+        return lastBrightnessBeforeOff[deviceId]
+    }
+    
+    /// Get the effective brightness for a device
+    /// Returns preserved brightness if device is off and brightness is 0, otherwise returns current brightness
+    /// This ensures UI shows the correct brightness value even when device is turned off
+    func getEffectiveBrightness(for device: WLEDDevice) -> Int {
+        // If device is off and brightness is 0, return preserved brightness if available
+        if !device.isOn && device.brightness == 0 {
+            if let preserved = lastBrightnessBeforeOff[device.id], preserved > 0 {
+                return preserved
+            }
+            // Device is off but no preserved brightness - return default
+            return 128
+        }
+        // Device is on - return current brightness (or default if 0)
+        return device.brightness > 0 ? device.brightness : 128
     }
 } 

@@ -77,8 +77,9 @@ actor GradientTransitionRunner {
                 : (1.0 - pow(-2.0 * tLinear + 2.0, 3.0) / 2.0)
 
             let interpStops = interpolateStops(from: from, to: to, t: t)
-            let g = LEDGradient(stops: interpStops)
-            let hex = GradientSampler.sample(g, ledCount: ledCount, gamma: 2.2)
+            // Use linear interpolation for transitions (smooth easing is handled by t calculation)
+            let g = LEDGradient(stops: interpStops, interpolation: .linear)
+            let hex = GradientSampler.sample(g, ledCount: ledCount, interpolation: .linear)
 
             var intent = ColorIntent(deviceId: device.id, mode: .perLED)
             intent.segmentId = segmentId
@@ -88,10 +89,9 @@ actor GradientTransitionRunner {
             if let aBright = aBrightness, let bBright = bBrightness {
                 let interpBrightness = Int(round(Double(aBright) * (1.0 - t) + Double(bBright) * t))
                 intent.brightness = interpBrightness
-                
-                // Use the pipeline's brightness handling
-                await pipeline.enqueuePendingBrightness(device, interpBrightness)
-                await pipeline.flushPendingBrightnessPublic(device)
+                // CRITICAL: Don't enqueue/flush brightness separately - ColorPipeline handles it atomically
+                // when intent.brightness is set, it includes brightness in the first chunk of per-LED upload
+                // This prevents duplicate brightness API calls and ensures atomic operation
             }
             
             await pipeline.apply(intent, to: device)

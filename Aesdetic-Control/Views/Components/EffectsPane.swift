@@ -518,7 +518,8 @@ private extension EffectsPane {
             positions = (0..<clampedCount).map { Double($0) / Double(clampedCount - 1) }
         }
         let generatedStops = positions.map { t -> GradientStop in
-            let color = GradientSampler.sampleColor(at: t, stops: sortedStops.isEmpty ? EffectsPane.defaultEffectGradient.stops : sortedStops)
+            let sourceStops = sortedStops.isEmpty ? EffectsPane.defaultEffectGradient.stops : sortedStops
+            let color = GradientSampler.sampleColor(at: t, stops: sourceStops)
             return GradientStop(position: t, hexColor: color.toHex())
         }
         return LEDGradient(stops: generatedStops)
