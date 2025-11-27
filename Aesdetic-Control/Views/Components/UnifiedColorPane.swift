@@ -179,7 +179,7 @@ struct UnifiedColorPane: View {
                 }
                 .padding(.horizontal, 16)
             }
-            
+
             GradientBar(
                 gradient: Binding(
                     get: { currentGradient },
@@ -508,15 +508,15 @@ struct UnifiedColorPane: View {
             
             await viewModel.applyColorIntent(intent, to: device)
         } else {
-            await viewModel.applyGradientStopsAcrossStrip(
-                device,
-                stops: stops,
-                ledCount: ledCount,
-                stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
+        await viewModel.applyGradientStopsAcrossStrip(
+            device,
+            stops: stops,
+            ledCount: ledCount,
+            stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
                 disableActiveEffect: true,
                 segmentId: segmentId,
                 interpolation: currentGradient.interpolation
-            )
+        )
         }
     }
 }

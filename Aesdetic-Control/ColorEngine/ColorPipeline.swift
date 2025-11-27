@@ -74,7 +74,7 @@ actor ColorPipeline {
                 )
                 // Final flush after upload completes (only if brightness wasn't in intent)
                 if intent.brightness == nil {
-                    await flushPendingBrightness(device)
+                await flushPendingBrightness(device)
                 }
             }
         case .palette:

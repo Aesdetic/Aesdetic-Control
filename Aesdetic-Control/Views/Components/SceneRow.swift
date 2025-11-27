@@ -73,7 +73,7 @@ struct SceneRow: View {
     
     private var sceneTypeText: String {
         if scene.effectsEnabled {
-            return "Effects"
+            return "Animations"
         } else if scene.transitionEnabled {
             return "Transition"
         } else {

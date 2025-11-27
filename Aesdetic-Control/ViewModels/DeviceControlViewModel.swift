@@ -31,27 +31,21 @@ class DeviceControlViewModel: ObservableObject {
     private static let maxEffectColorSlots = 3
     private static let gradientFriendlyEffectIds: Set<Int> = [
         2,   // Breathe
-        3,   // Wipe
-        4,   // Wipe Random
-        16,  // Android
-        20,  // Gradient
-        22,  // Chase
-        25,  // Running
-        27,  // Scanner
-        28,  // Chase 2
-        29,  // Fade
-        34,  // Railway
-        37,  // Sweep
-        46,  // Running dual
-        47,  // Fairy
-        54,  // Lake
-        102  // Candle Multi
+        3,   // Smooth Flow
+        27,  // Flow
+        37,  // Loading
+        46,  // Rain Fall
+        47,  // Sweep
+        54,  // Fog
+        102, // Candle
+        140, // Freqwave (audio-reactive)
+        149  // Fireplace
     ]
     
     private static let fallbackGradientFriendlyEffects: [EffectMetadata] = [
         EffectMetadata(
             id: 2,
-            name: "Breathe Gradient",
+            name: "Breathe",
             description: "Breathe between gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
@@ -59,72 +53,12 @@ class DeviceControlViewModel: ObservableObject {
             ],
             supportsPalette: false,
             isSoundReactive: false,
-            colorSlotCount: 3
+            colorSlotCount: 2
         ),
         EffectMetadata(
             id: 3,
-            name: "Color Wipe",
-            description: "Wipe across using gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 4,
-            name: "Wipe Random",
-            description: "Random wipe using gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 16,
-            name: "Android",
-            description: "Android-style animation with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 20,
-            name: "Gradient Cycle",
-            description: "Cycle through gradient colors smoothly.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 22,
-            name: "Chase Gradient",
-            description: "Gradient chase effect.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 25,
-            name: "Running",
-            description: "Running lights with gradient colors.",
+            name: "Smooth Flow",
+            description: "Smooth flow animation with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -135,44 +69,8 @@ class DeviceControlViewModel: ObservableObject {
         ),
         EffectMetadata(
             id: 27,
-            name: "Scanner",
-            description: "Scanner effect with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 28,
-            name: "Chase 2",
-            description: "Advanced chase effect with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 29,
-            name: "Fade",
-            description: "Fade effect with gradient colors.",
-            parameters: [
-                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
-                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
-            ],
-            supportsPalette: false,
-            isSoundReactive: false,
-            colorSlotCount: 3
-        ),
-        EffectMetadata(
-            id: 34,
-            name: "Railway",
-            description: "Railway effect with gradient colors.",
+            name: "Flow",
+            description: "Flow animation with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -183,8 +81,8 @@ class DeviceControlViewModel: ObservableObject {
         ),
         EffectMetadata(
             id: 37,
-            name: "Sweep",
-            description: "Sweep effect with gradient colors.",
+            name: "Loading",
+            description: "Loading animation with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -195,8 +93,8 @@ class DeviceControlViewModel: ObservableObject {
         ),
         EffectMetadata(
             id: 46,
-            name: "Running dual",
-            description: "Running lights with gradient colors.",
+            name: "Rain Fall",
+            description: "Rain fall animation with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -207,8 +105,8 @@ class DeviceControlViewModel: ObservableObject {
         ),
         EffectMetadata(
             id: 47,
-            name: "Fairy",
-            description: "Fairy effect with gradient colors.",
+            name: "Sweep",
+            description: "Sweep animation with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -219,8 +117,8 @@ class DeviceControlViewModel: ObservableObject {
         ),
         EffectMetadata(
             id: 54,
-            name: "Lake",
-            description: "Lake effect with gradient colors.",
+            name: "Fog",
+            description: "Fog animation with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
@@ -231,13 +129,37 @@ class DeviceControlViewModel: ObservableObject {
         ),
         EffectMetadata(
             id: 102,
-            name: "Candle Multi",
-            description: "Warm flicker with gradient palette (ID 102).",
+            name: "Candle",
+            description: "Warm candle flicker with gradient colors.",
             parameters: [
                 EffectParameter(index: 0, label: "Effect speed", kind: .speed),
                 EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
             ],
             supportsPalette: true,
+            isSoundReactive: false,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 140,
+            name: "Freqwave",
+            description: "Frequency wave visualization that maps audio frequencies to colors. Reacts to music beats and audio input.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
+            isSoundReactive: true,
+            colorSlotCount: 3
+        ),
+        EffectMetadata(
+            id: 149,
+            name: "Fireplace",
+            description: "Warm fireplace animation with gradient colors.",
+            parameters: [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ],
+            supportsPalette: false,
             isSoundReactive: false,
             colorSlotCount: 3
         )
@@ -1216,7 +1138,7 @@ class DeviceControlViewModel: ObservableObject {
             
             // Get device state and LED count
             // CRITICAL: Restore preserved brightness when turning on
-            let updatedDevice = await MainActor.run {
+                let updatedDevice = await MainActor.run {
                 var dev = self.devices.first(where: { $0.id == device.id }) ?? device
                 dev.isOn = targetState  // Update local state optimistically
                 
@@ -1229,8 +1151,8 @@ class DeviceControlViewModel: ObservableObject {
                 }
                 
                 return dev
-            }
-            let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+                }
+                let ledCount = updatedDevice.state?.segments.first?.len ?? 120
             
             // CRITICAL: Apply gradient WITH power-on in SAME API call (skip updateDeviceState)
             // Include on=true and brightness in the gradient application
@@ -1263,7 +1185,7 @@ class DeviceControlViewModel: ObservableObject {
             await coreDataManager.saveDevice(deviceToSave)
             
             // Small delay then check if WLED restored any effects and disable them
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
             
             // Fetch actual state to check for restored effects
             do {
@@ -1277,10 +1199,10 @@ class DeviceControlViewModel: ObservableObject {
                     // Re-apply gradient to ensure it's not overwritten by effect
                     // CRITICAL: Include on=true to ensure device stays on during gradient restoration
                     // This prevents WebSocket updates or WLED's own state from interfering with power state
-                    await applyGradientStopsAcrossStrip(
-                        updatedDevice,
-                        stops: persistedStops,
-                        ledCount: ledCount,
+                await applyGradientStopsAcrossStrip(
+                    updatedDevice,
+                    stops: persistedStops,
+                    ledCount: ledCount,
                         disableActiveEffect: true,
                         brightness: updatedDevice.brightness,  // Apply brightness with gradient
                         on: true  // CRITICAL: Ensure device stays on during gradient restoration
@@ -1556,42 +1478,42 @@ class DeviceControlViewModel: ObservableObject {
                 on: shouldBeOn ? true : false,  // CRITICAL: Explicitly set on=false when brightness is 0%
                 bri: brightness
             )
+        
+        do {
+            _ = try await apiService.updateState(for: device, state: stateUpdate)
             
-            do {
-                _ = try await apiService.updateState(for: device, state: stateUpdate)
-                
-                // Send WebSocket update if connected
-                if isRealTimeEnabled {
-                    webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                }
-                
-                await MainActor.run {
-                    if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                        devices[index].brightness = brightness
+            // Send WebSocket update if connected
+            if isRealTimeEnabled {
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            }
+            
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].brightness = brightness
                         devices[index].isOn = shouldBeOn  // CRITICAL: Update isOn based on brightness
-                        devices[index].isOnline = true
-                    }
+                    devices[index].isOnline = true
+                }
                     
                     // CRITICAL: Preserve brightness for future power-on operations
                     if brightness > 0 {
                         self.lastBrightnessBeforeOff[device.id] = brightness
                     }
                     
-                    clearError()
-                }
-                
-                // Persist the change
-                var updatedDevice = device
-                updatedDevice.brightness = brightness
+                clearError()
+            }
+            
+            // Persist the change
+            var updatedDevice = device
+            updatedDevice.brightness = brightness
                 updatedDevice.isOn = shouldBeOn  // CRITICAL: Update isOn based on brightness
-                updatedDevice.isOnline = true
-                updatedDevice.lastSeen = Date()
-                await coreDataManager.saveDevice(updatedDevice)
-                
-            } catch {
-                let mappedError = mapToWLEDError(error, device: device)
-                await MainActor.run {
-                    self.presentError(mappedError)
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+            
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            await MainActor.run {
+                self.presentError(mappedError)
                 }
             }
         }
@@ -1796,10 +1718,10 @@ class DeviceControlViewModel: ObservableObject {
             let preservedBrightness = await MainActor.run {
                 self.lastBrightnessBeforeOff[device.id]
             }
-            
-            await updateDeviceState(device) { currentDevice in
-                var updatedDevice = currentDevice
-                updatedDevice.isOn = isOn
+        
+        await updateDeviceState(device) { currentDevice in
+            var updatedDevice = currentDevice
+            updatedDevice.isOn = isOn
                 
                 // Restore preserved brightness if available
                 if let preservedBrightness = preservedBrightness, preservedBrightness > 0 {
@@ -1809,7 +1731,7 @@ class DeviceControlViewModel: ObservableObject {
                     updatedDevice.brightness = 128  // Default to 50% brightness
                 }
                 
-                return updatedDevice
+            return updatedDevice
             }
         } else {
             // Turning off or no change - use simple power update
@@ -1856,10 +1778,10 @@ class DeviceControlViewModel: ObservableObject {
                 // No persisted gradient - send solid color as before
                 let rgb = updatedDevice.currentColor.toRGBArray()
                 stateUpdate = WLEDStateUpdate(
-                    on: updatedDevice.isOn,
-                    bri: updatedDevice.brightness,
-                    seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])]
-                )
+                on: updatedDevice.isOn,
+                bri: updatedDevice.brightness,
+                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])]
+            )
             }
             
             _ = try await apiService.updateState(for: device, state: stateUpdate)
@@ -1980,14 +1902,14 @@ class DeviceControlViewModel: ObservableObject {
                     
                     // Only update color if device is NOT under user control AND gradient wasn't just applied
                     if !isUnderControl && !gradientJustApplied {
-                        // Update color if available
-                        if let segment = response.state.segments.first {
-                            // Check if segment has CCT (white temperature)
-                            if let normalized = segment.cctNormalized {
-                                updatedDevice.temperature = normalized
-                            } else if let colors = segment.colors,
-                                   let firstColor = colors.first,
-                                   firstColor.count >= 3 {
+                    // Update color if available
+                    if let segment = response.state.segments.first {
+                        // Check if segment has CCT (white temperature)
+                        if let normalized = segment.cctNormalized {
+                            updatedDevice.temperature = normalized
+                        } else if let colors = segment.colors,
+                               let firstColor = colors.first,
+                               firstColor.count >= 3 {
                                 // Check for active effect or CCT before updating color
                                 let segmentId = segment.id ?? 0
                                 let effectState = self.effectStates[device.id]?[segmentId]
@@ -1996,13 +1918,13 @@ class DeviceControlViewModel: ObservableObject {
                                 
                                 // Only update color if no active effect or CCT
                                 if !hasActiveEffect && !hasActiveCCT {
-                                    updatedDevice.currentColor = Color(
+                            updatedDevice.currentColor = Color(
                                         .sRGB,
-                                        red: Double(firstColor[0]) / 255.0,
-                                        green: Double(firstColor[1]) / 255.0,
-                                        blue: Double(firstColor[2]) / 255.0
-                                    )
-                                }
+                                red: Double(firstColor[0]) / 255.0,
+                                green: Double(firstColor[1]) / 255.0,
+                                blue: Double(firstColor[2]) / 255.0
+                            )
+                        }
                             }
                         }
                     } else {
@@ -2153,7 +2075,10 @@ class DeviceControlViewModel: ObservableObject {
             return DeviceControlViewModel.fallbackGradientFriendlyEffects
         }
         let filtered = bundle.effects.filter { metadata in
-            guard !metadata.isSoundReactive else { return false }
+            // Allow sound-reactive effects if they're in our approved list (e.g., Music Sync ID 139)
+            if metadata.isSoundReactive {
+                return DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
+            }
             let supportsGradient = metadata.supportsPalette || metadata.colorSlotCount >= 2
             return supportsGradient || DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
         }
@@ -2175,9 +2100,12 @@ class DeviceControlViewModel: ObservableObject {
         await cancelActiveTransitionIfNeeded(for: device)
         await colorPipeline.cancelUploads(for: device.id)
         
-        // Release realtime mode and wait a bit to ensure it's fully released
-        await apiService.releaseRealtimeOverride(for: device)
-        try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds to ensure realtime is fully released
+        // CRITICAL: Determine if we need to release realtime override atomically
+        // Only needed when coming from per-LED gradient mode, not when switching between effects
+        // We'll include lor: 0 in the same API call as the effect to prevent flash
+        let currentState = currentEffectState(for: device, segmentId: segmentId)
+        let isComingFromGradient = !currentState.isEnabled || currentState.effectId == 0
+        let needsRealtimeRelease = isComingFromGradient
         
         markUserInteraction(device.id)
         if lastGradientBeforeEffect[device.id] == nil {
@@ -2194,6 +2122,46 @@ class DeviceControlViewModel: ObservableObject {
             #endif
             return
         }
+        
+        // If this is a sound-reactive effect, enable audio reactive mode in WLED
+        if metadata.isSoundReactive {
+            #if DEBUG
+            os_log("[Effects] Sound-reactive effect detected, enabling audio reactive mode", log: OSLog.effects, type: .debug)
+            #endif
+            do {
+                // Check current status first
+                let wasEnabled = try? await apiService.isAudioReactiveEnabled(for: device)
+                if wasEnabled == true {
+                    #if DEBUG
+                    os_log("[Effects] Audio reactive mode already enabled", log: OSLog.effects, type: .debug)
+                    #endif
+                } else {
+                    // Enable audio reactive
+                    _ = try await apiService.enableAudioReactive(for: device)
+                    #if DEBUG
+                    os_log("[Effects] Audio reactive mode enabled successfully", log: OSLog.effects, type: .debug)
+                    #endif
+                    
+                    // Verify it was enabled
+                    let isNowEnabled = try? await apiService.isAudioReactiveEnabled(for: device)
+                    if isNowEnabled == true {
+                        #if DEBUG
+                        os_log("[Effects] Audio reactive mode verified as enabled", log: OSLog.effects, type: .info)
+                        #endif
+                    } else {
+                        #if DEBUG
+                        os_log("[Effects] WARNING: Audio reactive mode may not be enabled. Check WLED web interface.", log: OSLog.effects, type: .error)
+                        #endif
+                    }
+                }
+            } catch {
+                #if DEBUG
+                os_log("[Effects] Failed to enable/verify audio reactive mode: %{public}@", log: OSLog.effects, type: .error, error.localizedDescription)
+                #endif
+                // Continue anyway - the effect might still work if audio reactive is already enabled
+            }
+        }
+        
         let slotCount = min(DeviceControlViewModel.maxEffectColorSlots,
                             max(2, metadata.colorSlotCount))
         let colorArray = DeviceControlViewModel.colors(for: gradient, slotCount: slotCount)
@@ -2212,7 +2180,17 @@ class DeviceControlViewModel: ObservableObject {
         state.isEnabled = true
         updateEffectGradient(gradient, for: device)
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId, colors: colorArray, turnOn: true)
+        
+        // CRITICAL: When switching effects, ensure we get the current device brightness
+        // This prevents brightness from being reset during effect switch
+        let currentDevice = await MainActor.run {
+            self.devices.first(where: { $0.id == device.id }) ?? device
+        }
+        let currentBrightness = currentDevice.brightness > 0 ? currentDevice.brightness : 255
+        
+        // CRITICAL: Apply effect with colors, brightness, and realtime release atomically
+        // Include lor: 0 in the same call if needed to prevent flash
+        await applyEffectState(state, to: currentDevice, segmentId: segmentId, colors: colorArray, turnOn: true, releaseRealtime: needsRealtimeRelease)
         logEffectApplication(effectId: effectId, device: device, colors: colorArray)
     }
     
@@ -2264,30 +2242,71 @@ class DeviceControlViewModel: ObservableObject {
         state.isEnabled = false
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
         
-        // CRITICAL: Include brightness in effect-disable call to prevent WLED from restoring it to a high value
-        // This prevents the brightness flash that occurs when WLED restores default brightness
-        let segmentUpdate = SegmentUpdate(id: segmentId, bri: currentBrightness, fx: 0, pal: 0, frz: false)
-        let stateUpdate = WLEDStateUpdate(seg: [segmentUpdate])
-        _ = try? await apiService.updateState(for: currentDevice, state: stateUpdate)
-        
-        // CRITICAL: Restore and apply the main gradient after disabling effect
-        // This ensures the device falls back to the user's main color gradient, not a random color
+        // CRITICAL: Restore gradient colors ATOMICALLY with effect disable to prevent color flash
+        // According to WLED API docs, we must include fx: 0 in the same API call as colors
+        // For per-LED gradients, we include fx: 0 in the first chunk's segment
         if let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
             let ledCount = currentDevice.state?.segments.first(where: { $0.id == segmentId })?.len 
                 ?? currentDevice.state?.segments.first?.len 
                 ?? 120
             
-            // CRITICAL: Apply gradient with brightness atomically to prevent brightness flash
-            // Include brightness in the gradient application so it happens in one API call
-            // Use the same brightness we preserved above to ensure consistency
-            await applyGradientStopsAcrossStrip(
-                currentDevice,
-                stops: persistedStops,
-                ledCount: ledCount,
+            // Prepare gradient colors first
+            let sortedStops = persistedStops.sorted { $0.position < $1.position }
+            let gradient = LEDGradient(stops: sortedStops, interpolation: .linear)
+            let frame = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: gradient.interpolation)
+            
+            // CRITICAL: Include fx: 0 in the first chunk of per-LED upload atomically
+            // This combines colors, brightness, and effect disable in ONE API call
+            // Per WLED API: segment can include fx, pal, frz along with per-LED colors (i field)
+            await colorPipeline.cancelUploads(for: device.id)
+            
+            // Build per-LED upload bodies with fx: 0 in first chunk
+            var bodies = WLEDAPIService.buildSegmentPixelBodies(
                 segmentId: segmentId,
-                brightness: currentBrightness,  // Use preserved brightness atomically
-                on: nil  // Don't change power state when disabling effects
+                startIndex: 0,
+                hexColors: frame,
+                cct: nil,
+                chunkSize: nil,
+                on: nil,  // Don't change power state
+                brightness: currentBrightness
             )
+            
+            // CRITICAL: Disable effect FIRST with a simple segment update that includes the first gradient color
+            // This prevents WLED from showing a default color (blue) before the gradient is applied
+            // We use the first color from the gradient as a "preview" to prevent flash
+            let firstColorHex = frame.first ?? "000000"
+            // Convert hex string to RGB array
+            let firstColorRGB: [Int] = {
+                let hex = firstColorHex.uppercased()
+                var rgb: [Int] = [0, 0, 0]
+                if hex.count == 6 {
+                    let r = Int(hex.prefix(2), radix: 16) ?? 0
+                    let g = Int(hex.dropFirst(2).prefix(2), radix: 16) ?? 0
+                    let b = Int(hex.suffix(2), radix: 16) ?? 0
+                    rgb = [r, g, b]
+                }
+                return rgb
+            }()
+            let previewSegment = SegmentUpdate(
+                id: segmentId,
+                bri: currentBrightness,
+                col: [[firstColorRGB[0], firstColorRGB[1], firstColorRGB[2]]],  // First gradient color
+                fx: 0,  // Disable effect
+                pal: 0,  // Clear palette
+                frz: false  // Unfreeze
+            )
+            let previewUpdate = WLEDStateUpdate(seg: [previewSegment])
+            _ = try? await apiService.updateState(for: currentDevice, state: previewUpdate)
+            
+            // CRITICAL: Immediately send the full per-LED gradient without delay
+            // The effect is already disabled, so this just updates the colors
+            for body in bodies {
+                _ = try? await apiService.postRawState(for: currentDevice, body: body)
+            }
+            
+            // Update local state
+            latestGradientStops[device.id] = sortedStops
+            persistLatestGradient(sortedStops, for: device.id)
         } else {
             // Fallback: Use current color if no persisted gradient exists
             let stops = [
@@ -2296,6 +2315,19 @@ class DeviceControlViewModel: ObservableObject {
             ]
             updateEffectGradient(LEDGradient(stops: stops, interpolation: .linear), for: device)
             latestEffectGradientStops[device.id] = stops
+            
+            // For fallback, disable effect with brightness and single color atomically
+            let singleColor = device.currentColor.toRGBArray()
+            let segmentUpdate = SegmentUpdate(
+                id: segmentId,
+                bri: currentBrightness,
+                col: [[singleColor[0], singleColor[1], singleColor[2]]],  // Include color atomically
+                fx: 0,
+                pal: 0,
+                frz: false
+            )
+            let stateUpdate = WLEDStateUpdate(seg: [segmentUpdate])
+            _ = try? await apiService.updateState(for: currentDevice, state: stateUpdate)
         }
         
         lastGradientBeforeEffect.removeValue(forKey: device.id)
@@ -2338,7 +2370,7 @@ class DeviceControlViewModel: ObservableObject {
         effectStates[deviceId] = segmentStates
     }
     
-    private func applyEffectState(_ state: DeviceEffectState, to device: WLEDDevice, segmentId: Int, colors: [[Int]]? = nil, turnOn: Bool? = nil) async {
+    private func applyEffectState(_ state: DeviceEffectState, to device: WLEDDevice, segmentId: Int, colors: [[Int]]? = nil, turnOn: Bool? = nil, releaseRealtime: Bool = false) async {
         do {
             #if DEBUG
             os_log("[Effects] Sending fx=%d speed=%d intensity=%d palette=%@ turnOn=%@ colors=%@ to device %{public}@ segment %d", log: OSLog.effects, type: .debug, state.effectId, state.speed, state.intensity, String(describing: state.paletteId), String(describing: turnOn), String(describing: colors), device.name, segmentId)
@@ -2352,7 +2384,8 @@ class DeviceControlViewModel: ObservableObject {
                 palette: state.paletteId,
                 colors: colors,
                 device: device,
-                turnOn: turnOn
+                turnOn: turnOn,
+                releaseRealtime: releaseRealtime  // Include realtime release atomically
             )
             
             #if DEBUG
@@ -3093,7 +3126,8 @@ class DeviceControlViewModel: ObservableObject {
                 intensity: scene.intensity,
                 palette: scene.paletteId,
                 device: device,
-                turnOn: true
+                turnOn: true,
+                releaseRealtime: false  // Scenes don't need realtime release
             )
             return
         }

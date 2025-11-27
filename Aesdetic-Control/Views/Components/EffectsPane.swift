@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct EffectsPane: View {
     @EnvironmentObject private var viewModel: DeviceControlViewModel
@@ -20,11 +21,24 @@ struct EffectsPane: View {
     @State private var wheelInitial: Color = .white
     @State private var hasPendingGradientChanges = false
     @State private var autoApplyTask: Task<Void, Never>? = nil
+    @State private var selectedColorPresetId: UUID? = nil
+    @State private var animationBrightness: Double = 1.0
+    @State private var isAdjustingAnimationBrightness = false
+    @State private var baselineAnimationBrightness: Int? = nil
+    @State private var stagedSpeedValue: Double?
+    @State private var stagedIntensityValue: Double?
+    @State private var isAdjustingSpeed = false
+    @State private var isAdjustingFxIntensity = false
     
     private static let defaultEffectGradient = LEDGradient(stops: [
         GradientStop(position: 0.0, hexColor: "FFA000"),
         GradientStop(position: 1.0, hexColor: "FFFFFF")
     ])
+    private static let minimumAnimationBrightness: Double = 0.05
+    
+    private var colorPresets: [ColorPreset] {
+        PresetsStore.shared.colorPresets
+    }
     
     private var metadataBundle: EffectMetadataBundle? {
         viewModel.effectMetadata(for: device)
@@ -52,36 +66,6 @@ struct EffectsPane: View {
     
     private var canEditGradient: Bool {
         slotCount >= 2
-    }
-    
-    private var speedBinding: Binding<Double> {
-        Binding(
-            get: { Double(currentState.speed) },
-            set: { newValue in
-                isApplyingEffect = true
-                Task {
-                    await viewModel.updateEffectSpeed(for: device, segmentId: segmentId, speed: Int(newValue.rounded()))
-                    await MainActor.run {
-                        isApplyingEffect = false
-                    }
-                }
-            }
-        )
-    }
-    
-    private var intensityBinding: Binding<Double> {
-        Binding(
-            get: { Double(currentState.intensity) },
-            set: { newValue in
-                isApplyingEffect = true
-                Task {
-                    await viewModel.updateEffectIntensity(for: device, segmentId: segmentId, intensity: Int(newValue.rounded()))
-                    await MainActor.run {
-                        isApplyingEffect = false
-                    }
-                }
-            }
-        )
     }
     
     private var speedLabel: String {
@@ -144,6 +128,7 @@ struct EffectsPane: View {
                 }
                 wheelInitial = color
                 hasPendingGradientChanges = true
+                selectedColorPresetId = nil
                 viewModel.updateEffectGradient(effectGradient, for: device)
                 if isEffectEnabled {
                     scheduleAutoApply()
@@ -156,6 +141,7 @@ struct EffectsPane: View {
                         stops.removeAll { $0.id == id }
                         effectGradient = LEDGradient(stops: stops.sorted { $0.position < $1.position })
                         hasPendingGradientChanges = true
+                        selectedColorPresetId = nil
                         viewModel.updateEffectGradient(effectGradient, for: device)
                         if isEffectEnabled {
                             scheduleAutoApply()
@@ -202,12 +188,14 @@ struct EffectsPane: View {
                 isLoadingMetadata = false
             }
             syncEffectSelectionIfNeeded()
+            await syncAnimationBrightnessFromDevice()
         }
         .onAppear {
             if currentState.isEnabled {
                 isExpanded = true
                 onActivate()
                 effectSelectionId = currentState.effectId
+                rememberBaselineBrightnessIfNeeded()
             }
             syncEffectSelectionIfNeeded()
         }
@@ -224,6 +212,43 @@ struct EffectsPane: View {
         .onChange(of: effectOptions.count) { _, _ in
             syncEffectSelectionIfNeeded()
         }
+        .onReceive(
+            viewModel.$devices
+                .map { devices -> Int in
+                    guard let live = devices.first(where: { $0.id == device.id }) else {
+                        return device.brightness
+                    }
+                    return viewModel.getEffectiveBrightness(for: live)
+                }
+                .removeDuplicates()
+        ) { newBrightness in
+            let ratio = Double(newBrightness) / 255.0
+            if !isAdjustingAnimationBrightness {
+                animationBrightness = min(1.0, max(Self.minimumAnimationBrightness, ratio))
+            }
+            if isEffectEnabled && !isAdjustingAnimationBrightness {
+                baselineAnimationBrightness = newBrightness
+            }
+        }
+        .onChange(of: currentState.isEnabled) { _, enabled in
+            if enabled {
+                rememberBaselineBrightnessIfNeeded()
+                if !isExpanded {
+                    isExpanded = true
+                    onActivate()
+                }
+            } else {
+                showColorPicker = false
+                autoApplyTask?.cancel()
+                autoApplyTask = nil
+                isExpanded = false
+                Task { await MainActor.run { restoreBaselineBrightnessIfNeeded() } }
+                stagedSpeedValue = nil
+                stagedIntensityValue = nil
+                isAdjustingSpeed = false
+                isAdjustingFxIntensity = false
+            }
+        }
         .onChange(of: effectSelectionId) { _, newValue in
             guard newValue != 0 else { return }
             loadStagedGradient()
@@ -231,6 +256,10 @@ struct EffectsPane: View {
             if isEffectEnabled {
                 scheduleAutoApply(force: true)
             }
+            stagedSpeedValue = nil
+            stagedIntensityValue = nil
+            isAdjustingSpeed = false
+            isAdjustingFxIntensity = false
         }
         .onChange(of: viewModel.latestEffectGradientStops[device.id] ?? []) { _, newStops in
             guard !newStops.isEmpty else { return }
@@ -256,6 +285,16 @@ struct EffectsPane: View {
                 stagedSolidColor = Color(hex: firstHex)
             }
         }
+        .onChange(of: currentState.speed) { _, _ in
+            if !isAdjustingSpeed {
+                stagedSpeedValue = nil
+            }
+        }
+        .onChange(of: currentState.intensity) { _, _ in
+            if !isAdjustingFxIntensity {
+                stagedIntensityValue = nil
+            }
+        }
         .onDisappear {
             autoApplyTask?.cancel()
             autoApplyTask = nil
@@ -270,7 +309,7 @@ struct EffectsPane: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Label("Effects", systemImage: "sparkles")
+                Label("Animations", systemImage: "sparkles")
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
@@ -329,7 +368,7 @@ struct EffectsPane: View {
                 .disabled(isApplyingEffect || effectOptions.isEmpty)
             }
             
-            if isEffectEnabled && !effectOptions.isEmpty {
+            if !effectOptions.isEmpty && !isEffectEnabled {
                 Text("Animated patterns that respect your color choices")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
@@ -349,22 +388,23 @@ struct EffectsPane: View {
             } else {
                 solidColorEditor
             }
+            animationBrightnessControl
             if showsSpeed {
-                sliderRow(label: speedLabel, value: speedBinding)
+                speedControl
             }
             if showsIntensity {
-                sliderRow(label: intensityLabel, value: intensityBinding)
+                intensityControl
             }
         }
     }
     
     private var effectPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Effect")
+            Text("Animation")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.7))
             
-            Picker("Effect", selection: $effectSelectionId) {
+            Picker("Animation", selection: $effectSelectionId) {
                 ForEach(effectOptions) { effect in
                     Text(effect.name)
                         .tag(effect.id)
@@ -388,6 +428,7 @@ struct EffectsPane: View {
                     set: { newGradient in
                         effectGradient = newGradient
                         hasPendingGradientChanges = true
+                        selectedColorPresetId = nil
                     }
                 ),
                 selectedStopId: $selectedStopId,
@@ -409,6 +450,7 @@ struct EffectsPane: View {
                     wheelInitial = color
                     showColorPicker = true
                     hasPendingGradientChanges = true
+                    selectedColorPresetId = nil
                     viewModel.updateEffectGradient(effectGradient, for: device)
                     if isEffectEnabled {
                         scheduleAutoApply()
@@ -418,6 +460,7 @@ struct EffectsPane: View {
                     effectGradient = LEDGradient(stops: stops)
                     if phase == .ended {
                         hasPendingGradientChanges = true
+                        selectedColorPresetId = nil
                         viewModel.updateEffectGradient(effectGradient, for: device)
                         if isEffectEnabled {
                             scheduleAutoApply()
@@ -429,6 +472,17 @@ struct EffectsPane: View {
             .contentShape(RoundedRectangle(cornerRadius: 12))
             if showColorPicker {
                 colorWheelOverlay
+            }
+            if !colorPresets.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(colorPresets) { preset in
+                            presetChip(for: preset)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .padding(.top, 4)
             }
         }
     }
@@ -458,25 +512,109 @@ struct EffectsPane: View {
         }
     }
     
-    private func sliderRow(label: String, value: Binding<Double>) -> some View {
+    private var animationBrightnessControl: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(label)
+                Text("Animation Brightness")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
                 Spacer()
-                Text("\(Int(value.wrappedValue))")
+                Text("\(Int(animationBrightness * 100))%")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
             }
-            Slider(value: value, in: 0...255, step: 1)
-                .tint(.white)
-                .disabled(isApplyingEffect)
-                .accessibilityLabel(label)
-                .accessibilityValue("\(Int(value.wrappedValue))")
-                .accessibilityHint("Adjusts \(label.lowercased()) for the current effect.")
+            Slider(
+                value: Binding(
+                    get: { animationBrightness },
+                    set: { newValue in
+                        animationBrightness = newValue
+                    }
+                ),
+                in: Self.minimumAnimationBrightness...1.0,
+                step: 0.01,
+                onEditingChanged: { editing in
+                    isAdjustingAnimationBrightness = editing
+                    if editing {
+                        rememberBaselineBrightnessIfNeeded()
+                    } else {
+                        applyAnimationBrightness()
+                    }
+                }
+            )
+            .tint(.white)
+            .accessibilityLabel("Animation brightness")
+            .accessibilityValue("\(Int(animationBrightness * 100)) percent")
+            .accessibilityHint("Adjusts WLED brightness for animations.")
+            .disabled(!isEffectEnabled)
         }
     }
+    
+    private var speedControl: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(speedLabel)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+                Spacer()
+                Text("\(Int(currentSpeedSliderValue))")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            Slider(
+                value: Binding(
+                    get: { currentSpeedSliderValue },
+                    set: { stagedSpeedValue = $0 }
+                ),
+                in: 0...255,
+                step: 1,
+                onEditingChanged: { editing in
+                    isAdjustingSpeed = editing
+                    if !editing {
+                        applySpeedIfNeeded()
+                    }
+                }
+            )
+            .tint(.white)
+            .accessibilityLabel("Animation speed")
+            .accessibilityValue("\(Int(currentSpeedSliderValue))")
+            .accessibilityHint("Adjusts the effect speed.")
+            .disabled(isApplyingEffect)
+        }
+    }
+    
+    private var intensityControl: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(intensityLabel)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+                Spacer()
+                Text("\(Int(currentIntensitySliderValue))")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            Slider(
+                value: Binding(
+                    get: { currentIntensitySliderValue },
+                    set: { stagedIntensityValue = $0 }
+                ),
+                in: 0...255,
+                step: 1,
+                onEditingChanged: { editing in
+                    isAdjustingFxIntensity = editing
+                    if !editing {
+                        applyIntensityIfNeeded()
+                    }
+                }
+            )
+            .tint(.white)
+            .accessibilityLabel("Animation intensity")
+            .accessibilityValue("\(Int(currentIntensitySliderValue))")
+            .accessibilityHint("Adjusts the effect intensity.")
+            .disabled(isApplyingEffect)
+        }
+    }
+    
 }
 
 private extension EffectsPane {
@@ -546,16 +684,16 @@ private extension EffectsPane {
             effectGradient.stops.first(where: { $0.id == id })?.position
         }
         
-        if let baseStops = viewModel.gradientStops(for: device.id), !baseStops.isEmpty {
-            #if DEBUG
-            print("[EffectsPane] loadStagedGradient using device gradient: \(baseStops.map { $0.hexColor })")
-            #endif
-            effectGradient = preparedGradientForSlotCount(LEDGradient(stops: baseStops), slotCount: slotCount)
-        } else if let storedStops = viewModel.effectGradientStops(for: device.id), !storedStops.isEmpty {
+        if let storedStops = viewModel.effectGradientStops(for: device.id), !storedStops.isEmpty {
             #if DEBUG
             print("[EffectsPane] loadStagedGradient using stored effect gradient: \(storedStops.map { $0.hexColor })")
             #endif
             effectGradient = preparedGradientForSlotCount(LEDGradient(stops: storedStops), slotCount: slotCount)
+        } else if let baseStops = viewModel.gradientStops(for: device.id), !baseStops.isEmpty {
+            #if DEBUG
+            print("[EffectsPane] loadStagedGradient using device gradient: \(baseStops.map { $0.hexColor })")
+            #endif
+            effectGradient = preparedGradientForSlotCount(LEDGradient(stops: baseStops), slotCount: slotCount)
         } else {
             let hex = device.currentColor.toHex()
             effectGradient = preparedGradientForSlotCount(LEDGradient(stops: [
@@ -566,6 +704,7 @@ private extension EffectsPane {
             print("[EffectsPane] loadStagedGradient falling back to current color: \(hex)")
             #endif
         }
+        selectedColorPresetId = nil
         
         // Map the selected stop ID to the new stop by position
         if let position = selectedPosition {
@@ -630,8 +769,9 @@ private extension EffectsPane {
         }
         isApplyingEffect = true
         hasPendingGradientChanges = false
+        let liveDevice = viewModel.devices.first(where: { $0.id == device.id }) ?? device
         Task {
-            await viewModel.applyColorSafeEffect(effectSelectionId, with: preparedGradient, segmentId: segmentId, device: device)
+            await viewModel.applyColorSafeEffect(effectSelectionId, with: preparedGradient, segmentId: segmentId, device: liveDevice)
             await MainActor.run {
                 isApplyingEffect = false
                 effectGradient = preparedGradient
@@ -640,6 +780,131 @@ private extension EffectsPane {
                     stagedSolidColor = Color(hex: firstHex)
                 }
             }
+        }
+    }
+    
+    @ViewBuilder
+    private func presetChip(for preset: ColorPreset) -> some View {
+        let isSelected = selectedColorPresetId == preset.id
+        Button(action: {
+            applyColorPreset(preset)
+        }) {
+            Text(preset.name)
+                .font(.caption.weight(.medium))
+                .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.75))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(isSelected ? 0.22 : 0.12))
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.name) color preset")
+        .accessibilityHint("Applies the color preset to the animation gradient.")
+    }
+    
+    private func applyColorPreset(_ preset: ColorPreset) {
+        let sortedStops = preset.gradientStops.sorted { $0.position < $1.position }
+        guard !sortedStops.isEmpty else { return }
+        
+        let newGradient = LEDGradient(stops: sortedStops, interpolation: effectGradient.interpolation)
+        effectGradient = newGradient
+        selectedStopId = nil
+        selectedColorPresetId = preset.id
+        stagedSolidColor = Color(hex: sortedStops.first?.hexColor ?? "FFFFFF")
+        hasPendingGradientChanges = true
+        viewModel.updateEffectGradient(newGradient, for: device)
+        if isEffectEnabled {
+            scheduleAutoApply(force: true)
+        }
+    }
+
+    private func applyAnimationBrightness() {
+        guard isEffectEnabled else { return }
+        let target = max(
+            1,
+            min(255, Int((animationBrightness * 255.0).rounded()))
+        )
+        rememberBaselineBrightnessIfNeeded()
+        Task {
+            await viewModel.updateDeviceBrightness(device, brightness: target)
+            await MainActor.run {
+                baselineAnimationBrightness = target
+            }
+        }
+    }
+    
+    private var currentSpeedSliderValue: Double {
+        stagedSpeedValue ?? Double(currentState.speed)
+    }
+    
+    private var currentIntensitySliderValue: Double {
+        stagedIntensityValue ?? Double(currentState.intensity)
+    }
+    
+    private func applySpeedIfNeeded() {
+        let target = Int(round(stagedSpeedValue ?? Double(currentState.speed)))
+        guard target != currentState.speed else {
+            stagedSpeedValue = nil
+            return
+        }
+        stagedSpeedValue = Double(target)
+        isApplyingEffect = true
+        Task {
+            await viewModel.updateEffectSpeed(for: device, segmentId: segmentId, speed: target)
+            await MainActor.run {
+                isApplyingEffect = false
+                stagedSpeedValue = nil
+            }
+        }
+    }
+    
+    private func applyIntensityIfNeeded() {
+        let target = Int(round(stagedIntensityValue ?? Double(currentState.intensity)))
+        guard target != currentState.intensity else {
+            stagedIntensityValue = nil
+            return
+        }
+        stagedIntensityValue = Double(target)
+        isApplyingEffect = true
+        Task {
+            await viewModel.updateEffectIntensity(for: device, segmentId: segmentId, intensity: target)
+            await MainActor.run {
+                isApplyingEffect = false
+                stagedIntensityValue = nil
+            }
+        }
+    }
+
+    @MainActor
+    private func currentEffectiveBrightness() -> Int {
+        if let live = viewModel.devices.first(where: { $0.id == device.id }) {
+            return viewModel.getEffectiveBrightness(for: live)
+        }
+        return viewModel.getEffectiveBrightness(for: device)
+    }
+
+    @MainActor
+    private func syncAnimationBrightnessFromDevice() async {
+        let brightness = currentEffectiveBrightness()
+        let ratio = Double(brightness) / 255.0
+        animationBrightness = min(1.0, max(Self.minimumAnimationBrightness, ratio))
+    }
+
+    @MainActor
+    private func rememberBaselineBrightnessIfNeeded() {
+        if baselineAnimationBrightness == nil {
+            baselineAnimationBrightness = currentEffectiveBrightness()
+        }
+    }
+
+    @MainActor
+    private func restoreBaselineBrightnessIfNeeded() {
+        guard let baseline = baselineAnimationBrightness else { return }
+        baselineAnimationBrightness = nil
+        Task {
+            await viewModel.updateDeviceBrightness(device, brightness: baseline)
         }
     }
     
@@ -659,15 +924,21 @@ private extension EffectsPane {
                     autoApplyTask?.cancel()
                     autoApplyTask = nil
                 }
+                await MainActor.run {
+                    restoreBaselineBrightnessIfNeeded()
+                }
             } else {
                 if effectSelectionId == 0, let first = effectOptions.first {
                     effectSelectionId = first.id
                 }
                 await MainActor.run {
+                    rememberBaselineBrightnessIfNeeded()
                     isExpanded = true
                     onActivate()
                     loadStagedGradient()
                     isApplyingEffect = false
+                    stagedSpeedValue = nil
+                    stagedIntensityValue = nil
                 }
                 applyStagedEffect(force: true)
             }
@@ -678,6 +949,7 @@ private extension EffectsPane {
         guard !effectOptions.isEmpty else { return }
         isSavingPreset = true
         let presetName = "Effect " + Date().formatted(date: .omitted, time: .shortened)
+        let preparedGradient = preparedGradientForSlotCount(effectGradient, slotCount: slotCount)
         let preset = WLEDEffectPreset(
             name: presetName,
             deviceId: device.id,
@@ -685,6 +957,8 @@ private extension EffectsPane {
             speed: currentState.speed,
             intensity: currentState.intensity,
             paletteId: currentState.paletteId,
+            gradientStops: preparedGradient.stops,
+            gradientInterpolation: preparedGradient.interpolation,
             brightness: device.brightness
         )
         await MainActor.run {

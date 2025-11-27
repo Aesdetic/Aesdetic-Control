@@ -179,8 +179,19 @@ struct PresetsListView: View {
                             EffectPresetRow(preset: preset, onApply: {
                             Task {
                                 await viewModel.cancelActiveTransitionIfNeeded(for: device)
-                                // Try WLED preset ID first (if synced), otherwise apply directly
-                                if let presetId = preset.wledPresetId {
+                                if let stops = preset.gradientStops, !stops.isEmpty {
+                                    let gradient = LEDGradient(
+                                        stops: stops,
+                                        interpolation: preset.gradientInterpolation ?? .linear
+                                    )
+                                    await viewModel.updateDeviceBrightness(device, brightness: preset.brightness)
+                                    await viewModel.applyColorSafeEffect(
+                                        preset.effectId,
+                                        with: gradient,
+                                        segmentId: 0,
+                                        device: device
+                                    )
+                                } else if let presetId = preset.wledPresetId {
                                     let apiService = WLEDAPIService.shared
                                     _ = try? await apiService.applyPreset(presetId, to: device)
                                 } else {
@@ -635,7 +646,12 @@ struct EffectPresetRow: View {
     }
     
     private var effectPreviewColors: [Color] {
-        effectPreviewHexColors.map { Color(hex: $0) }
+        if let stored = preset.gradientStops, !stored.isEmpty {
+            return stored
+                .sorted { $0.position < $1.position }
+                .map { Color(hex: $0.hexColor) }
+        }
+        return effectPreviewHexColors.map { Color(hex: $0) }
     }
     
     private var effectPreviewHexColors: [String] {
@@ -677,7 +693,14 @@ struct EffectPresetRow: View {
     }
     
     private var brightnessLabelColor: Color {
+        if let stored = preset.gradientStops?.sorted(by: { $0.position < $1.position }).last?.hexColor {
+            return labelColor(forHex: stored)
+        }
         guard let hex = effectPreviewHexColors.last else { return .white }
+        return labelColor(forHex: hex)
+    }
+    
+    private func labelColor(forHex hex: String) -> Color {
         let sanitized = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
         guard sanitized.count >= 6 else { return .white }
         let rHex = String(sanitized.prefix(2))

@@ -311,7 +311,7 @@ final class AccessibilityTests: XCTestCase {
         navigateToDeviceDetail()
         
         // Navigate to Effects tab
-        let effectsTab = app.buttons["Effects"]
+        let effectsTab = app.buttons["Animations"]
         if effectsTab.waitForExistence(timeout: 3.0) {
             effectsTab.tap()
             Thread.sleep(forTimeInterval: 1.0)
@@ -326,7 +326,7 @@ final class AccessibilityTests: XCTestCase {
         navigateToDeviceDetail()
         
         // Navigate to Effects tab
-        let effectsTab = app.buttons["Effects"]
+        let effectsTab = app.buttons["Animations"]
         if effectsTab.waitForExistence(timeout: 3.0) {
             effectsTab.tap()
             Thread.sleep(forTimeInterval: 1.0)
@@ -345,7 +345,7 @@ final class AccessibilityTests: XCTestCase {
         navigateToDeviceDetail()
         
         // Navigate to Effects tab
-        let effectsTab = app.buttons["Effects"]
+        let effectsTab = app.buttons["Animations"]
         if effectsTab.waitForExistence(timeout: 3.0) {
             effectsTab.tap()
             Thread.sleep(forTimeInterval: 1.0)
@@ -364,7 +364,7 @@ final class AccessibilityTests: XCTestCase {
         navigateToDeviceDetail()
         
         // Navigate to Effects tab
-        let effectsTab = app.buttons["Effects"]
+        let effectsTab = app.buttons["Animations"]
         if effectsTab.waitForExistence(timeout: 3.0) {
             effectsTab.tap()
             Thread.sleep(forTimeInterval: 1.0)
@@ -383,7 +383,7 @@ final class AccessibilityTests: XCTestCase {
         navigateToDeviceDetail()
         
         // Navigate to Effects tab
-        let effectsTab = app.buttons["Effects"]
+        let effectsTab = app.buttons["Animations"]
         if effectsTab.waitForExistence(timeout: 3.0) {
             effectsTab.tap()
             Thread.sleep(forTimeInterval: 1.0)
@@ -623,7 +623,7 @@ final class AccessibilityTests: XCTestCase {
         }
         
         // Step 6: Navigate to Effects tab
-        let effectsTab = app.buttons["Effects"]
+        let effectsTab = app.buttons["Animations"]
         if effectsTab.exists {
             effectsTab.tap()
             Thread.sleep(forTimeInterval: 1.0)

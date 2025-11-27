@@ -56,15 +56,15 @@ final class EffectControlsVisibilityTests: XCTestCase {
         }
     }
     
-    /// Navigate to Effects tab
+    /// Navigate to Animations tab
     func navigateToEffectsTab() {
-        // Find and tap the "Effects" tab
-        let effectsTab = app.buttons["Effects"]
-        if effectsTab.waitForExistence(timeout: 3.0) {
-            effectsTab.tap()
+        // Find and tap the "Animations" tab
+        let animationsTab = app.buttons["Animations"]
+        if animationsTab.waitForExistence(timeout: 3.0) {
+            animationsTab.tap()
         }
         
-        // Wait for effects controls to appear
+        // Wait for animations controls to appear
         Thread.sleep(forTimeInterval: 1.0)
     }
     
@@ -106,15 +106,15 @@ final class EffectControlsVisibilityTests: XCTestCase {
     /// Get effect picker
     /// - Returns: XCUIElement for effect picker or nil if not found
     func getEffectPicker() -> XCUIElement? {
-        let effectPicker = app.pickers.matching(identifier: "Effect").firstMatch
+        let effectPicker = app.pickers.matching(identifier: "Animation").firstMatch
         if effectPicker.exists {
             return effectPicker
         }
         
         // Try alternative identifiers
-        let effectsPicker = app.pickers["Effects"]
-        if effectsPicker.exists {
-            return effectsPicker
+        let animationsPicker = app.pickers["Animations"]
+        if animationsPicker.exists {
+            return animationsPicker
         }
         
         return nil
@@ -365,11 +365,11 @@ final class EffectControlsVisibilityTests: XCTestCase {
         Thread.sleep(forTimeInterval: 2.0)
         
         // Verify effects section is visible
-        let effectsLabel = app.staticTexts["Effects"]
+        let effectsLabel = app.staticTexts["Animations"]
         let hasEffectsSection = effectsLabel.waitForExistence(timeout: 2.0) ||
-                               app.staticTexts.matching(NSPredicate(format: "label CONTAINS[cd] 'effect'")).count > 0
+                               app.staticTexts.matching(NSPredicate(format: "label CONTAINS[cd] 'animation'")).count > 0
         
-        XCTAssertTrue(hasEffectsSection, "Effects section should be visible")
+        XCTAssertTrue(hasEffectsSection, "Animations section should be visible")
         
         // Verify effect picker exists
         guard let effectPicker = getEffectPicker() else {

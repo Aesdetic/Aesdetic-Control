@@ -21,7 +21,7 @@ protocol WLEDAPIServiceProtocol {
     func setCCT(for device: WLEDDevice, cctKelvin: Int, segmentId: Int) async throws -> WLEDResponse
     func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset]
     func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws
-    func setEffect(_ effectId: Int, forSegment segmentId: Int, speed: Int?, intensity: Int?, palette: Int?, colors: [[Int]]?, device: WLEDDevice, turnOn: Bool?) async throws -> WLEDState
+    func setEffect(_ effectId: Int, forSegment segmentId: Int, speed: Int?, intensity: Int?, palette: Int?, colors: [[Int]]?, device: WLEDDevice, turnOn: Bool?, releaseRealtime: Bool) async throws -> WLEDState
     func releaseRealtimeOverride(for device: WLEDDevice) async
     
     // Playlist management
@@ -588,6 +588,100 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         // Legacy field used by certain tooling
         config["server-name"] = newName
     }
+    
+    /// Enables audio reactive mode in WLED configuration
+    /// - Parameter device: The WLED device to update
+    /// - Returns: Success status
+    func enableAudioReactive(for device: WLEDDevice) async throws -> Bool {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        // Fetch existing configuration
+        var config = try await fetchRawConfig(for: device)
+        
+        // Update audio reactive setting
+        // WLED stores this in different locations depending on firmware version
+        var updated = false
+        
+        // Helper function to update sound config recursively
+        func updateSoundConfig(_ dict: inout [String: Any], path: String = "") -> Bool {
+            // Try direct sound block
+            if var sound = dict["sound"] as? [String: Any] {
+                sound["enabled"] = true
+                dict["sound"] = sound
+                return true
+            }
+            
+            // Try cfg.sound block
+            if var cfg = dict["cfg"] as? [String: Any] {
+                if updateSoundConfig(&cfg, path: "cfg") {
+                    dict["cfg"] = cfg
+                    return true
+                }
+            }
+            
+            return false
+        }
+        
+        updated = updateSoundConfig(&config)
+        
+        // If no sound block exists, create one at the top level
+        if !updated {
+            config["sound"] = ["enabled": true]
+        }
+        
+        // Send updated config
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: config)
+        
+        let (_, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+        
+        return true
+    }
+    
+    /// Check if audio reactive mode is enabled in WLED configuration
+    func isAudioReactiveEnabled(for device: WLEDDevice) async throws -> Bool {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        let request = URLRequest(url: url)
+        let (data, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        
+        // Check various possible locations for sound.enabled
+        func checkSoundEnabled(_ dict: [String: Any]) -> Bool? {
+            // Direct sound block
+            if let sound = dict["sound"] as? [String: Any],
+               let enabled = sound["enabled"] as? Bool {
+                return enabled
+            }
+            
+            // cfg.sound block
+            if let cfg = dict["cfg"] as? [String: Any],
+               let sound = cfg["sound"] as? [String: Any],
+               let enabled = sound["enabled"] as? Bool {
+                return enabled
+            }
+            
+            return nil
+        }
+        
+        if let enabled = checkSoundEnabled(json) {
+            return enabled
+        }
+        
+        // Default to false if not found
+        return false
+    }
 
     // MARK: - Per-LED Control
     
@@ -669,7 +763,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
     
     /// Post raw JSON state update (for per-LED pixel uploads with custom body structure)
-    private func postRawState(for device: WLEDDevice, body: [String: Any]) async throws -> WLEDResponse {
+    func postRawState(for device: WLEDDevice, body: [String: Any]) async throws -> WLEDResponse {
         guard let url = URL(string: device.jsonEndpoint) else {
             throw WLEDAPIError.invalidURL
         }
@@ -861,7 +955,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     /// - Throws: WLEDAPIError if the request fails
     func setEffect(_ effectId: Int, forSegment segmentId: Int = 0, speed: Int? = nil,
                   intensity: Int? = nil, palette: Int? = nil, colors: [[Int]]? = nil,
-                  device: WLEDDevice, turnOn: Bool? = nil) async throws -> WLEDState {
+                  device: WLEDDevice, turnOn: Bool? = nil, releaseRealtime: Bool = false) async throws -> WLEDState {
         let baseSegment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }) ?? device.state?.segments.first
         
         // When sending colors with effects, omit palette (pal: 0 can conflict with col)
@@ -899,13 +993,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         print("[Effects][API] Segment also includes: len=\(baseSegment?.len ?? -1) start=\(baseSegment?.start ?? -1) stop=\(baseSegment?.stop ?? -1)")
         #endif
         
-        // Ensure device is on if we're turning on the segment
-        // Also ensure brightness is set (effects need brightness > 0 to be visible)
+        // CRITICAL: Always include brightness when applying effects to prevent flash
+        // Even if turnOn is nil, we should preserve current brightness atomically
         let deviceBrightness = device.brightness > 0 ? device.brightness : 255
+        // CRITICAL: Include lor: 0 atomically if needed to release realtime override
+        // This prevents flash by combining realtime release with effect application in one call
+        // Also always include brightness to prevent brightness reset during effect switch
         let stateUpdate = WLEDStateUpdate(
             on: turnOn == true ? true : nil,  // Turn device on if segment is being turned on
-            bri: turnOn == true ? deviceBrightness : nil,  // Ensure brightness is set when turning on
-            seg: [segment]
+            bri: deviceBrightness,  // CRITICAL: Always include brightness atomically to prevent flash
+            seg: [segment],
+            lor: releaseRealtime ? 0 : nil  // Release realtime override atomically if needed
         )
         
         #if DEBUG

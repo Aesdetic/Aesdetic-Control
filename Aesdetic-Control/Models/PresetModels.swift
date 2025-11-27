@@ -101,6 +101,8 @@ struct WLEDEffectPreset: Identifiable, Codable, Equatable {
     var speed: Int?  // Effect speed
     var intensity: Int?  // Effect intensity
     var paletteId: Int?  // Color palette
+    var gradientStops: [GradientStop]?  // Optional custom gradient colors
+    var gradientInterpolation: GradientInterpolation?
     
     // Brightness
     var brightness: Int
@@ -117,6 +119,8 @@ struct WLEDEffectPreset: Identifiable, Codable, Equatable {
         speed: Int? = nil,
         intensity: Int? = nil,
         paletteId: Int? = nil,
+        gradientStops: [GradientStop]? = nil,
+        gradientInterpolation: GradientInterpolation? = nil,
         brightness: Int,
         wledPresetId: Int? = nil
     ) {
@@ -128,6 +132,8 @@ struct WLEDEffectPreset: Identifiable, Codable, Equatable {
         self.speed = speed
         self.intensity = intensity
         self.paletteId = paletteId
+        self.gradientStops = gradientStops
+        self.gradientInterpolation = gradientInterpolation
         self.brightness = max(0, min(255, brightness))
         self.wledPresetId = wledPresetId
     }
