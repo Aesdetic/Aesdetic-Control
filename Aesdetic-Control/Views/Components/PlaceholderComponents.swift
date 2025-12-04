@@ -59,8 +59,8 @@ struct DeviceOverviewCard: View {
 struct AutomationOverviewCard: View {
     let automation: Automation
     
-    private func timeString(for automation: Automation) -> String {
-        return automation.time
+    private func triggerDescription(for automation: Automation) -> String {
+        automation.trigger.displayName
     }
     
     var body: some View {
@@ -72,7 +72,7 @@ struct AutomationOverviewCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(automation.name)
                     .font(.headline)
-                Text(timeString(for: automation))
+                Text(triggerDescription(for: automation))
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -168,77 +168,43 @@ struct EmptyDevicesView: View {
 
 // MARK: - Automation Components
 
-enum AutomationType: String, CaseIterable {
-    case sunrise = "Sunrise"
-    case sunset = "Sunset"
-    case bedtime = "Bedtime"
-    case movie = "Movie"
-    case party = "Party"
-    case focus = "Focus"
-    
-    var icon: String {
-        switch self {
-        case .sunrise: return "sunrise"
-        case .sunset: return "sunset"
-        case .bedtime: return "moon"
-        case .movie: return "tv"
-        case .party: return "party.popper"
-        case .focus: return "brain.head.profile"
-        }
-    }
-    
-    var color: Color {
-        switch self {
-        case .sunrise: return .orange
-        case .sunset: return .red
-        case .bedtime: return .blue
-        case .movie: return .purple
-        case .party: return .pink
-        case .focus: return .green
-        }
-    }
-    
-    var displayName: String {
-        return self.rawValue
-    }
-}
-
 struct QuickPresetCard: View {
-    let preset: AutomationType
+    let template: AutomationTemplate
+    var onSelect: (AutomationTemplate) -> Void
     @State private var isPressed: Bool = false
     
     var body: some View {
         Button(action: {
-            // Preset functionality not yet implemented
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isPressed = true
-            }
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isPressed = false
+            onSelect(template)
+        }) {
+            VStack(spacing: 10) {
+                Image(systemName: template.iconName)
+                    .font(.title2.weight(.medium))
+                    .foregroundColor(.white.opacity(0.92))
+                
+                VStack(spacing: 2) {
+                    Text(template.name)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    
+                    Text(template.subtitle)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
                 }
             }
-        }) {
-            VStack(spacing: 12) {
-                Image(systemName: preset.icon)
-                    .font(.title2.weight(.medium))
-                    .foregroundColor(.white)
-                
-                Text(preset.displayName)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
+            .padding(.horizontal, 8)
             .frame(maxWidth: .infinity)
-            .frame(height: 100)
+            .frame(height: 110)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.regularMaterial)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(.white.opacity(0.1))
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
                     )
             )
             .scaleEffect(isPressed ? 0.95 : 1.0)
@@ -252,8 +218,8 @@ struct AutomationCard: View {
     let automation: Automation
     @State private var isToggling: Bool = false
     
-    private func timeString(for automation: Automation) -> String {
-        return automation.time
+    private func triggerDescription(for automation: Automation) -> String {
+        automation.trigger.displayName
     }
     
     var body: some View {
@@ -275,19 +241,9 @@ struct AutomationCard: View {
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
-                HStack(spacing: 4) {
-                    Text(timeString(for: automation))
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(.white.opacity(0.7))
-                    
-                    Text("•")
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(.white.opacity(0.5))
-                    
-                    Text(automation.weekdaysString)
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
+                Text(triggerDescription(for: automation))
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.white.opacity(0.7))
             }
             
             Spacer()

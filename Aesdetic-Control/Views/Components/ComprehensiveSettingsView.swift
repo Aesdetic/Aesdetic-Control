@@ -757,11 +757,11 @@ struct ComprehensiveSettingsView: View {
         guard let liveDevice = liveDevice else {
             // Fallback to snapshot device if not found in ViewModel
             await MainActor.run {
-                isOn = device.isOn
+        isOn = device.isOn
                 let effectiveBrightness = viewModel.getEffectiveBrightness(for: device)
                 brightnessDouble = Double(effectiveBrightness) / 255.0 * 100.0
-                segStart = 0
-                segStop = device.state?.segments.first?.len ?? segStop
+        segStart = 0
+        segStop = device.state?.segments.first?.len ?? segStop
             }
             return
         }

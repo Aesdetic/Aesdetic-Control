@@ -574,11 +574,11 @@ struct EffectsPane: View {
                     }
                 }
             )
-            .tint(.white)
+                .tint(.white)
             .accessibilityLabel("Animation speed")
             .accessibilityValue("\(Int(currentSpeedSliderValue))")
             .accessibilityHint("Adjusts the effect speed.")
-            .disabled(isApplyingEffect)
+                .disabled(isApplyingEffect)
         }
     }
     

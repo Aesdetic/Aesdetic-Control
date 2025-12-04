@@ -394,6 +394,81 @@ class DeviceControlViewModel: ObservableObject {
         lastUserInput[deviceId] = Date()
     }
     
+    func automationGradient(for device: WLEDDevice) -> LEDGradient {
+        if let cachedStops = latestGradientStops[device.id], !cachedStops.isEmpty {
+            return LEDGradient(stops: cachedStops)
+        }
+        let hex = device.currentColor.toHex()
+        return LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: hex),
+            GradientStop(position: 1.0, hexColor: hex)
+        ])
+    }
+    
+    func runAutomationTransition(
+        for device: WLEDDevice,
+        startGradient: LEDGradient,
+        startBrightness: Int,
+        endGradient: LEDGradient,
+        endBrightness: Int,
+        durationSeconds: Double,
+        segmentId: Int = 0
+    ) async {
+        await cancelActiveTransitionIfNeeded(for: device)
+        await transitionRunner.cancel(deviceId: device.id)
+        
+        let ledCount = device.state?.segments.first(where: { $0.id == segmentId })?.len
+            ?? device.state?.segments.first?.len
+            ?? 120
+        
+        await applyGradientStopsAcrossStrip(
+            device,
+            stops: startGradient.stops,
+            ledCount: ledCount,
+            disableActiveEffect: true,
+            segmentId: segmentId,
+            interpolation: startGradient.interpolation,
+            brightness: startBrightness,
+            on: true
+        )
+        
+        await transitionRunner.start(
+            device: device,
+            from: startGradient,
+            to: endGradient,
+            durationSec: durationSeconds,
+            segmentId: segmentId,
+            aBrightness: startBrightness,
+            bBrightness: endBrightness
+        )
+        
+        await MainActor.run {
+            latestGradientStops[device.id] = endGradient.stops
+        }
+        
+        await updateDeviceBrightness(device, brightness: endBrightness)
+    }
+    
+    func runSimpleGradientFade(
+        for device: WLEDDevice,
+        targetGradient: LEDGradient,
+        targetBrightness: Int,
+        durationSeconds: Double,
+        segmentId: Int = 0
+    ) async {
+        let current = automationGradient(for: device)
+        let startBrightness = device.brightness
+        await runAutomationTransition(
+            for: device,
+            startGradient: current,
+            startBrightness: startBrightness,
+            endGradient: targetGradient,
+            endBrightness: targetBrightness,
+            durationSeconds: durationSeconds,
+            segmentId: segmentId
+        )
+    }
+    
     // Pending toggles tracking (anti-flicker)
     private var pendingToggles: [String: Bool] = [:]
     private var toggleTimers: [String: Timer] = [:]

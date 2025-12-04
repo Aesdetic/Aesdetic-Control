@@ -732,6 +732,8 @@ struct AddSceneButton: View {
 // MARK: - Add Automation Button
 struct AddAutomationButton: View {
     @State private var showAddAutomation = false
+    @State private var builderDevice: WLEDDevice?
+    @State private var pendingTemplate: AutomationTemplate?
     
     var body: some View {
         Button(action: {
@@ -761,9 +763,15 @@ struct AddAutomationButton: View {
             )
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showAddAutomation) {
-            Text("Add Automation - Coming Soon")
-                .presentationDetents([.medium])
+        .sheet(isPresented: $showAddAutomation, onDismiss: {
+            builderDevice = nil
+            pendingTemplate = nil
+        }) {
+            AutomationCreationSheet(
+                builderDevice: $builderDevice,
+                pendingTemplate: $pendingTemplate,
+                isPresented: $showAddAutomation
+            )
         }
     }
 }

@@ -35,6 +35,10 @@ final class PresetsStore: ObservableObject {
         }
     }
     
+    func colorPreset(id: UUID) -> ColorPreset? {
+        colorPresets.first(where: { $0.id == id })
+    }
+    
     func updateTransitionPreset(_ preset: TransitionPreset) {
         if let index = transitionPresets.firstIndex(where: { $0.id == preset.id }) {
             transitionPresets[index] = preset
@@ -65,6 +69,10 @@ final class PresetsStore: ObservableObject {
         transitionPresets.filter { $0.deviceId == deviceId }
     }
     
+    func transitionPreset(id: UUID) -> TransitionPreset? {
+        transitionPresets.first(where: { $0.id == id })
+    }
+    
     // MARK: - Effect Presets (Per-device)
     
     func addEffectPreset(_ preset: WLEDEffectPreset) {
@@ -79,6 +87,10 @@ final class PresetsStore: ObservableObject {
     
     func effectPresets(for deviceId: String) -> [WLEDEffectPreset] {
         effectPresets.filter { $0.deviceId == deviceId }
+    }
+    
+    func effectPreset(id: UUID) -> WLEDEffectPreset? {
+        effectPresets.first(where: { $0.id == id })
     }
     
     // MARK: - Persistence

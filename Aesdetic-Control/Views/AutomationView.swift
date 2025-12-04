@@ -9,68 +9,42 @@ import SwiftUI
 
 struct AutomationView: View {
     @ObservedObject private var viewModel = AutomationViewModel.shared
+    @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
+    @StateObject private var scenesStore = ScenesStore.shared
     @State private var showingCreateAutomation = false
+    @State private var builderDevice: WLEDDevice? = nil
+    @State private var pendingTemplate: AutomationTemplate? = nil
     
     // Animation constants (matching design system)
     private let standardAnimation: Animation = .easeInOut(duration: 0.25)
     private let fastAnimation: Animation = .easeInOut(duration: 0.15)
     
     var body: some View {
-        // RESTRUCTURED: Remove NavigationStack, use working pattern from Dashboard
-        GeometryReader { geometry in
+        ZStack {
+            AppBackground()
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 0) {
-                    // Enhanced safe area spacing for status bar
-                    Spacer()
-                        .frame(height: max(80, geometry.safeAreaInsets.top + 40))
-                    
-                    // Header
-                    HStack {
-                        Text("Automation")
-                            .font(.largeTitle.bold())
-                            .foregroundColor(.white)
-                        
-                        Spacer()
-                        
-                        // Add automation button
-                        Button(action: { showingCreateAutomation = true }) {
-                            Image(systemName: "plus")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
-                    
-                    // Quick Presets Section
-                    presetsSection(geometry: geometry)
-                    
-                    // User Automations Section
-                    automationsSection(geometry: geometry)
-                    
-                    // Bottom spacing
-                    Spacer()
-                        .frame(height: 100)
+                VStack(spacing: 24) {
+                    headerSection
+                    presetsSection
+                    automationsSection
+                    Spacer(minLength: 40)
                 }
-                .animation(standardAnimation, value: viewModel.automations.count)
+                .padding(.horizontal, 20)
+                .padding(.top, 80)
             }
-            .background(Color.clear)
             .refreshable {
                 await viewModel.refreshAutomations()
             }
         }
-        .background(Color.clear) // Make NavigationStack transparent
-        .sheet(isPresented: $showingCreateAutomation) {
-            // Minimal stub to satisfy compile; replace with real view when ready
-            VStack(spacing: 16) {
-                Text("Create Automation")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundColor(.gray)
-                Button("Close") { showingCreateAutomation = false }
-                    .buttonStyle(.bordered)
-            }
-            .padding()
+        .sheet(isPresented: $showingCreateAutomation, onDismiss: {
+            builderDevice = nil
+            pendingTemplate = nil
+        }) {
+            AutomationCreationSheet(
+                builderDevice: $builderDevice,
+                pendingTemplate: $pendingTemplate,
+                isPresented: $showingCreateAutomation
+            )
         }
     }
     
@@ -88,85 +62,145 @@ struct AutomationView: View {
         }
     }
     
-    // MARK: - Quick Presets Section
-    @ViewBuilder
-    private func presetsSection(geometry: GeometryProxy) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Quick Presets")
-                .font(.title2)
-                .fontWeight(.semibold)
+    private var headerSection: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Automations")
+                    .font(.largeTitle.bold())
+                    .foregroundColor(.white)
+                Text("Schedule sunrise lamps, bedtime fades, and more.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.75))
+            }
+            Spacer()
+            Button(action: { beginCreateAutomation() }) {
+                Image(systemName: "plus")
+                    .font(.title2.weight(.semibold))
+                    .foregroundColor(.black)
+                    .padding()
+                    .background(Color.white)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    
+    private var presetsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Quick Starters")
+                .font(.title3.weight(.semibold))
                 .foregroundColor(.white)
-                .padding(.horizontal, 16)
-            
-            // Grid of preset cards
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 12),
                 GridItem(.flexible(), spacing: 12)
             ], spacing: 12) {
-                QuickPresetCard(preset: .sunrise)
-                QuickPresetCard(preset: .sunset)
-                QuickPresetCard(preset: .focus)
-                QuickPresetCard(preset: .bedtime)
+                ForEach(AutomationTemplate.quickStartTemplates) { template in
+                    QuickPresetCard(template: template) { tappedTemplate in
+                        beginCreateAutomation(with: tappedTemplate)
+                    }
+                }
             }
-            .padding(.horizontal, 16)
         }
-        .padding(.bottom, 20)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
     
-    // MARK: - User Automations Section  
-    @ViewBuilder
-    private func automationsSection(geometry: GeometryProxy) -> some View {
+    private var automationsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Section header with create button
             HStack {
                 Text("My Automations")
-                    .font(.title2)
-                    .fontWeight(.semibold)
+                    .font(.title3.weight(.semibold))
                     .foregroundColor(.white)
-                
                 Spacer()
-                
-                Button(action: {
-                    showingCreateAutomation = true
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus")
-                            .font(.caption.weight(.semibold))
-                        Text("Create")
-                            .font(.headline)
-                    }
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(.white)
-                    )
+                Button(action: { beginCreateAutomation() }) {
+                    Label("Create", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.white)
+                        .foregroundColor(.black)
+                        .clipShape(Capsule())
                 }
-                .buttonStyle(PlainButtonStyle())
-                .scaleEffect(1.0)
-                .animation(fastAnimation, value: showingCreateAutomation)
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
             
-            // Automations list or empty state
+            let nextAutomationID = AutomationStore.shared.upcomingAutomationInfo?.automation.id
             if viewModel.automations.isEmpty {
                 EmptyAutomationsView()
-                    .padding(.horizontal, 16)
             } else {
-                LazyVStack(spacing: 12) {
+                VStack(spacing: 14) {
                     ForEach(viewModel.automations) { automation in
-                        AutomationCard(automation: automation)
+                        AutomationRow(
+                            automation: automation,
+                            scenes: scenesStore.scenes,
+                            isNext: nextAutomationID == automation.id,
+                            subtitle: targetName(for: automation),
+                            onToggle: { enabled in
+                                var updated = automation
+                                updated.enabled = enabled
+                                AutomationStore.shared.update(updated)
+                            },
+                            onRun: {
+                                AutomationStore.shared.applyAutomation(automation)
+                            },
+                            onShortcutToggle: { pinned in
+                                var updated = automation
+                                var metadata = updated.metadata
+                                metadata.pinnedToShortcuts = pinned
+                                updated.metadata = metadata
+                                AutomationStore.shared.update(updated)
+                            },
+                            onDelete: {
+                                AutomationStore.shared.delete(id: automation.id)
+                            }
+                        )
                     }
                 }
-                .padding(.horizontal, 16)
             }
         }
-        .background(Color.clear)
-        .padding(.bottom, 20)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
 }
 
 #Preview {
     AutomationView()
 } 
+
+// MARK: - Helpers
+
+private extension AutomationView {
+    func beginCreateAutomation(with template: AutomationTemplate? = nil) {
+        pendingTemplate = template
+        if deviceViewModel.devices.count == 1 {
+            builderDevice = deviceViewModel.devices.first
+        } else {
+            builderDevice = nil
+        }
+        showingCreateAutomation = true
+    }
+    
+    func targetName(for automation: Automation) -> String? {
+        let ids = automation.targets.deviceIds
+        guard !ids.isEmpty else { return nil }
+        if ids.count == 1,
+           let device = deviceViewModel.devices.first(where: { $0.id == ids[0] }) {
+            return device.name
+        }
+        return "\(ids.count) devices"
+    }
+}
