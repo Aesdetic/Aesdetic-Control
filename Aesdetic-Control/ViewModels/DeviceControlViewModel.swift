@@ -2372,7 +2372,7 @@ class DeviceControlViewModel: ObservableObject {
             )
             let previewUpdate = WLEDStateUpdate(seg: [previewSegment])
             _ = try? await apiService.updateState(for: currentDevice, state: previewUpdate)
-            
+        
             // CRITICAL: Immediately send the full per-LED gradient without delay
             // The effect is already disabled, so this just updates the colors
             for body in bodies {
@@ -2385,11 +2385,11 @@ class DeviceControlViewModel: ObservableObject {
         } else {
             // Fallback: Use current color if no persisted gradient exists
             let stops = [
-                GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
-                GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
-            ]
+            GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
+            GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
+        ]
             updateEffectGradient(LEDGradient(stops: stops, interpolation: .linear), for: device)
-            latestEffectGradientStops[device.id] = stops
+        latestEffectGradientStops[device.id] = stops
             
             // For fallback, disable effect with brightness and single color atomically
             let singleColor = device.currentColor.toRGBArray()

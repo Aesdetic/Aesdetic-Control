@@ -179,7 +179,7 @@ class AutomationStore: ObservableObject {
         }
     }
     
-    private func computeSolarDate(event: SolarEvent, trigger: SolarTrigger, referenceDate: Date) async -> Date? {
+    func computeSolarDate(event: SolarEvent, trigger: SolarTrigger, referenceDate: Date) async -> Date? {
         guard let coordinate = await coordinate(for: trigger.location) else {
             logger.error("Missing coordinate for solar automation")
             return nil
@@ -525,12 +525,12 @@ private final class LocationProvider: NSObject, CLLocationManagerDelegate {
     }
 }
 
-private enum SolarEvent: Hashable {
+enum SolarEvent: Hashable {
     case sunrise
     case sunset
 }
 
-private enum SunriseSunsetCalculator {
+enum SunriseSunsetCalculator {
     static func nextEventDate(
         event: SolarEvent,
         coordinate: CLLocationCoordinate2D,

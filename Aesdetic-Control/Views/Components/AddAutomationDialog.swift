@@ -41,9 +41,6 @@ struct AddAutomationDialog: View {
     @State private var selectedTime: Date = Date()
     @State private var selectedWeekdays: [Bool] = Array(repeating: false, count: 7)
     @State private var solarOffsetMinutes: Double = 0
-    @State private var useDeviceLocation: Bool = true
-    @State private var manualLatitude: String = ""
-    @State private var manualLongitude: String = ""
     
     @State private var actionSelection: ActionSelection = .color
     @State private var selectedSceneId: UUID?
@@ -101,9 +98,6 @@ struct AddAutomationDialog: View {
         var initialTime = Date()
         var initialWeekdays = Array(repeating: false, count: 7)
         var initialSolarOffset: Double = 0
-        var initialUseDeviceLocation = true
-        var initialManualLatitude = ""
-        var initialManualLongitude = ""
         var initialActionSelection: ActionSelection = .color
         var initialColorMode: ColorActionMode = scenes.isEmpty ? .gradient : .scenes
         var initialSceneId: UUID? = scenes.first?.id
@@ -239,9 +233,6 @@ struct AddAutomationDialog: View {
         _selectedTime = State(initialValue: initialTime)
         _selectedWeekdays = State(initialValue: initialWeekdays)
         _solarOffsetMinutes = State(initialValue: initialSolarOffset)
-        _useDeviceLocation = State(initialValue: initialUseDeviceLocation)
-        _manualLatitude = State(initialValue: initialManualLatitude)
-        _manualLongitude = State(initialValue: initialManualLongitude)
         _actionSelection = State(initialValue: initialActionSelection)
         _enableColorFade = State(initialValue: initialEnableColorFade)
         _gradientDuration = State(initialValue: initialGradientDuration)
@@ -431,46 +422,16 @@ struct AddAutomationDialog: View {
     }
     
     private var solarTriggerControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Offset")
-                    .foregroundColor(.white.opacity(0.8))
-                Spacer()
-                Text(offsetDescription)
-                    .foregroundColor(.white)
-                    .font(.headline)
-            }
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Start")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.8))
             
-            Slider(value: $solarOffsetMinutes, in: -120...120, step: 5)
-                .tint(.white)
-            
-            Toggle(isOn: $useDeviceLocation) {
-                Text("Use device location")
-                    .foregroundColor(.white.opacity(0.9))
-            }
-            .toggleStyle(SwitchToggleStyle(tint: .white))
-            
-            if !useDeviceLocation {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Manual coordinates")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                    HStack {
-                        TextField("Latitude", text: $manualLatitude)
-                            .keyboardType(.decimalPad)
-                            .padding(10)
-                            .background(Color.white.opacity(0.08))
-                            .cornerRadius(12)
-                            .foregroundColor(.white)
-                        TextField("Longitude", text: $manualLongitude)
-                            .keyboardType(.decimalPad)
-                            .padding(10)
-                            .background(Color.white.opacity(0.08))
-                            .cornerRadius(12)
-                            .foregroundColor(.white)
-                    }
-                }
-            }
+            SolarOffsetArcSlider(
+                offsetMinutes: $solarOffsetMinutes,
+                eventType: triggerSelection == .sunrise ? .sunrise : .sunset,
+                device: activeDevice
+            )
         }
     }
     
@@ -910,8 +871,15 @@ struct AddAutomationDialog: View {
     
     private var offsetDescription: String {
         let minutes = Int(solarOffsetMinutes)
-        if minutes == 0 { return "Exactly at event" }
-        return minutes > 0 ? "+\(minutes) min" : "\(minutes) min"
+        let eventName = triggerSelection == .sunrise ? "sunrise" : "sunset"
+        
+        if minutes == 0 {
+            return "At \(eventName)"
+        } else if minutes > 0 {
+            return "\(minutes) min after \(eventName)"
+        } else {
+            return "\(abs(minutes)) min before \(eventName)"
+        }
     }
     
     private func saveAndDismiss() {
@@ -980,15 +948,8 @@ struct AddAutomationDialog: View {
             )
         case .sunrise, .sunset:
             let offset = SolarTrigger.EventOffset.minutes(Int(solarOffsetMinutes))
-            let location: SolarTrigger.LocationSource
-            if useDeviceLocation {
-                location = .followDevice
-            } else if let lat = Double(manualLatitude), let lon = Double(manualLongitude) {
-                location = .manual(latitude: lat, longitude: lon)
-            } else {
-                location = .followDevice
-            }
-            let trigger = SolarTrigger(offset: offset, location: location)
+            // Always use device location for sunrise/sunset triggers
+            let trigger = SolarTrigger(offset: offset, location: .followDevice)
             return triggerSelection == .sunrise ? .sunrise(trigger) : .sunset(trigger)
         }
     }
