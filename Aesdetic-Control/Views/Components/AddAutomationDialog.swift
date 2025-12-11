@@ -511,8 +511,8 @@ struct AddAutomationDialog: View {
                     timeTriggerContent
                         .frame(height: cardHeight)
                         .padding(.horizontal, 20)
-                        .padding(.top, 8)
-                        .padding(.bottom, 12)
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
                 } else {
                     SolarOffsetArcSlider(
                         offsetMinutes: $solarOffsetMinutes,
@@ -523,8 +523,8 @@ struct AddAutomationDialog: View {
                     )
                     .frame(height: cardHeight)
                     .padding(.horizontal, 6)
-                    .padding(.top, 8)
-                    .padding(.bottom, 12)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
                 }
             }
         }
