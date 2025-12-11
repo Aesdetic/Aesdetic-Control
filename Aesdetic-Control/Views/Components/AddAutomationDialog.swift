@@ -358,15 +358,26 @@ struct AddAutomationDialog: View {
         }
     }
     
+    // MARK: - Trigger Settings Section
+    
     private var automationSettingsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Automation Settings")
                 .font(.callout.weight(.semibold))
                 .foregroundColor(.white.opacity(0.7))
             
-            unifiedTriggerModule
+            triggerSelectionCard
         }
     }
+    
+    private var triggerSelectionCard: some View {
+        GeometryReader { geometry in
+            triggerSelectionContent(geometry: geometry)
+        }
+        .frame(height: 260)
+    }
+    
+    // MARK: - Repeat Schedule Section
     
     private var repeatScheduleSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -392,15 +403,8 @@ struct AddAutomationDialog: View {
         }
     }
     
-    private var unifiedTriggerModule: some View {
-        GeometryReader { geometry in
-            unifiedTriggerModuleContent(geometry: geometry)
-        }
-        .frame(height: 260)
-    }
-    
     @ViewBuilder
-    private func unifiedTriggerModuleContent(geometry: GeometryProxy) -> some View {
+    private func triggerSelectionContent(geometry: GeometryProxy) -> some View {
         let tabHeight: CGFloat = 40
         let cardHeight: CGFloat = 220
         let cornerRadius: CGFloat = 20
@@ -413,7 +417,7 @@ struct AddAutomationDialog: View {
                     .init(color: Color.black.opacity(0.25), location: 1.0)
                 ]
             } else {
-                return SolarOffsetArcSlider.gradientStops(for: triggerSelection == .sunrise ? .sunrise : .sunset)
+                return SolarOffsetArcSlider.gradientStops(for: selectedSolarEvent)
             }
         }()
         
@@ -504,14 +508,14 @@ struct AddAutomationDialog: View {
                 
                 // Main content
                 if triggerSelection == .time {
-                    timeTriggerControlsUnified
+                    timeTriggerContent
                         .frame(height: cardHeight)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 16)
                 } else {
                     SolarOffsetArcSlider(
                         offsetMinutes: $solarOffsetMinutes,
-                        eventType: triggerSelection == .sunrise ? .sunrise : .sunset,
+                        eventType: selectedSolarEvent,
                         device: activeDevice,
                         disableClipping: true,
                         useExternalGradient: true
@@ -525,74 +529,16 @@ struct AddAutomationDialog: View {
         .frame(height: totalHeight)
     }
     
-    private var timeTriggerControlsUnified: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .datePickerStyle(.wheel)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
-                .environment(\.colorScheme, .dark)
-        }
+    private var timeTriggerContent: some View {
+        DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .datePickerStyle(.wheel)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .environment(\.colorScheme, .dark)
     }
     
-    private var timeTriggerControls: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Time of Day")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.8))
-            
-            DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .datePickerStyle(.wheel)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                        )
-                )
-                .environment(\.colorScheme, .dark)
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Repeat on")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                HStack {
-                    ForEach(weekdayNames.indices, id: \.self) { idx in
-                        Button(action: { selectedWeekdays[idx].toggle() }) {
-                            Text(weekdayNames[idx])
-                                .font(.caption.weight(.semibold))
-                                .padding(.vertical, 6)
-                                .padding(.horizontal, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(selectedWeekdays[idx] ? Color.white : Color.white.opacity(0.15))
-                                )
-                                .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.8))
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    private var solarTriggerControls: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Start")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.8))
-            
-            SolarOffsetArcSlider(
-                offsetMinutes: $solarOffsetMinutes,
-                eventType: triggerSelection == .sunrise ? .sunrise : .sunset,
-                device: activeDevice
-            )
-        }
-    }
+    // MARK: - Action Section
     
     private var automationActionSection: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1011,7 +957,7 @@ struct AddAutomationDialog: View {
         }
     }
     
-    // MARK: - Helpers
+    // MARK: - Computed Properties
     
     private var canSave: Bool {
         guard !automationName.trimmed().isEmpty else { return false }
@@ -1028,41 +974,17 @@ struct AddAutomationDialog: View {
         return true
     }
     
-    private var offsetDescription: String {
-        let minutes = Int(solarOffsetMinutes)
-        let eventName = triggerSelection == .sunrise ? "sunrise" : "sunset"
-        
-        if minutes == 0 {
-            return "At \(eventName)"
-        } else if minutes > 0 {
-            return "\(minutes) min after \(eventName)"
-        } else {
-            return "\(abs(minutes)) min before \(eventName)"
-        }
+    private var selectedSolarEvent: SolarEvent {
+        triggerSelection == .sunrise ? .sunrise : .sunset
     }
+    
+    // MARK: - Actions
     
     private func saveAndDismiss() {
         guard canSave else { return }
         guard let automation = buildAutomation() else { return }
         onSave(automation)
         dismiss()
-    }
-    
-    private func triggerOptionChip(label: String, selection target: TriggerSelection) -> some View {
-        let isSelected = triggerSelection == target
-        return Button {
-            triggerSelection = target
-        } label: {
-            Text(label)
-                .font(.footnote.weight(.semibold))
-                .padding(.vertical, 8)
-                .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity)
-                .background(isSelected ? Color.white : Color.white.opacity(0.12))
-                .foregroundColor(isSelected ? .black : .white.opacity(0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .buttonStyle(.plain)
     }
     
     private func buildAutomation() -> Automation? {
@@ -1165,6 +1087,8 @@ struct AddAutomationDialog: View {
             return nil
         }
     }
+    
+    // MARK: - Device Selection
     
     private var allowDeviceSelection: Bool {
         availableDevices.count > 1
