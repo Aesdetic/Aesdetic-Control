@@ -209,6 +209,35 @@ class AutomationStore: ObservableObject {
         return eventDate
     }
     
+    /// Public API to get user's current coordinate
+    /// Returns nil if permission denied or location unavailable
+    func currentCoordinate() async -> CLLocationCoordinate2D? {
+        do {
+            return try await locationProvider.currentCoordinate()
+        } catch {
+            logger.warning("Location unavailable: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
+    /// Public API for components to resolve solar trigger dates
+    func resolveSolarTriggerDate(
+        event: SolarEvent,
+        coordinate: CLLocationCoordinate2D,
+        date: Date,
+        offsetMinutes: Int
+    ) -> Date? {
+        let result = SunriseSunsetCalculator.nextEventDate(
+            event: event,
+            coordinate: coordinate,
+            referenceDate: date,
+            offsetMinutes: offsetMinutes,
+            timeZone: TimeZone.current
+        )
+        print("🔍 resolveSolarTriggerDate: \(event) at \(coordinate.latitude), \(coordinate.longitude) offset \(offsetMinutes) = \(result?.formatted(date: .omitted, time: .shortened) ?? "nil")")
+        return result
+    }
+    
     private func coordinate(for source: SolarTrigger.LocationSource) async -> CLLocationCoordinate2D? {
         switch source {
         case .manual(let lat, let lon):
@@ -481,21 +510,71 @@ private final class LocationProvider: NSObject, CLLocationManagerDelegate {
     private var cachedCoordinate: CLLocationCoordinate2D?
     private var lastUpdate: Date?
     
+    // UserDefaults keys for persistent location storage
+    private let latitudeKey = "com.aesdetic.cachedLatitude"
+    private let longitudeKey = "com.aesdetic.cachedLongitude"
+    private let lastUpdateKey = "com.aesdetic.lastLocationUpdate"
+    
     override init() {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        // Use reduced accuracy for city-level location (~10km radius)
+        // Perfect for sunrise/sunset, more privacy-friendly
+        manager.desiredAccuracy = kCLLocationAccuracyReduced
+        
+        // Load cached location from UserDefaults (survives app restarts)
+        loadCachedLocation()
+    }
+    
+    private func loadCachedLocation() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: latitudeKey) != nil,
+              defaults.object(forKey: longitudeKey) != nil else {
+            return
+        }
+        
+        let latitude = defaults.double(forKey: latitudeKey)
+        let longitude = defaults.double(forKey: longitudeKey)
+        
+        if let timestamp = defaults.object(forKey: lastUpdateKey) as? Date {
+            cachedCoordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            lastUpdate = timestamp
+        }
+    }
+    
+    private func saveCachedLocation() {
+        guard let coordinate = cachedCoordinate, let update = lastUpdate else { return }
+        
+        let defaults = UserDefaults.standard
+        defaults.set(coordinate.latitude, forKey: latitudeKey)
+        defaults.set(coordinate.longitude, forKey: longitudeKey)
+        defaults.set(update, forKey: lastUpdateKey)
     }
     
     func currentCoordinate() async throws -> CLLocationCoordinate2D {
-        if let coordinate = cachedCoordinate, let lastUpdate, Date().timeIntervalSince(lastUpdate) < 1800 {
+        // Cache location for 30 days since lamps don't move
+        // Only re-check if cache is stale or app restarts in new location
+        if let coordinate = cachedCoordinate, let lastUpdate, Date().timeIntervalSince(lastUpdate) < 2_592_000 { // 30 days
+            print("📍 Using cached location: \(coordinate.latitude), \(coordinate.longitude)")
             return coordinate
         }
         
-        if manager.authorizationStatus == .notDetermined {
+        // Check authorization status before creating continuation
+        switch manager.authorizationStatus {
+        case .denied, .restricted:
+            print("❌ Location permission denied")
+            throw NSError(domain: kCLErrorDomain, code: CLError.denied.rawValue)
+        case .notDetermined:
+            print("❓ Location permission not determined - requesting...")
             manager.requestWhenInUseAuthorization()
+            // Wait a bit for the permission dialog to be dismissed
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+        default:
+            break
         }
         
+        // Now request location
+        print("📍 Requesting location...")
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             manager.requestLocation()
@@ -503,35 +582,38 @@ private final class LocationProvider: NSObject, CLLocationManagerDelegate {
     }
     
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        if manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways {
-            manager.requestLocation()
-        } else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
-            continuation?.resume(throwing: NSError(domain: kCLErrorDomain, code: CLError.denied.rawValue))
-            continuation = nil
-        }
+        print("🔐 Location authorization changed: \(manager.authorizationStatus.rawValue)")
+        // Note: We no longer automatically request location here
+        // The currentCoordinate() function will handle it after permission is granted
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
+        guard let location = locations.last else {
+            print("❌ No location in update")
+            return
+        }
+        print("✅ Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude)")
         cachedCoordinate = location.coordinate
         lastUpdate = Date()
+        saveCachedLocation() // Persist to UserDefaults
         continuation?.resume(returning: location.coordinate)
         continuation = nil
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("❌ Location error: \(error.localizedDescription)")
         continuation?.resume(throwing: error)
         continuation = nil
     }
 }
 
-enum SolarEvent: Hashable {
+public enum SolarEvent: Hashable {
     case sunrise
     case sunset
 }
 
-enum SunriseSunsetCalculator {
-    static func nextEventDate(
+public enum SunriseSunsetCalculator {
+    public static func nextEventDate(
         event: SolarEvent,
         coordinate: CLLocationCoordinate2D,
         referenceDate: Date,
@@ -558,7 +640,8 @@ enum SunriseSunsetCalculator {
         coordinate: CLLocationCoordinate2D,
         timeZone: TimeZone
     ) -> Date? {
-        let calendar = Calendar(identifier: .gregorian)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
         guard let dayOfYear = calendar.ordinality(of: .day, in: .year, for: date) else {
             return nil
         }
@@ -591,15 +674,42 @@ enum SunriseSunsetCalculator {
         var UT = T - longitudeHour
         UT = normalizeHours(UT)
         
-        let hour = Int(UT)
-        let minute = Int((UT - Double(hour)) * 60.0)
-        let second = Int((((UT - Double(hour)) * 60.0) - Double(minute)) * 60.0)
+        // UT is in UTC time - convert to hours, minutes, seconds
+        let utcHour = Int(UT)
+        let minute = Int((UT - Double(utcHour)) * 60.0)
+        let second = Int((((UT - Double(utcHour)) * 60.0) - Double(minute)) * 60.0)
         
-        var components = calendar.dateComponents(in: timeZone, from: date)
+        // Convert UTC time to local time by adding timezone offset
+        let localOffsetSeconds = timeZone.secondsFromGMT(for: date)
+        let localOffsetHours = Double(localOffsetSeconds) / 3600.0
+        
+        // Add offset to convert UTC to local time
+        var localHours = Double(utcHour) + localOffsetHours
+        
+        // Handle day overflow
+        var dayOffset = 0
+        if localHours < 0 {
+            localHours += 24
+            dayOffset = -1
+        } else if localHours >= 24 {
+            localHours -= 24
+            dayOffset = 1
+        }
+        
+        let hour = Int(localHours)
+        
+        // Get year/month/day from the input date and apply day offset
+        var adjustedDate = date
+        if dayOffset != 0 {
+            adjustedDate = calendar.date(byAdding: .day, value: dayOffset, to: date) ?? date
+        }
+        
+        var components = calendar.dateComponents([.year, .month, .day], from: adjustedDate)
         components.hour = hour
         components.minute = minute
         components.second = second
         components.nanosecond = 0
+        
         return calendar.date(from: components)
     }
     

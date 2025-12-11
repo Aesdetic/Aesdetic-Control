@@ -44,7 +44,7 @@ struct AutomationView: View {
                 builderDevice: $builderDevice,
                 pendingTemplate: $pendingTemplate,
                 isPresented: $showingCreateAutomation
-            )
+                )
         }
     }
     

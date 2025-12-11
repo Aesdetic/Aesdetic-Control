@@ -45,7 +45,7 @@
         <string>_http._tcp</string>
     </array>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Your location is used to calculate accurate sunrise and sunset times for automations.</string>
+    <string>Your approximate location (city-level) is checked once to calculate sunrise and sunset times for automations.</string>
 </dict>
 </plist>
 

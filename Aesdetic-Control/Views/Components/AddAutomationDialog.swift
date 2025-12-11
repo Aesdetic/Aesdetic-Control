@@ -6,6 +6,14 @@ struct AddAutomationDialog: View {
         case sunrise = "Sunrise"
         case sunset = "Sunset"
         var id: String { rawValue }
+        
+        var tabIndex: Int {
+            switch self {
+            case .time: return 0
+            case .sunrise: return 1
+            case .sunset: return 2
+            }
+        }
     }
     
     enum ActionSelection: String, CaseIterable, Identifiable {
@@ -107,7 +115,6 @@ struct AddAutomationDialog: View {
         var initialGradientDuration: Double = 10
         var initialEnableColorFade = false
         var initialTransitionDuration: Double = 600
-        var initialAllowPartialFailure = true
         var initialTemplateGradient: LEDGradient?
         var initialTemplateTransition: TransitionActionPayload?
         var initialTemplateEffect: TemplateEffectSettings?
@@ -356,23 +363,198 @@ struct AddAutomationDialog: View {
                 .font(.callout.weight(.semibold))
                 .foregroundColor(.white.opacity(0.7))
             
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Time")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.85))
-                
-                HStack(spacing: 8) {
-                    triggerOptionChip(label: "Time of Day", selection: .time)
-                    triggerOptionChip(label: "Sunrise", selection: .sunrise)
-                    triggerOptionChip(label: "Sunset", selection: .sunset)
+            unifiedTriggerModule
+        }
+    }
+    
+    private var unifiedTriggerModule: some View {
+        GeometryReader { geometry in
+            unifiedTriggerModuleContent(geometry: geometry)
+        }
+        .frame(height: 260)
+    }
+    
+    @ViewBuilder
+    private func unifiedTriggerModuleContent(geometry: GeometryProxy) -> some View {
+        let tabHeight: CGFloat = 40
+        let cardHeight: CGFloat = 220
+        let cornerRadius: CGFloat = 20
+        let totalHeight = tabHeight + cardHeight
+        
+        let gradientStops: [Gradient.Stop] = {
+            if triggerSelection == .time {
+                return [
+                    .init(color: Color.black.opacity(0.4), location: 0.0),
+                    .init(color: Color.black.opacity(0.25), location: 1.0)
+                ]
+            } else {
+                return SolarOffsetArcSlider.gradientStops(for: triggerSelection == .sunrise ? .sunrise : .sunset)
+            }
+        }()
+        
+        let scrollOffset: CGFloat = {
+            guard triggerSelection != .time else { return 0 }
+            let gradientHeight = totalHeight * 30 // Use total height for proper coverage
+            let range: ClosedRange<Double> = -120...120
+            let normalized = max(0, min(1, (solarOffsetMinutes - range.lowerBound) / (range.upperBound - range.lowerBound)))
+            let scrollableHeight = gradientHeight - totalHeight
+            return normalized * scrollableHeight
+        }()
+        
+        let gradient = LinearGradient(
+            gradient: Gradient(stops: gradientStops),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        
+        ZStack(alignment: .top) {
+            // Background with folder tab shape - use GeometryReader for proper clipping
+            GeometryReader { geo in
+                ZStack {
+                    if triggerSelection == .time {
+                        gradient
+                            .frame(width: geo.size.width, height: totalHeight)
+                    } else {
+                        gradient
+                            .frame(width: geo.size.width, height: totalHeight * 30)
+                            .offset(y: -scrollOffset)
+                    }
                 }
             }
+            .clipShape(
+                FolderTabShape(
+                    activeTabIndex: triggerSelection.tabIndex,
+                    tabCount: 3,
+                    tabHeight: tabHeight,
+                    cornerRadius: cornerRadius
+                )
+            )
+            .overlay(
+                FolderTabShape(
+                    activeTabIndex: triggerSelection.tabIndex,
+                    tabCount: 3,
+                    tabHeight: tabHeight,
+                    cornerRadius: cornerRadius
+                )
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.3), radius: 12, y: 5)
             
-            switch triggerSelection {
-            case .time:
-                timeTriggerControls
-            case .sunrise, .sunset:
-                solarTriggerControls
+            // Content layer
+            VStack(spacing: 0) {
+                // Tab buttons with better visibility
+                HStack(spacing: 0) {
+                    ForEach(TriggerSelection.allCases) { option in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                triggerSelection = option
+                            }
+                        } label: {
+                            Text(option == .time ? "Time of Day" : option.rawValue)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(triggerSelection == option ? .white : .white.opacity(0.6))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: tabHeight)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .background(
+                    // Subtle background for inactive tabs to ensure visibility
+                    GeometryReader { geo in
+                        let tabWidth = geo.size.width / 3
+                        let activeIndex = triggerSelection.tabIndex
+                        
+                        ForEach(0..<3, id: \.self) { index in
+                            if index != activeIndex {
+                                Rectangle()
+                                    .fill(Color.black.opacity(0.15))
+                                    .frame(width: tabWidth, height: tabHeight)
+                                    .offset(x: CGFloat(index) * tabWidth)
+                            }
+                        }
+                    }
+                )
+                
+                // Main content
+                if triggerSelection == .time {
+                    timeTriggerControlsUnified
+                        .frame(height: cardHeight)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                } else {
+                    VStack(spacing: 12) {
+                        SolarOffsetArcSlider(
+                            offsetMinutes: $solarOffsetMinutes,
+                            eventType: triggerSelection == .sunrise ? .sunrise : .sunset,
+                            device: activeDevice,
+                            disableClipping: true,
+                            useExternalGradient: true
+                        )
+                        
+                        // Weekday selection for sunrise/sunset
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Repeat on")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.white.opacity(0.7))
+                                .padding(.horizontal, 14)
+                            
+                            HStack(spacing: 6) {
+                                ForEach(weekdayNames.indices, id: \.self) { idx in
+                                    Button(action: { selectedWeekdays[idx].toggle() }) {
+                                        Text(weekdayNames[idx])
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.vertical, 6)
+                                            .padding(.horizontal, 8)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                    .fill(selectedWeekdays[idx] ? Color.white : Color.white.opacity(0.15))
+                                            )
+                                            .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.8))
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                        }
+                    }
+                    .frame(height: cardHeight)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .frame(height: totalHeight)
+    }
+    
+    private var timeTriggerControlsUnified: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .datePickerStyle(.wheel)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .environment(\.colorScheme, .dark)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Repeat on")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.7))
+                HStack {
+                    ForEach(weekdayNames.indices, id: \.self) { idx in
+                        Button(action: { selectedWeekdays[idx].toggle() }) {
+                            Text(weekdayNames[idx])
+                                .font(.caption.weight(.semibold))
+                                .padding(.vertical, 6)
+                                .padding(.horizontal, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(selectedWeekdays[idx] ? Color.white : Color.white.opacity(0.15))
+                                )
+                                .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.8))
+                        }
+                    }
+                }
             }
         }
     }
