@@ -1378,50 +1378,52 @@ struct InactiveFolderTabShape: Shape {
         let width = rect.width
         let height = rect.height
         
-        // Start from bottom-left corner with outward curve
-        path.move(to: CGPoint(x: 0, y: height - bottomCornerRadius))
+        // Start from bottom-left
+        path.move(to: CGPoint(x: 0, y: height))
         
-        // Bottom-left outward curve (convex)
-        path.addQuadCurve(
-            to: CGPoint(x: bottomCornerRadius, y: height),
-            control: CGPoint(x: 0, y: height)
-        )
+        // Left edge going up
+        path.addLine(to: CGPoint(x: 0, y: cornerRadius))
         
-        // Bottom edge
-        path.addLine(to: CGPoint(x: width - bottomCornerRadius, y: height))
-        
-        // Bottom-right outward curve (convex)
-        path.addQuadCurve(
-            to: CGPoint(x: width, y: height - bottomCornerRadius),
-            control: CGPoint(x: width, y: height)
-        )
-        
-        // Right edge
-        path.addLine(to: CGPoint(x: width, y: cornerRadius))
-        
-        // Top-right corner (normal inward curve)
-        path.addArc(
-            center: CGPoint(x: width - cornerRadius, y: cornerRadius),
-            radius: cornerRadius,
-            startAngle: .degrees(0),
-            endAngle: .degrees(-90),
-            clockwise: true
-        )
-        
-        // Top edge
-        path.addLine(to: CGPoint(x: cornerRadius, y: 0))
-        
-        // Top-left corner (normal inward curve)
+        // Top-left corner (inward curve)
         path.addArc(
             center: CGPoint(x: cornerRadius, y: cornerRadius),
             radius: cornerRadius,
-            startAngle: .degrees(-90),
-            endAngle: .degrees(-180),
-            clockwise: true
+            startAngle: .degrees(180),
+            endAngle: .degrees(270),
+            clockwise: false
         )
         
-        // Left edge back to start
-        path.addLine(to: CGPoint(x: 0, y: height - bottomCornerRadius))
+        // Top edge
+        path.addLine(to: CGPoint(x: width - cornerRadius, y: 0))
+        
+        // Top-right corner (inward curve)
+        path.addArc(
+            center: CGPoint(x: width - cornerRadius, y: cornerRadius),
+            radius: cornerRadius,
+            startAngle: .degrees(270),
+            endAngle: .degrees(0),
+            clockwise: false
+        )
+        
+        // Right edge going down
+        path.addLine(to: CGPoint(x: width, y: height))
+        
+        // Bottom-right INWARD curve (concave) - curves INTO the tab
+        path.addQuadCurve(
+            to: CGPoint(x: width - bottomCornerRadius, y: height - bottomCornerRadius),
+            control: CGPoint(x: width - bottomCornerRadius, y: height)
+        )
+        
+        // Bottom edge
+        path.addLine(to: CGPoint(x: bottomCornerRadius, y: height - bottomCornerRadius))
+        
+        // Bottom-left INWARD curve (concave) - curves INTO the tab
+        path.addQuadCurve(
+            to: CGPoint(x: 0, y: height),
+            control: CGPoint(x: bottomCornerRadius, y: height)
+        )
+        
+        path.closeSubpath()
         
         return path
     }
