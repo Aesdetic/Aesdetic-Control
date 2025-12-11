@@ -506,13 +506,11 @@ struct AddAutomationDialog: View {
                     }
                 )
                 
-                // Main content
+                // Main content with NO padding - content fills naturally
                 if triggerSelection == .time {
                     timeTriggerContent
                         .frame(height: cardHeight)
                         .padding(.horizontal, 20)
-                        .padding(.top, 4)
-                        .padding(.bottom, 8)
                 } else {
                     SolarOffsetArcSlider(
                         offsetMinutes: $solarOffsetMinutes,
@@ -523,8 +521,6 @@ struct AddAutomationDialog: View {
                     )
                     .frame(height: cardHeight)
                     .padding(.horizontal, 6)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
                 }
             }
         }
