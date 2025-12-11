@@ -405,7 +405,7 @@ struct AddAutomationDialog: View {
     
     @ViewBuilder
     private func triggerSelectionContent(geometry: GeometryProxy) -> some View {
-        let tabHeight: CGFloat = 40
+        let tabHeight: CGFloat = 46  // Increased for better aesthetics
         let cardHeight: CGFloat = 200
         let cornerRadius: CGFloat = 16
         let totalHeight = tabHeight + cardHeight
@@ -487,6 +487,8 @@ struct AddAutomationDialog: View {
                             Text(option == .time ? "Time of Day" : option.rawValue)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(triggerSelection == option ? .white : .white.opacity(0.6))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: tabHeight)
                                 .contentShape(Rectangle())
@@ -502,11 +504,9 @@ struct AddAutomationDialog: View {
                         
                         ForEach(0..<3, id: \.self) { index in
                             if index != activeIndex {
-                                UnevenRoundedRectangle(
-                                    topLeadingRadius: cornerRadius,
-                                    bottomLeadingRadius: 0,
-                                    bottomTrailingRadius: 0,
-                                    topTrailingRadius: cornerRadius
+                                InactiveFolderTabShape(
+                                    cornerRadius: cornerRadius,
+                                    bottomCornerRadius: 8
                                 )
                                 .fill(Color.black.opacity(0.15))
                                 .frame(width: tabWidth, height: tabHeight)
@@ -1364,5 +1364,65 @@ extension AddAutomationDialog {
             isEditingName = true
             isNameFieldFocused = true
         }
+    }
+}
+
+// MARK: - Inactive Folder Tab Shape
+
+struct InactiveFolderTabShape: Shape {
+    let cornerRadius: CGFloat
+    let bottomCornerRadius: CGFloat
+    
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let width = rect.width
+        let height = rect.height
+        
+        // Start from bottom-left corner with outward curve
+        path.move(to: CGPoint(x: 0, y: height - bottomCornerRadius))
+        
+        // Bottom-left outward curve (convex)
+        path.addQuadCurve(
+            to: CGPoint(x: bottomCornerRadius, y: height),
+            control: CGPoint(x: 0, y: height)
+        )
+        
+        // Bottom edge
+        path.addLine(to: CGPoint(x: width - bottomCornerRadius, y: height))
+        
+        // Bottom-right outward curve (convex)
+        path.addQuadCurve(
+            to: CGPoint(x: width, y: height - bottomCornerRadius),
+            control: CGPoint(x: width, y: height)
+        )
+        
+        // Right edge
+        path.addLine(to: CGPoint(x: width, y: cornerRadius))
+        
+        // Top-right corner (normal inward curve)
+        path.addArc(
+            center: CGPoint(x: width - cornerRadius, y: cornerRadius),
+            radius: cornerRadius,
+            startAngle: .degrees(0),
+            endAngle: .degrees(-90),
+            clockwise: true
+        )
+        
+        // Top edge
+        path.addLine(to: CGPoint(x: cornerRadius, y: 0))
+        
+        // Top-left corner (normal inward curve)
+        path.addArc(
+            center: CGPoint(x: cornerRadius, y: cornerRadius),
+            radius: cornerRadius,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(-180),
+            clockwise: true
+        )
+        
+        // Left edge back to start
+        path.addLine(to: CGPoint(x: 0, y: height - bottomCornerRadius))
+        
+        return path
     }
 }
