@@ -163,7 +163,7 @@ struct SolarOffsetArcSlider: View {
                         }
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 4)
+                    .padding(.top, 20)
                     
                     Spacer()
                     
@@ -198,7 +198,7 @@ struct SolarOffsetArcSlider: View {
                         }
                         Spacer()
                     }
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 20)
                 }
                 .frame(width: width, height: height)
                 .allowsHitTesting(false) // Text overlays shouldn't block gestures
