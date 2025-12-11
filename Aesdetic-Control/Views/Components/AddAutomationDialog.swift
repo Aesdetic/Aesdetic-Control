@@ -407,7 +407,7 @@ struct AddAutomationDialog: View {
     private func triggerSelectionContent(geometry: GeometryProxy) -> some View {
         let tabHeight: CGFloat = 40
         let cardHeight: CGFloat = 200
-        let cornerRadius: CGFloat = 20
+        let cornerRadius: CGFloat = 16
         let totalHeight = tabHeight + cardHeight
         
         let gradientStops: [Gradient.Stop] = {
@@ -440,6 +440,7 @@ struct AddAutomationDialog: View {
             // Background with folder tab shape - use GeometryReader for proper clipping
             GeometryReader { geo in
                 ZStack {
+                    // Gradient layer
                     if triggerSelection == .time {
                         gradient
                             .frame(width: geo.size.width, height: totalHeight)
@@ -448,6 +449,10 @@ struct AddAutomationDialog: View {
                             .frame(width: geo.size.width, height: totalHeight * 30)
                             .offset(y: -scrollOffset)
                     }
+                    
+                    // Glass layer on top (matching device card)
+                    Color.white.opacity(0.12)
+                        .frame(width: geo.size.width, height: totalHeight)
                 }
             }
             .clipShape(
@@ -467,7 +472,7 @@ struct AddAutomationDialog: View {
                 )
                 .stroke(Color.white.opacity(0.2), lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.3), radius: 12, y: 5)
+            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
             
             // Content layer
             VStack(spacing: 0) {
