@@ -497,10 +497,15 @@ struct AddAutomationDialog: View {
                         
                         ForEach(0..<3, id: \.self) { index in
                             if index != activeIndex {
-                                Rectangle()
-                                    .fill(Color.black.opacity(0.15))
-                                    .frame(width: tabWidth, height: tabHeight)
-                                    .offset(x: CGFloat(index) * tabWidth)
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: cornerRadius,
+                                    bottomLeadingRadius: 0,
+                                    bottomTrailingRadius: 0,
+                                    topTrailingRadius: cornerRadius
+                                )
+                                .fill(Color.black.opacity(0.15))
+                                .frame(width: tabWidth, height: tabHeight)
+                                .offset(x: CGFloat(index) * tabWidth)
                             }
                         }
                     }
