@@ -374,7 +374,7 @@ struct AddAutomationDialog: View {
         GeometryReader { geometry in
             triggerSelectionContent(geometry: geometry)
         }
-        .frame(height: 260)
+        .frame(height: 240)
     }
     
     // MARK: - Repeat Schedule Section
@@ -406,7 +406,7 @@ struct AddAutomationDialog: View {
     @ViewBuilder
     private func triggerSelectionContent(geometry: GeometryProxy) -> some View {
         let tabHeight: CGFloat = 40
-        let cardHeight: CGFloat = 220
+        let cardHeight: CGFloat = 200
         let cornerRadius: CGFloat = 20
         let totalHeight = tabHeight + cardHeight
         
