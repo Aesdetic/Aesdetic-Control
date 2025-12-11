@@ -223,6 +223,9 @@ struct SolarOffsetArcSlider: View {
         .onAppear {
             loadCoordinate()
         }
+        .onChange(of: eventType) { _, _ in
+            calculateNextEventTime()
+        }
         .onChange(of: offsetMinutes) { _, _ in
             calculateNextEventTime()
         }
