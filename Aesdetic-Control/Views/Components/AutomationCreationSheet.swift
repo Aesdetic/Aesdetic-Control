@@ -101,5 +101,3 @@ struct DevicePickerSheet: View {
         }
     }
 }
-
-

@@ -49,18 +49,6 @@ struct AutomationView: View {
     }
     
     // MARK: - Header Section
-    @ViewBuilder
-    private func headerSection(geometry: GeometryProxy) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Automation")
-                .font(.largeTitle.bold())
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
-        }
-    }
     
     private var headerSection: some View {
         HStack {
@@ -179,7 +167,7 @@ struct AutomationView: View {
 
 #Preview {
     AutomationView()
-} 
+}
 
 // MARK: - Helpers
 
