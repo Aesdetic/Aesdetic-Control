@@ -436,90 +436,63 @@ struct AddAutomationDialog: View {
             endPoint: .bottom
         )
         
-        ZStack(alignment: .top) {
-            // Background with folder tab shape - use GeometryReader for proper clipping
-            GeometryReader { geo in
-                ZStack {
-                    // Gradient layer
-                    if triggerSelection == .time {
-                        gradient
-                            .frame(width: geo.size.width, height: totalHeight)
-                    } else {
-                        gradient
-                            .frame(width: geo.size.width, height: totalHeight * 30)
-                            .offset(y: -scrollOffset)
+        VStack(spacing: 12) {
+            // Pill-shaped tab buttons
+            HStack(spacing: 8) {
+                ForEach(TriggerSelection.allCases) { option in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            triggerSelection = option
+                        }
+                    } label: {
+                        Text(option == .time ? "Time of Day" : option.rawValue)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
                     }
-                    
-                    // Glass layer on top (matching device card)
-                    Color.white.opacity(0.12)
-                        .frame(width: geo.size.width, height: totalHeight)
+                    .background(
+                        Capsule()
+                            .fill(triggerSelection == option ? Color.clear : Color.white.opacity(0.15))
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.3), lineWidth: triggerSelection == option ? 1 : 0)
+                    )
+                    .buttonStyle(.plain)
                 }
             }
-            .clipShape(
-                FolderTabShape(
-                    activeTabIndex: triggerSelection.tabIndex,
-                    tabCount: 3,
-                    tabHeight: tabHeight,
-                    cornerRadius: cornerRadius
-                )
-            )
-            .overlay(
-                FolderTabShape(
-                    activeTabIndex: triggerSelection.tabIndex,
-                    tabCount: 3,
-                    tabHeight: tabHeight,
-                    cornerRadius: cornerRadius
-                )
-                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
             
-            // Content layer
-            VStack(spacing: 0) {
-                // Tab buttons with better visibility
-                HStack(spacing: 0) {
-                    ForEach(TriggerSelection.allCases) { option in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                triggerSelection = option
-                            }
-                        } label: {
-                            Text(option == .time ? "Time of Day" : option.rawValue)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(triggerSelection == option ? .white : .white.opacity(0.6))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: tabHeight)
-                                .contentShape(Rectangle())
+            // Main card container
+            ZStack {
+                // Background with gradient
+                GeometryReader { geo in
+                    ZStack {
+                        // Gradient layer
+                        if triggerSelection == .time {
+                            gradient
+                                .frame(width: geo.size.width, height: cardHeight)
+                        } else {
+                            gradient
+                                .frame(width: geo.size.width, height: cardHeight * 30)
+                                .offset(y: -scrollOffset)
                         }
-                        .buttonStyle(.plain)
+                        
+                        // Glass layer on top (matching device card)
+                        Color.white.opacity(0.12)
+                            .frame(width: geo.size.width, height: cardHeight)
                     }
                 }
-                .background(
-                    // Subtle background for inactive tabs to ensure visibility
-                    GeometryReader { geo in
-                        let tabWidth = geo.size.width / 3
-                        let activeIndex = triggerSelection.tabIndex
-                        
-                        ForEach(0..<3, id: \.self) { index in
-                            if index != activeIndex {
-                                InactiveFolderTabShape(
-                                    cornerRadius: cornerRadius,
-                                    bottomCornerRadius: 8
-                                )
-                                .fill(Color.black.opacity(0.15))
-                                .frame(width: tabWidth, height: tabHeight)
-                                .offset(x: CGFloat(index) * tabWidth)
-                            }
-                        }
-                    }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
                 )
+                .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
                 
-                // Main content with NO padding - content fills naturally
+                // Content layer
                 if triggerSelection == .time {
                     timeTriggerContent
-                        .frame(height: cardHeight)
                         .padding(.horizontal, 20)
                 } else {
                     SolarOffsetArcSlider(
@@ -529,12 +502,11 @@ struct AddAutomationDialog: View {
                         disableClipping: true,
                         useExternalGradient: true
                     )
-                    .frame(height: cardHeight)
                     .padding(.horizontal, 6)
                 }
             }
+            .frame(height: cardHeight)
         }
-        .frame(height: totalHeight)
     }
     
     private var timeTriggerContent: some View {
@@ -1364,67 +1336,5 @@ extension AddAutomationDialog {
             isEditingName = true
             isNameFieldFocused = true
         }
-    }
-}
-
-// MARK: - Inactive Folder Tab Shape
-
-struct InactiveFolderTabShape: Shape {
-    let cornerRadius: CGFloat
-    let bottomCornerRadius: CGFloat
-    
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let width = rect.width
-        let height = rect.height
-        
-        // Start from bottom-left
-        path.move(to: CGPoint(x: 0, y: height))
-        
-        // Left edge going up
-        path.addLine(to: CGPoint(x: 0, y: cornerRadius))
-        
-        // Top-left corner (inward curve)
-        path.addArc(
-            center: CGPoint(x: cornerRadius, y: cornerRadius),
-            radius: cornerRadius,
-            startAngle: .degrees(180),
-            endAngle: .degrees(270),
-            clockwise: false
-        )
-        
-        // Top edge
-        path.addLine(to: CGPoint(x: width - cornerRadius, y: 0))
-        
-        // Top-right corner (inward curve)
-        path.addArc(
-            center: CGPoint(x: width - cornerRadius, y: cornerRadius),
-            radius: cornerRadius,
-            startAngle: .degrees(270),
-            endAngle: .degrees(0),
-            clockwise: false
-        )
-        
-        // Right edge going down
-        path.addLine(to: CGPoint(x: width, y: height))
-        
-        // Bottom-right INWARD curve (concave) - curves INTO the tab
-        path.addQuadCurve(
-            to: CGPoint(x: width - bottomCornerRadius, y: height - bottomCornerRadius),
-            control: CGPoint(x: width - bottomCornerRadius, y: height)
-        )
-        
-        // Bottom edge
-        path.addLine(to: CGPoint(x: bottomCornerRadius, y: height - bottomCornerRadius))
-        
-        // Bottom-left INWARD curve (concave) - curves INTO the tab
-        path.addQuadCurve(
-            to: CGPoint(x: 0, y: height),
-            control: CGPoint(x: bottomCornerRadius, y: height)
-        )
-        
-        path.closeSubpath()
-        
-        return path
     }
 }
