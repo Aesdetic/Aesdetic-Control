@@ -284,6 +284,7 @@ struct AddAutomationDialog: View {
                 VStack(spacing: 20) {
                     automationDetailsSection
                     automationSettingsSection
+                    repeatScheduleSection
                     automationActionSection
                     
                     Button(action: saveAndDismiss) {
@@ -364,6 +365,30 @@ struct AddAutomationDialog: View {
                 .foregroundColor(.white.opacity(0.7))
             
             unifiedTriggerModule
+        }
+    }
+    
+    private var repeatScheduleSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Repeat Schedule")
+                .font(.callout.weight(.semibold))
+                .foregroundColor(.white.opacity(0.7))
+            
+            HStack(spacing: 8) {
+                ForEach(weekdayNames.indices, id: \.self) { idx in
+                    Button(action: { selectedWeekdays[idx].toggle() }) {
+                        Text(weekdayNames[idx])
+                            .font(.caption.weight(.semibold))
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(selectedWeekdays[idx] ? Color.white : Color.white.opacity(0.15))
+                            )
+                            .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.8))
+                    }
+                }
+            }
         }
     }
     
@@ -484,40 +509,13 @@ struct AddAutomationDialog: View {
                         .padding(.horizontal, 20)
                         .padding(.vertical, 16)
                 } else {
-                    VStack(spacing: 12) {
-                        SolarOffsetArcSlider(
-                            offsetMinutes: $solarOffsetMinutes,
-                            eventType: triggerSelection == .sunrise ? .sunrise : .sunset,
-                            device: activeDevice,
-                            disableClipping: true,
-                            useExternalGradient: true
-                        )
-                        
-                        // Weekday selection for sunrise/sunset
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Repeat on")
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(.white.opacity(0.7))
-                                .padding(.horizontal, 14)
-                            
-                            HStack(spacing: 6) {
-                                ForEach(weekdayNames.indices, id: \.self) { idx in
-                                    Button(action: { selectedWeekdays[idx].toggle() }) {
-                                        Text(weekdayNames[idx])
-                                            .font(.caption2.weight(.semibold))
-                                            .padding(.vertical, 6)
-                                            .padding(.horizontal, 8)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                    .fill(selectedWeekdays[idx] ? Color.white : Color.white.opacity(0.15))
-                                            )
-                                            .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.8))
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 14)
-                        }
-                    }
+                    SolarOffsetArcSlider(
+                        offsetMinutes: $solarOffsetMinutes,
+                        eventType: triggerSelection == .sunrise ? .sunrise : .sunset,
+                        device: activeDevice,
+                        disableClipping: true,
+                        useExternalGradient: true
+                    )
                     .frame(height: cardHeight)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 12)
@@ -535,27 +533,6 @@ struct AddAutomationDialog: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
                 .environment(\.colorScheme, .dark)
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Repeat on")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                HStack {
-                    ForEach(weekdayNames.indices, id: \.self) { idx in
-                        Button(action: { selectedWeekdays[idx].toggle() }) {
-                            Text(weekdayNames[idx])
-                                .font(.caption.weight(.semibold))
-                                .padding(.vertical, 6)
-                                .padding(.horizontal, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(selectedWeekdays[idx] ? Color.white : Color.white.opacity(0.15))
-                                )
-                                .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.8))
-                        }
-                    }
-                }
-            }
         }
     }
     
