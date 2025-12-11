@@ -361,7 +361,7 @@ struct AddAutomationDialog: View {
     // MARK: - Trigger Settings Section
     
     private var automationSettingsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             Text("Automation Settings")
                 .font(.callout.weight(.semibold))
                 .foregroundColor(.white.opacity(0.7))
@@ -511,7 +511,8 @@ struct AddAutomationDialog: View {
                     timeTriggerContent
                         .frame(height: cardHeight)
                         .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
+                        .padding(.top, 8)
+                        .padding(.bottom, 12)
                 } else {
                     SolarOffsetArcSlider(
                         offsetMinutes: $solarOffsetMinutes,
@@ -522,7 +523,8 @@ struct AddAutomationDialog: View {
                     )
                     .frame(height: cardHeight)
                     .padding(.horizontal, 6)
-                    .padding(.vertical, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
                 }
             }
         }
@@ -533,8 +535,7 @@ struct AddAutomationDialog: View {
         DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
             .labelsHidden()
             .datePickerStyle(.wheel)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .environment(\.colorScheme, .dark)
     }
     
