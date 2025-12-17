@@ -529,41 +529,57 @@ struct AddAutomationDialog: View {
                 )
                 .allowsHitTesting(false)
                 
-                // Glass layer on top of gradient
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color.white.opacity(0.12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-                    .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+                // Glass layer on top of gradient (shared chrome)
+                cardChrome(cornerRadius: cornerRadius)
                 
-                // Content layer
-                if triggerSelection == .time {
-                    timeTriggerContent
-                        .padding(.horizontal, 20)
-                } else {
-                    SolarOffsetArcSlider(
-                        offsetMinutes: $solarOffsetMinutes,
-                        eventType: selectedSolarEvent,
-                        device: activeDevice,
-                        disableClipping: true,
-                        useExternalGradient: true
-                    )
-                    .padding(.horizontal, 6)
+                // Content layer - unified structure
+                ZStack {
+                    if triggerSelection == .time {
+                        timeTriggerContent(cardHeight: cardHeight)
+                            .padding(.horizontal, 6)
+                    } else {
+                        SolarOffsetArcSlider(
+                            offsetMinutes: $solarOffsetMinutes,
+                            eventType: selectedSolarEvent,
+                            device: activeDevice,
+                            disableClipping: true,
+                            useExternalGradient: true
+                        )
+                        .padding(.horizontal, 6)
+                    }
                 }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             }
             .frame(height: cardHeight)
         }
         .frame(height: totalHeight)
     }
     
-    private var timeTriggerContent: some View {
-        DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
+    // MARK: - Card Chrome Helper
+    
+    private func cardChrome(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.white.opacity(0.12))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+    }
+    
+    private func timeTriggerContent(cardHeight: CGFloat) -> some View {
+        // Wheel pickers are ~216pt tall; scale & clamp to match the solar card
+        let pickerHeight: CGFloat = 216
+        
+        return DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
             .labelsHidden()
             .datePickerStyle(.wheel)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .environment(\.colorScheme, .dark)
+            .background(Color.clear)  // Remove default background
+            .scaleEffect(y: cardHeight / pickerHeight, anchor: .center)
+            .frame(height: cardHeight)  // Enforce final height
+            .clipped()
     }
     
     // MARK: - Action Section
