@@ -48,6 +48,7 @@ struct AddAutomationDialog: View {
     @State private var triggerSelection: TriggerSelection = .time
     @State private var selectedTime: Date = Date()
     @State private var selectedWeekdays: [Bool] = Array(repeating: false, count: 7)
+    @State private var draggingSelects: Bool? = nil  // Tracks swipe mode: true = selecting, false = deselecting
     @State private var solarOffsetMinutes: Double = 0
     
     @State private var actionSelection: ActionSelection = .color
@@ -380,26 +381,145 @@ struct AddAutomationDialog: View {
     // MARK: - Repeat Schedule Section
     
     private var repeatScheduleSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Repeat Schedule")
-                .font(.callout.weight(.semibold))
-                .foregroundColor(.white.opacity(0.7))
-            
-            HStack(spacing: 8) {
-                ForEach(weekdayNames.indices, id: \.self) { idx in
-                    Button(action: { selectedWeekdays[idx].toggle() }) {
-                        Text(weekdayNames[idx])
+        let weekdaySpacing: CGFloat = 5
+        let weekdayCornerRadius: CGFloat = 10
+        let allDaysSelected = selectedWeekdays.allSatisfy { $0 }
+        
+        return VStack(alignment: .leading, spacing: 8) {
+            // Title row with "Every day" toggle
+            HStack {
+                Text("Repeat Schedule")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.7))
+                
+                Spacer()
+                
+                // "Every day" toggle chip
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        let newValue = !allDaysSelected
+                        selectedWeekdays = Array(repeating: newValue, count: 7)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: allDaysSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.caption2)
+                        Text("Every day")
                             .font(.caption.weight(.semibold))
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(selectedWeekdays[idx] ? Color.white : Color.white.opacity(0.15))
-                            )
-                            .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.8))
+                    }
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(height: 28)
+                    .background(tabButtonBackground(isActive: allDaysSelected))
+                    .clipShape(RoundedRectangle(cornerRadius: weekdayCornerRadius, style: .continuous))
+                    .shadow(color: Color.black.opacity(allDaysSelected ? 0.15 : 0.08), radius: allDaysSelected ? 6 : 3, x: 0, y: allDaysSelected ? 3 : 2)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: weekdayCornerRadius, style: .continuous))
+                .buttonStyle(.plain)
+            }
+            
+            // Horizontal bar
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(height: 1)
+            
+            // Weekday buttons with swipe-to-select
+            GeometryReader { geo in
+                HStack(spacing: weekdaySpacing) {
+                    ForEach(weekdayNames.indices, id: \.self) { idx in
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                selectedWeekdays[idx].toggle()
+                            }
+                        }) {
+                            Text(weekdayNames[idx].uppercased())
+                                .font(.caption2.weight(.semibold))
+                                .tracking(0.3)
+                                .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.7))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 34)
+                                .background(weekdayButtonBackground(isSelected: selectedWeekdays[idx], cornerRadius: weekdayCornerRadius))
+                                .clipShape(RoundedRectangle(cornerRadius: weekdayCornerRadius, style: .continuous))
+                                .shadow(color: Color.black.opacity(selectedWeekdays[idx] ? 0.15 : 0.08), radius: selectedWeekdays[idx] ? 6 : 3, x: 0, y: selectedWeekdays[idx] ? 3 : 2)
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: weekdayCornerRadius, style: .continuous))
+                        .buttonStyle(.plain)
                     }
                 }
+                .overlay(
+                    // Swipe-to-select gesture overlay
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    let width = geo.size.width
+                                    let totalSpacing = weekdaySpacing * 6  // 6 gaps between 7 chips
+                                    let chipWidth = (width - totalSpacing) / 7
+                                    // Calculate index: each chip occupies chipWidth + spacing (except last)
+                                    let slotWidth = chipWidth + weekdaySpacing
+                                    let idx = min(max(Int(value.location.x / slotWidth), 0), 6)
+                                    
+                                    // On first call, detect swipe mode based on starting day
+                                    if draggingSelects == nil && idx < selectedWeekdays.count {
+                                        draggingSelects = !selectedWeekdays[idx]
+                                    }
+                                    
+                                    // Apply swipe mode to current day
+                                    if let mode = draggingSelects, idx < selectedWeekdays.count {
+                                        if selectedWeekdays[idx] != mode {
+                                            withAnimation(.easeInOut(duration: 0.1)) {
+                                                selectedWeekdays[idx] = mode
+                                            }
+                                        }
+                                    }
+                                }
+                                .onEnded { _ in
+                                    // Clear swipe mode when drag ends
+                                    draggingSelects = nil
+                                }
+                        )
+                )
             }
+            .frame(height: 34)
+            .padding(.bottom, weekdaySpacing)
+        }
+    }
+    
+    // MARK: - Weekday Button Background Helper
+    
+    @ViewBuilder
+    private func weekdayButtonBackground(isSelected: Bool, cornerRadius: CGFloat = 10) -> some View {
+        if isSelected {
+            // Selected: White pill with soft gradient
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.white)
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.95),
+                                    Color.white.opacity(0.85)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+        } else {
+            // Inactive: Transparent fill matching tab style
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(.ultraThinMaterial.opacity(0.5))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
         }
     }
     
