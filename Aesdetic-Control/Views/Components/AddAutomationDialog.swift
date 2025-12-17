@@ -437,11 +437,13 @@ struct AddAutomationDialog: View {
             endPoint: .bottom
         )
         
-        VStack(spacing: 12) {
-            // Tab row with neutral background
+        VStack(spacing: 0) {
+            // Tab row aligned with card edges
             HStack(spacing: 8) {
-                ForEach(TriggerSelection.allCases) { option in
+                // Explicit order: Sunrise | Sunset | Time of Day
+                ForEach([TriggerSelection.sunrise, .sunset, .time], id: \.self) { option in
                     let isActive = triggerSelection == option
+                    let isTimeOfDay = option == .time
                     
                     Button {
                         withAnimation(.easeInOut(duration: 0.25)) {
@@ -449,64 +451,22 @@ struct AddAutomationDialog: View {
                         }
                     } label: {
                         Text(option == .time ? "Time of Day" : option.rawValue)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .frame(maxWidth: .infinity, minHeight: 34)
+                            .padding(.horizontal, 12)
+                            .background(tabButtonBackground(isActive: isActive))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .shadow(color: Color.black.opacity(isActive ? 0.15 : 0.08), radius: isActive ? 6 : 3, x: 0, y: isActive ? 3 : 2)
                     }
-                    .background(
-                        ZStack {
-                            // Liquid glass effect
-                            if isActive {
-                                // Active: Ultra-transparent neutral background
-                                Capsule()
-                                    .fill(.ultraThinMaterial.opacity(0.25))
-                                    .overlay(
-                                        Capsule()
-                                            .fill(
-                                                LinearGradient(
-                                                    colors: [
-                                                        Color.white.opacity(0.2),
-                                                        Color.white.opacity(0.05)
-                                                    ],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
-                                                )
-                                            )
-                                    )
-                                    .overlay(
-                                        Capsule()
-                                            .strokeBorder(
-                                                LinearGradient(
-                                                    colors: [
-                                                        Color.white.opacity(0.5),
-                                                        Color.white.opacity(0.2)
-                                                    ],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
-                                                ),
-                                                lineWidth: 1.5
-                                            )
-                                    )
-                            } else {
-                                // Inactive: More opaque frosted glass
-                                Capsule()
-                                    .fill(.ultraThinMaterial.opacity(0.5))
-                                    .overlay(
-                                        Capsule()
-                                            .fill(Color.white.opacity(0.08))
-                                    )
-                                    .overlay(
-                                        Capsule()
-                                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-                                    )
-                            }
-                        }
-                    )
-                    .shadow(color: Color.black.opacity(isActive ? 0.15 : 0.08), radius: isActive ? 6 : 3, x: 0, y: isActive ? 3 : 2)
+                    .frame(minWidth: isTimeOfDay ? 120 : 90, maxWidth: .infinity)
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .buttonStyle(.plain)
                 }
             }
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .padding(.bottom, 10)  // Reduced gap: 12 - 2 = 10
             
             // Card with gradient background (masked to rounded shape)
             ZStack {
@@ -565,6 +525,57 @@ struct AddAutomationDialog: View {
                     .stroke(Color.white.opacity(0.2), lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+    }
+    
+    // MARK: - Tab Button Background Helper
+    
+    private func tabButtonBackground(isActive: Bool) -> some View {
+        ZStack {
+            if isActive {
+                // Active: Ultra-transparent to show gradient through
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.ultraThinMaterial.opacity(0.25))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.2),
+                                        Color.white.opacity(0.05)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.5),
+                                        Color.white.opacity(0.2)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.5
+                            )
+                    )
+            } else {
+                // Inactive: Lightened fill/stroke for subtle chrome, text remains at 0.9 opacity
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.ultraThinMaterial.opacity(0.5))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(0.05))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            }
+        }
     }
     
     private func timeTriggerContent(cardHeight: CGFloat) -> some View {
