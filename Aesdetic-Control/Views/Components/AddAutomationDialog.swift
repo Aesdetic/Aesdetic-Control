@@ -437,123 +437,123 @@ struct AddAutomationDialog: View {
             endPoint: .bottom
         )
         
-        ZStack(alignment: .top) {
-            // Background gradient layer extends behind tabs and card
-            GeometryReader { geo in
-                Group {
-                    if triggerSelection == .time {
-                        gradient
-                            .frame(width: geo.size.width, height: totalHeight)
-                    } else {
-                        gradient
-                            .frame(width: geo.size.width, height: cardHeight * 6)
-                            .offset(y: -scrollOffset)
-                    }
-                }
-            }
-            .frame(height: totalHeight)
-            .allowsHitTesting(false)  // Gradient doesn't capture touches
-            
-            // Tabs and card layered on top of gradient
-            VStack(spacing: 12) {
-                // Liquid glass tab buttons
-                HStack(spacing: 8) {
-                    ForEach(TriggerSelection.allCases) { option in
-                        let isActive = triggerSelection == option
-                        
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                triggerSelection = option
-                            }
-                        } label: {
-                            Text(option == .time ? "Time of Day" : option.rawValue)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                        }
-                        .background(
-                            ZStack {
-                                // Liquid glass effect
-                                if isActive {
-                                    // Active: Ultra-transparent to show gradient through
-                                    Capsule()
-                                        .fill(.ultraThinMaterial.opacity(0.25))
-                                        .overlay(
-                                            Capsule()
-                                                .fill(
-                                                    LinearGradient(
-                                                        colors: [
-                                                            Color.white.opacity(0.2),
-                                                            Color.white.opacity(0.05)
-                                                        ],
-                                                        startPoint: .topLeading,
-                                                        endPoint: .bottomTrailing
-                                                    )
-                                                )
-                                        )
-                                        .overlay(
-                                            Capsule()
-                                                .strokeBorder(
-                                                    LinearGradient(
-                                                        colors: [
-                                                            Color.white.opacity(0.5),
-                                                            Color.white.opacity(0.2)
-                                                        ],
-                                                        startPoint: .topLeading,
-                                                        endPoint: .bottomTrailing
-                                                    ),
-                                                    lineWidth: 1.5
-                                                )
-                                        )
-                                } else {
-                                    // Inactive: More opaque frosted glass
-                                    Capsule()
-                                        .fill(.ultraThinMaterial.opacity(0.5))
-                                        .overlay(
-                                            Capsule()
-                                                .fill(Color.white.opacity(0.08))
-                                        )
-                                        .overlay(
-                                            Capsule()
-                                                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-                                        )
-                                }
-                            }
-                        )
-                        .shadow(color: Color.black.opacity(isActive ? 0.15 : 0.08), radius: isActive ? 6 : 3, x: 0, y: isActive ? 3 : 2)
-                        .buttonStyle(.plain)
-                    }
-                }
-                
-                // Main card container with glass layer
-                ZStack {
-                    // Glass layer on top of gradient
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color.white.opacity(0.12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                        .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+        VStack(spacing: 12) {
+            // Tab row with neutral background
+            HStack(spacing: 8) {
+                ForEach(TriggerSelection.allCases) { option in
+                    let isActive = triggerSelection == option
                     
-                    // Content layer
-                    if triggerSelection == .time {
-                        timeTriggerContent
-                            .padding(.horizontal, 20)
-                    } else {
-                        SolarOffsetArcSlider(
-                            offsetMinutes: $solarOffsetMinutes,
-                            eventType: selectedSolarEvent,
-                            device: activeDevice,
-                            disableClipping: true,
-                            useExternalGradient: true
-                        )
-                        .padding(.horizontal, 6)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            triggerSelection = option
+                        }
+                    } label: {
+                        Text(option == .time ? "Time of Day" : option.rawValue)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                    }
+                    .background(
+                        ZStack {
+                            // Liquid glass effect
+                            if isActive {
+                                // Active: Ultra-transparent neutral background
+                                Capsule()
+                                    .fill(.ultraThinMaterial.opacity(0.25))
+                                    .overlay(
+                                        Capsule()
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [
+                                                        Color.white.opacity(0.2),
+                                                        Color.white.opacity(0.05)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                )
+                                            )
+                                    )
+                                    .overlay(
+                                        Capsule()
+                                            .strokeBorder(
+                                                LinearGradient(
+                                                    colors: [
+                                                        Color.white.opacity(0.5),
+                                                        Color.white.opacity(0.2)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                ),
+                                                lineWidth: 1.5
+                                            )
+                                    )
+                            } else {
+                                // Inactive: More opaque frosted glass
+                                Capsule()
+                                    .fill(.ultraThinMaterial.opacity(0.5))
+                                    .overlay(
+                                        Capsule()
+                                            .fill(Color.white.opacity(0.08))
+                                    )
+                                    .overlay(
+                                        Capsule()
+                                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                                    )
+                            }
+                        }
+                    )
+                    .shadow(color: Color.black.opacity(isActive ? 0.15 : 0.08), radius: isActive ? 6 : 3, x: 0, y: isActive ? 3 : 2)
+                    .buttonStyle(.plain)
+                }
+            }
+            
+            // Card with gradient background (masked to rounded shape)
+            ZStack {
+                // Gradient background masked to card shape
+                GeometryReader { geo in
+                    Group {
+                        if triggerSelection == .time {
+                            gradient
+                                .frame(width: geo.size.width, height: cardHeight)
+                        } else {
+                            gradient
+                                .frame(width: geo.size.width, height: cardHeight * 6)
+                                .offset(y: -scrollOffset)
+                        }
                     }
                 }
-                .frame(height: cardHeight)
+                .mask(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .frame(height: cardHeight)
+                )
+                .allowsHitTesting(false)
+                
+                // Glass layer on top of gradient
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+                
+                // Content layer
+                if triggerSelection == .time {
+                    timeTriggerContent
+                        .padding(.horizontal, 20)
+                } else {
+                    SolarOffsetArcSlider(
+                        offsetMinutes: $solarOffsetMinutes,
+                        eventType: selectedSolarEvent,
+                        device: activeDevice,
+                        disableClipping: true,
+                        useExternalGradient: true
+                    )
+                    .padding(.horizontal, 6)
+                }
             }
+            .frame(height: cardHeight)
         }
         .frame(height: totalHeight)
     }
