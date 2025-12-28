@@ -2261,7 +2261,7 @@ class DeviceControlViewModel: ObservableObject {
         let currentDevice = await MainActor.run {
             self.devices.first(where: { $0.id == device.id }) ?? device
         }
-        let currentBrightness = currentDevice.brightness > 0 ? currentDevice.brightness : 255
+        _ = currentDevice.brightness > 0 ? currentDevice.brightness : 255 // Unused
         
         // CRITICAL: Apply effect with colors, brightness, and realtime release atomically
         // Include lor: 0 in the same call if needed to prevent flash
@@ -2336,7 +2336,7 @@ class DeviceControlViewModel: ObservableObject {
             await colorPipeline.cancelUploads(for: device.id)
             
             // Build per-LED upload bodies with fx: 0 in first chunk
-            var bodies = WLEDAPIService.buildSegmentPixelBodies(
+            let bodies = WLEDAPIService.buildSegmentPixelBodies(
                 segmentId: segmentId,
                 startIndex: 0,
                 hexColors: frame,

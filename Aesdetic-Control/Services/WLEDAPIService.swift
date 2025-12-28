@@ -380,7 +380,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     /// Save a ColorPreset as a WLED preset with per-LED colors
     func saveColorPreset(_ preset: ColorPreset, to device: WLEDDevice, presetId: Int) async throws -> Int {
         let ledCount = device.state?.segments.first?.len ?? 120
-        let gradient = LEDGradient(stops: preset.gradientStops, interpolation: .linear)  // Presets use linear by default
+        let interpolation = preset.gradientInterpolation ?? .linear  // Use saved interpolation or default to linear
+        let gradient = LEDGradient(stops: preset.gradientStops, interpolation: interpolation)
         let hexColors = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: gradient.interpolation)
         
         // First, send per-LED colors using setSegmentPixels

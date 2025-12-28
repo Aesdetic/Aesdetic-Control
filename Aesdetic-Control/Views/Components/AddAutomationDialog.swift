@@ -24,13 +24,6 @@ struct AddAutomationDialog: View {
         var id: String { rawValue }
     }
     
-    enum ColorActionMode: String, CaseIterable, Identifiable {
-        case scenes = "Scenes"
-        case gradient = "Create New"
-        
-        var id: String { rawValue }
-    }
-    
     @Environment(\.dismiss) var dismiss
     @ObservedObject private var presetsStore = PresetsStore.shared
     let device: WLEDDevice
@@ -52,11 +45,14 @@ struct AddAutomationDialog: View {
     @State private var solarOffsetMinutes: Double = 0
     
     @State private var actionSelection: ActionSelection = .color
-    @State private var selectedSceneId: UUID?
     @State private var selectedEffectId: Int?
     @State private var effectBrightness: Double
+    @State private var effectSpeed: Int = 128
+    @State private var effectIntensity: Int = 128
+    @State private var effectGradient: LEDGradient?
     @State private var gradientBrightness: Double
     @State private var gradientDuration: Double = 10
+    @State private var gradientInterpolation: GradientInterpolation = .linear
     @State private var selectedColorPresetId: UUID?
     @State private var selectedTransitionPresetId: UUID?
     @State private var selectedEffectPresetId: UUID?
@@ -65,9 +61,13 @@ struct AddAutomationDialog: View {
     @State private var allowPartialFailure: Bool = true
     @State private var templateGradient: LEDGradient?
     @State private var templateTransition: TransitionActionPayload?
+    // Transition editor state
+    @State private var transitionStartGradient: LEDGradient?
+    @State private var transitionEndGradient: LEDGradient?
+    @State private var transitionStartBrightness: Double = 128
+    @State private var transitionEndBrightness: Double = 255
     @State private var templateEffectSettings: TemplateEffectSettings?
     @State private var templateMetadata: AutomationMetadata?
-    @State private var colorActionMode: ColorActionMode
     @State private var isEditingName: Bool = false
     @FocusState private var isNameFieldFocused: Bool
     
@@ -108,10 +108,11 @@ struct AddAutomationDialog: View {
         var initialWeekdays = Array(repeating: false, count: 7)
         var initialSolarOffset: Double = 0
         var initialActionSelection: ActionSelection = .color
-        var initialColorMode: ColorActionMode = scenes.isEmpty ? .gradient : .scenes
-        var initialSceneId: UUID? = scenes.first?.id
         var initialEffectId: Int? = effectOptions.first?.id
         var initialEffectBrightness = Double(device.brightness)
+        var initialEffectSpeed: Int = 128
+        var initialEffectIntensity: Int = 128
+        var initialEffectGradient: LEDGradient?
         var initialGradientBrightness = Double(device.brightness)
         var initialGradientDuration: Double = 10
         var initialEnableColorFade = false
@@ -121,6 +122,10 @@ struct AddAutomationDialog: View {
         var initialTemplateEffect: TemplateEffectSettings?
         var initialMetadata: AutomationMetadata?
         var initialAllowPartial = true
+        var initialTransitionStartGradient: LEDGradient?
+        var initialTransitionEndGradient: LEDGradient?
+        var initialTransitionStartBrightness: Double = 128
+        var initialTransitionEndBrightness: Double = 255
         
         if let editing = editingAutomation {
             initialName = editing.name
@@ -148,30 +153,46 @@ struct AddAutomationDialog: View {
             }
             switch editing.action {
             case .scene(let payload):
+                // Migrate scene action to gradient by finding the scene and extracting its gradient
                 initialActionSelection = .color
-                initialColorMode = .scenes
-                initialSceneId = payload.sceneId
+                if let scene = scenes.first(where: { $0.id == payload.sceneId }) {
+                    // Extract gradient from scene (scenes use primaryStops)
+                    initialTemplateGradient = LEDGradient(stops: scene.primaryStops, interpolation: .linear)
+                    initialGradientBrightness = Double(scene.brightness)
+                } else {
+                    // Fallback if scene not found - use device's current gradient
+                    let fallbackGradient = viewModel.automationGradient(for: initialActiveDevice)
+                    initialTemplateGradient = fallbackGradient
+                    initialGradientBrightness = Double(initialActiveDevice.brightness)
+                }
             case .gradient(let payload):
                 initialActionSelection = .color
-                initialColorMode = .gradient
                 initialTemplateGradient = payload.gradient
                 initialGradientBrightness = Double(payload.brightness)
                 initialEnableColorFade = payload.durationSeconds > 0
                 initialGradientDuration = max(10, payload.durationSeconds)
+                // Note: interpolation is stored in the gradient itself
             case .transition(let payload):
                 initialActionSelection = .transition
                 initialTemplateTransition = payload
                 initialGradientBrightness = Double(payload.endBrightness)
                 initialTransitionDuration = payload.durationSeconds
+                // Extract transition gradients for editor
+                initialTransitionStartGradient = payload.startGradient
+                initialTransitionEndGradient = payload.endGradient
+                initialTransitionStartBrightness = Double(payload.startBrightness)
+                initialTransitionEndBrightness = Double(payload.endBrightness)
             case .effect(let payload):
                 initialActionSelection = .effect
                 initialEffectId = payload.effectId
                 initialEffectBrightness = Double(payload.brightness)
+                initialEffectSpeed = payload.speed
+                initialEffectIntensity = payload.intensity
+                initialEffectGradient = payload.gradient
                 initialTemplateGradient = payload.gradient
                 initialTemplateEffect = TemplateEffectSettings(gradient: payload.gradient, speed: payload.speed, intensity: payload.intensity)
             case .preset, .directState:
                 initialActionSelection = .color
-                initialColorMode = .gradient
             }
             initialMetadata = editing.metadata
         } else if let prefill = templatePrefill {
@@ -200,7 +221,6 @@ struct AddAutomationDialog: View {
             switch prefill.action {
             case .gradient(let gradient, let brightness, let fadeDuration):
                 initialActionSelection = .color
-                initialColorMode = .gradient
                 initialTemplateGradient = gradient
                 initialGradientBrightness = Double(brightness)
                 initialEnableColorFade = fadeDuration > 0
@@ -226,9 +246,11 @@ struct AddAutomationDialog: View {
         }
         
         _automationName = State(initialValue: initialName)
-        _selectedSceneId = State(initialValue: initialSceneId)
         _selectedEffectId = State(initialValue: initialEffectId)
         _effectBrightness = State(initialValue: initialEffectBrightness)
+        _effectSpeed = State(initialValue: initialEffectSpeed)
+        _effectIntensity = State(initialValue: initialEffectIntensity)
+        _effectGradient = State(initialValue: initialEffectGradient ?? viewModel.automationGradient(for: initialActiveDevice))
         _gradientBrightness = State(initialValue: initialGradientBrightness)
         _selectedDeviceIds = State(initialValue: initialDeviceIds)
         _activeDevice = State(initialValue: initialActiveDevice)
@@ -244,11 +266,24 @@ struct AddAutomationDialog: View {
         _actionSelection = State(initialValue: initialActionSelection)
         _enableColorFade = State(initialValue: initialEnableColorFade)
         _gradientDuration = State(initialValue: initialGradientDuration)
-        _templateGradient = State(initialValue: initialTemplateGradient)
+        _gradientInterpolation = State(initialValue: initialTemplateGradient?.interpolation ?? .linear)
+        _templateGradient = State(initialValue: initialTemplateGradient ?? viewModel.automationGradient(for: initialActiveDevice))
         _templateTransition = State(initialValue: initialTemplateTransition)
         _templateEffectSettings = State(initialValue: initialTemplateEffect)
         _templateMetadata = State(initialValue: initialMetadata)
-        _colorActionMode = State(initialValue: initialColorMode)
+        // Initialize transition editor state
+        let defaultStartGradient = LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFFFFF")
+        ])
+        let defaultEndGradient = LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ])
+        _transitionStartGradient = State(initialValue: initialTransitionStartGradient ?? defaultStartGradient)
+        _transitionEndGradient = State(initialValue: initialTransitionEndGradient ?? defaultEndGradient)
+        _transitionStartBrightness = State(initialValue: initialTransitionStartBrightness)
+        _transitionEndBrightness = State(initialValue: initialTransitionEndBrightness)
     }
     
     private var weekdayNames: [String] { ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"] }
@@ -287,6 +322,7 @@ struct AddAutomationDialog: View {
                     automationSettingsSection
                     repeatScheduleSection
                     automationActionSection
+                    deviceSyncSection
                     
                     Button(action: saveAndDismiss) {
                         Text(primaryButtonTitle)
@@ -347,15 +383,129 @@ struct AddAutomationDialog: View {
     
     private var automationDetailsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Device selection moved to bottom of dialog
+        }
+    }
+    
+    @ViewBuilder
+    private var deviceSyncSection: some View {
             if allowDeviceSelection {
-                deviceSelectionSection
+            deviceSelectionCard
+        }
+    }
+    
+    private var deviceSelectionCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header row with summary on the right
+            HStack {
+                Text("Sync to devices")
+                    .font(.callout.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.7))
                 
-                Toggle(isOn: $allowPartialFailure) {
-                    Text("Allow partial run if a device is offline")
-                        .foregroundColor(.white.opacity(0.85))
-                }
-                .toggleStyle(SwitchToggleStyle(tint: .white))
+                Spacer()
+                
+                Text(deviceSyncSummary)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
             }
+            
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
+                ForEach(availableDevices) { device in
+                    deviceChip(device: device)
+                }
+            }
+        }
+    }
+    
+    private func deviceChip(device: WLEDDevice) -> some View {
+        let isSelected = selectedDeviceIds.contains(device.id)
+        let isOnline = device.isOnline
+        
+        return Button {
+            if isSelected && selectedDeviceIds.count == 1 {
+                return // Prevent deselecting the last device
+            }
+            if isSelected {
+                selectedDeviceIds.remove(device.id)
+            } else {
+                selectedDeviceIds.insert(device.id)
+                activeDevice = device
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(isSelected ? .black : .white.opacity(0.9))
+                    .lineLimit(1)
+                
+                HStack(spacing: 4) {
+                    Text(isOnline ? "Online" : "Offline")
+                        .font(.caption2)
+                        .foregroundColor(isSelected ? .black.opacity(0.7) : .white.opacity(0.5))
+                    
+                    // Status dot on the right
+                    Circle()
+                        .fill(isOnline ? Color.green : Color.orange)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(minHeight: 44) // Accessibility: minimum 44pt hit area
+            .background(deviceChipBackground(isSelected: isSelected))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(
+                color: Color.black.opacity(isSelected ? 0.15 : 0.08),
+                radius: isSelected ? 6 : 3,
+                x: 0,
+                y: isSelected ? 3 : 2
+            )
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sync to device: \(device.name), \(isOnline ? "Online" : "Offline")")
+        .accessibilityHint(isSelected ? "Tap to deselect this device" : "Tap to select this device")
+    }
+    
+    @ViewBuilder
+    private func deviceChipBackground(isSelected: Bool) -> some View {
+        if isSelected {
+            // Selected: White pill with soft gradient (matching tab style)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.95),
+                                    Color.white.opacity(0.85)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+        } else {
+            // Inactive: Transparent fill matching tab style
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
+            }
+    }
+    
+    private var deviceSyncSummary: String {
+        let selectedCount = selectedDeviceIds.count
+        let totalCount = availableDevices.count
+        
+        if selectedCount == totalCount {
+            return "All devices selected"
+        } else {
+            return "Syncing to \(selectedCount) of \(totalCount) devices"
         }
     }
     
@@ -388,10 +538,10 @@ struct AddAutomationDialog: View {
         return VStack(alignment: .leading, spacing: 8) {
             // Title row with "Every day" toggle
             HStack {
-                Text("Repeat Schedule")
+            Text("Repeat Schedule")
                     .font(.footnote.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                
+                .foregroundColor(.white.opacity(0.7))
+            
                 Spacer()
                 
                 // "Every day" toggle chip
@@ -437,7 +587,7 @@ struct AddAutomationDialog: View {
                                 .font(.caption2.weight(.semibold))
                                 .tracking(0.3)
                                 .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.7))
-                                .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity)
                                 .frame(height: 34)
                                 .background(weekdayButtonBackground(isSelected: selectedWeekdays[idx], cornerRadius: weekdayCornerRadius))
                                 .clipShape(RoundedRectangle(cornerRadius: weekdayCornerRadius, style: .continuous))
@@ -591,18 +741,18 @@ struct AddAutomationDialog: View {
             // Card with gradient background (masked to rounded shape)
             ZStack {
                 // Gradient background masked to card shape
-                GeometryReader { geo in
-                    Group {
-                        if triggerSelection == .time {
-                            gradient
+            GeometryReader { geo in
+                Group {
+                    if triggerSelection == .time {
+                        gradient
                                 .frame(width: geo.size.width, height: cardHeight)
-                        } else {
-                            gradient
-                                .frame(width: geo.size.width, height: cardHeight * 6)
-                                .offset(y: -scrollOffset)
-                        }
+                    } else {
+                        gradient
+                            .frame(width: geo.size.width, height: cardHeight * 6)
+                            .offset(y: -scrollOffset)
                     }
                 }
+            }
                 .mask(
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .frame(height: cardHeight)
@@ -645,55 +795,55 @@ struct AddAutomationDialog: View {
                     .stroke(Color.white.opacity(0.2), lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
-    }
+                        }
     
     // MARK: - Tab Button Background Helper
     
     private func tabButtonBackground(isActive: Bool) -> some View {
-        ZStack {
-            if isActive {
-                // Active: Ultra-transparent to show gradient through
+                            ZStack {
+                                if isActive {
+                                    // Active: Ultra-transparent to show gradient through
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.ultraThinMaterial.opacity(0.25))
-                    .overlay(
+                                        .fill(.ultraThinMaterial.opacity(0.25))
+                                        .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.2),
-                                        Color.white.opacity(0.05)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-                    .overlay(
+                                                .fill(
+                                                    LinearGradient(
+                                                        colors: [
+                                                            Color.white.opacity(0.2),
+                                                            Color.white.opacity(0.05)
+                                                        ],
+                                                        startPoint: .topLeading,
+                                                        endPoint: .bottomTrailing
+                                                    )
+                                                )
+                                        )
+                                        .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.5),
-                                        Color.white.opacity(0.2)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.5
-                            )
-                    )
-            } else {
+                                                .strokeBorder(
+                                                    LinearGradient(
+                                                        colors: [
+                                                            Color.white.opacity(0.5),
+                                                            Color.white.opacity(0.2)
+                                                        ],
+                                                        startPoint: .topLeading,
+                                                        endPoint: .bottomTrailing
+                                                    ),
+                                                    lineWidth: 1.5
+                                                )
+                                        )
+                                } else {
                 // Inactive: Lightened fill/stroke for subtle chrome, text remains at 0.9 opacity
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.ultraThinMaterial.opacity(0.5))
-                    .overlay(
+                                        .fill(.ultraThinMaterial.opacity(0.5))
+                                        .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(Color.white.opacity(0.05))
-                    )
-                    .overlay(
+                                        )
+                                        .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                    )
+                        )
             }
         }
     }
@@ -740,396 +890,120 @@ struct AddAutomationDialog: View {
     }
     
     private var effectActionControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            let presets = presetsStore.effectPresets(for: activeDevice.id)
-            if !presets.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Effect presets")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.8))
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(presets) { preset in
-                                Button {
-                                    selectedEffectPresetId = preset.id
-                                    selectedEffectId = preset.effectId
-                                    effectBrightness = Double(preset.brightness)
-                                    templateEffectSettings = nil
-                                    templateGradient = nil
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(preset.name)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundColor(.white)
-                                        Text("Effect \(preset.effectId)")
-                                            .font(.caption2)
-                                            .foregroundColor(.white.opacity(0.7))
-                                    }
-                                    .padding(10)
-                                    .frame(width: 140, alignment: .leading)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .fill(selectedEffectPresetId == preset.id ? Color.white.opacity(0.2) : Color.white.opacity(0.08))
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
+        AutomationEffectEditor(
+            viewModel: viewModel,
+            device: activeDevice,
+            effectOptions: effectOptions,
+            effectId: Binding(
+                get: { selectedEffectId ?? effectOptions.first?.id ?? 0 },
+                set: { newId in
+                    selectedEffectId = newId
+                    selectedEffectPresetId = nil
+                    // Update gradient for new slot count
+                    if let metadata = effectOptions.first(where: { $0.id == newId }) {
+                        let slotCount = max(metadata.colorSlotCount, 1)
+                        if slotCount <= 1 {
+                            // Single color mode
+                            let currentHex = effectGradient?.stops.first?.hexColor ?? "FFFFFF"
+                            effectGradient = LEDGradient(stops: [GradientStop(position: 0.0, hexColor: currentHex)])
+                        } else {
+                            // Multi-color mode - prepare gradient for slot count
+                            let currentGrad = effectGradient ?? viewModel.automationGradient(for: activeDevice)
+                            effectGradient = preparedGradientForSlotCount(currentGrad, slotCount: slotCount)
                         }
-                        .padding(.vertical, 4)
                     }
                 }
-            }
-            
-            if effectOptions.isEmpty {
-                Text("No gradient-friendly animations available for this device.")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.6))
-            } else {
-                Picker("Animation", selection: Binding(
-                    get: { selectedEffectId ?? effectOptions.first!.id },
-                    set: {
-                        selectedEffectId = $0
+            ),
+            brightness: $effectBrightness,
+            speed: $effectSpeed,
+            intensity: $effectIntensity,
+            gradient: Binding(
+                get: { effectGradient ?? viewModel.automationGradient(for: activeDevice) },
+                set: { newGradient in
+                    effectGradient = newGradient
                         selectedEffectPresetId = nil
-                        templateEffectSettings = nil
-                        templateGradient = nil
-                    }
-                )) {
-                    ForEach(effectOptions, id: \.id) { effect in
-                        Text(effect.name).tag(effect.id)
-                    }
                 }
-                .pickerStyle(.wheel)
-                .frame(height: 120)
-                .colorMultiply(.white)
-                
-                VStack(alignment: .leading) {
-                    Text("Brightness \(Int(effectBrightness))%")
-                        .foregroundColor(.white.opacity(0.8))
-                    Slider(value: $effectBrightness, in: 1...255, step: 1)
-                        .tint(.white)
-                }
-            }
+            )
+        )
+    }
+    
+    private func preparedGradientForSlotCount(_ gradient: LEDGradient, slotCount: Int) -> LEDGradient {
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        if slotCount <= 1 {
+            let hex = sortedStops.first?.hexColor ?? "FFFFFF"
+            return LEDGradient(stops: [GradientStop(position: 0.0, hexColor: hex)], interpolation: gradient.interpolation)
+                    }
+        let clampedCount = max(2, slotCount)
+        let positions: [Double]
+        if clampedCount == 2 {
+            positions = [0.0, 1.0]
+        } else {
+            positions = (0..<clampedCount).map { Double($0) / Double(clampedCount - 1) }
         }
+        let generatedStops = positions.map { t -> GradientStop in
+            let sourceStops = sortedStops.isEmpty ? gradient.stops : sortedStops
+            let color = GradientSampler.sampleColor(at: t, stops: sourceStops, interpolation: gradient.interpolation)
+            return GradientStop(position: t, hexColor: color.toHex())
+        }
+        return LEDGradient(stops: generatedStops, interpolation: gradient.interpolation)
     }
     
     private var colorActionControls: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Picker("Color Mode", selection: $colorActionMode) {
-                ForEach(ColorActionMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            
-            if colorActionMode == .scenes {
-                sceneSelectionControls
-            } else {
                 gradientCreationControls
-            }
-        }
-        .onChange(of: colorActionMode) { _, mode in
-            if mode == .scenes {
-                selectedColorPresetId = nil
-                templateGradient = nil
-            } else {
-                selectedSceneId = nil
-                if templateGradient == nil {
-                    templateGradient = viewModel.automationGradient(for: activeDevice)
-                }
-            }
-        }
-    }
-    
-    private var sceneSelectionControls: some View {
-        Group {
-            if scenes.isEmpty {
-                Text("Save a scene from the Colors tab to reuse it here.")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.65))
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(scenes) { scene in
-                            let isSelected = selectedSceneId == scene.id
-                            Button {
-                                selectedSceneId = scene.id
-                            } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(scene.name)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundColor(isSelected ? .black : .white)
-                                    Text("\(scene.primaryStops.count) colors")
-                                        .font(.caption)
-                                        .foregroundColor(isSelected ? .black.opacity(0.7) : .white.opacity(0.7))
-                                }
-                                .padding(12)
-                                .frame(width: 150, alignment: .leading)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(isSelected ? Color.white : Color.white.opacity(0.12))
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
+            .onChange(of: templateGradient) { _, newGradient in
+                // Sync interpolation when gradient changes
+                if let newGradient = newGradient {
+                    gradientInterpolation = newGradient.interpolation
             }
         }
     }
     
     private var gradientCreationControls: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            gradientEditorSection
-            
-            gradientPresetButtons
-            
-            Button {
-                setTemplateGradient(viewModel.automationGradient(for: activeDevice))
-            } label: {
-                Label("Use current colors", systemImage: "sparkles")
-                    .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.12))
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Brightness")
-                        .foregroundColor(.white.opacity(0.8))
-                    Spacer()
-                    Text("\(Int(gradientBrightness))%")
-                        .foregroundColor(.white)
+        AutomationColorEditor(
+            viewModel: viewModel,
+            device: activeDevice,
+            gradient: Binding(
+                get: { templateGradient ?? viewModel.automationGradient(for: activeDevice) },
+                set: { newGradient in
+                    templateGradient = newGradient
+                    gradientInterpolation = newGradient.interpolation
                 }
-                
-                Slider(value: $gradientBrightness, in: 1...255, step: 1)
-                    .tint(.white)
-            }
-            
-            Toggle(isOn: $enableColorFade.animation()) {
-                Text("Fade over time")
-                    .foregroundColor(.white.opacity(0.9))
-            }
-            .toggleStyle(SwitchToggleStyle(tint: .white))
-            
-            if enableColorFade {
-                VStack(alignment: .leading) {
-                    HStack {
-                        Text("Fade duration")
-                            .foregroundColor(.white.opacity(0.8))
-                        Spacer()
-                        Text("\(Int(gradientDuration)) sec")
-                            .foregroundColor(.white)
-                    }
-                    Slider(value: $gradientDuration, in: 5...300, step: 5)
-                        .tint(.white)
-                }
-            }
-        }
-    }
-    
-    private var gradientEditorSection: some View {
-        let gradient = editingGradient
-        return VStack(alignment: .leading, spacing: 12) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        gradient: Gradient(colors: gradient.stops.map { Color(hex: $0.hexColor) }),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 52)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                )
-            
-            ForEach(gradient.stops) { stop in
-                gradientStopEditorRow(stop: stop, totalCount: gradient.stops.count)
-            }
-            
-        Button(action: addGradientStop) {
-                Label("Add Color", systemImage: "plus.circle.fill")
-                    .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.12))
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-    }
-    
-    private var gradientPresetButtons: some View {
-        Group {
-            if presetsStore.colorPresets.isEmpty {
-                Text("Capture your current gradient or save a preset to reuse it here.")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.65))
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Presets")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.75))
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(presetsStore.colorPresets) { preset in
-                                let isSelected = selectedColorPresetId == preset.id
-                                Button {
-                                    let gradient = LEDGradient(stops: preset.gradientStops)
-                                    setTemplateGradient(gradient, presetId: preset.id)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        LinearGradient(
-                                            gradient: Gradient(colors: preset.gradientStops.map { Color(hex: $0.hexColor) }),
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
-                                        .frame(height: 28)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                        
-                                        Text(preset.name)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundColor(.white)
-                                    }
-                                    .padding(10)
-                                    .frame(width: 135, alignment: .leading)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .fill(isSelected ? Color.white.opacity(0.25) : Color.white.opacity(0.08))
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            }
-        }
-    }
-    
-    private func gradientStopEditorRow(stop: GradientStop, totalCount: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Stop \(stopLabel(for: stop))")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.85))
-                Spacer()
-                if totalCount > 1 {
-                    Button(role: .destructive) {
-                        removeGradientStop(stop.id)
-                    } label: {
-                        Image(systemName: "minus.circle")
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            
-            ColorPicker("Color", selection: colorBinding(for: stop), supportsOpacity: false)
-                .labelsHidden()
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            HStack {
-                Text("Position")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
-                Spacer()
-                Text(String(format: "%.0f%%", stop.position * 100))
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            
-            Slider(value: positionBinding(for: stop), in: 0...1)
-                .tint(.white)
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.08))
+            ),
+            brightness: $gradientBrightness,
+            interpolation: $gradientInterpolation,
+            fadeDuration: $gradientDuration,
+            enableFade: $enableColorFade,
+            selectedPresetId: $selectedColorPresetId
         )
     }
-    
     private var transitionActionControls: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            let presets = presetsStore.transitionPresets(for: activeDevice.id)
-            if presets.isEmpty {
-                Text("Create a transition preset from the Transitions tab to enable sunrise/sunset routines.")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.6))
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Pick a transition")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.8))
-                    ForEach(presets) { preset in
-                        Button {
-                            selectedTransitionPresetId = preset.id
-                            templateTransition = nil
-                        } label: {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(preset.name)
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                    Text("\(Int(preset.durationSec)) sec · \(Int(preset.brightnessA))% → \(Int(preset.brightnessB))%")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.7))
-                                }
-                                Spacer()
-                                if selectedTransitionPresetId == preset.id {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                }
-                            }
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(selectedTransitionPresetId == preset.id ? Color.white.opacity(0.18) : Color.white.opacity(0.08))
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
+        AutomationTransitionEditor(
+            viewModel: viewModel,
+            device: activeDevice,
+            startGradient: Binding(
+                get: { transitionStartGradient ?? LEDGradient(stops: [
+                    GradientStop(position: 0.0, hexColor: "FFA000"),
+                    GradientStop(position: 1.0, hexColor: "FFFFFF")
+                ]) },
+                set: { newGradient in
+                    transitionStartGradient = newGradient
+                    selectedTransitionPresetId = nil  // Clear preset selection when manually editing
                 }
-            }
-            
-            Button {
-                selectedTransitionPresetId = nil
-                templateTransition = nil
-            } label: {
-                Label("Use quick sunrise", systemImage: "sunrise.fill")
-                    .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.12))
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            
-            if selectedTransitionPresetId == nil {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Duration \(Int(customTransitionDuration / 60)) min")
-                        .foregroundColor(.white.opacity(0.8))
-                    Slider(value: $customTransitionDuration, in: 120...2400, step: 60)
-                        .tint(.white)
+            ),
+            endGradient: Binding(
+                get: { transitionEndGradient ?? LEDGradient(stops: [
+                    GradientStop(position: 0.0, hexColor: "FFFFFF"),
+                    GradientStop(position: 1.0, hexColor: "FFA000")
+                ]) },
+                set: { newGradient in
+                    transitionEndGradient = newGradient
+                    selectedTransitionPresetId = nil  // Clear preset selection when manually editing
                 }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Final brightness \(Int(gradientBrightness))%")
-                        .foregroundColor(.white.opacity(0.8))
-                    Slider(value: $gradientBrightness, in: 1...255, step: 1)
-                        .tint(.white)
-                }
-            }
-        }
+            ),
+            startBrightness: $transitionStartBrightness,
+            endBrightness: $transitionEndBrightness,
+            durationSeconds: $customTransitionDuration
+        )
     }
     
     // MARK: - Computed Properties
@@ -1139,9 +1013,6 @@ struct AddAutomationDialog: View {
         guard !selectedDeviceIds.isEmpty else { return false }
         if triggerSelection == .time && !selectedWeekdays.contains(true) {
             return false
-        }
-        if actionSelection == .color && colorActionMode == .scenes {
-            return selectedSceneId != nil
         }
         if actionSelection == .effect {
             return selectedEffectId != nil
@@ -1165,7 +1036,9 @@ struct AddAutomationDialog: View {
     private func buildAutomation() -> Automation? {
         guard let trigger = buildTrigger() else { return nil }
         guard let action = buildAction() else { return nil }
-        let metadata = templateMetadata ?? AutomationMetadata(colorPreviewHex: previewHex(for: action))
+        
+        // Regenerate fresh metadata after buildAction() succeeds to ensure preview is accurate
+        let freshMetadata = AutomationMetadata(colorPreviewHex: previewHex(for: action))
         let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
         
         // Preserve the original automation's ID and timestamps when editing
@@ -1175,7 +1048,7 @@ struct AddAutomationDialog: View {
             updated.trigger = trigger
             updated.action = action
             updated.targets = AutomationTargets(deviceIds: targetIds, syncGroupName: nil, allowPartialFailure: allowPartialFailure)
-            updated.metadata = metadata
+            updated.metadata = freshMetadata // Use fresh metadata for edited automations
             updated.updatedAt = Date()
             return updated
         }
@@ -1186,7 +1059,7 @@ struct AddAutomationDialog: View {
             trigger: trigger,
             action: action,
             targets: AutomationTargets(deviceIds: targetIds, syncGroupName: nil, allowPartialFailure: allowPartialFailure),
-            metadata: metadata
+            metadata: freshMetadata // Use fresh metadata for new automations
         )
     }
     
@@ -1213,18 +1086,7 @@ struct AddAutomationDialog: View {
     private func buildAction() -> AutomationAction? {
         switch actionSelection {
         case .color:
-            if colorActionMode == .scenes {
-                guard let sceneId = selectedSceneId ?? scenes.first?.id else { return nil }
-                let sceneName = scenes.first(where: { $0.id == sceneId })?.name
-                    ?? "Scene"
-                return .scene(
-                    SceneActionPayload(
-                        sceneId: sceneId,
-                        sceneName: sceneName,
-                        brightnessOverride: nil
-                    )
-                )
-            } else {
+            // Always use gradient action (scenes are migrated to gradients)
                 let gradient = currentColorGradient()
                 let duration = enableColorFade ? gradientDuration : 0
                 return .gradient(
@@ -1237,7 +1099,6 @@ struct AddAutomationDialog: View {
                         presetName: selectedColorPreset?.name
                     )
                 )
-            }
         case .transition:
             return buildTransitionAction()
         case .effect:
@@ -1248,6 +1109,7 @@ struct AddAutomationDialog: View {
     private func previewHex(for action: AutomationAction) -> String? {
         switch action {
         case .scene(let payload):
+            // Migrated scenes: extract gradient from scene if available
             if let scene = scenes.first(where: { $0.id == payload.sceneId }), let lastColor = scene.primaryStops.last {
                 return lastColor.hexColor
             }
@@ -1269,43 +1131,6 @@ struct AddAutomationDialog: View {
         availableDevices.count > 1
     }
     
-    private var deviceSelectionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Devices to control")
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(.white.opacity(0.7))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
-                ForEach(availableDevices) { device in
-                    let isSelected = selectedDeviceIds.contains(device.id)
-                    Button {
-                        if isSelected && selectedDeviceIds.count == 1 {
-                            return
-                        }
-                        if isSelected {
-                            selectedDeviceIds.remove(device.id)
-                        } else {
-                            selectedDeviceIds.insert(device.id)
-                            activeDevice = device
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(device.name)
-                                .font(.caption)
-                                .foregroundColor(isSelected ? .black : .white.opacity(0.9))
-                                .lineLimit(1)
-                            Text(device.isOnline ? "Online" : "Offline")
-                                .font(.caption2)
-                                .foregroundColor(isSelected ? .black.opacity(0.7) : (device.isOnline ? .green : .orange))
-                        }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(isSelected ? Color.white : Color.white.opacity(0.12))
-                        .cornerRadius(12)
-                    }
-                }
-            }
-        }
-    }
 }
 
 // MARK: - Action Builders & Helpers
@@ -1327,16 +1152,23 @@ private extension AddAutomationDialog {
     }
     
     func currentColorGradient() -> LEDGradient {
+        let baseGradient: LEDGradient
         if let preset = selectedColorPreset {
-            return LEDGradient(stops: preset.gradientStops)
+            baseGradient = LEDGradient(stops: preset.gradientStops)
+        } else if let templateGradient {
+            baseGradient = templateGradient
+        } else {
+            baseGradient = viewModel.automationGradient(for: activeDevice)
         }
-        if let templateGradient {
-            return templateGradient
-        }
-        return viewModel.automationGradient(for: activeDevice)
+        
+        // Ensure interpolation mode is synced from state
+        var result = baseGradient
+        result.interpolation = gradientInterpolation
+        return result
     }
     
     func buildTransitionAction() -> AutomationAction? {
+        // Use preset if selected, otherwise use editor values
         if let preset = selectedTransitionPreset {
             return .transition(
                 TransitionActionPayload(
@@ -1351,35 +1183,35 @@ private extension AddAutomationDialog {
                 )
             )
         }
-        if let templateTransition = templateTransition {
-            var payload = templateTransition
-            payload.durationSeconds = customTransitionDuration
-            payload.endBrightness = Int(gradientBrightness)
-            return .transition(payload)
-        }
-        return .transition(quickSunrisePayload())
-    }
-    
-    func quickSunrisePayload() -> TransitionActionPayload {
-        let startGradient = LEDGradient(stops: [
-            GradientStop(position: 0.0, hexColor: "#120700"),
-            GradientStop(position: 1.0, hexColor: "#371401")
+        
+        // Use editor values (from AutomationTransitionEditor bindings)
+        let startGrad = transitionStartGradient ?? LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFFFFF")
         ])
-        let endGradient = currentColorGradient()
-        return TransitionActionPayload(
-            startGradient: startGradient,
-            startBrightness: 6,
-            endGradient: endGradient,
-            endBrightness: Int(gradientBrightness),
-            durationSeconds: customTransitionDuration,
-            shouldLoop: false,
-            presetId: nil,
-            presetName: "Quick Sunrise"
+        let endGrad = transitionEndGradient ?? LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ])
+        
+        return .transition(
+            TransitionActionPayload(
+                startGradient: startGrad,
+                startBrightness: Int(transitionStartBrightness),
+                endGradient: endGrad,
+                endBrightness: Int(transitionEndBrightness),
+                durationSeconds: customTransitionDuration,
+                shouldLoop: false,
+                presetId: nil,
+                presetName: nil
+            )
         )
     }
     
     func buildEffectAction() -> AutomationAction? {
         guard let effectId = selectedEffectId ?? effectOptions.first?.id else { return nil }
+        
+        // Use preset if selected, otherwise use editor values
         if let preset = selectedEffectPreset {
             let gradient: LEDGradient?
             if let presetStops = preset.gradientStops, !presetStops.isEmpty {
@@ -1405,33 +1237,16 @@ private extension AddAutomationDialog {
             )
         }
         
-        if let templateEffectSettings {
+        // Use editor values (from AutomationEffectEditor bindings)
             let effectName = effectOptions.first(where: { $0.id == effectId })?.name
-            let gradient = templateEffectSettings.gradient ?? templateGradient ?? viewModel.automationGradient(for: activeDevice)
+        let gradient = effectGradient ?? viewModel.automationGradient(for: activeDevice)
             return .effect(
                 EffectActionPayload(
                     effectId: effectId,
                     effectName: effectName,
                     gradient: gradient,
-                    speed: templateEffectSettings.speed,
-                    intensity: templateEffectSettings.intensity,
-                    paletteId: nil,
-                    brightness: Int(effectBrightness),
-                    presetId: nil,
-                    presetName: nil
-                )
-            )
-        }
-        
-        let effectName = effectOptions.first(where: { $0.id == effectId })?.name
-        let gradient = viewModel.automationGradient(for: activeDevice)
-        return .effect(
-            EffectActionPayload(
-                effectId: effectId,
-                effectName: effectName,
-                gradient: gradient,
-                speed: 128,
-                intensity: 128,
+                speed: effectSpeed,
+                intensity: effectIntensity,
                 paletteId: nil,
                 brightness: Int(effectBrightness),
                 presetId: nil,
@@ -1440,72 +1255,6 @@ private extension AddAutomationDialog {
         )
     }
     
-    var editingGradient: LEDGradient {
-        templateGradient ?? viewModel.automationGradient(for: activeDevice)
-    }
-    
-    func setTemplateGradient(_ gradient: LEDGradient, presetId: UUID? = nil) {
-        templateGradient = LEDGradient(
-            stops: gradient.stops,
-            name: gradient.name,
-            interpolation: gradient.interpolation
-        )
-        if let presetId {
-            selectedColorPresetId = presetId
-        } else {
-            selectedColorPresetId = nil
-        }
-    }
-    
-    func updateGradientStop(_ stopId: UUID, mutation: (inout GradientStop) -> Void) {
-        var gradient = editingGradient
-        guard let idx = gradient.stops.firstIndex(where: { $0.id == stopId }) else { return }
-        mutation(&gradient.stops[idx])
-        gradient.stops.sort { $0.position < $1.position }
-        setTemplateGradient(gradient)
-    }
-    
-    func removeGradientStop(_ stopId: UUID) {
-        var gradient = editingGradient
-        guard gradient.stops.count > 1 else { return }
-        gradient.stops.removeAll { $0.id == stopId }
-        setTemplateGradient(gradient)
-    }
-    
-    func addGradientStop() {
-        var gradient = editingGradient
-        let positions = gradient.stops.map { $0.position }
-        let newPosition = positions.adjacentMid() ?? 0.5
-        let sampledColor = GradientSampler.sampleColor(at: newPosition, stops: gradient.stops, interpolation: gradient.interpolation)
-        gradient.stops.append(GradientStop(position: newPosition, hexColor: sampledColor.toHex()))
-        gradient.stops.sort { $0.position < $1.position }
-        setTemplateGradient(gradient)
-    }
-    
-    func stopLabel(for stop: GradientStop) -> String {
-        if let idx = editingGradient.stops.firstIndex(where: { $0.id == stop.id }) {
-            return "\(idx + 1)"
-        }
-        return "#"
-    }
-    
-    func colorBinding(for stop: GradientStop) -> Binding<Color> {
-        Binding(
-            get: { Color(hex: stop.hexColor) },
-            set: { newColor in
-                updateGradientStop(stop.id) { $0.hexColor = newColor.toHex() }
-            }
-        )
-    }
-    
-    func positionBinding(for stop: GradientStop) -> Binding<Double> {
-        Binding(
-            get: { stop.position },
-            set: { newValue in
-                updateGradientStop(stop.id) { $0.position = newValue }
-            }
-        )
-    }
 }
 
 private extension String {

@@ -118,6 +118,7 @@ struct SaveColorPresetDialog: View {
         let preset = ColorPreset(
             name: presetName,
             gradientStops: currentGradient.stops,
+            gradientInterpolation: currentGradient.interpolation,
             brightness: currentBrightness,
             temperature: currentTemperature
         )

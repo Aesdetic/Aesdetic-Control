@@ -12,6 +12,9 @@ struct ColorPreset: Identifiable, Codable, Equatable {
     // Gradient data
     var gradientStops: [GradientStop]
     
+    // Gradient interpolation mode (how colors blend between stops)
+    var gradientInterpolation: GradientInterpolation?
+    
     // Brightness (0-255)
     var brightness: Int
     
@@ -26,6 +29,7 @@ struct ColorPreset: Identifiable, Codable, Equatable {
         name: String,
         createdAt: Date = Date(),
         gradientStops: [GradientStop],
+        gradientInterpolation: GradientInterpolation? = nil,
         brightness: Int,
         temperature: Double? = nil,
         wledPresetId: Int? = nil
@@ -34,6 +38,7 @@ struct ColorPreset: Identifiable, Codable, Equatable {
         self.name = name
         self.createdAt = createdAt
         self.gradientStops = gradientStops
+        self.gradientInterpolation = gradientInterpolation
         self.brightness = max(0, min(255, brightness))
         self.temperature = temperature
         self.wledPresetId = wledPresetId

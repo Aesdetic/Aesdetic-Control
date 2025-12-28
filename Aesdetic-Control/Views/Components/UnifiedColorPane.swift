@@ -559,6 +559,7 @@ private extension UnifiedColorPane {
         var preset = ColorPreset(
             name: presetName,
             gradientStops: currentGradient.stops,
+            gradientInterpolation: currentGradient.interpolation,
             brightness: Int(briUI),
             temperature: stopTemperatures.values.first ?? (stopTemperatures.isEmpty ? nil : 0.5)
         )
