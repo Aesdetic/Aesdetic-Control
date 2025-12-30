@@ -23,18 +23,21 @@ struct WLEDStateUpdate: Codable {
     private let transitionMilliseconds: Int?
     /// Apply preset by ID
     let ps: Int?
+    /// Apply playlist by ID
+    let pl: Int?
     /// Night Light configuration
     let nl: NightLightUpdate?
     /// Live override release (0 disables realtime streaming)
     let lor: Int?
     
-    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
+    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, pl: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
         self.on = on
         self.bri = bri
         self.seg = seg
         self.udpn = udpn
         self.transitionMilliseconds = transition
         self.ps = ps
+        self.pl = pl
         self.nl = nl
         self.lor = lor
     }
@@ -47,7 +50,7 @@ struct WLEDStateUpdate: Codable {
     enum CodingKeys: String, CodingKey {
         case on, bri, seg, udpn
         case transitionDeciseconds = "tt"  // WLED expects "tt" field name
-        case ps, nl, lor
+        case ps, pl, nl, lor
     }
     
     func encode(to encoder: Encoder) throws {
@@ -63,6 +66,7 @@ struct WLEDStateUpdate: Codable {
             try container.encode(deciseconds, forKey: .transitionDeciseconds)
         }
         try container.encodeIfPresent(ps, forKey: .ps)
+        try container.encodeIfPresent(pl, forKey: .pl)
         try container.encodeIfPresent(nl, forKey: .nl)
         try container.encodeIfPresent(lor, forKey: .lor)
     }
@@ -80,6 +84,7 @@ struct WLEDStateUpdate: Codable {
             self.transitionMilliseconds = nil
         }
         self.ps = try container.decodeIfPresent(Int.self, forKey: .ps)
+        self.pl = try container.decodeIfPresent(Int.self, forKey: .pl)
         self.nl = try container.decodeIfPresent(NightLightUpdate.self, forKey: .nl)
         self.lor = try container.decodeIfPresent(Int.self, forKey: .lor)
     }
@@ -264,7 +269,7 @@ struct WLEDPresetSaveRequest {
     let state: WLEDStateUpdate?
 }
 
-/// Model for WLED playlist management (future use)
+/// Model for WLED playlist management
 struct WLEDPlaylist: Codable, Identifiable {
     let id: Int
     let name: String
@@ -272,6 +277,78 @@ struct WLEDPlaylist: Codable, Identifiable {
     let duration: [Int]
     let transition: [Int]
     let `repeat`: Int?
+}
+
+/// Model for WLED timer/macro configuration
+/// WLED timers are stored in /json/cfg under "timers" array
+/// Each timer slot can trigger presets, playlists, or macros based on time
+struct WLEDTimer: Codable, Identifiable {
+    /// Timer slot ID (0-based index, typically 0-9)
+    let id: Int
+    /// Enable/disable timer
+    let enabled: Bool
+    /// Time in minutes from midnight (0-1439)
+    let time: Int
+    /// Days of week bitmask (bit 0=Sun, bit 6=Sat)
+    /// 0x01 = Sunday, 0x02 = Monday, ..., 0x40 = Saturday
+    /// 0x7F = All days, 0x3E = Weekdays only
+    let days: Int
+    /// Action type: 0=preset, 1=playlist, 2=macro
+    let action: Int
+    /// Preset/playlist/macro ID to trigger
+    let presetId: Int
+    /// Start preset ID (for sunrise/sunset transitions)
+    let startPresetId: Int?
+    /// End preset ID (for sunrise/sunset transitions)
+    let endPresetId: Int?
+    /// Transition duration in deciseconds (for preset transitions)
+    let transition: Int?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case enabled = "en"
+        case time = "time"
+        case days = "dow"
+        case action = "act"
+        case presetId = "ps"
+        case startPresetId = "ps1"
+        case endPresetId = "ps2"
+        case transition = "tt"
+    }
+}
+
+/// Model for updating WLED timer configuration
+struct WLEDTimerUpdate: Codable {
+    /// Timer slot ID
+    let id: Int
+    /// Enable/disable timer
+    let enabled: Bool?
+    /// Time in minutes from midnight (0-1439)
+    let time: Int?
+    /// Days of week bitmask
+    let days: Int?
+    /// Action type: 0=preset, 1=playlist, 2=macro
+    let action: Int?
+    /// Preset/playlist/macro ID to trigger
+    let presetId: Int?
+    /// Start preset ID (for sunrise/sunset transitions)
+    let startPresetId: Int?
+    /// End preset ID (for sunrise/sunset transitions)
+    let endPresetId: Int?
+    /// Transition duration in deciseconds
+    let transition: Int?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case enabled = "en"
+        case time = "time"
+        case days = "dow"
+        case action = "act"
+        case presetId = "ps"
+        case startPresetId = "ps1"
+        case endPresetId = "ps2"
+        case transition = "tt"
+    }
 }
 
 // MARK: - API Configuration Models

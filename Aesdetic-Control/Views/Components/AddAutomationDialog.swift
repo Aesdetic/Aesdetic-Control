@@ -68,6 +68,7 @@ struct AddAutomationDialog: View {
     @State private var transitionEndBrightness: Double = 255
     @State private var templateEffectSettings: TemplateEffectSettings?
     @State private var templateMetadata: AutomationMetadata?
+    @State private var lockedAction: AutomationAction?
     @State private var isEditingName: Bool = false
     @FocusState private var isNameFieldFocused: Bool
     
@@ -126,6 +127,10 @@ struct AddAutomationDialog: View {
         var initialTransitionEndGradient: LEDGradient?
         var initialTransitionStartBrightness: Double = 128
         var initialTransitionEndBrightness: Double = 255
+        var initialSelectedColorPresetId: UUID?
+        var initialSelectedTransitionPresetId: UUID?
+        var initialSelectedEffectPresetId: UUID?
+        var initialLockedAction: AutomationAction? = nil
         
         if let editing = editingAutomation {
             initialName = editing.name
@@ -165,18 +170,25 @@ struct AddAutomationDialog: View {
                     initialTemplateGradient = fallbackGradient
                     initialGradientBrightness = Double(initialActiveDevice.brightness)
                 }
+            case .playlist:
+                // Playlist actions are not yet supported in the UI editor
+                // Fall through to default gradient behavior
+                initialActionSelection = .color
+                initialLockedAction = editing.action
             case .gradient(let payload):
                 initialActionSelection = .color
                 initialTemplateGradient = payload.gradient
                 initialGradientBrightness = Double(payload.brightness)
                 initialEnableColorFade = payload.durationSeconds > 0
-                initialGradientDuration = max(10, payload.durationSeconds)
+                initialGradientDuration = payload.durationSeconds  // Preserve actual duration, don't clamp
+                initialSelectedColorPresetId = payload.presetId
                 // Note: interpolation is stored in the gradient itself
             case .transition(let payload):
                 initialActionSelection = .transition
                 initialTemplateTransition = payload
                 initialGradientBrightness = Double(payload.endBrightness)
-                initialTransitionDuration = payload.durationSeconds
+                initialTransitionDuration = payload.durationSeconds  // Preserve actual duration
+                initialSelectedTransitionPresetId = payload.presetId
                 // Extract transition gradients for editor
                 initialTransitionStartGradient = payload.startGradient
                 initialTransitionEndGradient = payload.endGradient
@@ -191,8 +203,10 @@ struct AddAutomationDialog: View {
                 initialEffectGradient = payload.gradient
                 initialTemplateGradient = payload.gradient
                 initialTemplateEffect = TemplateEffectSettings(gradient: payload.gradient, speed: payload.speed, intensity: payload.intensity)
+                initialSelectedEffectPresetId = payload.presetId
             case .preset, .directState:
                 initialActionSelection = .color
+                initialLockedAction = editing.action
             }
             initialMetadata = editing.metadata
         } else if let prefill = templatePrefill {
@@ -254,9 +268,9 @@ struct AddAutomationDialog: View {
         _gradientBrightness = State(initialValue: initialGradientBrightness)
         _selectedDeviceIds = State(initialValue: initialDeviceIds)
         _activeDevice = State(initialValue: initialActiveDevice)
-        _selectedColorPresetId = State(initialValue: nil)
-        _selectedTransitionPresetId = State(initialValue: nil)
-        _selectedEffectPresetId = State(initialValue: nil)
+        _selectedColorPresetId = State(initialValue: initialSelectedColorPresetId)
+        _selectedTransitionPresetId = State(initialValue: initialSelectedTransitionPresetId)
+        _selectedEffectPresetId = State(initialValue: initialSelectedEffectPresetId)
         _customTransitionDuration = State(initialValue: initialTransitionDuration)
         _allowPartialFailure = State(initialValue: initialAllowPartial)
         _triggerSelection = State(initialValue: initialTriggerSelection)
@@ -271,6 +285,7 @@ struct AddAutomationDialog: View {
         _templateTransition = State(initialValue: initialTemplateTransition)
         _templateEffectSettings = State(initialValue: initialTemplateEffect)
         _templateMetadata = State(initialValue: initialMetadata)
+        _lockedAction = State(initialValue: initialLockedAction)
         // Initialize transition editor state
         let defaultStartGradient = LEDGradient(stops: [
             GradientStop(position: 0.0, hexColor: "FFA000"),
@@ -877,6 +892,7 @@ struct AddAutomationDialog: View {
                 }
             }
             .pickerStyle(.segmented)
+            .disabled(lockedAction != nil)
             
             switch actionSelection {
             case .color:
@@ -923,7 +939,8 @@ struct AddAutomationDialog: View {
                     effectGradient = newGradient
                         selectedEffectPresetId = nil
                 }
-            )
+            ),
+            selectedEffectPresetId: $selectedEffectPresetId
         )
     }
     
@@ -1037,8 +1054,10 @@ struct AddAutomationDialog: View {
         guard let trigger = buildTrigger() else { return nil }
         guard let action = buildAction() else { return nil }
         
-        // Regenerate fresh metadata after buildAction() succeeds to ensure preview is accurate
-        let freshMetadata = AutomationMetadata(colorPreviewHex: previewHex(for: action))
+        // Preserve existing metadata and only update colorPreviewHex
+        var metadata = editingAutomation?.metadata ?? templateMetadata ?? AutomationMetadata()
+        metadata.colorPreviewHex = previewHex(for: action)
+        let freshMetadata = metadata
         let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
         
         // Preserve the original automation's ID and timestamps when editing
@@ -1084,6 +1103,8 @@ struct AddAutomationDialog: View {
     }
     
     private func buildAction() -> AutomationAction? {
+        // If action is locked (playlist/preset/directState), return it directly
+        if let lockedAction { return lockedAction }
         switch actionSelection {
         case .color:
             // Always use gradient action (scenes are migrated to gradients)
@@ -1120,7 +1141,7 @@ struct AddAutomationDialog: View {
             return payload.endGradient.stops.last?.hexColor
         case .effect(let payload):
             return payload.gradient?.stops.last?.hexColor
-        case .preset, .directState:
+        case .preset, .playlist, .directState:
             return nil
         }
     }

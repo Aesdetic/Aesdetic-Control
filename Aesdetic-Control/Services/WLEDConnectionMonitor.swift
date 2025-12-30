@@ -308,6 +308,10 @@ class WLEDConnectionMonitor: ObservableObject {
         Task {
             await updateDeviceInCoreData(device, isOnline: true, response: response)
         }
+        
+        Task {
+            await DeviceCleanupManager.shared.processQueue(for: device.id)
+        }
     }
     
     @MainActor

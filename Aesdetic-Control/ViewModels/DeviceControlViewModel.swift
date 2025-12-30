@@ -25,6 +25,59 @@ struct DeviceEffectState {
     static let `default` = DeviceEffectState(effectId: 0, speed: 128, intensity: 128, paletteId: nil, isEnabled: false)
 }
 
+/// Metadata for native WLED transitions (on-device transitions using tt parameter)
+struct NativeTransitionInfo: Equatable {
+    let targetColorRGB: [Int]  // [r, g, b]
+    let targetBrightness: Int
+    let durationSeconds: Double
+}
+
+/// Tracks active automation/transition runs per device
+struct ActiveRunStatus: Equatable {
+    let id: UUID  // Unique identifier for this run
+    let deviceId: String
+    let kind: RunKind
+    let title: String
+    let startDate: Date
+    var progress: Double  // 0.0 to 1.0
+    let isCancellable: Bool
+    let expectedEnd: Date?  // When this run is expected to complete (for native transitions)
+    let nativeTransition: NativeTransitionInfo?  // Metadata for native WLED transitions
+    
+    enum RunKind: Equatable {
+        case automation
+        case transition
+        case effect
+        case applying  // Short-lived, no progress (preset/playlist/directState)
+    }
+    
+    init(
+        id: UUID = UUID(),
+        deviceId: String,
+        kind: RunKind,
+        title: String,
+        startDate: Date,
+        progress: Double = 0.0,
+        isCancellable: Bool = true,
+        expectedEnd: Date? = nil,
+        nativeTransition: NativeTransitionInfo? = nil
+    ) {
+        self.id = id
+        self.deviceId = deviceId
+        self.kind = kind
+        self.title = title
+        self.startDate = startDate
+        self.progress = progress
+        self.isCancellable = isCancellable
+        self.expectedEnd = expectedEnd
+        self.nativeTransition = nativeTransition
+    }
+    
+    static func == (lhs: ActiveRunStatus, rhs: ActiveRunStatus) -> Bool {
+        lhs.id == rhs.id && lhs.deviceId == rhs.deviceId && lhs.kind == rhs.kind && lhs.title == rhs.title
+    }
+}
+
 @MainActor
 class DeviceControlViewModel: ObservableObject {
     static let shared = DeviceControlViewModel()
@@ -277,6 +330,22 @@ class DeviceControlViewModel: ObservableObject {
     @Published var selectedLocationFilter: DeviceLocation = .all
     @Published var webSocketConnectionStatus: WLEDWebSocketManager.ConnectionStatus = .disconnected
     
+    // Active run tracking (automations/transitions)
+    @Published var activeRunStatus: [String: ActiveRunStatus] = [:]
+    
+    // Watchdog state for monitoring stalled runs
+    private struct RunWatchdog {
+        var lastProgressAt: Date
+        var lastProgressValue: Double
+        var runStartAt: Date
+    }
+    private var runWatchdogs: [String: RunWatchdog] = [:]
+    private var watchdogTask: Task<Void, Never>?
+    
+    // Watchdog constants
+    private let watchdogTimeoutSeconds: TimeInterval = 10.0  // Cancel if no progress for 10 seconds
+    private let watchdogCheckInterval: TimeInterval = 2.0     // Check every 2 seconds
+    
     // Computed filtered devices based on current filters - Optimized with memoization
     var filteredDevices: [WLEDDevice] {
         let now = Date()
@@ -352,7 +421,7 @@ class DeviceControlViewModel: ObservableObject {
     
     // Combine cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
-
+    
     // MARK: - Capability Detection
     private let capabilityDetector = CapabilityDetector.shared
     
@@ -412,7 +481,8 @@ class DeviceControlViewModel: ObservableObject {
         endGradient: LEDGradient,
         endBrightness: Int,
         durationSeconds: Double,
-        segmentId: Int = 0
+        segmentId: Int = 0,
+        automationName: String? = nil
     ) async {
         await cancelActiveTransitionIfNeeded(for: device)
         await transitionRunner.cancel(deviceId: device.id)
@@ -429,8 +499,32 @@ class DeviceControlViewModel: ObservableObject {
             segmentId: segmentId,
             interpolation: startGradient.interpolation,
             brightness: startBrightness,
-            on: true
+            on: true,
+            userInitiated: false
         )
+        
+        // Set active run status
+        let runTitle = automationName ?? "Transition"
+        let startDate = Date()
+        let runKind: ActiveRunStatus.RunKind = automationName != nil ? .automation : .transition
+        await MainActor.run {
+            activeRunStatus[device.id] = ActiveRunStatus(
+                deviceId: device.id,
+                kind: runKind,
+                title: runTitle,
+                startDate: startDate,
+                progress: 0.0,
+                isCancellable: true
+            )
+            // Initialize watchdog for this run
+            runWatchdogs[device.id] = RunWatchdog(
+                lastProgressAt: startDate,
+                lastProgressValue: 0.0,
+                runStartAt: startDate
+            )
+            // Start watchdog task if not already running
+            startWatchdogTaskIfNeeded()
+        }
         
         await transitionRunner.start(
             device: device,
@@ -439,14 +533,33 @@ class DeviceControlViewModel: ObservableObject {
             durationSec: durationSeconds,
             segmentId: segmentId,
             aBrightness: startBrightness,
-            bBrightness: endBrightness
+            bBrightness: endBrightness,
+            onProgress: { [weak self] progress in
+                Task { @MainActor in
+                    if var status = self?.activeRunStatus[device.id] {
+                        status.progress = progress
+                        self?.activeRunStatus[device.id] = status
+                        // Update watchdog on progress (any progress update counts)
+                        if var watchdog = self?.runWatchdogs[device.id] {
+                            watchdog.lastProgressAt = Date()
+                            watchdog.lastProgressValue = progress
+                            self?.runWatchdogs[device.id] = watchdog
+                        }
+                    }
+                }
+            }
         )
         
         await MainActor.run {
             latestGradientStops[device.id] = endGradient.stops
+            // Clear status when transition completes
+            activeRunStatus.removeValue(forKey: device.id)
+            // Clear watchdog
+            runWatchdogs.removeValue(forKey: device.id)
         }
         
-        await updateDeviceBrightness(device, brightness: endBrightness)
+        // Update brightness at end of transition (automation-driven, don't cancel active runs)
+        await updateDeviceBrightness(device, brightness: endBrightness, userInitiated: false)
     }
     
     func runSimpleGradientFade(
@@ -454,7 +567,8 @@ class DeviceControlViewModel: ObservableObject {
         targetGradient: LEDGradient,
         targetBrightness: Int,
         durationSeconds: Double,
-        segmentId: Int = 0
+        segmentId: Int = 0,
+        automationName: String? = nil
     ) async {
         let current = automationGradient(for: device)
         let startBrightness = device.brightness
@@ -465,7 +579,8 @@ class DeviceControlViewModel: ObservableObject {
             endGradient: targetGradient,
             endBrightness: targetBrightness,
             durationSeconds: durationSeconds,
-            segmentId: segmentId
+            segmentId: segmentId,
+            automationName: automationName
         )
     }
     
@@ -548,6 +663,8 @@ class DeviceControlViewModel: ObservableObject {
                 }
                 clearError()
             }
+            
+            await DeviceCleanupManager.shared.processQueue(for: device.id)
             
         } catch {
             // Device is offline - update status immediately
@@ -633,6 +750,9 @@ class DeviceControlViewModel: ObservableObject {
         toggleTimers.values.forEach { $0.invalidate() }
         toggleTimers.removeAll()
         
+        // Cancel watchdog task
+        watchdogTask?.cancel()
+        
         // Note: webSocketManager.disconnectAll() is main actor-isolated
         // WebSocket connections will be cleaned up when the main actor context is deallocated
         
@@ -641,6 +761,7 @@ class DeviceControlViewModel: ObservableObject {
         pendingToggles.removeAll()
         uiToggleStates.removeAll()
         lastUserInput.removeAll()
+        runWatchdogs.removeAll()
         
         print("DeviceControlViewModel deinit - Memory cleaned up")
     }
@@ -1164,6 +1285,9 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func toggleDevicePower(_ device: WLEDDevice) async {
+        // CRITICAL: Auto-cancel any active transitions/runs on manual input
+        await cancelActiveRun(for: device)
+        
         // The UI will have already registered the optimistic state.
         // The `targetState` is what the UI *wants* the device to be.
         let targetState: Bool = await MainActor.run {
@@ -1280,7 +1404,8 @@ class DeviceControlViewModel: ObservableObject {
                     ledCount: ledCount,
                         disableActiveEffect: true,
                         brightness: updatedDevice.brightness,  // Apply brightness with gradient
-                        on: true  // CRITICAL: Ensure device stays on during gradient restoration
+                        on: true,  // CRITICAL: Ensure device stays on during gradient restoration
+                        userInitiated: false  // State restoration, not user-initiated
                     )
                 }
             } catch {
@@ -1328,7 +1453,12 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     
-    func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int) async {
+    func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int, userInitiated: Bool = true) async {
+        // CRITICAL: Auto-cancel any active transitions/runs on manual input
+        if userInitiated {
+            await cancelActiveRun(for: device)
+        }
+        
         markUserInteraction(device.id)
         
         // CRITICAL: WLED treats brightness 0% as "off" (on: false)
@@ -1452,7 +1582,8 @@ class DeviceControlViewModel: ObservableObject {
                     ledCount: ledCount,
                     disableActiveEffect: hasActiveEffect,  // Disable if we found an active effect
                     brightness: brightness,  // Apply brightness with gradient
-                    on: true  // CRITICAL: Turn device on when restoring brightness from 0%
+                    on: true,  // CRITICAL: Turn device on when restoring brightness from 0%
+                    userInitiated: true  // User changed brightness, cancel any active runs
                 )
                 
                 // Update local state
@@ -1517,7 +1648,8 @@ class DeviceControlViewModel: ObservableObject {
                 ledCount: ledCount,
                 disableActiveEffect: false,  // Don't disable effects during normal brightness changes
                 brightness: brightness,  // Apply brightness with gradient
-                on: true  // CRITICAL: Ensure device is on when brightness > 0
+                on: true,  // CRITICAL: Ensure device is on when brightness > 0
+                userInitiated: true  // User changed brightness, cancel any active runs
             )
             
             // Update local state
@@ -1595,6 +1727,9 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func updateDeviceColor(_ device: WLEDDevice, color: Color) async {
+        // CRITICAL: Auto-cancel any active transitions/runs on manual input
+        await cancelActiveRun(for: device)
+        
         // Mark device under user control for color changes too
         markUserInteraction(device.id)
         
@@ -1779,7 +1914,8 @@ class DeviceControlViewModel: ObservableObject {
                         ledCount: ledCount,
                         disableActiveEffect: true,
                         brightness: updatedDevice.brightness,  // Apply brightness with gradient
-                        on: true  // CRITICAL: Ensure device stays on during gradient restoration
+                        on: true,  // CRITICAL: Ensure device stays on during gradient restoration
+                        userInitiated: false  // State restoration, not user-initiated
                     )
                 }
             } catch {
@@ -2793,7 +2929,30 @@ class DeviceControlViewModel: ObservableObject {
     ///   - ledCount: Number of LEDs
     ///   - stopTemperatures: Optional mapping of stop IDs to temperature values (0.0-1.0)
     ///   - disableActiveEffect: Whether to disable active effects before applying gradient (default: false to avoid interference)
-    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil) async {
+    /// Determine if a gradient should use WLED native transition (tt) or client-side transition
+    /// - Parameters:
+    ///   - stops: Gradient stops to check
+    ///   - durationSeconds: Duration of transition (> 0 for native transition)
+    /// - Returns: true if should use native WLED transition, false if client-side is needed
+    func shouldUseNativeTransition(stops: [GradientStop], durationSeconds: Double) -> Bool {
+        guard durationSeconds > 0 else { return false }
+        
+        // Centralized solid color detection: single stop OR all stops have same color
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        guard let firstColorHex = sortedStops.first?.hexColor else { return false }
+        let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == firstColorHex }
+        
+        // Use native transition for solid colors (WLED can handle simple color transitions efficiently)
+        // For complex gradients with multiple colors, use client-side transition runner
+        return isSolidColor
+    }
+    
+    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil, transitionDurationSeconds: Double? = nil, userInitiated: Bool = true) async {
+        // CRITICAL: Auto-cancel any active transitions/runs on manual input
+        if userInitiated, activeRunStatus[device.id] != nil {
+            await cancelActiveRun(for: device)
+        }
+        
         // CRITICAL: Mark user interaction BEFORE applying gradient to prevent WebSocket overwrites
         // This ensures WebSocket updates are blocked during gradient application
         markUserInteraction(device.id)
@@ -2816,9 +2975,13 @@ class DeviceControlViewModel: ObservableObject {
         latestGradientStops[device.id] = sortedStops
         persistLatestGradient(sortedStops, for: device.id)
         
-        // OPTIMIZATION: Single-stop solid color uses segment col field (more efficient than per-LED upload)
+        // OPTIMIZATION: Solid color detection (single stop OR all stops have same color)
+        // Use segment col field for solid colors (more efficient than per-LED upload)
         // This matches WLED's recommended approach for solid colors
-        if sortedStops.count == 1, let singleStop = sortedStops.first {
+        let firstColorHex = sortedStops.first?.hexColor
+        let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == firstColorHex }
+        
+        if isSolidColor, let singleStop = sortedStops.first {
             // Check if this is truly a solid color (no temperature variation)
             let hasTemperature = stopTemperatures?[singleStop.id] != nil
             let allStopsHaveSameTemp: Bool
@@ -2850,10 +3013,13 @@ class DeviceControlViewModel: ObservableObject {
             // CRITICAL: Include on and brightness in state update if provided
             // This ensures power-on/brightness is applied ALONG WITH color in SAME API call
             // This prevents WLED from showing restored colors before color is applied
+            // Include transition time if provided (for solid color transitions)
+            let transitionMs = transitionDurationSeconds.map { Int($0 * 1000) }
             let stateUpdate = WLEDStateUpdate(
                 on: on,  // CRITICAL: Include power state if provided (for power-on operations)
                 bri: brightness,  // Set brightness if provided
-                seg: [segment]
+                seg: [segment],
+                transition: transitionMs  // Include transition time for native WLED transition
             )
             
             do {
@@ -3065,6 +3231,131 @@ class DeviceControlViewModel: ObservableObject {
         await colorPipeline.cancelUploads(for: device.id)
     }
     
+    /// Cancel any active run (transition/automation) for a device
+    /// This is called automatically on manual user input, or can be called manually via UI
+    func cancelActiveRun(for device: WLEDDevice) async {
+        // Check if there's a native WLED transition running that needs to be stopped
+        let nativeTransitionInfo = await MainActor.run {
+            activeRunStatus[device.id]?.nativeTransition
+        }
+        
+        // If native transition is active, send immediate state update to stop it
+        if let nativeInfo = nativeTransitionInfo {
+            // Send immediate override with transition: 0 to jump to target state
+            let segment = SegmentUpdate(
+                id: 0,
+                col: [[nativeInfo.targetColorRGB[0], nativeInfo.targetColorRGB[1], nativeInfo.targetColorRGB[2]]]
+            )
+            let immediateState = WLEDStateUpdate(
+                on: true,
+                bri: nativeInfo.targetBrightness,
+                seg: [segment],
+                transition: 0  // No transition - jump immediately to target
+            )
+            
+            do {
+                _ = try await apiService.updateState(for: device, state: immediateState)
+                #if DEBUG
+                print("🛑 Stopped native WLED transition for device \(device.name) by jumping to target state")
+                #endif
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to stop native transition for device \(device.name): \(error.localizedDescription)")
+                #endif
+            }
+        }
+        
+        // Cancel transition runner and uploads
+        await cancelActiveTransitionIfNeeded(for: device)
+        
+        // Release real-time override if needed
+        await apiService.releaseRealtimeOverride(for: device)
+        
+        // Clear active run status
+        await MainActor.run {
+            activeRunStatus.removeValue(forKey: device.id)
+            // Clear watchdog
+            runWatchdogs.removeValue(forKey: device.id)
+        }
+        
+        #if DEBUG
+        print("🛑 Cancelled active run for device \(device.name)")
+        #endif
+    }
+    
+    // MARK: - Watchdog Management
+    
+    /// Start the watchdog task if not already running
+    private func startWatchdogTaskIfNeeded() {
+        guard watchdogTask == nil || watchdogTask?.isCancelled == true else { return }
+        
+        watchdogTask = Task { [weak self] in
+            guard let self = self else { return }
+            while !Task.isCancelled {
+                await self.checkForStalledRuns()
+                try? await Task.sleep(nanoseconds: UInt64(self.watchdogCheckInterval * 1_000_000_000))
+            }
+        }
+    }
+    
+    /// Check for stalled runs and auto-cancel them
+    private func checkForStalledRuns() async {
+        let now = Date()
+        let deviceIds = Array(runWatchdogs.keys)
+        
+        for deviceId in deviceIds {
+            guard let watchdog = runWatchdogs[deviceId],
+                  let runStatus = activeRunStatus[deviceId] else {
+                // Run status cleared but watchdog still exists - clean up
+                runWatchdogs.removeValue(forKey: deviceId)
+                continue
+            }
+            
+            // Only watchdog runs that should have progress updates
+            guard runStatus.kind == .transition || runStatus.kind == .automation else {
+                // Skip watchdog for .applying runs (they're short-lived)
+                // Skip .effect runs (not currently tracked with progress)
+                continue
+            }
+            
+            // State-based completion detection for native transitions
+            if let expectedEnd = runStatus.expectedEnd, now >= expectedEnd {
+                // Native transition should have completed - clear status if runId still matches
+                if runStatus.id == activeRunStatus[deviceId]?.id {
+                    #if DEBUG
+                    print("✅ Watchdog: Native transition completed for device \(deviceId)")
+                    #endif
+                    activeRunStatus.removeValue(forKey: deviceId)
+                    runWatchdogs.removeValue(forKey: deviceId)
+                    continue
+                }
+            }
+            
+            // Check if progress has stalled (only for client-side transitions with progress callbacks)
+            let timeSinceLastProgress = now.timeIntervalSince(watchdog.lastProgressAt)
+            
+            if timeSinceLastProgress > watchdogTimeoutSeconds {
+                // Progress has stalled - auto-cancel
+                #if DEBUG
+                print("⏱️ Watchdog: Auto-cancelling stalled run for device \(deviceId)")
+                print("   Run: \(runStatus.title), Last progress: \(Int(watchdog.lastProgressValue * 100))% at \(watchdog.lastProgressAt)")
+                print("   Time since last progress: \(String(format: "%.1f", timeSinceLastProgress))s")
+                #endif
+                
+                // Find the device and cancel the run
+                if let device = devices.first(where: { $0.id == deviceId }) {
+                    await cancelActiveRun(for: device)
+                } else {
+                    // Device not found - just clean up
+                    await MainActor.run {
+                        activeRunStatus.removeValue(forKey: deviceId)
+                        runWatchdogs.removeValue(forKey: deviceId)
+                    }
+                }
+            }
+        }
+    }
+    
     func gradientStops(for deviceId: String) -> [GradientStop]? {
         if let stops = latestGradientStops[deviceId], !stops.isEmpty {
             return stops
@@ -3179,12 +3470,12 @@ class DeviceControlViewModel: ObservableObject {
         ScenesStore.shared.add(scene)
     }
 
-    func applyScene(_ scene: Scene, to device: WLEDDevice) async {
+    func applyScene(_ scene: Scene, to device: WLEDDevice, userInitiated: Bool = true) async {
         // 1) Cancel any running streams
         await cancelStreaming(for: device)
 
         // 2) Brightness first (bri-only)
-        await updateDeviceBrightness(device, brightness: scene.brightness)
+        await updateDeviceBrightness(device, brightness: scene.brightness, userInitiated: userInitiated)
 
         // 3) Effects
         if scene.effectsEnabled {
@@ -3222,7 +3513,7 @@ class DeviceControlViewModel: ObservableObject {
             )
         } else {
             let ledCount = device.state?.segments.first?.len ?? 120
-            await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops, ledCount: ledCount)
+            await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops, ledCount: ledCount, userInitiated: userInitiated)
         }
     }
     
@@ -3352,5 +3643,36 @@ class DeviceControlViewModel: ObservableObject {
         }
         // Device is on - return current brightness (or default if 0)
         return device.brightness > 0 ? device.brightness : 128
+    }
+    
+    // MARK: - Recovery Functions
+    
+    /// Emergency recovery: Clear all protection windows and release real-time override
+    /// Use this when device appears stuck and unresponsive to user input
+    func clearProtectionWindows(for device: WLEDDevice) async {
+        // Clear user interaction protection
+        lastUserInput.removeValue(forKey: device.id)
+        
+        // Clear gradient application protection
+        gradientApplicationTimes.removeValue(forKey: device.id)
+        
+        // Clear pending toggles
+        pendingToggles.removeValue(forKey: device.id)
+        toggleTimers[device.id]?.invalidate()
+        toggleTimers.removeValue(forKey: device.id)
+        
+        // Clear UI toggle states
+        uiToggleStates.removeValue(forKey: device.id)
+        
+        // Cancel any active transitions/uploaders
+        await cancelActiveTransitionIfNeeded(for: device)
+        await colorPipeline.cancelUploads(for: device.id)
+        
+        // Release real-time override (lor: 0)
+        await apiService.releaseRealtimeOverride(for: device)
+        
+        #if DEBUG
+        print("🔄 Cleared all protection windows and released real-time override for device \(device.name)")
+        #endif
     }
 } 

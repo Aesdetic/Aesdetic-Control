@@ -46,7 +46,8 @@ struct PresetsListView: View {
                         Task {
                             await viewModel.cancelActiveTransitionIfNeeded(for: device)
                             // Try WLED preset ID first (if synced), otherwise apply directly
-                            if let presetId = preset.wledPresetId {
+                            let presetId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId
+                            if let presetId = presetId {
                                 let apiService = WLEDAPIService.shared
                                 _ = try? await apiService.applyPreset(presetId, to: device)
                             } else {
@@ -80,6 +81,7 @@ struct PresetsListView: View {
                     }, onEdit: {
                         onRequestRename(.color(preset))
                     }, onDelete: {
+                        Task { await requestColorPresetDeletion(preset, on: device) }
                         store.removeColorPreset(preset.id)
                     })
                     }
@@ -120,33 +122,31 @@ struct PresetsListView: View {
                         ForEach(transitionPresets) { preset in
                             TransitionPresetRow(preset: preset, onApply: {
                             Task {
+                                await viewModel.cancelActiveTransitionIfNeeded(for: device)
                                 // Try WLED playlist ID first (if synced), otherwise apply directly
-                                if preset.wledPlaylistId != nil {
-                                    // WLED playlists would normally run on-device; for now we
-                                    // fall back to the client-side transition implementation.
-                                    await viewModel.startTransition(
-                                        from: preset.gradientA,
-                                        aBrightness: preset.brightnessA,
-                                        to: preset.gradientB,
-                                        bBrightness: preset.brightnessB,
-                                        durationSec: preset.durationSec,
-                                        device: device
-                                    )
+                                if let playlistId = preset.wledPlaylistId {
+                                    let apiService = WLEDAPIService.shared
+                                    let applied = (try? await apiService.applyPlaylist(playlistId, to: device)) != nil
+                                    if applied {
+                                        return
+                                    }
+                                    // Fallback to client-side transition if playlist failed
                                 } else {
                                     // Apply transition directly
-                                    await viewModel.startTransition(
-                                        from: preset.gradientA,
-                                        aBrightness: preset.brightnessA,
-                                        to: preset.gradientB,
-                                        bBrightness: preset.brightnessB,
-                                        durationSec: preset.durationSec,
-                                        device: device
-                                    )
                                 }
+                                await viewModel.startTransition(
+                                    from: preset.gradientA,
+                                    aBrightness: preset.brightnessA,
+                                    to: preset.gradientB,
+                                    bBrightness: preset.brightnessB,
+                                    durationSec: preset.durationSec,
+                                    device: device
+                                )
                             }
                         }, onEdit: {
                             onRequestRename(.transition(preset))
                         }, onDelete: {
+                            Task { await requestTransitionPresetDeletion(preset, on: device) }
                             store.removeTransitionPreset(preset.id)
                         })
                         }
@@ -220,6 +220,7 @@ struct PresetsListView: View {
                         }, onEdit: {
                             onRequestRename(.effect(preset))
                         }, onDelete: {
+                            Task { await requestEffectPresetDeletion(preset, on: device) }
                             store.removeEffectPreset(preset.id)
                         })
                         }
@@ -243,6 +244,35 @@ struct PresetsListView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
+    }
+
+    private func requestColorPresetDeletion(_ preset: ColorPreset, on device: WLEDDevice) async {
+        if let idsByDevice = preset.wledPresetIds, !idsByDevice.isEmpty {
+            for (deviceId, presetId) in idsByDevice {
+                if let target = viewModel.devices.first(where: { $0.id == deviceId }) {
+                    await DeviceCleanupManager.shared.requestDelete(type: .preset, device: target, ids: [presetId])
+                } else {
+                    DeviceCleanupManager.shared.enqueue(type: .preset, deviceId: deviceId, ids: [presetId])
+                }
+            }
+            return
+        }
+        if let legacyId = preset.wledPresetId {
+            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [legacyId])
+        }
+    }
+
+    private func requestTransitionPresetDeletion(_ preset: TransitionPreset, on device: WLEDDevice) async {
+        guard let playlistId = preset.wledPlaylistId else { return }
+        let presetAId = playlistId * 100
+        let presetBId = playlistId * 100 + 1
+        await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [playlistId])
+        await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [presetAId, presetBId])
+    }
+
+    private func requestEffectPresetDeletion(_ preset: WLEDEffectPreset, on device: WLEDDevice) async {
+        guard let presetId = preset.wledPresetId else { return }
+        await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [presetId])
     }
 }
 

@@ -16,7 +16,7 @@ protocol WLEDAPIServiceProtocol {
     func updateState(for device: WLEDDevice, state: WLEDStateUpdate) async throws -> WLEDResponse
     func setPower(for device: WLEDDevice, isOn: Bool, transition: Int?) async throws -> WLEDResponse
     func setBrightness(for device: WLEDDevice, brightness: Int, transition: Int?) async throws -> WLEDResponse
-    func setColor(for device: WLEDDevice, color: [Int], cct: Int?, white: Int?) async throws -> WLEDResponse
+    func setColor(for device: WLEDDevice, color: [Int], cct: Int?, white: Int?, transition: Int?) async throws -> WLEDResponse
     func setCCT(for device: WLEDDevice, cct: Int, segmentId: Int) async throws -> WLEDResponse
     func setCCT(for device: WLEDDevice, cctKelvin: Int, segmentId: Int) async throws -> WLEDResponse
     func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset]
@@ -27,6 +27,16 @@ protocol WLEDAPIServiceProtocol {
     // Playlist management
     func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws -> [WLEDPlaylist]
     func fetchPlaylists(for device: WLEDDevice) async throws -> [WLEDPlaylist]
+    func applyPlaylist(_ playlistId: Int, to device: WLEDDevice) async throws -> WLEDState
+    
+    // Timer/Macro management
+    func fetchTimers(for device: WLEDDevice) async throws -> [WLEDTimer]
+    func updateTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws
+    func disableTimer(slot: Int, device: WLEDDevice) async throws -> Bool
+    
+    // Deletion methods
+    func deletePreset(id: Int, device: WLEDDevice) async throws -> Bool
+    func deletePlaylist(id: Int, device: WLEDDevice) async throws -> Bool
     
     // Preset saving helpers
     func saveColorPreset(_ preset: ColorPreset, to device: WLEDDevice, presetId: Int) async throws -> Int
@@ -171,7 +181,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try await updateState(for: device, state: stateUpdate)
     }
     
-    func setColor(for device: WLEDDevice, color: [Int], cct: Int? = nil, white: Int? = nil) async throws -> WLEDResponse {
+    func setColor(for device: WLEDDevice, color: [Int], cct: Int? = nil, white: Int? = nil, transition: Int? = nil) async throws -> WLEDResponse {
         guard color.count >= 3 else {
             throw WLEDAPIError.invalidConfiguration
         }
@@ -191,7 +201,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         
         let segment = SegmentUpdate(id: 0, col: [colorArray], cct: cct)
-        let stateUpdate = WLEDStateUpdate(seg: [segment])
+        let stateUpdate = WLEDStateUpdate(seg: [segment], transition: transition)
         return try await updateState(for: device, state: stateUpdate)
     }
     
@@ -372,6 +382,266 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             return playlists.sorted { $0.id < $1.id }
         } catch {
             throw handleError(error, device: device)
+        }
+    }
+    
+    /// Apply a playlist to a WLED device using the `pl` field in state update
+    /// - Parameters:
+    ///   - playlistId: The playlist ID to apply (0-250)
+    ///   - device: The target WLED device
+    /// - Returns: The updated WLEDState after applying the playlist
+    /// - Throws: WLEDAPIError if the request fails
+    func applyPlaylist(_ playlistId: Int, to device: WLEDDevice) async throws -> WLEDState {
+        guard playlistId >= 0 && playlistId <= 250 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        
+        let stateUpdate = WLEDStateUpdate(pl: playlistId)
+        let response = try await updateState(for: device, state: stateUpdate)
+        return response.state
+    }
+    
+    // MARK: - Timer/Macro Management
+    
+    /// Fetch all timer configurations from a WLED device
+    /// - Parameter device: The target WLED device
+    /// - Returns: Array of timer configurations
+    /// - Throws: WLEDAPIError if the request fails
+    func fetchTimers(for device: WLEDDevice) async throws -> [WLEDTimer] {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        let request = URLRequest(url: url)
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
+            
+            // Timers are typically under "timers" key in cfg
+            guard let timersArray = json?["timers"] as? [[String: Any]] else {
+                return []
+            }
+            
+            var timers: [WLEDTimer] = []
+            for (index, timerDict) in timersArray.enumerated() {
+                let enabled = timerDict["en"] as? Bool ?? false
+                let time = timerDict["time"] as? Int ?? 0
+                let days = timerDict["dow"] as? Int ?? 0
+                let action = timerDict["act"] as? Int ?? 0
+                let presetId = timerDict["ps"] as? Int ?? 0
+                let startPresetId = timerDict["ps1"] as? Int
+                let endPresetId = timerDict["ps2"] as? Int
+                let transition = timerDict["tt"] as? Int
+                
+                let timer = WLEDTimer(
+                    id: index,
+                    enabled: enabled,
+                    time: time,
+                    days: days,
+                    action: action,
+                    presetId: presetId,
+                    startPresetId: startPresetId,
+                    endPresetId: endPresetId,
+                    transition: transition
+                )
+                timers.append(timer)
+            }
+            return timers
+        } catch {
+            throw handleError(error, device: device)
+        }
+    }
+    
+    /// Update a timer configuration on a WLED device
+    /// - Parameters:
+    ///   - timerUpdate: The timer update configuration
+    ///   - device: The target WLED device
+    /// - Throws: WLEDAPIError if the request fails
+    func updateTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        // First, fetch current config to get timers array
+        let currentTimers = try await fetchTimers(for: device)
+        
+        // Convert timers to mutable dictionary format for update
+        var timersArray: [[String: Any]] = Array(repeating: [:], count: max(currentTimers.count, timerUpdate.id + 1))
+        
+        // Populate existing timers
+        for timer in currentTimers {
+            if timer.id < timersArray.count {
+                timersArray[timer.id] = [
+                    "en": timer.enabled,
+                    "time": timer.time,
+                    "dow": timer.days,
+                    "act": timer.action,
+                    "ps": timer.presetId
+                ]
+                if let ps1 = timer.startPresetId {
+                    timersArray[timer.id]["ps1"] = ps1
+                }
+                if let ps2 = timer.endPresetId {
+                    timersArray[timer.id]["ps2"] = ps2
+                }
+                if let tt = timer.transition {
+                    timersArray[timer.id]["tt"] = tt
+                }
+            }
+        }
+        
+        // Apply updates
+        if timerUpdate.id < timersArray.count {
+            if let enabled = timerUpdate.enabled {
+                timersArray[timerUpdate.id]["en"] = enabled
+            }
+            if let time = timerUpdate.time {
+                timersArray[timerUpdate.id]["time"] = time
+            }
+            if let days = timerUpdate.days {
+                timersArray[timerUpdate.id]["dow"] = days
+            }
+            if let action = timerUpdate.action {
+                timersArray[timerUpdate.id]["act"] = action
+            }
+            if let presetId = timerUpdate.presetId {
+                timersArray[timerUpdate.id]["ps"] = presetId
+            }
+            if let ps1 = timerUpdate.startPresetId {
+                timersArray[timerUpdate.id]["ps1"] = ps1
+            }
+            if let ps2 = timerUpdate.endPresetId {
+                timersArray[timerUpdate.id]["ps2"] = ps2
+            }
+            if let tt = timerUpdate.transition {
+                timersArray[timerUpdate.id]["tt"] = tt
+            }
+        }
+        
+        // Send update
+        var httpRequest = URLRequest(url: url)
+        httpRequest.httpMethod = "POST"
+        httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = ["timers": timersArray]
+        httpRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        
+        let (_, response) = try await urlSession.data(for: httpRequest)
+        try validateHTTPResponse(response, device: device)
+    }
+    
+    /// Disable a timer slot on a WLED device
+    /// - Parameters:
+    ///   - slot: Timer slot ID (0-9)
+    ///   - device: The target WLED device
+    /// - Returns: true if successful, false otherwise
+    /// - Throws: WLEDAPIError if the request fails
+    func disableTimer(slot: Int, device: WLEDDevice) async throws -> Bool {
+        guard slot >= 0 && slot < 10 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        
+        // Fetch current timers
+        let currentTimers = try await fetchTimers(for: device)
+        
+        // Verify the timer slot exists
+        guard currentTimers.contains(where: { $0.id == slot }) else {
+            logger.warning("Timer slot \(slot) not found on device \(device.id)")
+            return true
+        }
+        
+        // Create update to disable the timer
+        let timerUpdate = WLEDTimerUpdate(
+            id: slot,
+            enabled: false,
+            time: nil,
+            days: nil,
+            action: nil,
+            presetId: nil,
+            startPresetId: nil,
+            endPresetId: nil,
+            transition: nil
+        )
+        
+        try await updateTimer(timerUpdate, on: device)
+        return true
+    }
+    
+    /// Delete a preset from a WLED device
+    /// - Parameters:
+    ///   - id: Preset ID to delete
+    ///   - device: The target WLED device
+    /// - Returns: true if successful, false otherwise
+    /// - Throws: WLEDAPIError if the request fails
+    func deletePreset(id: Int, device: WLEDDevice) async throws -> Bool {
+        guard id >= 0 && id <= 250 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        
+        guard let deleteUrl = URL(string: "http://\(device.ipAddress)/json/presets") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        var request = URLRequest(url: deleteUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "ps": [String(id): NSNull()]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        
+        do {
+            let (_, response) = try await urlSession.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 404 {
+                    return true
+                }
+                return (200...299).contains(httpResponse.statusCode)
+            }
+            try validateHTTPResponse(response, device: device)
+            return true
+        } catch {
+            logger.warning("Preset deletion failed for \(id) on device \(device.id), will retry later")
+            return false
+        }
+    }
+    
+    /// Delete a playlist from a WLED device
+    /// - Parameters:
+    ///   - id: Playlist ID to delete
+    ///   - device: The target WLED device
+    /// - Returns: true if successful, false otherwise
+    /// - Throws: WLEDAPIError if the request fails
+    func deletePlaylist(id: Int, device: WLEDDevice) async throws -> Bool {
+        guard id >= 0 && id <= 250 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        
+        guard let deleteUrl = URL(string: "http://\(device.ipAddress)/json/playlists") else {
+            throw WLEDAPIError.invalidURL
+        }
+        
+        var request = URLRequest(url: deleteUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "playlist": [String(id): NSNull()]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        
+        do {
+            let (_, response) = try await urlSession.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 404 {
+                    return true
+                }
+                return (200...299).contains(httpResponse.statusCode)
+            }
+            try validateHTTPResponse(response, device: device)
+            return true
+        } catch {
+            logger.warning("Playlist deletion failed for \(id) on device \(device.id), will retry later")
+            return false
         }
     }
     

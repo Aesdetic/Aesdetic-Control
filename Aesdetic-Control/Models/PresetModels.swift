@@ -21,7 +21,9 @@ struct ColorPreset: Identifiable, Codable, Equatable {
     // CCT/Temperature (0.0-1.0, nil if not set)
     var temperature: Double?
     
-    // WLED preset ID (nil until saved to device)
+    // WLED preset IDs per device (nil until saved to device)
+    var wledPresetIds: [String: Int]?
+    // Legacy single-device preset ID (kept for migration fallback)
     var wledPresetId: Int?
     
     init(
@@ -32,6 +34,7 @@ struct ColorPreset: Identifiable, Codable, Equatable {
         gradientInterpolation: GradientInterpolation? = nil,
         brightness: Int,
         temperature: Double? = nil,
+        wledPresetIds: [String: Int]? = nil,
         wledPresetId: Int? = nil
     ) {
         self.id = id
@@ -41,6 +44,7 @@ struct ColorPreset: Identifiable, Codable, Equatable {
         self.gradientInterpolation = gradientInterpolation
         self.brightness = max(0, min(255, brightness))
         self.temperature = temperature
+        self.wledPresetIds = wledPresetIds
         self.wledPresetId = wledPresetId
     }
 }
@@ -143,6 +147,5 @@ struct WLEDEffectPreset: Identifiable, Codable, Equatable {
         self.wledPresetId = wledPresetId
     }
 }
-
 
 

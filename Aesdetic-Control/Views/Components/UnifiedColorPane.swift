@@ -466,7 +466,7 @@ struct UnifiedColorPane: View {
         if phase == .changed {
             applyWorkItem?.cancel()
             let work = DispatchWorkItem {
-                Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures, disableActiveEffect: true, segmentId: segmentId, interpolation: currentGradient.interpolation) }
+                Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures, disableActiveEffect: true, segmentId: segmentId, interpolation: currentGradient.interpolation, userInitiated: true) }
             }
             applyWorkItem = work
             Task { @MainActor in
@@ -474,7 +474,7 @@ struct UnifiedColorPane: View {
                 work.perform()
             }
         } else {
-            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures, disableActiveEffect: true, segmentId: segmentId, interpolation: currentGradient.interpolation) }
+            Task { await viewModel.applyGradientStopsAcrossStrip(device, stops: stops, ledCount: ledCount, stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures, disableActiveEffect: true, segmentId: segmentId, interpolation: currentGradient.interpolation, userInitiated: true) }
         }
     }
 
@@ -515,7 +515,8 @@ struct UnifiedColorPane: View {
             stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
                 disableActiveEffect: true,
                 segmentId: segmentId,
-                interpolation: currentGradient.interpolation
+                interpolation: currentGradient.interpolation,
+                userInitiated: true
         )
         }
     }
@@ -591,6 +592,9 @@ private extension UnifiedColorPane {
                 
                 // Update local preset with WLED ID if sync succeeded
                 await MainActor.run {
+                    var ids = preset.wledPresetIds ?? [:]
+                    ids[device.id] = savedId
+                    preset.wledPresetIds = ids
                     preset.wledPresetId = savedId
                     PresetsStore.shared.updateColorPreset(preset)
                 }
@@ -607,6 +611,5 @@ private extension UnifiedColorPane {
         }
     }
 }
-
 
 

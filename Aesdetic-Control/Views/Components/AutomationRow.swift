@@ -187,6 +187,8 @@ struct AutomationRow: View {
             actionLabel(icon: "paintbrush", text: "→ \(sceneName)")
         case .preset(let payload):
             actionLabel(icon: "list.bullet.rectangle", text: "Preset \(payload.presetId)")
+        case .playlist(let payload):
+            actionLabel(icon: "list.bullet.rectangle", text: payload.playlistName ?? "Playlist \(payload.playlistId)")
         case .gradient:
             actionLabel(icon: "rainbow", text: "Color routine")
         case .transition(let payload):
@@ -218,6 +220,8 @@ struct AutomationRow: View {
             return "Scene · \(sceneName)"
         case .preset(let payload):
             return "Preset #\(payload.presetId)"
+        case .playlist(let payload):
+            return "Playlist #\(payload.playlistId)"
         case .gradient:
             return "Color · \(automation.summary)"
         case .transition:

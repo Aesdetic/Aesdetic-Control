@@ -47,6 +47,8 @@ struct Automation: Codable, Identifiable, Equatable {
             return payload.sceneName ?? "Scene"
         case .preset(let payload):
             return "Preset \(payload.presetId)"
+        case .playlist(let payload):
+            return payload.playlistName ?? "Playlist \(payload.playlistId)"
         case .gradient(let payload):
             return payload.gradient.name ?? "Gradient"
         case .transition(let payload):
@@ -209,6 +211,7 @@ struct AutomationTargets: Codable, Equatable {
 enum AutomationAction: Codable, Equatable {
     case scene(SceneActionPayload)
     case preset(PresetActionPayload)
+    case playlist(PlaylistActionPayload)
     case gradient(GradientActionPayload)
     case transition(TransitionActionPayload)
     case effect(EffectActionPayload)
@@ -224,6 +227,12 @@ struct SceneActionPayload: Codable, Equatable {
 struct PresetActionPayload: Codable, Equatable {
     var presetId: Int
     var paletteName: String?
+    var durationSeconds: Double? = nil  // Optional duration for preset transitions
+}
+
+struct PlaylistActionPayload: Codable, Equatable {
+    var playlistId: Int  // WLED playlist ID (0-250)
+    var playlistName: String?
 }
 
 struct GradientActionPayload: Codable, Equatable {
@@ -276,6 +285,10 @@ struct AutomationMetadata: Codable, Equatable {
     var notes: String?
     var templateId: String?
     var pinnedToShortcuts: Bool?
+    // WLED device-side execution metadata (optional, backwards compatible)
+    var wledPlaylistId: Int? = nil  // WLED playlist ID if this automation uses a playlist
+    var wledTimerSlot: Int? = nil   // WLED timer slot ID if this automation runs on-device
+    var runOnDevice: Bool = false   // Whether this automation should run on WLED device (timer-based)
     
     init(
         colorPreviewHex: String? = nil,
@@ -283,7 +296,10 @@ struct AutomationMetadata: Codable, Equatable {
         iconName: String? = nil,
         notes: String? = nil,
         templateId: String? = nil,
-        pinnedToShortcuts: Bool? = nil
+        pinnedToShortcuts: Bool? = nil,
+        wledPlaylistId: Int? = nil,
+        wledTimerSlot: Int? = nil,
+        runOnDevice: Bool = false
     ) {
         self.colorPreviewHex = colorPreviewHex
         self.accentColorHex = accentColorHex
@@ -291,5 +307,8 @@ struct AutomationMetadata: Codable, Equatable {
         self.notes = notes
         self.templateId = templateId
         self.pinnedToShortcuts = pinnedToShortcuts
+        self.wledPlaylistId = wledPlaylistId
+        self.wledTimerSlot = wledTimerSlot
+        self.runOnDevice = runOnDevice
     }
 }

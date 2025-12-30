@@ -13,6 +13,7 @@ struct AutomationEffectEditor: View {
     @Binding var speed: Int
     @Binding var intensity: Int
     @Binding var gradient: LEDGradient
+    @Binding var selectedEffectPresetId: UUID?
     
     // Preview state
     @State private var previewEnabled: Bool = false
@@ -23,7 +24,6 @@ struct AutomationEffectEditor: View {
     @State private var showWheel: Bool = false
     @State private var wheelInitial: Color = .white
     @State private var selectedColorPresetId: UUID? = nil
-    @State private var selectedEffectPresetId: UUID? = nil
     @State private var stagedSpeedValue: Double?
     @State private var stagedIntensityValue: Double?
     @State private var isAdjustingSpeed = false

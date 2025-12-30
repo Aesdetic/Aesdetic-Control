@@ -263,10 +263,10 @@ struct DeviceDetailView: View {
                     Text(viewModel.isDeviceOnline(device) || isToggling ? "Online" : "Offline")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.7))
-                    if !device.ipAddress.isEmpty {
-                        Text("· \(device.ipAddress)")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.5))
+                    
+                    // Active run status chip
+                    if let activeRun = viewModel.activeRunStatus[device.id] {
+                        activeRunStatusChip(activeRun)
                     }
                 }
             }
@@ -293,6 +293,53 @@ struct DeviceDetailView: View {
             .fill((viewModel.isDeviceOnline(device) || isToggling) ? Color.green : Color.red)
             .frame(width: 8, height: 8)
             .shadow(color: (viewModel.isDeviceOnline(device) || isToggling) ? Color.green.opacity(0.5) : Color.red.opacity(0.5), radius: 4, x: 0, y: 0)
+    }
+    
+    @ViewBuilder
+    private func activeRunStatusChip(_ run: ActiveRunStatus) -> some View {
+        HStack(spacing: 6) {
+            // Status text
+            Group {
+                switch run.kind {
+                case .automation, .transition:
+                    if run.progress > 0 {
+                        Text("\(run.title) \(Int(run.progress * 100))%")
+                    } else {
+                        Text("Running: \(run.title)")
+                    }
+                case .effect:
+                    Text("Effect: \(run.title)")
+                case .applying:
+                    Text("Applying: \(run.title)")
+                }
+            }
+            .font(.caption2)
+            .foregroundColor(.white.opacity(0.85))
+            
+            // Cancel button (if cancellable)
+            if run.isCancellable {
+                Button(action: {
+                    Task {
+                        await viewModel.cancelActiveRun(for: device)
+                    }
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.15))
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
     
     private var powerButtonContent: some View {
