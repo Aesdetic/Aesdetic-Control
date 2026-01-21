@@ -13,6 +13,8 @@ struct AutomationColorEditor: View {
     @Binding var fadeDuration: Double
     @Binding var enableFade: Bool
     @Binding var selectedPresetId: UUID?
+    @Binding var temperature: Double?
+    @Binding var whiteLevel: Double?
     
     // Preview state
     @State private var previewEnabled: Bool = false
@@ -22,8 +24,10 @@ struct AutomationColorEditor: View {
     @State private var showWheel: Bool = false
     @State private var wheelInitial: Color = .white
     @State private var stopTemperatures: [UUID: Double] = [:]
+    @State private var stopWhiteLevels: [UUID: Double] = [:]
     @State private var isSavingPreset = false
     @State private var showSaveSuccess = false
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     var body: some View {
         VStack(spacing: 16) {
@@ -52,9 +56,21 @@ struct AutomationColorEditor: View {
                 }
             }
         }
+        .onAppear {
+            hydrateStopMapsIfNeeded()
+        }
     }
     
     // MARK: - Section Views
+
+    private func hydrateStopMapsIfNeeded() {
+        if stopTemperatures.isEmpty, let temp = temperature {
+            stopTemperatures = Dictionary(uniqueKeysWithValues: gradient.stops.map { ($0.id, temp) })
+        }
+        if stopWhiteLevels.isEmpty, let white = whiteLevel {
+            stopWhiteLevels = Dictionary(uniqueKeysWithValues: gradient.stops.map { ($0.id, white) })
+        }
+    }
     
     @ViewBuilder
     private var presetSelector: some View {
@@ -84,6 +100,14 @@ struct AutomationColorEditor: View {
             gradient = LEDGradient(stops: preset.gradientStops, interpolation: preset.gradientInterpolation ?? .linear)
             brightness = Double(preset.brightness)
             interpolation = preset.gradientInterpolation ?? gradient.interpolation
+            stopTemperatures = preset.temperature.map { temp in
+                Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, temp) })
+            } ?? [:]
+            stopWhiteLevels = preset.whiteLevel.map { white in
+                Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, white) })
+            } ?? [:]
+            temperature = stopTemperatures.values.first
+            whiteLevel = stopWhiteLevels.values.first
             
             if previewEnabled {
                 Task {
@@ -194,7 +218,7 @@ struct AutomationColorEditor: View {
     
     @ViewBuilder
     private var blendSelector: some View {
-        if gradient.stops.count >= 2 {
+        if advancedUIEnabled, gradient.stops.count >= 2 {
             VStack(spacing: 6) {
                 HStack {
                     Text("Blend Style")
@@ -288,8 +312,32 @@ struct AutomationColorEditor: View {
                 }
             }
         }
+
+        if !stopWhiteLevels.isEmpty {
+            let sortedStops = updatedGradient.stops.sorted { $0.position < $1.position }
+            if let newIndex = sortedStops.firstIndex(where: { $0.id == new.id }) {
+                var nearestWhite: Double? = nil
+                var minDistance: Double = Double.greatestFiniteMagnitude
+
+                for (idx, stop) in sortedStops.enumerated() {
+                    if idx != newIndex, let white = stopWhiteLevels[stop.id] {
+                        let distance = abs(stop.position - new.position)
+                        if distance < minDistance {
+                            minDistance = distance
+                            nearestWhite = white
+                        }
+                    }
+                }
+
+                if let inheritedWhite = nearestWhite {
+                    stopWhiteLevels[new.id] = inheritedWhite
+                }
+            }
+        }
         
         gradient = updatedGradient
+        temperature = stopTemperatures.values.first
+        whiteLevel = stopWhiteLevels.values.first
         selectedStopId = new.id
         selectedPresetId = nil // Clear preset when manually adding a stop
         
@@ -305,6 +353,11 @@ struct AutomationColorEditor: View {
         updatedGradient.stops = stops
         gradient = updatedGradient
         selectedPresetId = nil // Clear preset when manually dragging stops
+        let stopIds = Set(stops.map { $0.id })
+        stopTemperatures = stopTemperatures.filter { stopIds.contains($0.key) }
+        stopWhiteLevels = stopWhiteLevels.filter { stopIds.contains($0.key) }
+        temperature = stopTemperatures.values.first
+        whiteLevel = stopWhiteLevels.values.first
         
         if previewEnabled && phase == .ended {
             Task {
@@ -329,12 +382,17 @@ struct AutomationColorEditor: View {
         let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: 0)
         return ColorWheelInline(
             initialColor: wheelInitial,
+            initialTemperature: stopTemperatures[selectedId],
+            initialWhiteLevel: stopWhiteLevels[selectedId],
             canRemove: gradient.stops.count > 1,
             supportsCCT: supportsCCT,
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+            allowManualWhite: advancedUIEnabled,
+            cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, whiteLevel in
-                handleColorChange(selectedId: selectedId, color: color, temperature: temperature)
+                handleColorChange(selectedId: selectedId, color: color, temperature: temperature, whiteLevel: whiteLevel)
             },
             onRemove: {
                 handleColorRemove(selectedId: selectedId)
@@ -345,7 +403,7 @@ struct AutomationColorEditor: View {
         .padding(.horizontal, 16)
     }
     
-    private func handleColorChange(selectedId: UUID, color: Color, temperature: Double?) {
+    private func handleColorChange(selectedId: UUID, color: Color, temperature: Double?, whiteLevel: Double?) {
         guard let idx = gradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }
         
         var updatedGradient = gradient
@@ -353,10 +411,22 @@ struct AutomationColorEditor: View {
         if let temp = temperature {
             stopTemperatures[selectedId] = temp
             updatedGradient.stops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
+            if let white = whiteLevel {
+                stopWhiteLevels[selectedId] = white
+            } else {
+                stopWhiteLevels.removeValue(forKey: selectedId)
+            }
         } else {
             updatedGradient.stops[idx].hexColor = color.toHex()
             stopTemperatures.removeValue(forKey: selectedId)
+            if let white = whiteLevel {
+                stopWhiteLevels[selectedId] = white
+            } else {
+                stopWhiteLevels.removeValue(forKey: selectedId)
+            }
         }
+        self.temperature = stopTemperatures.values.first
+        self.whiteLevel = stopWhiteLevels.values.first
         
         gradient = updatedGradient
         selectedPresetId = nil // Clear preset when manually changing a stop color
@@ -373,6 +443,9 @@ struct AutomationColorEditor: View {
             var updatedGradient = gradient
             updatedGradient.stops.removeAll { $0.id == selectedId }
             stopTemperatures.removeValue(forKey: selectedId)
+            stopWhiteLevels.removeValue(forKey: selectedId)
+            temperature = stopTemperatures.values.first
+            whiteLevel = stopWhiteLevels.values.first
             gradient = updatedGradient
             selectedStopId = nil
             selectedPresetId = nil // Clear preset when manually removing a stop
@@ -413,15 +486,17 @@ struct AutomationColorEditor: View {
     // MARK: - Preview Functions
     
     private func previewGradient(_ gradient: LEDGradient) async {
-        let ledCount = device.state?.segments.first?.len ?? 120
+        let ledCount = viewModel.totalLEDCount(for: device)
         await viewModel.applyGradientStopsAcrossStrip(
             device,
             stops: gradient.stops,
             ledCount: ledCount,
             stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
+            stopWhiteLevels: stopWhiteLevels.isEmpty ? nil : stopWhiteLevels,
             disableActiveEffect: true,
             segmentId: 0,
-            interpolation: gradient.interpolation
+            interpolation: gradient.interpolation,
+            preferSegmented: true
         )
     }
     
@@ -438,28 +513,42 @@ struct AutomationColorEditor: View {
         }
         
         let presetName = "Color Preset \(Date().formatted(date: .omitted, time: .shortened))"
-        let preset = ColorPreset(
+        var preset = ColorPreset(
             name: presetName,
             gradientStops: gradient.stops,
             gradientInterpolation: gradient.interpolation,
             brightness: Int(brightness),
-            temperature: stopTemperatures.values.first
+            temperature: stopTemperatures.values.first,
+            whiteLevel: stopWhiteLevels.values.first
         )
-        
-        await MainActor.run {
-            PresetsStore.shared.addColorPreset(preset)
-            selectedPresetId = preset.id  // Select the newly saved preset
-            isSavingPreset = false
-            showSaveSuccess = true
-            
-            Task {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                await MainActor.run {
-                    showSaveSuccess = false
-                }
+
+        do {
+            let savedId = try await PresetSyncManager.shared.saveColorPreset(preset, to: device)
+            await MainActor.run {
+                var ids = preset.wledPresetIds ?? [:]
+                ids[device.id] = savedId
+                preset.wledPresetIds = ids
+                preset.wledPresetId = savedId
+                PresetsStore.shared.addColorPreset(preset)
+                selectedPresetId = preset.id
+                isSavingPreset = false
+                showSaveSuccess = true
             }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run {
+                showSaveSuccess = false
+            }
+            #if DEBUG
+            print("✅ Color preset saved to WLED device: ID \(savedId)")
+            #endif
+        } catch {
+            await MainActor.run {
+                isSavingPreset = false
+                showSaveSuccess = false
+            }
+            #if DEBUG
+            print("⚠️ Failed to save color preset to WLED: \(error.localizedDescription)")
+            #endif
         }
     }
 }
-
-

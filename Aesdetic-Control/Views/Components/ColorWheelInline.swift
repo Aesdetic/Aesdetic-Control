@@ -2,10 +2,15 @@ import SwiftUI
 
 struct ColorWheelInline: View {
     let initialColor: Color
+    let initialTemperature: Double?
+    let initialWhiteLevel: Double?
     let canRemove: Bool
     let supportsCCT: Bool
     let supportsWhite: Bool
     let usesKelvinCCT: Bool
+    let allowCCTForTemperatureStops: Bool
+    let allowManualWhite: Bool
+    let cctKelvinRange: ClosedRange<Int>
     let onColorChange: (Color, Double?, Double?) -> Void  // Color, optional temperature (0-1), optional white level (0-1)
     let onRemove: () -> Void
     let onDismiss: () -> Void
@@ -23,12 +28,31 @@ struct ColorWheelInline: View {
     @State private var isEditingHex: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
-    init(initialColor: Color, canRemove: Bool, supportsCCT: Bool, supportsWhite: Bool, usesKelvinCCT: Bool, onColorChange: @escaping (Color, Double?, Double?) -> Void, onRemove: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+    init(
+        initialColor: Color,
+        initialTemperature: Double? = nil,
+        initialWhiteLevel: Double? = nil,
+        canRemove: Bool,
+        supportsCCT: Bool,
+        supportsWhite: Bool,
+        usesKelvinCCT: Bool,
+        allowCCTForTemperatureStops: Bool = false,
+        allowManualWhite: Bool = true,
+        cctKelvinRange: ClosedRange<Int>? = nil,
+        onColorChange: @escaping (Color, Double?, Double?) -> Void,
+        onRemove: @escaping () -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
         self.initialColor = initialColor
+        self.initialTemperature = initialTemperature
+        self.initialWhiteLevel = initialWhiteLevel
         self.canRemove = canRemove
         self.supportsCCT = supportsCCT
         self.supportsWhite = supportsWhite
         self.usesKelvinCCT = usesKelvinCCT
+        self.allowCCTForTemperatureStops = allowCCTForTemperatureStops
+        self.allowManualWhite = allowManualWhite
+        self.cctKelvinRange = cctKelvinRange ?? Self.defaultKelvinRange
         self.onColorChange = onColorChange
         self.onRemove = onRemove
         self.onDismiss = onDismiss
@@ -170,10 +194,16 @@ struct ColorWheelInline: View {
             // This prevents the background tap gesture from dismissing the picker
         }
         .onAppear {
-            extractHSV(from: initialColor)
-            extractTemperature(from: initialColor)
-            updatePickerPosition()
-            updateHexInput()
+            syncFromInitialState(force: true)
+        }
+        .onChange(of: initialColor) { _, _ in
+            syncFromInitialState(force: false)
+        }
+        .onChange(of: initialTemperature) { _, _ in
+            syncFromInitialState(force: true)
+        }
+        .onChange(of: initialWhiteLevel) { _, _ in
+            syncFromInitialState(force: true)
         }
         }
     }
@@ -250,11 +280,18 @@ struct ColorWheelInline: View {
                 HStack {
                     Image(systemName: "thermometer.sun")
                         .foregroundColor(.orange)
-                    Text("Temperature")
+                    Text("White Temperature")
                         .foregroundColor(secondaryLabelColor)
                     Spacer()
-                    Text(temperatureText)
-                        .foregroundColor(secondaryLabelColor)
+                    if allowCCTForTemperatureStops && isUsingTemperatureSlider {
+                        Text("CCT")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .foregroundColor(.white)
+                            .background(Color.orange.opacity(0.85))
+                            .clipShape(Capsule())
+                    }
                 }
                 .font(.caption)
                 
@@ -316,12 +353,21 @@ struct ColorWheelInline: View {
                     )
                 }
                 .frame(height: 20)
+                HStack {
+                    Text("Warm")
+                        .font(.caption2)
+                        .foregroundColor(secondaryLabelColor)
+                    Spacer()
+                    Text("Cool")
+                        .font(.caption2)
+                        .foregroundColor(secondaryLabelColor)
+                }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(usesKelvinCCT ? "Color temperature" : "Color temperature")
+            .accessibilityLabel("White temperature")
             .accessibilityValue(temperatureText)
             .accessibilityIdentifier("CCTTemperatureSlider") // For UI testing
-            .accessibilityHint(usesKelvinCCT ? "Adjusts the light's color temperature in Kelvin." : "Adjusts between warm and cool white.")
+            .accessibilityHint("Adjusts between warm and cool white.")
             .accessibilityAdjustableAction { direction in
                 let step: Double = 0.05
                 switch direction {
@@ -338,8 +384,8 @@ struct ColorWheelInline: View {
             }
             }
             
-            // White Channel Slider (shown only if device supports white channel - RGBW strips)
-            if supportsWhite {
+            // White Channel Slider (manual override, advanced UI only)
+            if supportsWhite && allowManualWhite {
             VStack(spacing: 6) {
                 HStack {
                     Image(systemName: "circle.fill")
@@ -380,9 +426,11 @@ struct ColorWheelInline: View {
                             .onChanged { value in
                                 let newValue = Double(value.location.x / geometry.size.width)
                                 whiteLevel = max(0, min(1, newValue))
+                                isUsingTemperatureSlider = false
                                 // Don't apply during drag, just update preview
                             }
                             .onEnded { _ in
+                                isUsingTemperatureSlider = false
                                 // Apply color to device only on release
                                 applyColorToDevice()
                             }
@@ -404,6 +452,7 @@ struct ColorWheelInline: View {
                 @unknown default:
                     break
                 }
+                isUsingTemperatureSlider = false
                 applyColorToDevice()
             }
             }
@@ -481,19 +530,39 @@ struct ColorWheelInline: View {
     
     // MARK: - Helper Functions
     
-    private var temperatureText: String {
-        if usesKelvinCCT {
-            let kelvin = Segment.kelvinValue(fromNormalized: temperature)
-            return "\(kelvin)K"
+    private static let defaultKelvinRange: ClosedRange<Int> = 1900...10091
+
+    private func syncFromInitialState(force: Bool) {
+        if !force, initialColor.toHex() == selectedColor.toHex() {
+            return
         }
-        let eightBit = Segment.eightBitValue(fromNormalized: temperature)
-        if temperature < 0.3 {
-            return "CCT \(eightBit) (Warm)"
-        } else if temperature < 0.7 {
-            return "CCT \(eightBit) (Neutral)"
+        selectedColor = initialColor
+        extractHSV(from: initialColor)
+        if let initialTemperature {
+            temperature = max(0.0, min(1.0, initialTemperature))
+            isUsingTemperatureSlider = true
+            applyTemperatureShift()
         } else {
-            return "CCT \(eightBit) (Cool)"
+            isUsingTemperatureSlider = false
+            extractTemperature(from: initialColor)
         }
+        if let initialWhiteLevel, supportsWhite, allowManualWhite {
+            whiteLevel = max(0.0, min(1.0, initialWhiteLevel))
+        }
+        updatePickerPosition()
+        updateHexInput()
+    }
+    
+    private var temperatureText: String {
+        let clamped = max(0.0, min(1.0, temperature))
+        let percentCool = Int(round(clamped * 100))
+        if percentCool == 0 {
+            return "Warm"
+        }
+        if percentCool == 100 {
+            return "Cool"
+        }
+        return "Warm to cool, \(percentCool)% cool"
     }
     
     private var whiteLevelText: String {
@@ -596,10 +665,7 @@ struct ColorWheelInline: View {
             }
         }
         
-        // If the color is clearly a CCT white (low saturation), set isUsingTemperatureSlider to true
-        if saturation < 0.3 {
-            isUsingTemperatureSlider = true
-        }
+        // Keep temperature in sync for UI, but don't auto-enable temperature mode.
     }
     
     // Apple's exact spectrum position calculation
@@ -684,7 +750,10 @@ struct ColorWheelInline: View {
         // For RGBW strips: Pass white level (0-1) if white channel is supported
         // For RGBCCT strips: Pass temperature (0-1) if temperature slider is being used
         let temperatureValue = isUsingTemperatureSlider ? temperature : nil
-        let whiteLevelValue = supportsWhite && whiteLevel > 0.0 ? whiteLevel : nil
+        let whiteLevelValue = resolvedWhiteLevel(forTemperature: isUsingTemperatureSlider)
+        if isUsingTemperatureSlider, let whiteLevelValue, whiteLevel <= 0.0 {
+            whiteLevel = whiteLevelValue
+        }
         #if DEBUG
         print("🔵 applyColorToDevice() calling onColorChange - tempValue=\(temperatureValue?.description ?? "nil")")
         #endif
@@ -760,6 +829,15 @@ struct ColorWheelInline: View {
     private func updateHexInput() {
         hexInput = selectedColor.toHex().replacingOccurrences(of: "#", with: "")
     }
+
+    private func resolvedWhiteLevel(forTemperature: Bool) -> Double? {
+        guard supportsWhite, allowManualWhite else { return nil }
+        if allowCCTForTemperatureStops, forTemperature {
+            return nil
+        }
+        if whiteLevel > 0.0 { return whiteLevel }
+        return nil
+    }
 }
 
 
@@ -808,5 +886,3 @@ private extension ColorWheelInline {
         colorSchemeContrast == .increased ? min(1.0, base * 1.6) : base
     }
 }
-
-

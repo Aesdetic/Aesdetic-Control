@@ -28,6 +28,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     private var schedulerTask: Task<Void, Never>? = nil
     private var lastPingTimes: [String: Date] = [:]
     private var lastParseErrors: [String: Date] = [:]  // Track last parse error time per device
+    private var lastReceiveErrors: [String: Date] = [:]
     
     // Connection pool management
     private let maxConcurrentConnections = 20
@@ -315,6 +316,13 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     
     /// Send a state update to a device via WebSocket
     func sendStateUpdate(_ update: WLEDStateUpdate, to deviceId: String) {
+        let segCount = update.seg?.count ?? 0
+        if segCount > 6 {
+            #if DEBUG
+            print("🔵 WebSocket skipped for \(deviceId): segCount=\(segCount)")
+            #endif
+            return
+        }
         guard let webSocketTask = webSocketTasks[deviceId] else {
             logger.warning("No WebSocket connection for device: \(deviceId)")
             return
@@ -484,7 +492,29 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             case .failure(let error):
                 guard let self = self else { return }
                 Task { @MainActor in
-                    self.logger.error("WebSocket receive error for device \(deviceId): \(error.localizedDescription)")
+                    let now = Date()
+                    let errorKey = "lastReceiveError_\(deviceId)"
+                    let isExpected: Bool = {
+                        guard let urlError = error as? URLError else { return false }
+                        switch urlError.code {
+                        case .timedOut, .cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet:
+                            return true
+                        default:
+                            return false
+                        }
+                    }()
+                    if isExpected,
+                       let lastError = self.lastReceiveErrors[errorKey],
+                       now.timeIntervalSince(lastError) < 60 {
+                        // Skip noisy expected errors for 60 seconds per device
+                    } else {
+                        self.lastReceiveErrors[errorKey] = now
+                        if isExpected {
+                            self.logger.debug("WebSocket receive transient error for device \(deviceId): \(error.localizedDescription)")
+                        } else {
+                            self.logger.error("WebSocket receive error for device \(deviceId): \(error.localizedDescription)")
+                        }
+                    }
                     self.handleWebSocketError(.connectionLost(error), for: deviceId)
                 }
             }
@@ -518,6 +548,12 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             if let text = String(data: data, encoding: .utf8),
                text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "pong" {
                 // Silently handle pong - it's just a health check response
+                return
+            }
+
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["error"] != nil {
+                // Ignore WLED error payloads that aren't full state updates (e.g., {"error":3})
                 return
             }
             

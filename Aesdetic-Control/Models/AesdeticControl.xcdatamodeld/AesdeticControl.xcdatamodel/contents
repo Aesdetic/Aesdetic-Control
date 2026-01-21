@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788.4" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="YES" userDefinedModelVersionIdentifier="">
     <entity name="WLEDDeviceEntity" representedClassName="WLEDDeviceEntity" syncable="YES">
+        <attribute name="autoWhiteMode" optional="YES" attributeType="Integer 16" defaultValueString="-1" usesScalarValueType="YES"/>
         <attribute name="brightness" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="currentColorHex" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="String"/>
@@ -32,6 +33,7 @@
     <entity name="WLEDStateEntity" representedClassName="WLEDStateEntity" syncable="YES">
         <attribute name="brightness" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="isOn" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="transitionDeciseconds" optional="YES" attributeType="Integer 16"/>
         <relationship name="device" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="WLEDDeviceEntity" inverseName="state" inverseEntity="WLEDDeviceEntity"/>
         <relationship name="segments" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="WLEDSegmentEntity" inverseName="state" inverseEntity="WLEDSegmentEntity"/>
     </entity>

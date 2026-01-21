@@ -20,6 +20,7 @@ class AutomationStore: ObservableObject {
     private let apiService = WLEDAPIService.shared
     private let locationProvider = LocationProvider()
     private var solarCache: [SolarCacheKey: Date] = [:]
+    private let maxWLEDTransitionSeconds: Double = 6553.5
     
     private init() {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -41,6 +42,11 @@ class AutomationStore: ObservableObject {
         save()
         scheduleNext()
         logger.info("Added automation: \(record.name)")
+        if record.metadata.runOnDevice {
+            Task { [weak self] in
+                await self?.syncOnDeviceScheduleIfNeeded(for: record)
+            }
+        }
     }
     
     func update(_ automation: Automation) {
@@ -54,6 +60,11 @@ class AutomationStore: ObservableObject {
         save()
         scheduleNext()
         logger.info("Updated automation: \(record.name)")
+        if record.metadata.runOnDevice {
+            Task { [weak self] in
+                await self?.syncOnDeviceScheduleIfNeeded(for: record)
+            }
+        }
     }
     
     func delete(id: UUID) {
@@ -258,7 +269,7 @@ class AutomationStore: ObservableObject {
         switch action {
         case .scene(let payload):
             // Set short-lived "Applying" status
-            await MainActor.run {
+            _ = await MainActor.run {
                 viewModel.activeRunStatus[device.id] = ActiveRunStatus(
                     deviceId: device.id,
                     kind: .applying,
@@ -271,7 +282,7 @@ class AutomationStore: ObservableObject {
             
             guard let scene = scenesStore.scenes.first(where: { $0.id == payload.sceneId }) else {
                 logger.error("Scene \(payload.sceneId) missing for automation \(automation.name)")
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus.removeValue(forKey: device.id)
                 }
                 return false
@@ -284,14 +295,14 @@ class AutomationStore: ObservableObject {
             await viewModel.applyScene(sceneCopy, to: device, userInitiated: false)
             
             // Clear status after completion
-            await MainActor.run {
+            _ = await MainActor.run {
                 viewModel.activeRunStatus.removeValue(forKey: device.id)
             }
             return true
             
         case .preset(let payload):
             // Set short-lived "Applying" status
-            await MainActor.run {
+            _ = await MainActor.run {
                 viewModel.activeRunStatus[device.id] = ActiveRunStatus(
                     deviceId: device.id,
                     kind: .applying,
@@ -308,12 +319,12 @@ class AutomationStore: ObservableObject {
                 _ = try await apiService.applyPreset(payload.presetId, to: device, transition: transitionMs)
                 
                 // Clear status after completion
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus.removeValue(forKey: device.id)
                 }
             } catch {
                 logger.error("Failed to apply preset \(payload.presetId) for automation \(automation.name): \(error.localizedDescription)")
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus.removeValue(forKey: device.id)
                 }
                 return false
@@ -322,7 +333,7 @@ class AutomationStore: ObservableObject {
             
         case .playlist(let payload):
             // Set short-lived "Applying" status
-            await MainActor.run {
+            _ = await MainActor.run {
                 viewModel.activeRunStatus[device.id] = ActiveRunStatus(
                     deviceId: device.id,
                     kind: .applying,
@@ -338,12 +349,12 @@ class AutomationStore: ObservableObject {
                 _ = try await apiService.applyPlaylist(payload.playlistId, to: device)
                 
                 // Clear status after completion
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus.removeValue(forKey: device.id)
                 }
             } catch {
                 logger.error("Failed to apply playlist \(payload.playlistId) for automation \(automation.name): \(error.localizedDescription)")
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus.removeValue(forKey: device.id)
                 }
                 return false
@@ -352,10 +363,60 @@ class AutomationStore: ObservableObject {
             
         case .gradient(let payload):
             let gradient = resolveGradientPayload(payload, device: device)
-            let ledCount = device.state?.segments.first?.len ?? 120
+            let ledCount = viewModel.totalLEDCount(for: device)
+            let resolvedTemperature = payload.temperature ?? payload.presetId.flatMap { presetsStore.colorPreset(id: $0)?.temperature }
+            let resolvedWhiteLevel = payload.whiteLevel ?? payload.presetId.flatMap { presetsStore.colorPreset(id: $0)?.whiteLevel }
+            let stopTemperatures = resolvedTemperature.map { temp in
+                Dictionary(uniqueKeysWithValues: gradient.stops.map { ($0.id, temp) })
+            }
+            let stopWhiteLevels = resolvedWhiteLevel.map { white in
+                Dictionary(uniqueKeysWithValues: gradient.stops.map { ($0.id, white) })
+            }
+            var durationSeconds = payload.durationSeconds
+
+            if durationSeconds > maxWLEDNativeTransitionSeconds {
+                let startGradient = viewModel.automationGradient(for: device)
+                if let playlist = await viewModel.createTransitionPlaylist(
+                    device: device,
+                    from: startGradient,
+                    to: gradient,
+                    durationSeconds: durationSeconds,
+                    startBrightness: device.brightness,
+                    endBrightness: payload.brightness
+                ) {
+                    let runId = UUID()
+                    let startDate = Date()
+                    let expectedEnd = startDate.addingTimeInterval(durationSeconds)
+                    _ = await MainActor.run {
+                        viewModel.activeRunStatus[device.id] = ActiveRunStatus(
+                            id: runId,
+                            deviceId: device.id,
+                            kind: .automation,
+                            title: automation.name,
+                            startDate: startDate,
+                            progress: 0.0,
+                            isCancellable: true,
+                            expectedEnd: expectedEnd
+                        )
+                    }
+                    _ = await viewModel.startPlaylist(device: device, playlistId: playlist.playlistId)
+                    Task {
+                        try? await Task.sleep(nanoseconds: UInt64(durationSeconds * 1_000_000_000))
+                        await viewModel.cleanupTransitionPlaylist(device: device)
+                        _ = await MainActor.run {
+                            if let currentStatus = viewModel.activeRunStatus[device.id], currentStatus.id == runId {
+                                viewModel.activeRunStatus.removeValue(forKey: device.id)
+                            }
+                        }
+                    }
+                    return true
+                }
+                durationSeconds = maxWLEDNativeTransitionSeconds
+            }
             
             // Use native WLED transition for solid colors with duration > 0
-            if payload.durationSeconds > 0 && viewModel.shouldUseNativeTransition(stops: gradient.stops, durationSeconds: payload.durationSeconds) {
+            if durationSeconds > 0 && viewModel.shouldUseNativeTransition(stops: gradient.stops, durationSeconds: durationSeconds) {
+                logger.info("Automation gradient path=native-tt device=\(device.name, privacy: .public) duration=\(durationSeconds, privacy: .public)s")
                 // Solid color with transition - use native WLED tt
                 // Extract target color RGB for native transition metadata
                 let targetColor = Color(hex: gradient.stops.first?.hexColor ?? "#FFFFFF")
@@ -363,11 +424,11 @@ class AutomationStore: ObservableObject {
                 let targetBrightness = payload.brightness
                 
                 let startDate = Date()
-                let expectedEnd = startDate.addingTimeInterval(payload.durationSeconds)
+                let expectedEnd = startDate.addingTimeInterval(durationSeconds)
                 let runId = UUID()
                 
                 // Set active run status with native transition metadata
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus[device.id] = ActiveRunStatus(
                         id: runId,
                         deviceId: device.id,
@@ -380,66 +441,129 @@ class AutomationStore: ObservableObject {
                         nativeTransition: NativeTransitionInfo(
                             targetColorRGB: targetRGB,
                             targetBrightness: targetBrightness,
-                            durationSeconds: payload.durationSeconds
+                            durationSeconds: durationSeconds
                         )
                     )
                 }
                 
+                await apiService.releaseRealtimeOverride(for: device)
                 await viewModel.applyGradientStopsAcrossStrip(
                     device,
                     stops: gradient.stops,
                     ledCount: ledCount,
+                    stopTemperatures: stopTemperatures,
+                    stopWhiteLevels: stopWhiteLevels,
                     disableActiveEffect: true,
                     interpolation: gradient.interpolation,
                     brightness: payload.brightness,
                     on: true,
-                    transitionDurationSeconds: payload.durationSeconds,
-                    userInitiated: false
+                    transitionDurationSeconds: durationSeconds,
+                    releaseRealtimeOverride: false,
+                    userInitiated: false,
+                    preferSegmented: true
                 )
                 
                 // Clear status after transition completes (use timer with runId check to prevent race condition)
                 Task {
-                    try? await Task.sleep(nanoseconds: UInt64(payload.durationSeconds * 1_000_000_000))
-                    await MainActor.run {
+                    try? await Task.sleep(nanoseconds: UInt64(durationSeconds * 1_000_000_000))
+                    _ = await MainActor.run {
                         // Only clear if this run is still active (check runId to prevent clearing newer runs)
                         if let currentStatus = viewModel.activeRunStatus[device.id], currentStatus.id == runId {
                             viewModel.activeRunStatus.removeValue(forKey: device.id)
                         }
                     }
                 }
-            } else if payload.durationSeconds > 0.5 {
-                // Multi-stop gradient with transition - use client-side runner
-                await viewModel.runSimpleGradientFade(
-                    for: device,
-                    targetGradient: gradient,
-                    targetBrightness: payload.brightness,
-                    durationSeconds: payload.durationSeconds,
-                    automationName: automation.name
+            } else if durationSeconds > 0.5 {
+                logger.info("Automation gradient path=segmented-tt device=\(device.name, privacy: .public) duration=\(durationSeconds, privacy: .public)s")
+                // Multi-stop gradient with transition - use segmented update with native tt
+                await apiService.releaseRealtimeOverride(for: device)
+                await viewModel.applyGradientStopsAcrossStrip(
+                    device,
+                    stops: gradient.stops,
+                    ledCount: ledCount,
+                    stopTemperatures: stopTemperatures,
+                    stopWhiteLevels: stopWhiteLevels,
+                    disableActiveEffect: true,
+                    interpolation: gradient.interpolation,
+                    brightness: payload.brightness,
+                    on: true,
+                    transitionDurationSeconds: durationSeconds,
+                    releaseRealtimeOverride: false,
+                    userInitiated: false,
+                    preferSegmented: true
                 )
             } else {
+                logger.info("Automation gradient path=immediate device=\(device.name, privacy: .public)")
                 // No transition or very short - apply immediately
                 await viewModel.applyGradientStopsAcrossStrip(
                     device,
                     stops: gradient.stops,
                     ledCount: ledCount,
+                    stopTemperatures: stopTemperatures,
+                    stopWhiteLevels: stopWhiteLevels,
                     disableActiveEffect: true,
                     interpolation: gradient.interpolation,
                     brightness: payload.brightness,
                     on: true,
-                    userInitiated: false
+                    userInitiated: false,
+                    preferSegmented: true
                 )
             }
             return true
             
         case .transition(let payload):
             let resolved = resolveTransitionPayload(payload, device: device)
-            let ledCount = device.state?.segments.first?.len ?? 120
+            let ledCount = viewModel.totalLEDCount(for: device)
+            var durationSeconds = resolved.durationSeconds
+            let startStopTemperatures = resolved.startTemperature.map { temp in
+                Dictionary(uniqueKeysWithValues: resolved.startGradient.stops.map { ($0.id, temp) })
+            }
+            let startStopWhiteLevels = resolved.startWhiteLevel.map { white in
+                Dictionary(uniqueKeysWithValues: resolved.startGradient.stops.map { ($0.id, white) })
+            }
+            let endStopTemperatures = resolved.endTemperature.map { temp in
+                Dictionary(uniqueKeysWithValues: resolved.endGradient.stops.map { ($0.id, temp) })
+            }
+            let endStopWhiteLevels = resolved.endWhiteLevel.map { white in
+                Dictionary(uniqueKeysWithValues: resolved.endGradient.stops.map { ($0.id, white) })
+            }
+
+            if let playlistId = await ensureAutomationTransitionPlaylist(for: automation, device: device, payload: resolved) {
+                let runId = UUID()
+                let startDate = Date()
+                let expectedEnd = startDate.addingTimeInterval(durationSeconds)
+                logger.info("Automation transition path=playlist device=\(device.name, privacy: .public) playlistId=\(playlistId) duration=\(durationSeconds, privacy: .public)s")
+                _ = await MainActor.run {
+                    viewModel.activeRunStatus[device.id] = ActiveRunStatus(
+                        id: runId,
+                        deviceId: device.id,
+                        kind: .automation,
+                        title: automation.name,
+                        startDate: startDate,
+                        progress: 0.0,
+                        isCancellable: true,
+                        expectedEnd: expectedEnd
+                    )
+                }
+                _ = await viewModel.startPlaylist(device: device, playlistId: playlistId)
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(durationSeconds * 1_000_000_000))
+                    _ = await MainActor.run {
+                        if let currentStatus = viewModel.activeRunStatus[device.id], currentStatus.id == runId {
+                            viewModel.activeRunStatus.removeValue(forKey: device.id)
+                        }
+                    }
+                }
+                return true
+            }
+            durationSeconds = min(durationSeconds, maxWLEDNativeTransitionSeconds)
+            logger.info("Automation transition path=native-tt device=\(device.name, privacy: .public) duration=\(durationSeconds, privacy: .public)s (playlist unavailable)")
             
             // Fast path: Both start and end are solid colors - use native WLED transition
-            let startIsSolid = viewModel.shouldUseNativeTransition(stops: resolved.startGradient.stops, durationSeconds: resolved.durationSeconds)
-            let endIsSolid = viewModel.shouldUseNativeTransition(stops: resolved.endGradient.stops, durationSeconds: resolved.durationSeconds)
+            let startIsSolid = viewModel.shouldUseNativeTransition(stops: resolved.startGradient.stops, durationSeconds: durationSeconds)
+            let endIsSolid = viewModel.shouldUseNativeTransition(stops: resolved.endGradient.stops, durationSeconds: durationSeconds)
             
-            if startIsSolid && endIsSolid && resolved.durationSeconds > 0 {
+            if startIsSolid && endIsSolid && durationSeconds > 0 {
                 // Solid-to-solid transition: Apply start immediately, then end with transition
                 // Extract target color RGB for native transition metadata (end color is the target)
                 let targetColor = Color(hex: resolved.endGradient.stops.first?.hexColor ?? "#FFFFFF")
@@ -447,11 +571,11 @@ class AutomationStore: ObservableObject {
                 let targetBrightness = resolved.endBrightness
                 
                 let startDate = Date()
-                let expectedEnd = startDate.addingTimeInterval(resolved.durationSeconds)
+                let expectedEnd = startDate.addingTimeInterval(durationSeconds)
                 let runId = UUID()
                 
                 // Set active run status with native transition metadata
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus[device.id] = ActiveRunStatus(
                         id: runId,
                         deviceId: device.id,
@@ -464,39 +588,48 @@ class AutomationStore: ObservableObject {
                         nativeTransition: NativeTransitionInfo(
                             targetColorRGB: targetRGB,
                             targetBrightness: targetBrightness,
-                            durationSeconds: resolved.durationSeconds
+                            durationSeconds: durationSeconds
                         )
                     )
                 }
                 
+                await apiService.releaseRealtimeOverride(for: device)
                 // Apply start color immediately (no transition)
                 await viewModel.applyGradientStopsAcrossStrip(
                     device,
                     stops: resolved.startGradient.stops,
                     ledCount: ledCount,
+                    stopTemperatures: startStopTemperatures,
+                    stopWhiteLevels: startStopWhiteLevels,
                     disableActiveEffect: true,
                     interpolation: resolved.startGradient.interpolation,
                     brightness: resolved.startBrightness,
                     on: true,
-                    userInitiated: false
+                    releaseRealtimeOverride: false,
+                    userInitiated: false,
+                    preferSegmented: true
                 )
                 // Apply end color with transition
                 await viewModel.applyGradientStopsAcrossStrip(
                     device,
                     stops: resolved.endGradient.stops,
                     ledCount: ledCount,
+                    stopTemperatures: endStopTemperatures,
+                    stopWhiteLevels: endStopWhiteLevels,
                     disableActiveEffect: true,
                     interpolation: resolved.endGradient.interpolation,
                     brightness: resolved.endBrightness,
                     on: true,
-                    transitionDurationSeconds: resolved.durationSeconds,
-                    userInitiated: false
+                    transitionDurationSeconds: durationSeconds,
+                    releaseRealtimeOverride: false,
+                    userInitiated: false,
+                    preferSegmented: true
                 )
                 
                 // Clear status after transition completes (use timer with runId check to prevent race condition)
                 Task {
-                    try? await Task.sleep(nanoseconds: UInt64(resolved.durationSeconds * 1_000_000_000))
-                    await MainActor.run {
+                    try? await Task.sleep(nanoseconds: UInt64(durationSeconds * 1_000_000_000))
+                    _ = await MainActor.run {
                         // Only clear if this run is still active (check runId to prevent clearing newer runs)
                         if let currentStatus = viewModel.activeRunStatus[device.id], currentStatus.id == runId {
                             viewModel.activeRunStatus.removeValue(forKey: device.id)
@@ -504,15 +637,36 @@ class AutomationStore: ObservableObject {
                     }
                 }
             } else {
-                // Complex transition - use client-side runner
-                await viewModel.runAutomationTransition(
-                    for: device,
-                    startGradient: resolved.startGradient,
-                    startBrightness: resolved.startBrightness,
-                    endGradient: resolved.endGradient,
-                    endBrightness: resolved.endBrightness,
-                    durationSeconds: resolved.durationSeconds,
-                    automationName: automation.name
+                await apiService.releaseRealtimeOverride(for: device)
+                // Multi-stop transition - apply start, then end with native tt
+                await viewModel.applyGradientStopsAcrossStrip(
+                    device,
+                    stops: resolved.startGradient.stops,
+                    ledCount: ledCount,
+                    stopTemperatures: startStopTemperatures,
+                    stopWhiteLevels: startStopWhiteLevels,
+                    disableActiveEffect: true,
+                    interpolation: resolved.startGradient.interpolation,
+                    brightness: resolved.startBrightness,
+                    on: true,
+                    releaseRealtimeOverride: false,
+                    userInitiated: false,
+                    preferSegmented: true
+                )
+                await viewModel.applyGradientStopsAcrossStrip(
+                    device,
+                    stops: resolved.endGradient.stops,
+                    ledCount: ledCount,
+                    stopTemperatures: endStopTemperatures,
+                    stopWhiteLevels: endStopWhiteLevels,
+                    disableActiveEffect: true,
+                    interpolation: resolved.endGradient.interpolation,
+                    brightness: resolved.endBrightness,
+                    on: true,
+                    transitionDurationSeconds: durationSeconds,
+                    releaseRealtimeOverride: false,
+                    userInitiated: false,
+                    preferSegmented: true
                 )
             }
             return true
@@ -525,7 +679,8 @@ class AutomationStore: ObservableObject {
                 resolved.effectId,
                 with: gradient,
                 segmentId: 0,
-                device: device
+                device: device,
+                userInitiated: false
             )
             return true
             
@@ -534,7 +689,7 @@ class AutomationStore: ObservableObject {
             let transitionSeconds = payload.transitionMs > 0 ? Double(payload.transitionMs) / 1000.0 : nil
             if transitionSeconds == nil {
                 // Set short-lived "Applying" status (no watchdog needed - these complete quickly)
-                await MainActor.run {
+                _ = await MainActor.run {
                     viewModel.activeRunStatus[device.id] = ActiveRunStatus(
                         deviceId: device.id,
                         kind: .applying,
@@ -552,21 +707,30 @@ class AutomationStore: ObservableObject {
                 GradientStop(position: 0.0, hexColor: payload.colorHex),
                 GradientStop(position: 1.0, hexColor: payload.colorHex)
             ]
-            let ledCount = device.state?.segments.first?.len ?? 120
+            let ledCount = viewModel.totalLEDCount(for: device)
+            let stopTemperatures = payload.temperature.map { temp in
+                Dictionary(uniqueKeysWithValues: stops.map { ($0.id, temp) })
+            }
+            let stopWhiteLevels = payload.whiteLevel.map { white in
+                Dictionary(uniqueKeysWithValues: stops.map { ($0.id, white) })
+            }
             // Use native transition if transitionMs > 0 (solid color with duration)
             await viewModel.applyGradientStopsAcrossStrip(
                 device,
                 stops: stops,
                 ledCount: ledCount,
+                stopTemperatures: stopTemperatures,
+                stopWhiteLevels: stopWhiteLevels,
                 disableActiveEffect: true,
                 brightness: payload.brightness,
                 on: true,
                 transitionDurationSeconds: transitionSeconds,
-                userInitiated: false
+                userInitiated: false,
+                preferSegmented: true
             )
             
             // Clear status after completion
-            await MainActor.run {
+            _ = await MainActor.run {
                 viewModel.activeRunStatus.removeValue(forKey: device.id)
             }
             // Don't call updateDeviceBrightness separately - it's already included in applyGradientStopsAcrossStrip
@@ -586,6 +750,125 @@ class AutomationStore: ObservableObject {
         guard retryAttempts > 0 else { return false }
         try? await Task.sleep(nanoseconds: 500_000_000)
         return await runActionWithRetry(action, automation: automation, on: device, retryAttempts: retryAttempts - 1)
+    }
+
+    private func ensureAutomationTransitionPlaylist(
+        for automation: Automation,
+        device: WLEDDevice,
+        payload: TransitionActionPayload
+    ) async -> Int? {
+        if let existing = automation.metadata.wledPlaylistId {
+            return existing
+        }
+
+        let label = "Automation \(automation.name)"
+        if let playlist = await viewModel.createTransitionPlaylist(
+            device: device,
+            from: payload.startGradient,
+            to: payload.endGradient,
+            durationSeconds: payload.durationSeconds,
+            startBrightness: payload.startBrightness,
+            endBrightness: payload.endBrightness,
+            persist: true,
+            label: label
+        ) {
+            var updated = automation
+            updated.metadata.wledPlaylistId = playlist.playlistId
+            if updated != automation {
+                update(updated)
+            }
+            return playlist.playlistId
+        }
+        return nil
+    }
+
+    private func syncOnDeviceScheduleIfNeeded(for automation: Automation) async {
+        guard automation.metadata.runOnDevice else { return }
+        guard case .transition(let payload) = automation.action else {
+            logger.info("On-device schedule skipped: action is not transition for \(automation.name, privacy: .public)")
+            return
+        }
+        guard case .specificTime = automation.trigger else {
+            logger.info("On-device schedule skipped: trigger is not specific time for \(automation.name, privacy: .public)")
+            return
+        }
+        let devices = viewModel.devices.filter { automation.targets.deviceIds.contains($0.id) }
+        guard devices.count == 1, let device = devices.first else {
+            logger.info("On-device schedule skipped: requires exactly 1 target device for \(automation.name, privacy: .public)")
+            return
+        }
+        guard let playlistId = await ensureAutomationTransitionPlaylist(for: automation, device: device, payload: payload) else {
+            logger.error("On-device schedule failed: playlist unavailable for \(automation.name, privacy: .public)")
+            return
+        }
+        guard let timeConfig = wledTimeAndDays(from: automation.trigger) else {
+            logger.error("On-device schedule failed: time config unavailable for \(automation.name, privacy: .public)")
+            return
+        }
+
+        let timerSlot = await ensureTimerSlot(for: automation, device: device)
+        guard let timerSlot else {
+            logger.error("On-device schedule failed: no timer slots for \(automation.name, privacy: .public)")
+            return
+        }
+
+        let updatePayload = WLEDTimerUpdate(
+            id: timerSlot,
+            enabled: automation.enabled,
+            time: timeConfig.time,
+            days: timeConfig.days,
+            action: 1,
+            presetId: playlistId,
+            startPresetId: nil,
+            endPresetId: nil,
+            transition: nil
+        )
+
+        do {
+            try await apiService.updateTimer(updatePayload, on: device)
+            var updated = automation
+            updated.metadata.wledPlaylistId = playlistId
+            updated.metadata.wledTimerSlot = timerSlot
+            if updated != automation {
+                update(updated)
+            }
+            logger.info("On-device schedule updated: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public) slot=\(timerSlot)")
+        } catch {
+            logger.error("On-device schedule failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func wledTimeAndDays(from trigger: AutomationTrigger) -> (time: Int, days: Int)? {
+        guard case .specificTime(let timeTrigger) = trigger else { return nil }
+        let components = timeTrigger.time.split(separator: ":")
+        guard components.count == 2,
+              let hour = Int(components[0]),
+              let minute = Int(components[1]) else { return nil }
+        let time = max(0, min(1439, hour * 60 + minute))
+        var days = 0
+        for (idx, enabled) in timeTrigger.weekdays.enumerated() where enabled {
+            days |= (1 << idx)
+        }
+        if days == 0 {
+            days = 0x7F
+        }
+        return (time, days)
+    }
+
+    private func ensureTimerSlot(for automation: Automation, device: WLEDDevice) async -> Int? {
+        if let existing = automation.metadata.wledTimerSlot {
+            return existing
+        }
+        do {
+            let timers = try await apiService.fetchTimers(for: device)
+            if let slot = timers.first(where: { !$0.enabled })?.id {
+                return slot
+            }
+            return nil
+        } catch {
+            logger.error("Failed to fetch timers for \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     private func cleanupDeviceEntries(for automation: Automation) {
@@ -639,8 +922,12 @@ class AutomationStore: ObservableObject {
         return TransitionActionPayload(
             startGradient: preset.gradientA,
             startBrightness: preset.brightnessA,
+            startTemperature: preset.temperatureA,
+            startWhiteLevel: preset.whiteLevelA,
             endGradient: preset.gradientB,
             endBrightness: preset.brightnessB,
+            endTemperature: preset.temperatureB,
+            endWhiteLevel: preset.whiteLevelB,
             durationSeconds: payload.durationSeconds > 0 ? payload.durationSeconds : preset.durationSec,
             shouldLoop: payload.shouldLoop,
             presetId: presetId,

@@ -239,6 +239,8 @@ struct GradientActionPayload: Codable, Equatable {
     var gradient: LEDGradient
     var brightness: Int
     var durationSeconds: Double
+    var temperature: Double? = nil
+    var whiteLevel: Double? = nil
     var shouldLoop: Bool = false
     var presetId: UUID? = nil
     var presetName: String? = nil
@@ -247,8 +249,12 @@ struct GradientActionPayload: Codable, Equatable {
 struct TransitionActionPayload: Codable, Equatable {
     var startGradient: LEDGradient
     var startBrightness: Int
+    var startTemperature: Double? = nil
+    var startWhiteLevel: Double? = nil
     var endGradient: LEDGradient
     var endBrightness: Int
+    var endTemperature: Double? = nil
+    var endWhiteLevel: Double? = nil
     var durationSeconds: Double
     var shouldLoop: Bool = false
     var presetId: UUID? = nil
@@ -274,7 +280,8 @@ struct EffectActionPayload: Codable, Equatable {
 struct DirectStatePayload: Codable, Equatable {
     var colorHex: String
     var brightness: Int
-    var temperature: Double?
+    var temperature: Double? = nil
+    var whiteLevel: Double? = nil
     var transitionMs: Int
 }
 

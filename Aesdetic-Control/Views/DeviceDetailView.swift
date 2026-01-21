@@ -29,6 +29,7 @@ struct DeviceDetailView: View {
     @State private var automationEditorDefaultName: String? = nil
     @State private var automationPendingDelete: Automation? = nil
     @State private var hasSeededAutomationTemplates: Bool = false
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     // Use coordinated power state from ViewModel
     private var currentPowerState: Bool {
@@ -280,6 +281,19 @@ struct DeviceDetailView: View {
                 Button(action: { showSettings.toggle() }) {
                     Label("Settings", systemImage: "gearshape")
                 }
+                Button(action: { advancedUIEnabled.toggle() }) {
+                    Label(
+                        advancedUIEnabled ? "Disable Advanced UI" : "Enable Advanced UI",
+                        systemImage: advancedUIEnabled ? "checkmark.circle.fill" : "circle"
+                    )
+                }
+                Button(action: {
+                    Task {
+                        await viewModel.clearProtectionWindows(for: device)
+                    }
+                }) {
+                    Label("Recover Device", systemImage: "arrow.triangle.2.circlepath")
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.title2.weight(.semibold))
@@ -320,7 +334,7 @@ struct DeviceDetailView: View {
             if run.isCancellable {
                 Button(action: {
                     Task {
-                        await viewModel.cancelActiveRun(for: device)
+                        await viewModel.cancelActiveRun(for: device, force: true)
                     }
                 }) {
                     Image(systemName: "xmark.circle.fill")
@@ -438,7 +452,7 @@ struct DeviceDetailView: View {
     private var colorsTabContent: some View {
         VStack(spacing: 16) {
             // Segment Picker (only show for multi-segment devices)
-            if viewModel.hasMultipleSegments(for: device) {
+            if advancedUIEnabled, viewModel.hasMultipleSegments(for: device) {
                 segmentPicker
             }
             

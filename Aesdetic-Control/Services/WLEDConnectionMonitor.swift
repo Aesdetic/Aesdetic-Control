@@ -490,15 +490,15 @@ class WLEDConnectionMonitor: ObservableObject {
             updatedDevice.isOn = response.state.isOn
             
             // Update color if available
-            if let segment = response.state.segments.first,
-               let colors = segment.colors,
-               let firstColor = colors.first,
-               firstColor.count >= 3 {
-                updatedDevice.currentColor = Color(
-                    red: Double(firstColor[0]) / 255.0,
-                    green: Double(firstColor[1]) / 255.0,
-                    blue: Double(firstColor[2]) / 255.0
-                )
+            if let segment = response.state.segments.first {
+                updatedDevice.temperature = segment.cctNormalized
+                if let normalized = segment.cctNormalized {
+                    updatedDevice.currentColor = Color.color(fromCCTTemperature: normalized)
+                } else if let colors = segment.colors,
+                          let firstColor = colors.first,
+                          firstColor.count >= 3 {
+                    updatedDevice.currentColor = Color.color(fromRGBArray: firstColor)
+                }
             }
         }
         

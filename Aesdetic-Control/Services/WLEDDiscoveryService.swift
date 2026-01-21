@@ -25,11 +25,18 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     private let logger = os.Logger(subsystem: "com.aesdetic.control", category: "Discovery")
     private var failedIPBanlist: [String: Date] = [:]
     private var deviceCountAtScanStart: Int = 0  // Track device count at start of scan
+    private var discoveryStartTime: Date?
+    private var fallbackScanWorkItem: DispatchWorkItem?
     
     // Network discovery components
-    private var netServiceBrowser: NetServiceBrowser?
+    private var netServiceBrowsers: [NetServiceBrowser] = []
+    private var netServiceBrowserTypes: [ObjectIdentifier: String] = [:]
     private var foundNetServices: [NetService] = []
     private var wasScanningBeforeBackground: Bool = false
+    private var isPassiveListening: Bool = false
+    private var udpListener: NWListener?
+    private let udpQueue = DispatchQueue(label: "wled.discovery.udp")
+    private var lastDiscoveryCheck: [String: Date] = [:]
     
     // Discovery configuration (aligned with WLED's approach)
     private let mDNSDiscoveryTimeout: TimeInterval = 4.0  // mDNS is fast, shorter timeout
@@ -37,6 +44,11 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     private let httpTimeout: TimeInterval = 1.0  // Faster timeout for quicker discovery
     private let maxConcurrentHTTPRequests = 5   // Balanced between 3 and 8 for better discovery
     private let failureTTL: TimeInterval = 15 * 60
+    private let udpPort: UInt16 = 21324
+    private let udpPacketMinLength = 40
+    private let udpCheckCooldown: TimeInterval = 20.0
+    private let passiveDiscoveryWindow: TimeInterval = 30.0
+    private let minimumDiscoveryDuration: TimeInterval = 30.0
     
     // Semaphore for controlling concurrent HTTP requests
     private let httpSemaphore: DispatchSemaphore
@@ -90,15 +102,32 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         DispatchQueue.main.async {
             // Track device count at start to detect NEW devices found during this scan
             self.deviceCountAtScanStart = self.discoveredDevices.count
+            self.discoveryStartTime = Date()
             self.isScanning = true
             self.discoveredDevices.indices.forEach { self.discoveredDevices[$0].isOnline = false }
             self.discoveryProgress = "Initializing discovery..."
             self.syncQueue.async {
                 self.scannedIPs.removeAll()
+                self.failedIPBanlist.removeAll()
+                self.lastDiscoveryCheck.removeAll()
             }
         }
         
         startComprehensiveDiscovery()
+    }
+
+    func startPassiveDiscovery() {
+        guard !isPassiveListening else { return }
+        isPassiveListening = true
+
+        DispatchQueue.main.async {
+            self.discoveryProgress = "Listening for WLED broadcasts..."
+        }
+
+        startUDPListener()
+        DispatchQueue.main.async {
+            self.startmDNSDiscovery()
+        }
     }
     
     func stopDiscovery() {
@@ -111,9 +140,15 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         deviceUpdateTimer = nil
         
         // Stop mDNS discovery
-        netServiceBrowser?.stop()
-        netServiceBrowser = nil
-        foundNetServices.removeAll()
+        if !isPassiveListening {
+            netServiceBrowsers.forEach { $0.stop() }
+            netServiceBrowsers.removeAll()
+            netServiceBrowserTypes.removeAll()
+            foundNetServices.removeAll()
+            stopUDPListener()
+        }
+        fallbackScanWorkItem?.cancel()
+        fallbackScanWorkItem = nil
 
         // Cancel in-flight HTTP scans by invalidating and recreating the session
         session.invalidateAndCancel()
@@ -141,7 +176,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             self.discoveryProgress = "Checking \(ipAddress)..."
         }
         
-        checkWLEDDevice(at: ipAddress) { result in
+        checkWLEDDevice(at: ipAddress, allowRescan: true, bypassBanlist: true) { result in
             self.handleDeviceCheckResult(result, source: "Manual")
         }
     }
@@ -150,56 +185,22 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
     
     private func startComprehensiveDiscovery() {
         DispatchQueue.global(qos: .userInitiated).async {
-            // WLED's discovery approach: mDNS first (fastest), then IP scanning as fallback
-            
-            // Method 1: mDNS/Bonjour Discovery (WLED's primary method)
+            // WLED devices are passive: listen first, then fall back to scanning only if needed.
             DispatchQueue.main.async {
-                self.discoveryProgress = "Searching via mDNS (WLED standard)..."
+                self.discoveryProgress = "Listening for WLED broadcasts..."
             }
             
-            self.startmDNSDiscovery {
-                // After mDNS completes, check if we found NEW devices during THIS scan
-                DispatchQueue.main.async {
-                    let newDevicesFound = self.discoveredDevices.count - self.deviceCountAtScanStart
-                    
-                    if newDevicesFound == 0 {
-                        // No NEW devices found via mDNS, fall back to IP scanning to find more
-                        self.logger.info("📡 No new devices found via mDNS (had \(self.deviceCountAtScanStart), still \(self.discoveredDevices.count)), starting IP scan fallback...")
-                        self.discoveryProgress = "Scanning IP ranges (fallback)..."
-                        self.startComprehensiveIPScanning {
-                            DispatchQueue.main.async {
-                                let totalNewDevices = self.discoveredDevices.count - self.deviceCountAtScanStart
-                                self.logger.info("✅ Discovery completed - found \(totalNewDevices) new device(s), total: \(self.discoveredDevices.count)")
-                                self.isScanning = false
-                                self.discoveryProgress = "Discovery completed - found \(totalNewDevices) new device(s)"
-                                self.lastDiscoveryTime = Date()
-                            }
-                        }
-                    } else {
-                        // Found NEW devices via mDNS, but continue IP scan to find any additional devices
-                        self.logger.info("✅ Found \(newDevicesFound) new device(s) via mDNS, continuing IP scan to find more...")
-                        self.discoveryProgress = "Found \(newDevicesFound) via mDNS, scanning for more..."
-                        self.startComprehensiveIPScanning {
-                            DispatchQueue.main.async {
-                                let totalNewDevices = self.discoveredDevices.count - self.deviceCountAtScanStart
-                                self.logger.info("✅ Discovery completed - found \(totalNewDevices) new device(s), total: \(self.discoveredDevices.count)")
-                                self.isScanning = false
-                                self.discoveryProgress = "Found \(totalNewDevices) new device(s)"
-                                self.lastDiscoveryTime = Date()
-                            }
-                        }
-                    }
-                }
+            self.startUDPListener()
+            DispatchQueue.main.async {
+                self.startmDNSDiscovery()
             }
+            self.scheduleFallbackScan()
         }
     }
     
     // MARK: - mDNS/Bonjour Discovery (WLED's Primary Method)
     
-    private func startmDNSDiscovery(completion: @escaping () -> Void) {
-        netServiceBrowser = NetServiceBrowser()
-        netServiceBrowser?.delegate = self
-        
+    private func startmDNSDiscovery() {
         // WLED's official service type is "_wled._tcp."
         // Also search for generic HTTP services as fallback (some WLED devices may not register _wled._tcp.)
         let serviceTypes = [
@@ -208,20 +209,165 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
         ]
         
         logger.info("🔍 Starting mDNS discovery for WLED devices...")
+        netServiceBrowsers.forEach { $0.stop() }
+        netServiceBrowsers.removeAll()
+        netServiceBrowserTypes.removeAll()
+
         for serviceType in serviceTypes {
+            let browser = NetServiceBrowser()
+            browser.delegate = self
+            browser.includesPeerToPeer = true
+            browser.schedule(in: .main, forMode: .default)
+            netServiceBrowsers.append(browser)
+            netServiceBrowserTypes[ObjectIdentifier(browser)] = serviceType
             logger.info("🔍 Searching for \(serviceType)")
-            netServiceBrowser?.searchForServices(ofType: serviceType, inDomain: "local.")
+            browser.searchForServices(ofType: serviceType, inDomain: "local.")
         }
         
-        // Complete mDNS discovery after timeout (mDNS is fast, shorter timeout)
-        DispatchQueue.global().asyncAfter(deadline: .now() + mDNSDiscoveryTimeout) {
-            self.netServiceBrowser?.stop()
-            completion()
+        // Keep browser active during discovery to catch late arrivals
+    }
+
+    // MARK: - UDP Discovery
+
+    private func startUDPListener() {
+        guard udpListener == nil else { return }
+        do {
+            let port = NWEndpoint.Port(rawValue: udpPort) ?? 21324
+            let parameters = NWParameters.udp
+            parameters.allowLocalEndpointReuse = true
+            let listener = try NWListener(using: parameters, on: port)
+
+            listener.stateUpdateHandler = { [weak self] state in
+                if case .failed(let error) = state {
+                    self?.logger.error("❌ UDP listener failed: \(error.localizedDescription)")
+                }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.handleUDPConnection(connection)
+            }
+            listener.start(queue: udpQueue)
+            udpListener = listener
+            logger.info("📡 UDP listener started on port \(self.udpPort)")
+        } catch {
+            logger.error("❌ Failed to start UDP listener: \(error.localizedDescription)")
+        }
+    }
+
+    private func stopUDPListener() {
+        udpListener?.cancel()
+        udpListener = nil
+    }
+
+    private func handleUDPConnection(_ connection: NWConnection) {
+        connection.start(queue: udpQueue)
+        receiveUDPMessage(on: connection)
+    }
+
+    private func receiveUDPMessage(on connection: NWConnection) {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            guard let self = self else { return }
+            if let data = data, !data.isEmpty {
+                self.handleUDPPacket(data)
+            }
+            if error == nil {
+                self.receiveUDPMessage(on: connection)
+            } else {
+                connection.cancel()
+            }
+        }
+    }
+
+    private func handleUDPPacket(_ data: Data) {
+        guard data.count >= udpPacketMinLength else { return }
+        let bytes = [UInt8](data)
+        guard bytes[0] == 255, bytes[1] == 1 else { return }
+
+        let ipAddress = "\(bytes[2]).\(bytes[3]).\(bytes[4]).\(bytes[5])"
+        let nameData = data.subdata(in: 6..<38)
+        let name = String(decoding: nameData, as: UTF8.self).split(separator: "\0").first.map(String.init) ?? "WLED"
+
+        guard shouldStartQuickCheck(for: ipAddress) else { return }
+        logger.info("📡 UDP broadcast from \(name) at \(ipAddress)")
+        addPlaceholderDevice(name: name, ipAddress: ipAddress, source: "UDP")
+        checkWLEDDevice(at: ipAddress, allowRescan: true, bypassBanlist: true) { result in
+            self.handleDeviceCheckResult(result, source: "UDP Full")
+        }
+    }
+
+    // MARK: - AP Mode Quick Check
+
+    private func checkAPModeDefaults() {
+        let localIPs = getCurrentDeviceIPs()
+        let isAPSubnet = localIPs.contains { $0.hasPrefix("192.168.4.") }
+        guard isAPSubnet else {
+            logger.debug("Skipping AP mode check (not on 192.168.4.x subnet)")
+            return
+        }
+
+        let apAddresses = ["192.168.4.1"]
+        for ip in apAddresses {
+            checkWLEDDevice(at: ip, allowRescan: true, bypassBanlist: true) { result in
+                self.handleDeviceCheckResult(result, source: "AP Mode")
+            }
+        }
+    }
+
+    private func scheduleFallbackScan() {
+        fallbackScanWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, self.isScanning else { return }
+            let newDevicesFound = self.discoveredDevices.count - self.deviceCountAtScanStart
+            if newDevicesFound == 0 {
+                self.logger.info("📡 No new devices found via UDP/mDNS, starting IP scan fallback...")
+                DispatchQueue.main.async {
+                    self.discoveryProgress = "Scanning IP ranges (fallback)..."
+                }
+                self.startComprehensiveIPScanning {
+                    self.finishDiscovery()
+                }
+            } else {
+                self.finishDiscovery()
+            }
+        }
+        fallbackScanWorkItem = workItem
+        DispatchQueue.global().asyncAfter(deadline: .now() + passiveDiscoveryWindow, execute: workItem)
+    }
+
+    private func shouldStartQuickCheck(for ipAddress: String) -> Bool {
+        var shouldCheck = false
+        syncQueue.sync {
+            let now = Date()
+            if let lastSeen = lastDiscoveryCheck[ipAddress], now.timeIntervalSince(lastSeen) < udpCheckCooldown {
+                return
+            }
+            lastDiscoveryCheck[ipAddress] = now
+            failedIPBanlist.removeValue(forKey: ipAddress)
+            shouldCheck = true
+        }
+        return shouldCheck
+    }
+
+    private func finishDiscovery() {
+        let elapsed = Date().timeIntervalSince(discoveryStartTime ?? Date())
+        let delay = max(0, minimumDiscoveryDuration - elapsed)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self, self.isScanning else { return }
+            let totalNewDevices = self.discoveredDevices.count - self.deviceCountAtScanStart
+            self.logger.info("✅ Discovery completed - found \(totalNewDevices) new device(s), total: \(self.discoveredDevices.count)")
+            self.isScanning = false
+            self.discoveryProgress = "Discovery completed - found \(totalNewDevices) new device(s)"
+            self.lastDiscoveryTime = Date()
+            if !self.isPassiveListening {
+                self.netServiceBrowsers.forEach { $0.stop() }
+                self.netServiceBrowsers.removeAll()
+                self.netServiceBrowserTypes.removeAll()
+                self.foundNetServices.removeAll()
+                self.stopUDPListener()
+            }
         }
     }
     
-    // Note: UDP port 21324 is used by WLED for sync/notifier (state synchronization between devices),
-    // NOT for device discovery. WLED uses mDNS for discovery, which is implemented above.
+    // Note: UDP port 21324 is used by WLED for node broadcasts; apps can listen for discovery.
     
     // MARK: - Comprehensive IP Scanning
     
@@ -362,14 +508,36 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             }
         }
     }
+
+    private func addPlaceholderDevice(name: String, ipAddress: String, source: String) {
+        let displayName = name.isEmpty ? "WLED" : name
+        let placeholder = WLEDDevice(
+            id: "ip:\(ipAddress)",
+            name: displayName,
+            ipAddress: ipAddress,
+            isOnline: true,
+            brightness: 0,
+            currentColor: .black,
+            productType: .generic,
+            location: .all,
+            lastSeen: Date(),
+            state: nil
+        )
+        logger.info("⚡️ Quick discovery via \(source): \(displayName) at \(ipAddress)")
+        addOrUpdateDevice(placeholder)
+    }
     
-    private func checkWLEDDevice(at ipAddress: String, completion: @escaping (Result<WLEDDevice, Error>) -> Void) {
+    private func checkWLEDDevice(at ipAddress: String, allowRescan: Bool = false, bypassBanlist: Bool = false, completion: @escaping (Result<WLEDDevice, Error>) -> Void) {
         // Check if already scanned
         var alreadyScanned = false
         var isBanned = false
         syncQueue.sync {
-            alreadyScanned = !scannedIPs.insert(ipAddress).inserted
-            if let ts = failedIPBanlist[ipAddress], Date().timeIntervalSince(ts) < failureTTL {
+            if allowRescan {
+                _ = scannedIPs.insert(ipAddress)
+            } else {
+                alreadyScanned = !scannedIPs.insert(ipAddress).inserted
+            }
+            if !bypassBanlist, let ts = failedIPBanlist[ipAddress], Date().timeIntervalSince(ts) < failureTTL {
                 isBanned = true
             }
         }
@@ -445,16 +613,15 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
             
             // Extract color information
             let firstSegment = state.segments.first
-            let colors = firstSegment?.colors?.first ?? [0, 0, 0]
-            let red = colors.count > 0 ? colors[0] : 0
-            let green = colors.count > 1 ? colors[1] : 0
-            let blue = colors.count > 2 ? colors[2] : 0
-            
-            let currentColor = Color(.sRGB, 
-                                   red: Double(red) / 255.0, 
-                                   green: Double(green) / 255.0, 
-                                   blue: Double(blue) / 255.0, 
-                                   opacity: state.isOn ? 1.0 : 0.5)
+            let baseColor: Color
+            if let normalized = firstSegment?.cctNormalized {
+                baseColor = Color.color(fromCCTTemperature: normalized)
+            } else if let colors = firstSegment?.colors?.first, colors.count >= 3 {
+                baseColor = Color.color(fromRGBArray: colors)
+            } else {
+                baseColor = .black
+            }
+            let currentColor = baseColor.opacity(state.isOn ? 1.0 : 0.5)
 
             let wledDevice = WLEDDevice(
                 id: info.mac,
@@ -463,6 +630,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
                 isOnline: true,
                 brightness: state.brightness,
                 currentColor: currentColor,
+                temperature: firstSegment?.cctNormalized,
                 productType: .generic,
                 location: .all,
                 lastSeen: Date(),
@@ -504,6 +672,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
                     if let index = self.discoveredDevices.firstIndex(where: { $0.id == device.id }) {
                         // Update existing device - preserve user-customized name
                         let existingName = self.discoveredDevices[index].name
+                        let resolvedAutoWhite = device.autoWhiteMode ?? self.discoveredDevices[index].autoWhiteMode
                         self.discoveredDevices[index] = WLEDDevice(
                             id: device.id,
                             name: existingName,
@@ -511,12 +680,31 @@ class WLEDDiscoveryService: NSObject, ObservableObject {
                             isOnline: true,
                             brightness: device.brightness,
                             currentColor: device.currentColor,
+                            autoWhiteMode: resolvedAutoWhite,
                             productType: device.productType,
                             location: self.discoveredDevices[index].location,
                             lastSeen: Date(),
                             state: device.state
                         )
                         self.logger.info("🔄 Updated device: \(existingName)")
+                    } else if let index = self.discoveredDevices.firstIndex(where: { $0.ipAddress == device.ipAddress }) {
+                        // Replace placeholder entries created from UDP/mDNS
+                        let existingName = self.discoveredDevices[index].name
+                        let resolvedAutoWhite = device.autoWhiteMode ?? self.discoveredDevices[index].autoWhiteMode
+                        self.discoveredDevices[index] = WLEDDevice(
+                            id: device.id,
+                            name: existingName,
+                            ipAddress: device.ipAddress,
+                            isOnline: true,
+                            brightness: device.brightness,
+                            currentColor: device.currentColor,
+                            autoWhiteMode: resolvedAutoWhite,
+                            productType: device.productType,
+                            location: self.discoveredDevices[index].location,
+                            lastSeen: Date(),
+                            state: device.state
+                        )
+                        self.logger.info("🔄 Replaced placeholder for \(existingName)")
                     } else {
                         // Add new device
                         self.discoveredDevices.append(device)
@@ -548,10 +736,11 @@ extension WLEDDiscoveryService: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
         // Error -72008 (kCFNetServiceErrorNotFound) is normal when no mDNS services are found
         let errorCode = errorDict["NSNetServicesErrorCode"]?.intValue ?? 0
+        let serviceType = netServiceBrowserTypes[ObjectIdentifier(browser)] ?? "unknown"
         if errorCode == -72008 {
-            logger.debug("mDNS search completed (no services found) - this is normal")
+            logger.debug("mDNS search completed for \(serviceType) (no services found) - this is normal")
         } else {
-            logger.error("❌ NetService search failed: \(errorDict)")
+            logger.error("❌ NetService search failed for \(serviceType): \(errorDict)")
         }
     }
     
@@ -583,9 +772,10 @@ extension WLEDDiscoveryService: NetServiceDelegate {
                 
                 if isWLEDService {
                     logger.info("🔍 Resolved mDNS service '\(sender.name)' (\(type)) to IP: \(ip)")
-                    // Verify it's actually a WLED device by checking /json endpoint
-                    checkWLEDDevice(at: ip) { result in
-                        self.handleDeviceCheckResult(result, source: "mDNS")
+                    guard shouldStartQuickCheck(for: ip) else { return }
+                    addPlaceholderDevice(name: sender.name, ipAddress: ip, source: "mDNS")
+                    checkWLEDDevice(at: ip, allowRescan: true, bypassBanlist: true) { result in
+                        self.handleDeviceCheckResult(result, source: "mDNS Full")
                     }
                 } else {
                     logger.debug("Skipping non-WLED mDNS service: \(sender.name) (\(type))")

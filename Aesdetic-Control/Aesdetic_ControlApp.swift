@@ -30,11 +30,6 @@ struct Aesdetic_ControlApp: App {
                     // Configure transparent backgrounds immediately
                     configureAppearances()
                     
-                    // Preload background image immediately
-                    Task { @MainActor in
-                        _ = BackgroundImageCache.shared
-                    }
-                    
                     // CRITICAL: Warm up the sheet presentation system
                     // This forces iOS to initialize presentation controllers
                     Task { @MainActor in
@@ -83,6 +78,7 @@ struct Aesdetic_ControlApp: App {
         tabAppearance.backgroundColor = UIColor.clear
         UITabBar.appearance().standardAppearance = tabAppearance
         UITabBar.appearance().scrollEdgeAppearance = tabAppearance
+        UITabBar.appearance().isHidden = true
         
         // Also configure TabView container background
         UITabBar.appearance().backgroundColor = UIColor.clear

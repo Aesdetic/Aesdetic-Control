@@ -82,6 +82,8 @@ struct ActiveRunStatus: Equatable {
 class DeviceControlViewModel: ObservableObject {
     static let shared = DeviceControlViewModel()
     private static let maxEffectColorSlots = 3
+    private let directColorTransitionSeconds: Double = 0.35
+    private let directBrightnessTransitionSeconds: Double = 0.35
     private static let gradientFriendlyEffectIds: Set<Int> = [
         2,   // Breathe
         3,   // Smooth Flow
@@ -244,7 +246,7 @@ class DeviceControlViewModel: ObservableObject {
         // Not enough stops to fill every slot – fall back to interpolated colors
         let positions = (0..<clampedSlots).map { Double($0) / Double(clampedSlots - 1) }
         return positions.map { t in
-            let color = GradientSampler.sampleColor(at: t, stops: sortedStops)
+            let color = GradientSampler.sampleColor(at: t, stops: sortedStops, interpolation: gradient.interpolation)
             let rgb = color.toRGBArray()
             return [rgb[0], rgb[1], rgb[2]]
         }
@@ -332,6 +334,10 @@ class DeviceControlViewModel: ObservableObject {
     
     // Active run tracking (automations/transitions)
     @Published var activeRunStatus: [String: ActiveRunStatus] = [:]
+    private var transitionCancelLockUntil: [String: Date] = [:]
+    private var savedTransitionDefaults: [String: Int?] = [:]
+    private var savedTransitionDefaultRunIds: [String: UUID] = [:]
+    private var playlistUnsupportedDevices: Set<String> = []
     
     // Watchdog state for monitoring stalled runs
     private struct RunWatchdog {
@@ -345,6 +351,46 @@ class DeviceControlViewModel: ObservableObject {
     // Watchdog constants
     private let watchdogTimeoutSeconds: TimeInterval = 10.0  // Cancel if no progress for 10 seconds
     private let watchdogCheckInterval: TimeInterval = 2.0     // Check every 2 seconds
+
+    private func lockTransitionCancel(for deviceId: String, seconds: TimeInterval = 1.5) {
+        transitionCancelLockUntil[deviceId] = Date().addingTimeInterval(seconds)
+    }
+
+    private func setTemporaryTransitionDefault(for device: WLEDDevice, deciseconds: Int, runId: UUID) async {
+        if savedTransitionDefaults[device.id] == nil {
+            savedTransitionDefaults[device.id] = device.state?.transitionDeciseconds
+            savedTransitionDefaultRunIds[device.id] = runId
+        }
+        let stateUpdate = WLEDStateUpdate(transitionDeciseconds: max(0, deciseconds))
+        _ = try? await apiService.updateState(for: device, state: stateUpdate)
+    }
+
+    private func restoreTransitionDefaultIfNeeded(for device: WLEDDevice, runId: UUID?) async {
+        if let storedRunId = savedTransitionDefaultRunIds[device.id], let runId, storedRunId != runId {
+            return
+        }
+        guard savedTransitionDefaults.keys.contains(device.id) else { return }
+        let restoredDeciseconds = savedTransitionDefaults[device.id] ?? nil
+        if let restoredDeciseconds {
+            let stateUpdate = WLEDStateUpdate(transitionDeciseconds: max(0, restoredDeciseconds))
+            _ = try? await apiService.updateState(for: device, state: stateUpdate)
+        }
+        await MainActor.run {
+            if let index = devices.firstIndex(where: { $0.id == device.id }),
+               let state = devices[index].state {
+                devices[index].state = WLEDState(
+                    brightness: state.brightness,
+                    isOn: state.isOn,
+                    segments: state.segments,
+                    transitionDeciseconds: restoredDeciseconds,
+                    presetId: state.presetId,
+                    playlistId: state.playlistId
+                )
+            }
+        }
+        savedTransitionDefaults.removeValue(forKey: device.id)
+        savedTransitionDefaultRunIds.removeValue(forKey: device.id)
+    }
     
     // Computed filtered devices based on current filters - Optimized with memoization
     var filteredDevices: [WLEDDevice] {
@@ -409,6 +455,7 @@ class DeviceControlViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var currentError: WLEDError?
     @Published var reconnectionStatus: [String: String] = [:]
+    private var allowActiveHealthChecks: Bool = false
     
     // Service dependencies
     private let apiService = WLEDAPIService.shared
@@ -427,6 +474,7 @@ class DeviceControlViewModel: ObservableObject {
     
     /// Local cache of device capabilities for synchronous access from MainActor
     private var deviceCapabilities: [String: WLEDCapabilities] = [:]
+    private var deviceLedCounts: [String: Int] = [:]
     
     // Effect metadata caching
     @Published private(set) var rawEffectMetadata: [String: [String]] = [:]
@@ -441,6 +489,38 @@ class DeviceControlViewModel: ObservableObject {
     private var effectMetadataLastFetched: [String: Date] = [:]
     private var lastGradientBeforeEffect: [String: [GradientStop]] = [:]
     private let effectMetadataRefreshInterval: TimeInterval = 300 // 5 minute cache
+    private var ledPreferencesLastFetched: [String: Date] = [:]
+    private let ledPreferencesRefreshInterval: TimeInterval = 300
+    private let temperatureStopsCCTKeyPrefix = "temperatureStopsCCTEnabled."
+    private let defaultCCTKelvinMin: Int = 1900
+    private let defaultCCTKelvinMax: Int = 10091
+    private var cctKelvinRanges: [String: ClosedRange<Int>] = [:]
+
+    private var appManagedSegmentDevices: Set<String> = []
+    private struct SegmentBounds: Equatable {
+        let start: Int
+        let stop: Int
+    }
+    private var appManagedSegmentLayouts: [String: [SegmentBounds]] = [:]
+    private let defaultSegmentCount: Int = 12
+    private let maxSegmentCount: Int = 16
+    private let perLedFallbackLedLimit: Int = 30
+    private let maxWLEDTransitionDeciseconds: Int = 65535
+    private let segmentedTransitionMaxStepSeconds: Double = 60.0
+    private let segmentedTransitionMinStepSeconds: Double = 5.0
+    private let segmentedTransitionMaxSteps: Int = 120
+    private let segmentedTransitionSleepSliceSeconds: Double = 1.0
+    private let playlistLongTransitionThresholdSeconds: Double = 600.0
+    private let presetSaveRetryAttempts: Int = 3
+    private let presetVerifyRetryAttempts: Int = 4
+    private let presetSaveDelayNanos: UInt64 = 500_000_000
+    private let presetVerifyDelayNanos: UInt64 = 600_000_000
+    private let playlistSaveRetryAttempts: Int = 3
+    private let playlistVerifyRetryAttempts: Int = 4
+    private let playlistSaveDelayNanos: UInt64 = 600_000_000
+    private let playlistVerifyDelayNanos: UInt64 = 700_000_000
+    private var temporaryPlaylistIds: [String: Int] = [:]
+    private var temporaryPresetIds: [String: [Int]] = [:]
     
     private let gradientDefaultsPrefix = "latestGradientStops."
     private let effectGradientDefaultsPrefix = "latestEffectGradientStops."
@@ -462,6 +542,96 @@ class DeviceControlViewModel: ObservableObject {
     private func markUserInteraction(_ deviceId: String) {
         lastUserInput[deviceId] = Date()
     }
+
+    private func clampedTransitionMs(for durationSeconds: Double?) -> Int? {
+        guard let durationSeconds else { return nil }
+        let ms = Int(durationSeconds * 1000.0)
+        let maxMs = maxWLEDTransitionDeciseconds * 100
+        return min(ms, maxMs)
+    }
+
+    private func isSolidGradient(_ gradient: LEDGradient) -> Bool {
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        guard let firstHex = sortedStops.first?.hexColor else { return false }
+        return sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == firstHex }
+    }
+
+    private func segmentedStepPlan(for durationSeconds: Double) -> (steps: Int, stepDuration: Double) {
+        let safeDuration = max(0.1, durationSeconds)
+        let idealStep = safeDuration / Double(segmentedTransitionMaxSteps)
+        let clampedStep = min(segmentedTransitionMaxStepSeconds, max(segmentedTransitionMinStepSeconds, idealStep))
+        let steps = max(1, Int(ceil(safeDuration / clampedStep)))
+        let actualStep = safeDuration / Double(steps)
+        return (steps, actualStep)
+    }
+
+    private func isRunActive(deviceId: String, runId: UUID) async -> Bool {
+        await MainActor.run {
+            activeRunStatus[deviceId]?.id == runId
+        }
+    }
+
+    private func waitForRunContinuation(deviceId: String, runId: UUID, durationSeconds: Double) async -> Bool {
+        guard durationSeconds > 0 else { return await isRunActive(deviceId: deviceId, runId: runId) }
+        var remaining = durationSeconds
+        let slice = min(segmentedTransitionSleepSliceSeconds, durationSeconds)
+        while remaining > 0 {
+            if Task.isCancelled { return false }
+            let step = min(slice, remaining)
+            let nanos = UInt64(step * 1_000_000_000.0)
+            try? await Task.sleep(nanoseconds: nanos)
+            remaining -= step
+            if !(await isRunActive(deviceId: deviceId, runId: runId)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func defaultTransitionMs(for device: WLEDDevice) -> Int? {
+        if savedTransitionDefaults.keys.contains(device.id) {
+            guard let deciseconds = savedTransitionDefaults[device.id] ?? nil else { return nil }
+            let ms = deciseconds * 100
+            let maxMs = maxWLEDTransitionDeciseconds * 100
+            return min(ms, maxMs)
+        }
+        guard let deciseconds = device.state?.transitionDeciseconds else { return nil }
+        let ms = deciseconds * 100
+        let maxMs = maxWLEDTransitionDeciseconds * 100
+        return min(ms, maxMs)
+    }
+
+    private func resolvedTransitionMs(for device: WLEDDevice, fallbackSeconds: Double?) -> Int? {
+        if let ms = defaultTransitionMs(for: device) {
+            return ms
+        }
+        guard let fallbackSeconds else { return nil }
+        return Int(max(0, fallbackSeconds * 1000.0))
+    }
+
+    private func allowPerLedFallback(for device: WLEDDevice) -> Bool {
+        let advancedEnabled = UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+        let perLedEnabled = UserDefaults.standard.bool(forKey: "perLedTransitionsEnabled")
+        let ledCount = totalLEDCount(for: device)
+        return perLedEnabled && advancedEnabled && ledCount <= perLedFallbackLedLimit
+    }
+
+    func totalLEDCount(for device: WLEDDevice) -> Int {
+        let cachedCount = deviceLedCounts[device.id] ?? 0
+        if let segments = device.state?.segments, !segments.isEmpty {
+            if let maxStop = segments.compactMap({ $0.stop }).max(), maxStop > 0 {
+                return max(maxStop, cachedCount)
+            }
+            let sumLen = segments.compactMap({ $0.len }).reduce(0, +)
+            if sumLen > 0 {
+                return max(sumLen, cachedCount)
+            }
+            if let firstLen = segments.first?.len, firstLen > 0 {
+                return max(firstLen, cachedCount)
+            }
+        }
+        return cachedCount > 0 ? cachedCount : 120
+    }
     
     func automationGradient(for device: WLEDDevice) -> LEDGradient {
         if let cachedStops = latestGradientStops[device.id], !cachedStops.isEmpty {
@@ -481,85 +651,200 @@ class DeviceControlViewModel: ObservableObject {
         endGradient: LEDGradient,
         endBrightness: Int,
         durationSeconds: Double,
+        startStopTemperatures: [UUID: Double]? = nil,
+        startStopWhiteLevels: [UUID: Double]? = nil,
+        endStopTemperatures: [UUID: Double]? = nil,
+        endStopWhiteLevels: [UUID: Double]? = nil,
         segmentId: Int = 0,
         automationName: String? = nil
     ) async {
         await cancelActiveTransitionIfNeeded(for: device)
         await transitionRunner.cancel(deviceId: device.id)
         
-        let ledCount = device.state?.segments.first(where: { $0.id == segmentId })?.len
-            ?? device.state?.segments.first?.len
-            ?? 120
+        let requestedDuration = durationSeconds
+        var durationSeconds = durationSeconds
+        let ledCount = totalLEDCount(for: device)
+        // Use native transition up to 1 hour (policy), then clamp for manual transitions.
+        let maxNativeSeconds = maxWLEDNativeTransitionSeconds
+        #if DEBUG
+        let startStopsCount = startGradient.stops.count
+        let endStopsCount = endGradient.stops.count
+        print("🔎 Transition start for \(device.name): duration=\(durationSeconds)s, maxNative=\(maxNativeSeconds)s, startStops=\(startStopsCount), endStops=\(endStopsCount)")
+        #endif
+
+        let startIsSolid = isSolidGradient(startGradient)
+        let endIsSolid = isSolidGradient(endGradient)
+        let requiresSegmentedStepper = !(startIsSolid && endIsSolid)
+        let exceedsNativeCap = durationSeconds > maxNativeSeconds
+        let usePlaylistForLongTransition = automationName == nil && durationSeconds >= playlistLongTransitionThresholdSeconds
+        let useSegmentedStepper = requiresSegmentedStepper || exceedsNativeCap
+
+        if !useSegmentedStepper, durationSeconds > maxNativeSeconds {
+            #if DEBUG
+            print("⚠️ Transition duration exceeds native cap for \(device.name). Capping to \(maxNativeSeconds)s (requested \(durationSeconds)s).")
+            #endif
+            durationSeconds = maxNativeSeconds
+        }
+
+        // Ensure realtime override is released so WLED can honor transitions.
+        await apiService.releaseRealtimeOverride(for: device)
+
+        #if DEBUG
+        if usePlaylistForLongTransition {
+            print("🔎 Transition path for \(device.name): playlist duration=\(requestedDuration)s threshold=\(playlistLongTransitionThresholdSeconds)s")
+        } else if useSegmentedStepper {
+            let reason = exceedsNativeCap ? "duration>nativeCap" : "multi-stop gradient"
+            print("🔎 Transition path for \(device.name): segmented-stepper duration=\(requestedDuration)s reason=\(reason)")
+        } else {
+            print("🔎 Transition path for \(device.name): native-tt duration=\(durationSeconds)s")
+        }
+        #endif
         
         await applyGradientStopsAcrossStrip(
             device,
             stops: startGradient.stops,
             ledCount: ledCount,
+            stopTemperatures: startStopTemperatures,
+            stopWhiteLevels: startStopWhiteLevels,
             disableActiveEffect: true,
             segmentId: segmentId,
             interpolation: startGradient.interpolation,
             brightness: startBrightness,
             on: true,
-            userInitiated: false
+            forceNoPerCallTransition: true,
+            releaseRealtimeOverride: false,
+            userInitiated: false,
+            preferSegmented: true
         )
         
         // Set active run status
         let runTitle = automationName ?? "Transition"
         let startDate = Date()
         let runKind: ActiveRunStatus.RunKind = automationName != nil ? .automation : .transition
+        let effectiveDuration = useSegmentedStepper ? requestedDuration : durationSeconds
+        let expectedEnd = effectiveDuration > 0 ? startDate.addingTimeInterval(effectiveDuration) : nil
+        let nativeTransition: NativeTransitionInfo? = (!useSegmentedStepper && endIsSolid && startIsSolid)
+            ? NativeTransitionInfo(
+                targetColorRGB: Color(hex: endGradient.stops.first?.hexColor ?? "#000000").toRGBArray(),
+                targetBrightness: endBrightness,
+                durationSeconds: durationSeconds
+            )
+            : nil
+        #if DEBUG
+        let nativeEligible = durationSeconds <= maxNativeSeconds
+        print("🔎 Transition path check for \(device.name): startSolid=\(startIsSolid), endSolid=\(endIsSolid), nativeEligible=\(nativeEligible), segmented=\(useSegmentedStepper)")
+        #endif
+        let runId = UUID()
         await MainActor.run {
             activeRunStatus[device.id] = ActiveRunStatus(
+                id: runId,
                 deviceId: device.id,
                 kind: runKind,
                 title: runTitle,
                 startDate: startDate,
                 progress: 0.0,
-                isCancellable: true
+                isCancellable: true,
+                expectedEnd: expectedEnd,
+                nativeTransition: nativeTransition
             )
-            // Initialize watchdog for this run
             runWatchdogs[device.id] = RunWatchdog(
                 lastProgressAt: startDate,
                 lastProgressValue: 0.0,
                 runStartAt: startDate
             )
-            // Start watchdog task if not already running
             startWatchdogTaskIfNeeded()
         }
-        
-        await transitionRunner.start(
-            device: device,
-            from: startGradient,
-            to: endGradient,
-            durationSec: durationSeconds,
-            segmentId: segmentId,
-            aBrightness: startBrightness,
-            bBrightness: endBrightness,
-            onProgress: { [weak self] progress in
-                Task { @MainActor in
-                    if var status = self?.activeRunStatus[device.id] {
-                        status.progress = progress
-                        self?.activeRunStatus[device.id] = status
-                        // Update watchdog on progress (any progress update counts)
-                        if var watchdog = self?.runWatchdogs[device.id] {
-                            watchdog.lastProgressAt = Date()
-                            watchdog.lastProgressValue = progress
-                            self?.runWatchdogs[device.id] = watchdog
-                        }
-                    }
+
+        if usePlaylistForLongTransition {
+            if let playlist = await createTransitionPlaylist(
+                device: device,
+                from: startGradient,
+                to: endGradient,
+                durationSeconds: requestedDuration,
+                startBrightness: startBrightness,
+                endBrightness: endBrightness,
+                persist: false,
+                label: nil
+            ),
+            await startPlaylist(device: device, playlistId: playlist.playlistId) {
+                #if DEBUG
+                print("✅ Transition playlist started for \(device.name): playlistId=\(playlist.playlistId)")
+                #endif
+                await MainActor.run {
+                    latestGradientStops[device.id] = endGradient.stops
+                }
+                return
+            } else {
+                #if DEBUG
+                print("⚠️ Transition playlist failed for \(device.name). Falling back to stepper/native.")
+                #endif
+            }
+        }
+
+        if useSegmentedStepper {
+            let stepPlan = segmentedStepPlan(for: effectiveDuration)
+            #if DEBUG
+            print("🔎 Segmented transition plan for \(device.name): steps=\(stepPlan.steps), step=\(String(format: "%.2f", stepPlan.stepDuration))s, total=\(String(format: "%.2f", effectiveDuration))s")
+            #endif
+            let steps = stepPlan.steps
+            let stepDuration = stepPlan.stepDuration
+            for step in 1...steps {
+                if Task.isCancelled { break }
+                if !(await isRunActive(deviceId: device.id, runId: runId)) { break }
+                let t = Double(step) / Double(steps)
+                let stepStops = interpolateStops(from: startGradient, to: endGradient, t: t)
+                let interpBrightness = Int(round(Double(startBrightness) * (1.0 - t) + Double(endBrightness) * t))
+                let stepGradient = LEDGradient(stops: stepStops, interpolation: endGradient.interpolation)
+                await applySegmentedGradient(
+                    device,
+                    gradient: stepGradient,
+                    stopTemperatures: nil,
+                    stopWhiteLevels: nil,
+                    brightness: interpBrightness,
+                    on: true,
+                    transitionDurationSeconds: stepDuration,
+                    forceNoPerCallTransition: false,
+                    releaseRealtimeOverride: false,
+                    segmentId: segmentId,
+                    disableActiveEffect: false
+                )
+                if step < steps {
+                    let shouldContinue = await waitForRunContinuation(
+                        deviceId: device.id,
+                        runId: runId,
+                        durationSeconds: stepDuration
+                    )
+                    if !shouldContinue { break }
                 }
             }
-        )
+            #if DEBUG
+            print("✅ Segmented transition completed for \(device.name): duration=\(effectiveDuration)s")
+            #endif
+        } else {
+            await applyGradientStopsAcrossStrip(
+                device,
+                stops: endGradient.stops,
+                ledCount: ledCount,
+                stopTemperatures: endStopTemperatures,
+                stopWhiteLevels: endStopWhiteLevels,
+                disableActiveEffect: true,
+                segmentId: segmentId,
+                interpolation: endGradient.interpolation,
+                brightness: endBrightness,
+                on: true,
+                transitionDurationSeconds: durationSeconds,
+                releaseRealtimeOverride: false,
+                userInitiated: false,
+                preferSegmented: true
+            )
+            #if DEBUG
+            print("✅ Transition applied via native transition for \(device.name): duration=\(durationSeconds)s")
+            #endif
+        }
         
         await MainActor.run {
             latestGradientStops[device.id] = endGradient.stops
-            // Clear status when transition completes
-            activeRunStatus.removeValue(forKey: device.id)
-            // Clear watchdog
-            runWatchdogs.removeValue(forKey: device.id)
         }
-        
-        // Update brightness at end of transition (automation-driven, don't cancel active runs)
-        await updateDeviceBrightness(device, brightness: endBrightness, userInitiated: false)
     }
     
     func runSimpleGradientFade(
@@ -605,6 +890,14 @@ class DeviceControlViewModel: ObservableObject {
     
     // Real-time control state
     @Published var isRealTimeEnabled: Bool = true
+
+    private func shouldSendWebSocketUpdate(_ update: WLEDStateUpdate) -> Bool {
+        let segCount = update.seg?.count ?? 0
+        if segCount > 6 {
+            return false
+        }
+        return true
+    }
     
     // Multi-device batch operations
     @Published var selectedDevices: Set<String> = []
@@ -630,50 +923,53 @@ class DeviceControlViewModel: ObservableObject {
     /// Immediately check device status when app becomes active
     @MainActor
     func checkDeviceStatusOnAppActive() async {
+        guard allowActiveHealthChecks else {
+            print("Skipping device status check (active checks disabled)")
+            return
+        }
         print("🔄 App became active - checking device status immediately")
         
         // Get all persisted devices
         let persistedDevices = await coreDataManager.fetchDevices()
         
         // Perform immediate health checks for all devices
-        await withTaskGroup(of: Void.self) { group in
-            for device in persistedDevices {
-                group.addTask { [weak self] in
-                    await self?.performImmediateHealthCheck(for: device)
-                }
-            }
+        for device in persistedDevices {
+            performImmediateHealthCheckDetached(for: device)
         }
         
         // Also trigger connection monitor to perform immediate checks
         await connectionMonitor.performImmediateHealthChecks()
     }
     
-    /// Perform immediate health check for a single device
-    private func performImmediateHealthCheck(for device: WLEDDevice) async {
-        do {
-            // Quick HTTP ping to check if device is reachable
-            let _ = try await apiService.getState(for: device)
-            
-            // Device is online - update status immediately
-            await MainActor.run {
-                if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                    devices[index].isOnline = true
-                    devices[index].lastSeen = Date()
-                    print("✅ Immediate check: \(device.name) is online")
+    /// Perform immediate health check for a single device off the main actor.
+    private func performImmediateHealthCheckDetached(for device: WLEDDevice) {
+        let apiService = self.apiService
+        Task.detached {
+            do {
+                // Quick HTTP ping to check if device is reachable
+                let _ = try await apiService.getState(for: device)
+                
+                // Device is online - update status immediately
+                await MainActor.run {
+                    if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                        self.devices[index].isOnline = true
+                        self.devices[index].lastSeen = Date()
+                        print("✅ Immediate check: \(device.name) is online")
+                    }
+                    self.clearError()
                 }
-                clearError()
-            }
-            
-            await DeviceCleanupManager.shared.processQueue(for: device.id)
-            
-        } catch {
-            // Device is offline - update status immediately
-            await MainActor.run {
-                if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                    devices[index].isOnline = false
-                    print("❌ Immediate check: \(device.name) is offline")
+                
+                await DeviceCleanupManager.shared.processQueue(for: device.id)
+                
+            } catch {
+                // Device is offline - update status immediately
+                await MainActor.run {
+                    if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                        self.devices[index].isOnline = false
+                        print("❌ Immediate check: \(device.name) is offline")
+                    }
+                    self.presentError(.deviceOffline(deviceName: device.name))
                 }
-                presentError(.deviceOffline(deviceName: device.name))
             }
         }
     }
@@ -864,6 +1160,7 @@ class DeviceControlViewModel: ObservableObject {
                device1.isOnline == device2.isOnline &&
                device1.name == device2.name &&
                device1.ipAddress == device2.ipAddress &&
+               device1.autoWhiteMode == device2.autoWhiteMode &&
                device1.currentColor == device2.currentColor // Simple color comparison
     }
     
@@ -931,15 +1228,13 @@ class DeviceControlViewModel: ObservableObject {
                 // Update color if available from segments
                 // CRITICAL: Don't overwrite color if device has active CCT temperature OR active effect
                 // OR if gradient was just applied (to prevent WebSocket echo from overwriting gradient)
-                if let segment = state.segments.first,
-                   let colors = segment.colors,
-                   let firstColor = colors.first,
-                   firstColor.count >= 3 {
+                if let segment = state.segments.first {
                     let segmentId = segment.id ?? 0
                     let effectState = effectStates[stateUpdate.deviceId]?[segmentId]
                     let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
-                    let hasActiveCCT = updatedDevice.temperature != nil && updatedDevice.temperature! > 0
-                    
+                    let normalized = segment.cctNormalized
+                    updatedDevice.temperature = normalized
+
                     // Check if gradient was just applied (within protection window)
                     let gradientJustApplied: Bool
                     if let gradientTime = gradientApplicationTimes[stateUpdate.deviceId] {
@@ -948,20 +1243,16 @@ class DeviceControlViewModel: ObservableObject {
                     } else {
                         gradientJustApplied = false
                     }
-                    
-                    // Only update color if neither CCT nor effect is active AND gradient wasn't just applied
-                    if !hasActiveCCT && !hasActiveEffect && !gradientJustApplied {
-                        updatedDevice.currentColor = Color(
-                            .sRGB,
-                            red: Double(firstColor[0]) / 255.0,
-                            green: Double(firstColor[1]) / 255.0,
-                            blue: Double(firstColor[2]) / 255.0
-                        )
+
+                    // Only update color if effect isn't active AND gradient wasn't just applied
+                    if !hasActiveEffect && !gradientJustApplied {
+                        if let normalized {
+                            updatedDevice.currentColor = Color.color(fromCCTTemperature: normalized)
+                        } else if let color = derivedColor(from: segment) {
+                            updatedDevice.currentColor = color
+                        }
                     } else {
                         #if DEBUG
-                        if hasActiveCCT, let temp = updatedDevice.temperature {
-                            print("🔵 handleWebSocketStateUpdate: Skipping color update - CCT is active (temp=\(temp))")
-                        }
                         if hasActiveEffect, let fx = effectState?.effectId {
                             print("🔵 handleWebSocketStateUpdate: Skipping color update - Effect is active (fx=\(fx))")
                         }
@@ -1079,7 +1370,7 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
     
-    private func performBatchOperation(_ operation: @escaping (WLEDDevice) async -> Void) async {
+    private func performBatchOperation(_ operation: @escaping @MainActor (WLEDDevice) async -> Void) async {
         guard !selectedDevices.isEmpty else { return }
         
         batchOperationInProgress = true
@@ -1089,7 +1380,7 @@ class DeviceControlViewModel: ObservableObject {
         
         await withTaskGroup(of: Void.self) { group in
             for device in selectedDeviceList {
-                group.addTask {
+                group.addTask { @MainActor in
                     await operation(device)
                 }
             }
@@ -1157,11 +1448,12 @@ class DeviceControlViewModel: ObservableObject {
         Task { @MainActor in
             let persistedDevices = await coreDataManager.fetchDevices()
             await MainActor.run {
-                self.devices = persistedDevices
-                
+                let placeholders = persistedDevices.filter { self.isPlaceholderDevice($0) }
+                self.devices = persistedDevices.filter { !self.isPlaceholderDevice($0) }
+
                 // CRITICAL: Preload persisted gradients for all devices on app start
                 // This ensures gradients are available immediately when power toggle happens
-                for device in persistedDevices {
+                for device in self.devices {
                     if let persisted = loadPersistedGradient(for: device.id), !persisted.isEmpty {
                         latestGradientStops[device.id] = persisted
                         #if DEBUG
@@ -1169,20 +1461,27 @@ class DeviceControlViewModel: ObservableObject {
                         #endif
                     }
                 }
-                
-                // Register persisted devices with connection monitor
-                for device in persistedDevices {
-                    self.connectionMonitor.registerDevice(device)
+
+                for placeholder in placeholders {
+                    Task {
+                        await self.coreDataManager.deleteDevice(id: placeholder.id)
+                    }
                 }
                 
-                // Perform immediate status check for all devices on app launch
-                Task { @MainActor in
-                    await self.performInitialDeviceStatusCheck()
+                // Register persisted devices with connection monitor
+                for device in self.devices {
+                    self.connectionMonitor.registerDevice(device)
+                }
+
+                for device in self.devices {
+                    Task {
+                        await self.refreshLEDPreferencesIfNeeded(for: device)
+                    }
                 }
                 
                 // Auto-connect real-time WebSocket for online devices if enabled
                 if self.isRealTimeEnabled {
-                    let onlineDevices = persistedDevices.filter { $0.isOnline }
+                    let onlineDevices = self.devices.filter { $0.isOnline }
                     if !onlineDevices.isEmpty {
                         // Small delay to allow app to fully initialize
                         Task { @MainActor in
@@ -1200,17 +1499,31 @@ class DeviceControlViewModel: ObservableObject {
         print("🚀 App launched - performing initial device status check")
         
         // Quick parallel health checks for all devices
-        await withTaskGroup(of: Void.self) { group in
-            for device in devices {
-                group.addTask { [weak self] in
-                    await self?.performImmediateHealthCheck(for: device)
-                }
-            }
+        for device in devices {
+            performImmediateHealthCheckDetached(for: device)
         }
     }
     
     private func handleDiscoveredDevices(_ discoveredDevices: [WLEDDevice]) async {
+        let realDeviceIPs = Set(discoveredDevices.filter { !isPlaceholderDevice($0) }.map { $0.ipAddress })
         for discoveredDevice in discoveredDevices {
+            if isPlaceholderDevice(discoveredDevice), realDeviceIPs.contains(discoveredDevice.ipAddress) {
+                continue
+            }
+            if isPlaceholderDevice(discoveredDevice),
+               devices.contains(where: { $0.ipAddress == discoveredDevice.ipAddress && !isPlaceholderDevice($0) }) {
+                continue
+            }
+
+            if !isPlaceholderDevice(discoveredDevice),
+               let placeholderIndex = devices.firstIndex(where: { isPlaceholderDevice($0) && $0.ipAddress == discoveredDevice.ipAddress }) {
+                let placeholderId = devices[placeholderIndex].id
+                devices.remove(at: placeholderIndex)
+                Task {
+                    await coreDataManager.deleteDevice(id: placeholderId)
+                }
+            }
+
             // Check if device already exists
             if let existingIndex = devices.firstIndex(where: { $0.id == discoveredDevice.id }) {
                 // Update existing device with any new information
@@ -1222,10 +1535,13 @@ class DeviceControlViewModel: ObservableObject {
                 updatedDevice.brightness = discoveredDevice.brightness
                 updatedDevice.isOn = discoveredDevice.isOn
                 updatedDevice.currentColor = discoveredDevice.currentColor
+                updatedDevice.autoWhiteMode = discoveredDevice.autoWhiteMode ?? updatedDevice.autoWhiteMode
                 updatedDevice.lastSeen = Date()
                 
                 devices[existingIndex] = updatedDevice
-                await coreDataManager.saveDevice(updatedDevice)
+                if !isPlaceholderDevice(updatedDevice) {
+                    await coreDataManager.saveDevice(updatedDevice)
+                }
                 
                 // Force UI update to reflect the new online status
                 await MainActor.run {
@@ -1236,7 +1552,9 @@ class DeviceControlViewModel: ObservableObject {
                 var newDevice = discoveredDevice
                 newDevice.lastSeen = Date()
                 devices.append(newDevice)
-                await coreDataManager.saveDevice(newDevice)
+                if !isPlaceholderDevice(newDevice) {
+                    await coreDataManager.saveDevice(newDevice)
+                }
                 
                 // Force UI update for new device
                 await MainActor.run {
@@ -1245,11 +1563,25 @@ class DeviceControlViewModel: ObservableObject {
             }
             
             // Register with connection monitor
-            connectionMonitor.registerDevice(discoveredDevice)
+            if !isPlaceholderDevice(discoveredDevice) {
+                connectionMonitor.registerDevice(discoveredDevice)
+            }
             
             // Connect WebSocket if real-time is enabled
-            connectWebSocketIfNeeded(for: discoveredDevice)
+            if !isPlaceholderDevice(discoveredDevice) {
+                connectWebSocketIfNeeded(for: discoveredDevice)
+            }
+
+            if !isPlaceholderDevice(discoveredDevice) {
+                Task {
+                    await refreshLEDPreferencesIfNeeded(for: discoveredDevice)
+                }
+            }
         }
+    }
+
+    private func isPlaceholderDevice(_ device: WLEDDevice) -> Bool {
+        return device.id.hasPrefix("ip:")
     }
     
     private func updateDeviceHealthStatus(_ healthStatus: [String: Bool]) {
@@ -1281,12 +1613,15 @@ class DeviceControlViewModel: ObservableObject {
             devices[index].isOnline = true
             devices[index].lastSeen = Date()
             objectWillChange.send()
+            Task {
+                await refreshLEDPreferencesIfNeeded(for: devices[index])
+            }
         }
     }
     
     func toggleDevicePower(_ device: WLEDDevice) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
-        await cancelActiveRun(for: device)
+        await cancelActiveRun(for: device, force: true)
         
         // The UI will have already registered the optimistic state.
         // The `targetState` is what the UI *wants* the device to be.
@@ -1351,7 +1686,7 @@ class DeviceControlViewModel: ObservableObject {
                 
                 return dev
                 }
-                let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+                let ledCount = totalLEDCount(for: updatedDevice)
             
             // CRITICAL: Apply gradient WITH power-on in SAME API call (skip updateDeviceState)
             // Include on=true and brightness in the gradient application
@@ -1362,7 +1697,8 @@ class DeviceControlViewModel: ObservableObject {
                 ledCount: ledCount,
                 disableActiveEffect: true,  // Always disable effects during power-on restoration
                 brightness: updatedDevice.brightness,  // Apply restored brightness with gradient
-                on: true  // Include power-on in gradient application
+                on: true,  // Include power-on in gradient application
+                preferSegmented: true
             )
             
             // Update local state optimistically
@@ -1456,7 +1792,7 @@ class DeviceControlViewModel: ObservableObject {
     func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int, userInitiated: Bool = true) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
         if userInitiated {
-            await cancelActiveRun(for: device)
+            await cancelActiveRun(for: device, force: true)
         }
         
         markUserInteraction(device.id)
@@ -1539,7 +1875,7 @@ class DeviceControlViewModel: ObservableObject {
                     
                     return dev
                 }
-                let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+                let ledCount = totalLEDCount(for: updatedDevice)
                 
                 // CRITICAL: Check actual WLED state for active effects
                 // WLED might restore effects/presets when brightness comes back from 0%
@@ -1583,7 +1919,8 @@ class DeviceControlViewModel: ObservableObject {
                     disableActiveEffect: hasActiveEffect,  // Disable if we found an active effect
                     brightness: brightness,  // Apply brightness with gradient
                     on: true,  // CRITICAL: Turn device on when restoring brightness from 0%
-                    userInitiated: true  // User changed brightness, cancel any active runs
+                    userInitiated: true,  // User changed brightness, cancel any active runs
+                    preferSegmented: true
                 )
                 
                 // Update local state
@@ -1625,73 +1962,37 @@ class DeviceControlViewModel: ObservableObject {
             return
         }
         
-        // CRITICAL: If we have a gradient, we need to preserve it during brightness changes
-        // WLED's brightness control affects overall brightness, but per-LED colors should be preserved
-        // However, to ensure gradient colors remain visible, re-apply gradient with new brightness
-        if hasPersistedGradient, !isEffectEnabled, let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
-            // We have a gradient - re-apply it with new brightness to ensure colors are preserved
-            markUserInteraction(device.id)
-            
-            let updatedDevice = await MainActor.run {
-                var dev = self.devices.first(where: { $0.id == device.id }) ?? device
-                dev.brightness = brightness
-                return dev
+        // CRITICAL: If we have a gradient, only update brightness (no color resend).
+        if hasPersistedGradient, !isEffectEnabled, (gradientStops(for: device.id)?.isEmpty == false) {
+            await updateDeviceState(device) { currentDevice in
+                var updatedDevice = currentDevice
+                updatedDevice.brightness = brightness
+                updatedDevice.isOn = true
+                return updatedDevice
             }
-            let ledCount = updatedDevice.state?.segments.first?.len ?? 120
-            
-            // Re-apply gradient with new brightness
-            // This ensures gradient colors are preserved and visible at the new brightness level
-            // CRITICAL: Include on=true when brightness > 0 to ensure device stays on
-            await applyGradientStopsAcrossStrip(
-                updatedDevice,
-                stops: persistedStops,
-                ledCount: ledCount,
-                disableActiveEffect: false,  // Don't disable effects during normal brightness changes
-                brightness: brightness,  // Apply brightness with gradient
-                on: true,  // CRITICAL: Ensure device is on when brightness > 0
-                userInitiated: true  // User changed brightness, cancel any active runs
-            )
-            
-            // Update local state
-            await MainActor.run {
-                if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                    devices[index].brightness = brightness
-                    devices[index].isOn = true  // CRITICAL: Ensure isOn is true when brightness > 0
-                    devices[index].isOnline = true
-                }
-                
-                // CRITICAL: Preserve brightness for future power-on operations
-                if brightness > 0 {
-                    self.lastBrightnessBeforeOff[device.id] = brightness
-                }
-                
-                clearError()
+            if brightness > 0 {
+                self.lastBrightnessBeforeOff[device.id] = brightness
             }
-            
-            // Persist the change
-            var deviceToSave = updatedDevice
-            deviceToSave.brightness = brightness
-            deviceToSave.isOn = true  // CRITICAL: Ensure isOn is true when brightness > 0
-            deviceToSave.isOnline = true
-            deviceToSave.lastSeen = Date()
-            await coreDataManager.saveDevice(deviceToSave)
-            
         } else {
             // No gradient - use simple brightness update
             // CRITICAL: WLED treats brightness 0% as "off" (on: false)
             // Include on state in brightness update to ensure proper state
             let shouldBeOn = brightness > 0
+            let transitionMs = resolvedTransitionMs(for: device, fallbackSeconds: directBrightnessTransitionSeconds)
             let stateUpdate = WLEDStateUpdate(
                 on: shouldBeOn ? true : false,  // CRITICAL: Explicitly set on=false when brightness is 0%
-                bri: brightness
+                bri: brightness,
+                transition: transitionMs
             )
         
         do {
             _ = try await apiService.updateState(for: device, state: stateUpdate)
             
             // Send WebSocket update if connected
-            if isRealTimeEnabled {
-                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
+                if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
+                    webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+                }
             }
             
             await MainActor.run {
@@ -1728,16 +2029,28 @@ class DeviceControlViewModel: ObservableObject {
     
     func updateDeviceColor(_ device: WLEDDevice, color: Color) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
-        await cancelActiveRun(for: device)
-        
-        // Mark device under user control for color changes too
+        await cancelActiveRun(for: device, force: true)
         markUserInteraction(device.id)
-        
-        await updateDeviceState(device) { currentDevice in
-            var updatedDevice = currentDevice
-            updatedDevice.currentColor = color
-            return updatedDevice
-        }
+
+        let hex = color.toHex()
+        let stops = [
+            GradientStop(position: 0.0, hexColor: hex),
+            GradientStop(position: 1.0, hexColor: hex)
+        ]
+        let ledCount = totalLEDCount(for: device)
+        let transitionDurationSeconds = defaultTransitionMs(for: device) == nil
+            ? directColorTransitionSeconds
+            : nil
+        await applyGradientStopsAcrossStrip(
+            device,
+            stops: stops,
+            ledCount: ledCount,
+            disableActiveEffect: true,
+            on: true,
+            transitionDurationSeconds: transitionDurationSeconds,
+            userInitiated: true,
+            preferSegmented: true
+        )
     }
     
     /// Apply CCT (Correlated Color Temperature) to a device
@@ -1747,8 +2060,9 @@ class DeviceControlViewModel: ObservableObject {
     ///   - withColor: Optional RGB color to set along with CCT
     func applyCCT(to device: WLEDDevice, temperature: Double, withColor: [Int]? = nil, segmentId: Int = 0) async {
         markUserInteraction(device.id)
+        guard supportsCCT(for: device, segmentId: segmentId) else { return }
         let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: segmentId)
-        let cct: Int = usesKelvin ? Segment.kelvinValue(fromNormalized: temperature) : Segment.eightBitValue(fromNormalized: temperature)
+        let cct: Int = usesKelvin ? kelvinValue(for: device, normalized: temperature) : Segment.eightBitValue(fromNormalized: temperature)
         
         do {
             if let color = withColor {
@@ -1821,6 +2135,7 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func setDevicePower(_ device: WLEDDevice, isOn: Bool) async {
+        await cancelActiveRun(for: device, force: true)
         markUserInteraction(device.id)
         
         // Get device state before power change to check if we're turning on
@@ -1861,7 +2176,7 @@ class DeviceControlViewModel: ObservableObject {
                 
                 return dev
             }
-            let ledCount = updatedDevice.state?.segments.first?.len ?? 120
+            let ledCount = totalLEDCount(for: updatedDevice)
             
             // CRITICAL: Apply gradient WITH power-on in SAME API call (skip updateDeviceState)
             // Include on=true and brightness in the gradient application
@@ -1872,7 +2187,8 @@ class DeviceControlViewModel: ObservableObject {
                 ledCount: ledCount,
                 disableActiveEffect: true,  // Always disable effects during power-on restoration
                 brightness: updatedDevice.brightness,  // Apply restored brightness with gradient
-                on: true  // Include power-on in gradient application
+                on: true,  // Include power-on in gradient application
+                preferSegmented: true
             )
             
             // Update local state optimistically
@@ -1915,7 +2231,8 @@ class DeviceControlViewModel: ObservableObject {
                         disableActiveEffect: true,
                         brightness: updatedDevice.brightness,  // Apply brightness with gradient
                         on: true,  // CRITICAL: Ensure device stays on during gradient restoration
-                        userInitiated: false  // State restoration, not user-initiated
+                        userInitiated: false,  // State restoration, not user-initiated
+                        preferSegmented: true
                     )
                 }
             } catch {
@@ -1968,6 +2285,7 @@ class DeviceControlViewModel: ObservableObject {
         do {
             // Check if we have a persisted gradient that will be restored
             let hasPersistedGradient = gradientStops(for: device.id)?.isEmpty == false
+            let transitionMs = resolvedTransitionMs(for: updatedDevice, fallbackSeconds: directBrightnessTransitionSeconds)
             
             // Create state update based on changes
             // CRITICAL FIX: If we have a persisted gradient, DON'T send col field
@@ -1983,7 +2301,8 @@ class DeviceControlViewModel: ObservableObject {
                 stateUpdate = WLEDStateUpdate(
                     on: updatedDevice.isOn,
                     bri: updatedDevice.brightness,
-                    seg: nil  // Don't send segment color - let gradient restoration handle it
+                    seg: nil,  // Don't send segment color - let gradient restoration handle it
+                    transition: transitionMs
                 )
             } else {
                 // No persisted gradient - send solid color as before
@@ -1991,14 +2310,15 @@ class DeviceControlViewModel: ObservableObject {
                 stateUpdate = WLEDStateUpdate(
                 on: updatedDevice.isOn,
                 bri: updatedDevice.brightness,
-                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])]
+                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])],
+                transition: transitionMs
             )
             }
             
             _ = try await apiService.updateState(for: device, state: stateUpdate)
             
             // Send WebSocket update if connected (for faster local feedback)
-            if isRealTimeEnabled {
+            if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
                 webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
             }
             
@@ -2041,6 +2361,10 @@ class DeviceControlViewModel: ObservableObject {
     func startScanning() async {
         wledService.startDiscovery()
     }
+
+    func startPassiveDiscovery() {
+        wledService.startPassiveDiscovery()
+    }
     
     func stopScanning() async {
         wledService.stopDiscovery()
@@ -2048,6 +2372,14 @@ class DeviceControlViewModel: ObservableObject {
     
     func addDeviceByIP(_ ipAddress: String) {
         wledService.addDeviceByIP(ipAddress)
+    }
+
+    func enableActiveHealthChecksIfNeeded() {
+        guard !allowActiveHealthChecks else { return }
+        allowActiveHealthChecks = true
+        Task { @MainActor in
+            await performInitialDeviceStatusCheck()
+        }
     }
     
     func refreshDevices() async {
@@ -2065,7 +2397,7 @@ class DeviceControlViewModel: ObservableObject {
         while index < devices.count {
             await withTaskGroup(of: Void.self) { group in
                 for d in devices[index..<min(index+limit, devices.count)] {
-                    group.addTask { [weak self] in
+                    group.addTask { @MainActor [weak self] in
                         await self?.refreshDeviceState(d)
                     }
                 }
@@ -2080,9 +2412,14 @@ class DeviceControlViewModel: ObservableObject {
         if !isIPInCurrentSubnets(device.ipAddress) { return }
         do {
             let response = try await apiService.getState(for: device)
+            let ledCount = response.info.leds.count
+            if ledCount > 0 {
+                deviceLedCounts[device.id] = ledCount
+            }
             
             // Detect and cache capabilities using CapabilityDetector
-            if let seglc = response.info.leds.seglc {
+            let seglc = response.info.leds.seglc ?? fallbackSeglc(from: response.info.leds, state: response.state)
+            if let seglc {
                 let capabilities = await capabilityDetector.detect(deviceId: device.id, seglc: seglc)
                 // Cache locally for synchronous access from MainActor
                 await MainActor.run {
@@ -2095,6 +2432,7 @@ class DeviceControlViewModel: ObservableObject {
             await MainActor.run {
                 if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                     var updatedDevice = self.devices[index]
+                    updatedDevice.state = response.state
                     updatedDevice.brightness = response.state.brightness
                     updatedDevice.isOn = response.state.isOn
                     updatedDevice.isOnline = true
@@ -2113,29 +2451,17 @@ class DeviceControlViewModel: ObservableObject {
                     
                     // Only update color if device is NOT under user control AND gradient wasn't just applied
                     if !isUnderControl && !gradientJustApplied {
-                    // Update color if available
-                    if let segment = response.state.segments.first {
-                        // Check if segment has CCT (white temperature)
-                        if let normalized = segment.cctNormalized {
+                        if let segment = response.state.segments.first {
+                            let segmentId = segment.id ?? 0
+                            let effectState = self.effectStates[device.id]?[segmentId]
+                            let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
+                            let normalized = segment.cctNormalized
                             updatedDevice.temperature = normalized
-                        } else if let colors = segment.colors,
-                               let firstColor = colors.first,
-                               firstColor.count >= 3 {
-                                // Check for active effect or CCT before updating color
-                                let segmentId = segment.id ?? 0
-                                let effectState = self.effectStates[device.id]?[segmentId]
-                                let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
-                                let hasActiveCCT = updatedDevice.temperature != nil && updatedDevice.temperature! > 0
-                                
-                                // Only update color if no active effect or CCT
-                                if !hasActiveEffect && !hasActiveCCT {
-                            updatedDevice.currentColor = Color(
-                                        .sRGB,
-                                red: Double(firstColor[0]) / 255.0,
-                                green: Double(firstColor[1]) / 255.0,
-                                blue: Double(firstColor[2]) / 255.0
-                            )
-                        }
+
+                            if let normalized, !hasActiveEffect {
+                                updatedDevice.currentColor = Color.color(fromCCTTemperature: normalized)
+                            } else if let color = derivedColor(from: segment), !hasActiveEffect {
+                                updatedDevice.currentColor = color
                             }
                         }
                     } else {
@@ -2183,27 +2509,17 @@ class DeviceControlViewModel: ObservableObject {
             
             // Update persistence
             var persistDevice = device
+            persistDevice.state = response.state
             persistDevice.brightness = response.state.brightness
             persistDevice.isOn = response.state.isOn
             persistDevice.isOnline = true
             persistDevice.lastSeen = Date()
             
-            if let segment = response.state.segments.first,
-               let colors = segment.colors,
-               let firstColor = colors.first,
-               firstColor.count >= 3 {
-                // CRITICAL: Explicitly use .sRGB color space to prevent color mismatches on wide-gamut displays
-                // WLED sends sRGB colors, so we must use .sRGB to ensure correct color representation
-                persistDevice.currentColor = Color(
-                    .sRGB,
-                    red: Double(firstColor[0]) / 255.0,
-                    green: Double(firstColor[1]) / 255.0,
-                    blue: Double(firstColor[2]) / 255.0
-                )
-            }
-
-            if let normalized = response.state.segments.first?.cctNormalized {
-                persistDevice.temperature = normalized
+            if let segment = response.state.segments.first {
+                if let color = derivedColor(from: segment) {
+                    persistDevice.currentColor = color
+                }
+                persistDevice.temperature = segment.cctNormalized
             }
             
             await coreDataManager.saveDevice(persistDevice)
@@ -2221,20 +2537,36 @@ class DeviceControlViewModel: ObservableObject {
     // MARK: - Capability Helpers
     func supportsCCT(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
         // Use local cache for synchronous access from MainActor
-        guard let capabilities = deviceCapabilities[device.id],
-              let segmentCap = capabilities.capabilities(for: segmentId) else {
-            return false // Fallback if not yet detected
+        if let capabilities = deviceCapabilities[device.id],
+           let segmentCap = capabilities.capabilities(for: segmentId) {
+            return segmentCap.supportsCCT
         }
-        return segmentCap.supportsCCT
+        if device.temperature != nil {
+            return true
+        }
+        if let segments = device.state?.segments,
+           segments.contains(where: { $0.cct != nil }) {
+            return true
+        }
+        return false
     }
     
     func supportsWhite(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
         // Use local cache for synchronous access from MainActor
-        guard let capabilities = deviceCapabilities[device.id],
-              let segmentCap = capabilities.capabilities(for: segmentId) else {
-            return false // Fallback if not yet detected
+        if let capabilities = deviceCapabilities[device.id],
+           let segmentCap = capabilities.capabilities(for: segmentId) {
+            return segmentCap.supportsWhite
         }
-        return segmentCap.supportsWhite
+        if let segments = device.state?.segments {
+            let hasWhite = segments.contains { segment in
+                guard let colors = segment.colors else { return false }
+                return colors.contains { $0.count >= 4 }
+            }
+            if hasWhite {
+                return true
+            }
+        }
+        return false
     }
     
     func supportsRGB(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
@@ -2290,8 +2622,8 @@ class DeviceControlViewModel: ObservableObject {
             if metadata.isSoundReactive {
                 return DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
             }
-            let supportsGradient = metadata.supportsPalette || metadata.colorSlotCount >= 2
-            return supportsGradient || DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
+            let supportsColors = metadata.colorSlotCount >= 1
+            return supportsColors || DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
         }
         let list = filtered.isEmpty ? DeviceControlViewModel.fallbackGradientFriendlyEffects : filtered
         return list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -2306,9 +2638,15 @@ class DeviceControlViewModel: ObservableObject {
         _ effectId: Int,
         with gradient: LEDGradient,
         segmentId: Int = 0,
-        device: WLEDDevice
+        device: WLEDDevice,
+        userInitiated: Bool = true
     ) async {
-        await cancelActiveTransitionIfNeeded(for: device)
+        if userInitiated {
+            await cancelActiveRun(for: device, releaseRealtimeOverride: false, force: true)
+            markUserInteraction(device.id)
+        } else {
+            await cancelActiveTransitionIfNeeded(for: device)
+        }
         await colorPipeline.cancelUploads(for: device.id)
         
         // CRITICAL: Determine if we need to release realtime override atomically
@@ -2318,7 +2656,6 @@ class DeviceControlViewModel: ObservableObject {
         let isComingFromGradient = !currentState.isEnabled || currentState.effectId == 0
         let needsRealtimeRelease = isComingFromGradient
         
-        markUserInteraction(device.id)
         if lastGradientBeforeEffect[device.id] == nil {
             let baseline = gradientStops(for: device.id) ?? [
                 GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
@@ -2374,7 +2711,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         
         let slotCount = min(DeviceControlViewModel.maxEffectColorSlots,
-                            max(2, metadata.colorSlotCount))
+                            max(1, metadata.colorSlotCount))
         let colorArray = DeviceControlViewModel.colors(for: gradient, slotCount: slotCount)
         #if DEBUG
         os_log("[Effects] Applying effect %{public}@ (id %d) with %d colors to device %{public}@", metadata.name, effectId, colorArray.count, device.name)
@@ -2401,7 +2738,8 @@ class DeviceControlViewModel: ObservableObject {
         
         // CRITICAL: Apply effect with colors, brightness, and realtime release atomically
         // Include lor: 0 in the same call if needed to prevent flash
-        await applyEffectState(state, to: currentDevice, segmentId: segmentId, colors: colorArray, turnOn: true, releaseRealtime: needsRealtimeRelease)
+        let useFullStrip = true
+        await applyEffectState(state, to: currentDevice, segmentId: segmentId, colors: colorArray, turnOn: true, releaseRealtime: needsRealtimeRelease, fullStrip: useFullStrip)
         logEffectApplication(effectId: effectId, device: device, colors: colorArray)
     }
     
@@ -2418,6 +2756,88 @@ class DeviceControlViewModel: ObservableObject {
         segmentCCTFormats[device.id]?[segmentId] ?? false
     }
 
+    func cctKelvinRange(for device: WLEDDevice) -> ClosedRange<Int> {
+        cctKelvinRanges[device.id] ?? (defaultCCTKelvinMin...defaultCCTKelvinMax)
+    }
+
+    private func kelvinValue(for device: WLEDDevice, normalized: Double) -> Int {
+        let range = cctKelvinRange(for: device)
+        let clamped = min(max(normalized, 0.0), 1.0)
+        let span = Double(range.upperBound - range.lowerBound)
+        return Int(round(Double(range.lowerBound) + clamped * span))
+    }
+
+    func temperatureStopsUseCCT(for device: WLEDDevice) -> Bool {
+        UserDefaults.standard.bool(forKey: temperatureStopsCCTKeyPrefix + device.id)
+    }
+
+    func setTemperatureStopsUseCCT(_ enabled: Bool, for device: WLEDDevice) {
+        UserDefaults.standard.set(enabled, forKey: temperatureStopsCCTKeyPrefix + device.id)
+    }
+
+    private func refreshLEDPreferencesIfNeeded(for device: WLEDDevice, force: Bool = false) async {
+        guard !isPlaceholderDevice(device), device.isOnline else { return }
+        let now = Date()
+        if !force, let lastFetch = ledPreferencesLastFetched[device.id],
+           now.timeIntervalSince(lastFetch) < ledPreferencesRefreshInterval {
+            return
+        }
+        ledPreferencesLastFetched[device.id] = now
+
+        do {
+            let config = try await apiService.getLEDConfiguration(for: device)
+            let mode = AutoWhiteMode(rawValue: config.autoWhiteMode) ?? .none
+            if let minKelvin = config.cctKelvinMin,
+               let maxKelvin = config.cctKelvinMax,
+               minKelvin < maxKelvin {
+                cctKelvinRanges[device.id] = minKelvin...maxKelvin
+            } else {
+                cctKelvinRanges.removeValue(forKey: device.id)
+            }
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].autoWhiteMode = mode
+                }
+            }
+            var updated = devices.first(where: { $0.id == device.id }) ?? device
+            updated.autoWhiteMode = mode
+            await coreDataManager.saveDevice(updated)
+        } catch {
+            // Ignore LED preference fetch failures to avoid blocking discovery.
+        }
+    }
+
+    private func fallbackSeglc(from leds: LedInfo, state: WLEDState) -> [Int]? {
+        if let lc = leds.lc {
+            return [lc]
+        }
+        var flags = 0
+        if leds.rgbw == true || leds.wv == true {
+            flags |= 0b010
+        }
+        if leds.cct == true {
+            flags |= 0b100
+        }
+        if flags == 0 {
+            let hasWhite = state.segments.contains { segment in
+                guard let colors = segment.colors else { return false }
+                return colors.contains { $0.count >= 4 }
+            }
+            let hasCct = state.segments.contains { $0.cct != nil }
+            if hasWhite {
+                flags |= 0b010
+            }
+            if hasCct {
+                flags |= 0b100
+            }
+        }
+        if flags == 0 {
+            return nil
+        }
+        flags |= 0b001
+        return [flags]
+    }
+
     func setEffect(for device: WLEDDevice, segmentId: Int = 0, effectId: Int) async {
         await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
@@ -2426,7 +2846,8 @@ class DeviceControlViewModel: ObservableObject {
         state.paletteId = nil // ensure palette reset for color-slot effects
         state.isEnabled = true
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: true)
+        let useFullStrip = true
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: true, fullStrip: useFullStrip)
     }
     
     /// Disable effects for a device/segment (set fx: 0)
@@ -2453,93 +2874,26 @@ class DeviceControlViewModel: ObservableObject {
         state.isEnabled = false
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
         
-        // CRITICAL: Restore gradient colors ATOMICALLY with effect disable to prevent color flash
-        // According to WLED API docs, we must include fx: 0 in the same API call as colors
-        // For per-LED gradients, we include fx: 0 in the first chunk's segment
-        if let persistedStops = gradientStops(for: device.id), !persistedStops.isEmpty {
-            let ledCount = currentDevice.state?.segments.first(where: { $0.id == segmentId })?.len 
-                ?? currentDevice.state?.segments.first?.len 
-                ?? 120
-            
-            // Prepare gradient colors first
-            let sortedStops = persistedStops.sorted { $0.position < $1.position }
-            let gradient = LEDGradient(stops: sortedStops, interpolation: .linear)
-            let frame = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: gradient.interpolation)
-            
-            // CRITICAL: Include fx: 0 in the first chunk of per-LED upload atomically
-            // This combines colors, brightness, and effect disable in ONE API call
-            // Per WLED API: segment can include fx, pal, frz along with per-LED colors (i field)
-            await colorPipeline.cancelUploads(for: device.id)
-            
-            // Build per-LED upload bodies with fx: 0 in first chunk
-            let bodies = WLEDAPIService.buildSegmentPixelBodies(
-                segmentId: segmentId,
-                startIndex: 0,
-                hexColors: frame,
-                cct: nil,
-                chunkSize: nil,
-                on: nil,  // Don't change power state
-                brightness: currentBrightness
-            )
-            
-            // CRITICAL: Disable effect FIRST with a simple segment update that includes the first gradient color
-            // This prevents WLED from showing a default color (blue) before the gradient is applied
-            // We use the first color from the gradient as a "preview" to prevent flash
-            let firstColorHex = frame.first ?? "000000"
-            // Convert hex string to RGB array
-            let firstColorRGB: [Int] = {
-                let hex = firstColorHex.uppercased()
-                var rgb: [Int] = [0, 0, 0]
-                if hex.count == 6 {
-                    let r = Int(hex.prefix(2), radix: 16) ?? 0
-                    let g = Int(hex.dropFirst(2).prefix(2), radix: 16) ?? 0
-                    let b = Int(hex.suffix(2), radix: 16) ?? 0
-                    rgb = [r, g, b]
-                }
-                return rgb
-            }()
-            let previewSegment = SegmentUpdate(
-                id: segmentId,
-                bri: currentBrightness,
-                col: [[firstColorRGB[0], firstColorRGB[1], firstColorRGB[2]]],  // First gradient color
-                fx: 0,  // Disable effect
-                pal: 0,  // Clear palette
-                frz: false  // Unfreeze
-            )
-            let previewUpdate = WLEDStateUpdate(seg: [previewSegment])
-            _ = try? await apiService.updateState(for: currentDevice, state: previewUpdate)
-        
-            // CRITICAL: Immediately send the full per-LED gradient without delay
-            // The effect is already disabled, so this just updates the colors
-            for body in bodies {
-                _ = try? await apiService.postRawState(for: currentDevice, body: body)
-            }
-            
-            // Update local state
-            latestGradientStops[device.id] = sortedStops
-            persistLatestGradient(sortedStops, for: device.id)
-        } else {
-            // Fallback: Use current color if no persisted gradient exists
-            let stops = [
+        let restoreStops = gradientStops(for: device.id)
+        let stops = (restoreStops?.isEmpty == false) ? restoreStops! : [
             GradientStop(position: 0.0, hexColor: device.currentColor.toHex()),
             GradientStop(position: 1.0, hexColor: device.currentColor.toHex())
         ]
-            updateEffectGradient(LEDGradient(stops: stops, interpolation: .linear), for: device)
-        latestEffectGradientStops[device.id] = stops
-            
-            // For fallback, disable effect with brightness and single color atomically
-            let singleColor = device.currentColor.toRGBArray()
-            let segmentUpdate = SegmentUpdate(
-                id: segmentId,
-                bri: currentBrightness,
-                col: [[singleColor[0], singleColor[1], singleColor[2]]],  // Include color atomically
-                fx: 0,
-                pal: 0,
-                frz: false
-            )
-            let stateUpdate = WLEDStateUpdate(seg: [segmentUpdate])
-            _ = try? await apiService.updateState(for: currentDevice, state: stateUpdate)
-        }
+        let restoreInterpolation = effectGradientStops(for: device.id)?.isEmpty == false
+            ? LEDGradient(stops: effectGradientStops(for: device.id)!).interpolation
+            : LEDGradient(stops: stops).interpolation
+        await applyGradientStopsAcrossStrip(
+            currentDevice,
+            stops: stops,
+            ledCount: totalLEDCount(for: currentDevice),
+            disableActiveEffect: true,
+            segmentId: 0,
+            interpolation: restoreInterpolation,
+            brightness: currentBrightness,
+            on: currentDevice.isOn,
+            userInitiated: false,
+            preferSegmented: true
+        )
         
         lastGradientBeforeEffect.removeValue(forKey: device.id)
         
@@ -2554,7 +2908,8 @@ class DeviceControlViewModel: ObservableObject {
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.speed = max(0, min(255, speed))
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId)
+        let useFullStrip = true
+        await applyEffectState(state, to: device, segmentId: segmentId, fullStrip: useFullStrip)
     }
     
     func updateEffectIntensity(for device: WLEDDevice, segmentId: Int = 0, intensity: Int) async {
@@ -2563,7 +2918,8 @@ class DeviceControlViewModel: ObservableObject {
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.intensity = max(0, min(255, intensity))
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId)
+        let useFullStrip = true
+        await applyEffectState(state, to: device, segmentId: segmentId, fullStrip: useFullStrip)
     }
     
     func updateEffectPalette(for device: WLEDDevice, segmentId: Int = 0, paletteId: Int) async {
@@ -2572,7 +2928,8 @@ class DeviceControlViewModel: ObservableObject {
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.paletteId = max(0, paletteId)  // Only set palette when explicitly requested (no colors)
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
-        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil)
+        let useFullStrip = true
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil, fullStrip: useFullStrip)
     }
     
     private func updateEffectStateCache(_ state: DeviceEffectState, deviceId: String, segmentId: Int) {
@@ -2581,46 +2938,146 @@ class DeviceControlViewModel: ObservableObject {
         effectStates[deviceId] = segmentStates
     }
     
-    private func applyEffectState(_ state: DeviceEffectState, to device: WLEDDevice, segmentId: Int, colors: [[Int]]? = nil, turnOn: Bool? = nil, releaseRealtime: Bool = false) async {
+    private func applyEffectState(
+        _ state: DeviceEffectState,
+        to device: WLEDDevice,
+        segmentId: Int,
+        colors: [[Int]]? = nil,
+        turnOn: Bool? = nil,
+        releaseRealtime: Bool = false,
+        fullStrip: Bool = false
+    ) async {
         do {
+            let currentDevice = devices.first(where: { $0.id == device.id }) ?? device
             #if DEBUG
             os_log("[Effects] Sending fx=%d speed=%d intensity=%d palette=%@ turnOn=%@ colors=%@ to device %{public}@ segment %d", log: OSLog.effects, type: .debug, state.effectId, state.speed, state.intensity, String(describing: state.paletteId), String(describing: turnOn), String(describing: colors), device.name, segmentId)
             #endif
             
-            let responseState = try await apiService.setEffect(
-                state.effectId,
-                forSegment: segmentId,
-                speed: state.speed,
-                intensity: state.intensity,
-                palette: state.paletteId,
-                colors: colors,
-                device: device,
-                turnOn: turnOn,
-                releaseRealtime: releaseRealtime  // Include realtime release atomically
-            )
+            let effectivePalette: Int? = colors != nil ? nil : state.paletteId
+            let deviceBrightness: Int?
+            if turnOn == true {
+                let fallback = lastBrightnessBeforeOff[device.id] ?? 128
+                deviceBrightness = currentDevice.brightness > 0 ? currentDevice.brightness : fallback
+            } else if currentDevice.brightness > 0 {
+                deviceBrightness = currentDevice.brightness
+            } else {
+                deviceBrightness = nil
+            }
+            let responseState: WLEDState
+            if fullStrip {
+                let totalLEDs = totalLEDCount(for: currentDevice)
+                let useAppSegments = appManagedSegmentDevices.contains(device.id)
+                    || appManagedSegmentLayouts[device.id] != nil
+                var updates: [SegmentUpdate] = []
+                if useAppSegments {
+                    let count = segmentCount(for: totalLEDs)
+                    let ranges = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
+                    let includeLayout: Bool
+                    if let layout = appManagedSegmentLayouts[device.id], layout.count == count {
+                        includeLayout = false
+                    } else {
+                        let segments = currentDevice.state?.segments ?? []
+                        includeLayout = !segmentsMatchLayout(segments, layout: ranges.map { SegmentBounds(start: $0.start, stop: $0.stop) }, segmentCount: count)
+                    }
+                    for (idx, range) in ranges.enumerated() {
+                        updates.append(
+                            SegmentUpdate(
+                                id: idx,
+                                start: includeLayout ? range.start : nil,
+                                stop: includeLayout ? range.stop : nil,
+                                on: turnOn,
+                                col: colors,
+                                cct: nil,
+                                fx: state.effectId,
+                                sx: state.speed,
+                                ix: state.intensity,
+                                pal: effectivePalette,
+                                frz: false
+                            )
+                        )
+                    }
+                } else {
+                    updates.append(
+                        SegmentUpdate(
+                            id: segmentId,
+                            start: 0,
+                            stop: totalLEDs,
+                            len: totalLEDs,
+                            on: turnOn,
+                            col: colors,
+                            cct: nil,
+                            fx: state.effectId,
+                            sx: state.speed,
+                            ix: state.intensity,
+                            pal: effectivePalette,
+                            frz: false
+                        )
+                    )
+                }
+                let managedIds = Set(updates.compactMap { $0.id })
+                var knownIds = Set<Int>()
+                if let segments = currentDevice.state?.segments, !segments.isEmpty {
+                    for (index, segment) in segments.enumerated() {
+                        knownIds.insert(segment.id ?? index)
+                    }
+                } else if let layout = appManagedSegmentLayouts[device.id], !layout.isEmpty {
+                    knownIds = Set(0..<layout.count)
+                } else if useAppSegments {
+                    knownIds = Set(0..<segmentCount(for: totalLEDs))
+                }
+                for id in knownIds where !managedIds.contains(id) {
+                    updates.append(SegmentUpdate(id: id, on: false, fx: 0, pal: 0))
+                }
+                let stateUpdate = WLEDStateUpdate(
+                    on: turnOn,
+                    bri: deviceBrightness,
+                    seg: updates,
+                    lor: releaseRealtime ? 0 : nil
+                )
+                let response = try await apiService.updateState(for: device, state: stateUpdate)
+                responseState = response.state
+            } else {
+                let response = try await apiService.setEffect(
+                    state.effectId,
+                    forSegment: segmentId,
+                    speed: state.speed,
+                    intensity: state.intensity,
+                    palette: state.paletteId,
+                    colors: colors,
+                    device: device,
+                    turnOn: turnOn,
+                    releaseRealtime: releaseRealtime  // Include realtime release atomically
+                )
+                responseState = response
+            }
             
             #if DEBUG
             print("[Effects][API] Initial response has \(responseState.segments.count) segment(s)")
             #endif
             
             // WLED's POST /json/state might not return segments, so fetch state separately to verify
+            // Skip verification fetch for full-strip effects to reduce timeouts/lag.
             var verifiedSegments = responseState.segments
             if responseState.segments.isEmpty {
-                #if DEBUG
-                print("[Effects][API] Response missing segments, fetching fresh state to verify...")
-                #endif
-                do {
-                    // Small delay to let WLED process the update
-                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    let verifiedResponse = try await apiService.getState(for: device)
-                    verifiedSegments = verifiedResponse.state.segments
+                if fullStrip {
+                    verifiedSegments = []
+                } else {
                     #if DEBUG
-                    print("[Effects][API] Fresh state fetch returned \(verifiedSegments.count) segment(s)")
+                    print("[Effects][API] Response missing segments, fetching fresh state to verify...")
                     #endif
-                } catch {
-                    #if DEBUG
-                    print("[Effects][WARNING] Failed to fetch fresh state for verification: \(error.localizedDescription)")
-                    #endif
+                    do {
+                        // Small delay to let WLED process the update
+                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                        let verifiedResponse = try await apiService.getState(for: device)
+                        verifiedSegments = verifiedResponse.state.segments
+                        #if DEBUG
+                        print("[Effects][API] Fresh state fetch returned \(verifiedSegments.count) segment(s)")
+                        #endif
+                    } catch {
+                        #if DEBUG
+                        print("[Effects][WARNING] Failed to fetch fresh state for verification: \(error.localizedDescription)")
+                        #endif
+                    }
                 }
             }
             
@@ -2641,7 +3098,7 @@ class DeviceControlViewModel: ObservableObject {
                 } else {
                     print("[Effects][WARNING] ⚠️ WLED response missing fx field!")
                 }
-            } else {
+            } else if !fullStrip {
                 print("[Effects][ERROR] ❌ No segment found in verified state!")
             }
             #endif
@@ -2658,6 +3115,9 @@ class DeviceControlViewModel: ObservableObject {
                         isEnabled: (seg.fx ?? 0) != 0
                     )
                     segmentStates[segmentId] = confirmedState
+                    effectStates[device.id] = segmentStates
+                } else if fullStrip {
+                    segmentStates[segmentId] = state
                     effectStates[device.id] = segmentStates
                 }
             }
@@ -2680,20 +3140,9 @@ class DeviceControlViewModel: ObservableObject {
             updatedDevice.state = state
             updatedDevice.lastSeen = Date()
             if let segment = state.segments.first {
-                if let colors = segment.colors,
-                   let firstColor = colors.first,
-                   firstColor.count >= 3 {
-                    // CRITICAL: Explicitly use .sRGB color space to prevent color mismatches on wide-gamut displays
-                    // WLED sends sRGB colors, so we must use .sRGB to ensure correct color representation
-                    updatedDevice.currentColor = Color(
-                        .sRGB,
-                        red: Double(firstColor[0]) / 255.0,
-                        green: Double(firstColor[1]) / 255.0,
-                        blue: Double(firstColor[2]) / 255.0
-                    )
-                }
-                if let normalized = segment.cctNormalized {
-                    updatedDevice.temperature = normalized
+                updatedDevice.temperature = segment.cctNormalized
+                if let color = derivedColor(from: segment) {
+                    updatedDevice.currentColor = color
                 }
             }
             devices[index] = updatedDevice
@@ -2947,18 +3396,35 @@ class DeviceControlViewModel: ObservableObject {
         return isSolidColor
     }
     
-    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil, transitionDurationSeconds: Double? = nil, userInitiated: Bool = true) async {
+    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, stopWhiteLevels: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil, transitionDurationSeconds: Double? = nil, forceNoPerCallTransition: Bool = false, releaseRealtimeOverride: Bool = true, userInitiated: Bool = true, preferSegmented: Bool = false) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
         if userInitiated, activeRunStatus[device.id] != nil {
-            await cancelActiveRun(for: device)
+            await cancelActiveRun(for: device, force: true)
         }
         
-        // CRITICAL: Mark user interaction BEFORE applying gradient to prevent WebSocket overwrites
-        // This ensures WebSocket updates are blocked during gradient application
-        markUserInteraction(device.id)
+        // CRITICAL: Mark user interaction only for user-driven updates
+        if userInitiated {
+            markUserInteraction(device.id)
+        }
         
-        // Only disable effect if explicitly requested (default false to avoid interference with normal gradient application)
-        if disableActiveEffect, currentEffectState(for: device, segmentId: segmentId).isEnabled {
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        latestGradientStops[device.id] = sortedStops
+        persistLatestGradient(sortedStops, for: device.id)
+        let allowPerLed = allowPerLedFallback(for: device)
+        
+        // OPTIMIZATION: Solid color detection (single stop OR all stops have same color)
+        // Use segment col field for solid colors (more efficient than per-LED upload)
+        // This matches WLED's recommended approach for solid colors
+        let firstColorHex = sortedStops.first?.hexColor
+        let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == firstColorHex }
+        let willUseSegmented = isSolidColor
+            ? (preferSegmented || appManagedSegmentDevices.contains(device.id))
+            : (preferSegmented || transitionDurationSeconds != nil || !allowPerLed || appManagedSegmentDevices.contains(device.id))
+
+        // Only disable effects ahead of time for per-LED uploads.
+        if disableActiveEffect,
+           currentEffectState(for: device, segmentId: segmentId).isEnabled,
+           !willUseSegmented {
             // Simply set effect to 0 without the full disableEffect flow that causes interference
             var state = currentEffectState(for: device, segmentId: segmentId)
             state.effectId = 0
@@ -2970,16 +3436,42 @@ class DeviceControlViewModel: ObservableObject {
             let stateUpdate = WLEDStateUpdate(seg: [segmentUpdate])
             _ = try? await apiService.updateState(for: device, state: stateUpdate)
         }
-        
-        let sortedStops = stops.sorted { $0.position < $1.position }
-        latestGradientStops[device.id] = sortedStops
-        persistLatestGradient(sortedStops, for: device.id)
-        
-        // OPTIMIZATION: Solid color detection (single stop OR all stops have same color)
-        // Use segment col field for solid colors (more efficient than per-LED upload)
-        // This matches WLED's recommended approach for solid colors
-        let firstColorHex = sortedStops.first?.hexColor
-        let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == firstColorHex }
+
+        if isSolidColor, willUseSegmented {
+            let gradient = LEDGradient(stops: sortedStops, interpolation: interpolation)
+            await applySegmentedGradient(
+                device,
+                gradient: gradient,
+                stopTemperatures: stopTemperatures,
+                stopWhiteLevels: stopWhiteLevels,
+                brightness: brightness,
+                on: on,
+                transitionDurationSeconds: transitionDurationSeconds,
+                forceNoPerCallTransition: forceNoPerCallTransition,
+                releaseRealtimeOverride: releaseRealtimeOverride,
+                segmentId: segmentId,
+                disableActiveEffect: disableActiveEffect
+            )
+            return
+        }
+
+        if !isSolidColor, willUseSegmented {
+            let gradient = LEDGradient(stops: sortedStops, interpolation: interpolation)
+            await applySegmentedGradient(
+                device,
+                gradient: gradient,
+                stopTemperatures: stopTemperatures,
+                stopWhiteLevels: stopWhiteLevels,
+                brightness: brightness,
+                on: on,
+                transitionDurationSeconds: transitionDurationSeconds,
+                forceNoPerCallTransition: forceNoPerCallTransition,
+                releaseRealtimeOverride: releaseRealtimeOverride,
+                segmentId: segmentId,
+                disableActiveEffect: disableActiveEffect
+            )
+            return
+        }
         
         if isSolidColor, let singleStop = sortedStops.first {
             // Check if this is truly a solid color (no temperature variation)
@@ -2997,24 +3489,92 @@ class DeviceControlViewModel: ObservableObject {
             // Use segment col field for single solid color (more efficient)
             let rgb = Color(hex: singleStop.hexColor).toRGBArray()
             var cct: Int? = nil
+            var normalizedTemp: Double? = nil
+            var whiteLevel: Int? = nil
+            let supportsWhiteValue = supportsWhite(for: device, segmentId: segmentId)
+            let allowManualWhite = supportsWhiteValue && UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+            let allowCCTTemperatureStops = temperatureStopsUseCCT(for: device)
+            let supportsCCTDevice = supportsCCT(for: device, segmentId: segmentId)
             
             // Handle CCT if provided and consistent
             if hasTemperature, allStopsHaveSameTemp, let temp = stopTemperatures?[singleStop.id] {
-                cct = Int(round(temp * 255.0))
+                normalizedTemp = temp
+                let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: segmentId)
+                cct = usesKelvin
+                    ? kelvinValue(for: device, normalized: temp)
+                    : Segment.eightBitValue(fromNormalized: temp)
             }
+
+            if allowManualWhite, let whiteMap = stopWhiteLevels, !whiteMap.isEmpty {
+                let whiteValues = sortedStops.compactMap { whiteMap[$0.id] }
+                let allStopsHaveSameWhite = whiteValues.count == sortedStops.count &&
+                    (whiteValues.count <= 1 || whiteValues.allSatisfy { abs($0 - whiteValues[0]) < 0.001 })
+                if allStopsHaveSameWhite, let level = whiteMap[singleStop.id] {
+                    whiteLevel = Int(round(max(0.0, min(1.0, level)) * 255.0))
+                } else if isSolidColor, let level = whiteMap[singleStop.id] {
+                    whiteLevel = Int(round(max(0.0, min(1.0, level)) * 255.0))
+                }
+            }
+            let useCCTOnly = allowCCTTemperatureStops && supportsCCTDevice && cct != nil && whiteLevel == nil
+
+            #if DEBUG
+            if let cct, useCCTOnly {
+                print("🔵 [Gradient] Solid color uses CCT-only update (segmentId=\(segmentId), cct=\(cct))")
+            } else if let cct {
+                if let whiteLevel {
+                    print("🔵 [Gradient] Solid color uses CCT + white update (segmentId=\(segmentId), cct=\(cct), white=\(whiteLevel))")
+                } else {
+                    print("🔵 [Gradient] Solid color uses CCT-only update (segmentId=\(segmentId), cct=\(cct))")
+                }
+            } else if let whiteLevel {
+                print("🔵 [Gradient] Solid color uses RGBW update (segmentId=\(segmentId), white=\(whiteLevel))")
+            }
+            #endif
             
             // Build segment update with col field (WLED's efficient solid color method)
-            let segment = SegmentUpdate(
-                id: segmentId,
-                col: [[rgb[0], rgb[1], rgb[2]]],
-                cct: cct,
-                fx: disableActiveEffect ? 0 : nil
-            )
+            let segment: SegmentUpdate
+            if let cctValue = cct, useCCTOnly {
+                let derivedRGB = normalizedTemp.map { rgbArrayForTemperature($0) } ?? [0, 0, 0]
+                let clearColor = supportsWhiteValue ? (derivedRGB + [0]) : derivedRGB
+                let clearSegment = SegmentUpdate(
+                    id: segmentId,
+                    col: [clearColor],
+                    fx: disableActiveEffect ? 0 : nil
+                )
+                let clearState = WLEDStateUpdate(
+                    on: on,
+                    bri: brightness,
+                    seg: [clearSegment],
+                    transition: nil
+                )
+                do {
+                    _ = try await apiService.updateState(for: device, state: clearState)
+                } catch {
+                    #if DEBUG
+                    print("⚠️ Failed to clear RGB before CCT update for device \(device.name): \(error)")
+                    #endif
+                }
+                segment = SegmentUpdate(
+                    id: segmentId,
+                    cct: cctValue,
+                    fx: disableActiveEffect ? 0 : nil
+                )
+            } else {
+                var colorArray = [rgb[0], rgb[1], rgb[2]]
+                if let whiteLevel {
+                    colorArray.append(whiteLevel)
+                }
+                segment = SegmentUpdate(
+                    id: segmentId,
+                    col: [colorArray],
+                    fx: disableActiveEffect ? 0 : nil
+                )
+            }
             // CRITICAL: Include on and brightness in state update if provided
             // This ensures power-on/brightness is applied ALONG WITH color in SAME API call
             // This prevents WLED from showing restored colors before color is applied
             // Include transition time if provided (for solid color transitions)
-            let transitionMs = transitionDurationSeconds.map { Int($0 * 1000) }
+            let transitionMs = forceNoPerCallTransition ? nil : clampedTransitionMs(for: transitionDurationSeconds)
             let stateUpdate = WLEDStateUpdate(
                 on: on,  // CRITICAL: Include power state if provided (for power-on operations)
                 bri: brightness,  // Set brightness if provided
@@ -3026,7 +3586,7 @@ class DeviceControlViewModel: ObservableObject {
                 _ = try await apiService.updateState(for: device, state: stateUpdate)
                 
                 // Send WebSocket update if connected
-                if isRealTimeEnabled {
+                if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
                     webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
                 }
                 
@@ -3037,10 +3597,19 @@ class DeviceControlViewModel: ObservableObject {
                     // Optimistically update the device's current color, brightness, and power state
                     // CRITICAL: Update all state that was included in the API call to keep UI in sync
                     if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                        self.devices[index].currentColor = Color(hex: singleStop.hexColor)
-                        if let cctValue = cct {
-                            // Update temperature if CCT was set
-                            self.devices[index].temperature = Double(cctValue) / 255.0
+                        if let temp = normalizedTemp {
+                            if let whiteLevel {
+                                self.devices[index].currentColor = Color.color(fromRGBArray: rgb, white: whiteLevel)
+                            } else {
+                                self.devices[index].currentColor = Color.color(fromCCTTemperature: temp)
+                            }
+                            self.devices[index].temperature = temp
+                        } else if let whiteLevel {
+                            self.devices[index].currentColor = Color.color(fromRGBArray: rgb, white: whiteLevel)
+                            self.devices[index].temperature = nil
+                        } else {
+                            self.devices[index].currentColor = Color(hex: singleStop.hexColor)
+                            self.devices[index].temperature = nil
                         }
                         // CRITICAL: Update brightness if provided in API call
                         if let brightnessValue = brightness {
@@ -3058,19 +3627,26 @@ class DeviceControlViewModel: ObservableObject {
                 #endif
                 return  // Early return - more efficient than per-LED upload
             } catch {
-                // Fallback to per-LED upload if segment col fails
+                // Fallback to per-LED upload only if allowed
                 #if DEBUG
-                print("⚠️ [Gradient] Segment col update failed, falling back to per-LED upload: \(error)")
+                print("⚠️ [Gradient] Segment col update failed: \(error)")
                 #endif
-                // Continue to per-LED upload below
+                if !allowPerLed {
+                    return
+                }
             }
+        }
+        
+        if !allowPerLed {
+            return
         }
         
         // Multi-stop gradient: Use per-LED colors (required for gradient blending)
         // CRITICAL: Use sortedStops consistently (not unsorted stops) for code consistency and correctness
         // This ensures gradient colors are sampled in the correct order matching temperature collection
         let gradient = LEDGradient(stops: sortedStops, interpolation: interpolation)
-        let frame = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: interpolation)
+        let resolvedLedCount = appManagedSegmentDevices.contains(device.id) ? totalLEDCount(for: device) : max(1, ledCount)
+        let frame = GradientSampler.sample(gradient, ledCount: resolvedLedCount, interpolation: interpolation)
         var intent = ColorIntent(deviceId: device.id, mode: .perLED)
         intent.segmentId = segmentId
         intent.perLEDHex = frame
@@ -3086,23 +3662,28 @@ class DeviceControlViewModel: ObservableObject {
         }
         
         // Check if all stops have the same temperature, send CCT if they do
-        if let tempMap = stopTemperatures, !tempMap.isEmpty {
+        let allowCCTTemperatureStops = temperatureStopsUseCCT(for: device)
+        if allowCCTTemperatureStops, let tempMap = stopTemperatures, !tempMap.isEmpty {
             // CRITICAL: Use sortedStops consistently (not unsorted stops) for code consistency and correctness
             // This ensures temperatures are collected in the same order as stops are processed
             // Collect all temperatures from stops that have them
             let temperatures = sortedStops.compactMap { stop -> Double? in
                 tempMap[stop.id]
             }
-            
-            // If all stops with temperatures share the same temperature, use it
-            if !temperatures.isEmpty {
+            if temperatures.count == sortedStops.count, !temperatures.isEmpty {
+                // If all stops with temperatures share the same temperature, use it
                 let firstTemp = temperatures[0]
                 let allSame = temperatures.allSatisfy { abs($0 - firstTemp) < 0.001 }
                 
                 if allSame {
                     // Convert temperature (0.0-1.0) to CCT (0-255)
-                    let cct = Int(round(firstTemp * 255.0))
-                    intent.cct = cct
+                    let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: segmentId)
+                    let cct = usesKelvin
+                        ? kelvinValue(for: device, normalized: firstTemp)
+                        : Segment.eightBitValue(fromNormalized: firstTemp)
+                    if supportsCCT(for: device, segmentId: segmentId) {
+                        intent.cct = cct
+                    }
                 }
             }
         }
@@ -3117,19 +3698,1043 @@ class DeviceControlViewModel: ObservableObject {
             if let index = self.devices.firstIndex(where: { $0.id == device.id }),
                let firstStop = sortedStops.first {
                 self.devices[index].currentColor = Color(hex: firstStop.hexColor)
+                self.devices[index].temperature = nil
             }
         }
     }
 
-    func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 60, aBrightness: Int? = nil, bBrightness: Int? = nil) async {
-        await transitionRunner.start(
+    private func segmentCount(for ledCount: Int) -> Int {
+        guard ledCount > 0 else { return 0 }
+        let capped = min(defaultSegmentCount, maxSegmentCount)
+        return min(ledCount, max(2, capped))
+    }
+
+    private func segmentStops(totalLEDs: Int, segmentCount: Int) -> [(start: Int, stop: Int)] {
+        guard totalLEDs > 0, segmentCount > 0 else { return [] }
+        let base = totalLEDs / segmentCount
+        let remainder = totalLEDs % segmentCount
+        var stops: [(Int, Int)] = []
+        var cursor = 0
+        for idx in 0..<segmentCount {
+            let extra = idx < remainder ? 1 : 0
+            let len = max(1, base + extra)
+            let start = cursor
+            let stop = min(totalLEDs, cursor + len)
+            stops.append((start: start, stop: stop))
+            cursor = stop
+        }
+        return stops
+    }
+
+    private func segmentsMatchLayout(
+        _ segments: [Segment],
+        layout: [SegmentBounds],
+        segmentCount: Int
+    ) -> Bool {
+        guard segmentCount > 0, segments.count >= segmentCount else { return false }
+        for idx in 0..<segmentCount {
+            let target = layout[idx]
+            let segment = segments.first(where: { ($0.id ?? idx) == idx }) ?? segments[idx]
+            if segment.start != target.start || segment.stop != target.stop {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func segmentColors(for gradient: LEDGradient, count: Int) -> [[Int]] {
+        guard count > 0 else { return [] }
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let denom = Double(count)
+        return (0..<count).map { idx in
+            let t = (Double(idx) + 0.5) / denom
+            let color = GradientSampler.sampleColor(at: t, stops: sortedStops, interpolation: gradient.interpolation)
+            return color.toRGBArray()
+        }
+    }
+
+    private func segmentWhiteLevels(
+        for gradient: LEDGradient,
+        count: Int,
+        stopWhiteLevels: [UUID: Double]?
+    ) -> [Int]? {
+        guard count > 0, let stopWhiteLevels, !stopWhiteLevels.isEmpty else { return nil }
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let values = sortedStops.map { stopWhiteLevels[$0.id] ?? 0.0 }
+        let hasWhite = values.contains { abs($0) > 0.0001 }
+        guard hasWhite else { return nil }
+        let denom = Double(count)
+        return (0..<count).map { idx in
+            let t = (Double(idx) + 0.5) / denom
+            let value = interpolateScalar(stops: sortedStops, values: values, t: t, interpolation: gradient.interpolation)
+            let clamped = max(0.0, min(1.0, value))
+            return Int(round(clamped * 255.0))
+        }
+    }
+
+    private func boundingStopIndices(for t: Double, stops: [GradientStop]) -> (Int, Int)? {
+        guard !stops.isEmpty else { return nil }
+        let clampedT = max(0.0, min(1.0, t))
+        if let first = stops.first, clampedT <= first.position {
+            return (0, 0)
+        }
+        if let last = stops.last, clampedT >= last.position {
+            let lastIndex = max(0, stops.count - 1)
+            return (lastIndex, lastIndex)
+        }
+        for idx in 0..<(stops.count - 1) {
+            if clampedT >= stops[idx].position && clampedT <= stops[idx + 1].position {
+                return (idx, idx + 1)
+            }
+        }
+        return nil
+    }
+
+    private func segmentTemperatures(
+        for gradient: LEDGradient,
+        count: Int,
+        stopTemperatures: [UUID: Double]?
+    ) -> [Double?] {
+        guard count > 0, let stopTemperatures, !stopTemperatures.isEmpty else {
+            return Array(repeating: nil, count: count)
+        }
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let denom = Double(count)
+        return (0..<count).map { idx in
+            let t = (Double(idx) + 0.5) / denom
+            guard let (aIndex, bIndex) = boundingStopIndices(for: t, stops: sortedStops) else {
+                return nil
+            }
+            let aStop = sortedStops[aIndex]
+            let bStop = sortedStops[bIndex]
+            guard let aTemp = stopTemperatures[aStop.id], let bTemp = stopTemperatures[bStop.id] else {
+                return nil
+            }
+            if aIndex == bIndex {
+                return aTemp
+            }
+            let span = max(0.000001, bStop.position - aStop.position)
+            let rawLocalT = (t - aStop.position) / span
+            let easedLocalT = applyInterpolation(rawLocalT, mode: gradient.interpolation)
+            return aTemp + (bTemp - aTemp) * easedLocalT
+        }
+    }
+
+    private func rgbArrayForTemperature(_ temperature: Double) -> [Int] {
+        let color = Color.color(fromCCTTemperature: temperature)
+        return color.toRGBArray()
+    }
+
+    private func interpolateScalar(
+        stops: [GradientStop],
+        values: [Double],
+        t: Double,
+        interpolation: GradientInterpolation
+    ) -> Double {
+        let clampedT = max(0.0, min(1.0, t))
+        guard let first = stops.first, let last = stops.last else { return 0.0 }
+        if clampedT <= first.position { return values.first ?? 0.0 }
+        if clampedT >= last.position { return values.last ?? 0.0 }
+        var aIndex = 0
+        var bIndex = 1
+        for idx in 0..<(stops.count - 1) {
+            if clampedT >= stops[idx].position && clampedT <= stops[idx + 1].position {
+                aIndex = idx
+                bIndex = idx + 1
+                break
+            }
+        }
+        let a = stops[aIndex]
+        let b = stops[bIndex]
+        let span = max(0.000001, b.position - a.position)
+        let rawLocalT = (clampedT - a.position) / span
+        let easedLocalT = applyInterpolation(rawLocalT, mode: interpolation)
+        let aValue = values[aIndex]
+        let bValue = values[bIndex]
+        return aValue + (bValue - aValue) * easedLocalT
+    }
+
+    private func applyInterpolation(_ t: Double, mode: GradientInterpolation) -> Double {
+        let clampedT = max(0.0, min(1.0, t))
+        switch mode {
+        case .linear:
+            return clampedT
+        case .easeInOut:
+            if clampedT < 0.5 {
+                return 4 * clampedT * clampedT * clampedT
+            }
+            return 1 - pow(-2 * clampedT + 2, 3) / 2
+        case .easeIn:
+            return clampedT * clampedT * clampedT
+        case .easeOut:
+            return 1 - pow(1 - clampedT, 3)
+        case .cubic:
+            let t2 = clampedT * clampedT
+            let t3 = t2 * clampedT
+            return 3 * t2 - 2 * t3
+        }
+    }
+
+    private func uniformCCTIfAvailable(
+        device: WLEDDevice,
+        stops: [GradientStop],
+        stopTemperatures: [UUID: Double]?
+    ) -> Int? {
+        guard let temps = stopTemperatures, !temps.isEmpty else { return nil }
+        if supportsCCT(for: device, segmentId: 0) == false {
+            return nil
+        }
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        let values = sortedStops.compactMap { temps[$0.id] }
+        guard values.count == sortedStops.count, !values.isEmpty else { return nil }
+        let first = values[0]
+        guard values.allSatisfy({ abs($0 - first) < 0.001 }) else { return nil }
+        let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: 0)
+        return usesKelvin
+            ? kelvinValue(for: device, normalized: first)
+            : Segment.eightBitValue(fromNormalized: first)
+    }
+
+    private func uniformNormalizedTemperatureIfAvailable(
+        stops: [GradientStop],
+        stopTemperatures: [UUID: Double]?
+    ) -> Double? {
+        guard let temps = stopTemperatures, !temps.isEmpty else { return nil }
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        let values = sortedStops.compactMap { temps[$0.id] }
+        guard values.count == sortedStops.count, !values.isEmpty else { return nil }
+        let first = values[0]
+        guard values.allSatisfy({ abs($0 - first) < 0.001 }) else { return nil }
+        return first
+    }
+
+    private func uniformWhiteLevelIfAvailable(
+        stops: [GradientStop],
+        stopWhiteLevels: [UUID: Double]?
+    ) -> Int? {
+        guard let levels = stopWhiteLevels, !levels.isEmpty else { return nil }
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        let values = sortedStops.compactMap { levels[$0.id] }
+        guard values.count == sortedStops.count, !values.isEmpty else { return nil }
+        let first = values[0]
+        guard values.allSatisfy({ abs($0 - first) < 0.001 }) else { return nil }
+        return Int(round(max(0.0, min(1.0, first)) * 255.0))
+    }
+
+    private func derivedColor(from segment: Segment) -> Color? {
+        if let normalized = segment.cctNormalized {
+            return Color.color(fromCCTTemperature: normalized)
+        }
+        if let colors = segment.colors,
+           let first = colors.first,
+           first.count >= 3 {
+            return Color.color(fromRGBArray: first)
+        }
+        return nil
+    }
+
+    private func applySegmentedGradient(
+        _ device: WLEDDevice,
+        gradient: LEDGradient,
+        stopTemperatures: [UUID: Double]?,
+        stopWhiteLevels: [UUID: Double]?,
+        brightness: Int?,
+        on: Bool?,
+        transitionDurationSeconds: Double?,
+        forceNoPerCallTransition: Bool,
+        releaseRealtimeOverride: Bool,
+        segmentId: Int,
+        disableActiveEffect: Bool
+    ) async {
+        appManagedSegmentDevices.insert(device.id)
+
+        let totalLEDs = totalLEDCount(for: device)
+        guard totalLEDs > 0 else { return }
+        let count = segmentCount(for: totalLEDs)
+        let stops = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
+        let layout = stops.map { SegmentBounds(start: $0.start, stop: $0.stop) }
+        let existingLayout = appManagedSegmentLayouts[device.id]
+        let deviceSegments = device.state?.segments ?? []
+        let layoutMatches = segmentsMatchLayout(deviceSegments, layout: layout, segmentCount: count)
+        let includeLayout = existingLayout == nil || existingLayout != layout || !layoutMatches
+        let colors = segmentColors(for: gradient, count: count)
+        let allowCCTTemperatureStops = temperatureStopsUseCCT(for: device)
+        let supportsCCTDevice = supportsCCT(for: device, segmentId: 0)
+        let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: 0)
+        let segmentTemperatures = (allowCCTTemperatureStops && supportsCCTDevice)
+            ? segmentTemperatures(for: gradient, count: count, stopTemperatures: stopTemperatures)
+            : nil
+        let supportsWhiteValue = supportsWhite(for: device, segmentId: 0)
+        let allowManualWhite = supportsWhiteValue && UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+        let manualWhiteLevels = allowManualWhite
+            ? segmentWhiteLevels(for: gradient, count: count, stopWhiteLevels: stopWhiteLevels)
+            : nil
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == sortedStops.first?.hexColor }
+        let uniformTemp = uniformNormalizedTemperatureIfAvailable(stops: gradient.stops, stopTemperatures: stopTemperatures)
+        let effectiveTemp = uniformTemp ?? (isSolidColor ? stopTemperatures?.values.first : nil)
+        let uniformWhite = allowManualWhite
+            ? uniformWhiteLevelIfAvailable(stops: gradient.stops, stopWhiteLevels: stopWhiteLevels)
+            : nil
+        let effectiveWhite: Int? = {
+            if let uniformWhite {
+                return uniformWhite
+            }
+            if allowManualWhite, isSolidColor, let first = stopWhiteLevels?.values.first {
+                return Int(round(max(0.0, min(1.0, first)) * 255.0))
+            }
+            return nil
+        }()
+        let useWhite = manualWhiteLevels != nil || effectiveWhite != nil
+        let hasCCTSegments = segmentTemperatures?.contains { $0 != nil } ?? false
+        let effectReset = disableActiveEffect ? 0 : nil
+
+        #if DEBUG
+        if hasCCTSegments {
+            print("🔵 [Segmented] Using mixed CCT/RGB updates")
+        } else if useWhite, let effectiveWhite {
+            print("🔵 [Segmented] Using RGBW update (white=\(effectiveWhite))")
+        }
+        #endif
+
+        var updates: [SegmentUpdate] = []
+        updates.reserveCapacity(stops.count)
+        for (idx, range) in stops.enumerated() {
+            let rgb = colors[idx]
+            var col: [[Int]]? = [[rgb[0], rgb[1], rgb[2]]]
+            var cctValue: Int? = nil
+            let whiteValue = manualWhiteLevels?[idx] ?? effectiveWhite
+            if let temp = segmentTemperatures?[idx],
+               allowCCTTemperatureStops,
+               supportsCCTDevice,
+               whiteValue == nil {
+                col = nil
+                cctValue = usesKelvin
+                    ? kelvinValue(for: device, normalized: temp)
+                    : Segment.eightBitValue(fromNormalized: temp)
+            } else if useWhite, let whiteValue {
+                col = [[rgb[0], rgb[1], rgb[2], whiteValue]]
+            }
+            updates.append(
+                SegmentUpdate(
+                    id: idx,
+                    start: includeLayout ? range.start : nil,
+                    stop: includeLayout ? range.stop : nil,
+                    on: on,
+                    col: col,
+                    cct: cctValue,
+                    fx: effectReset,
+                    pal: effectReset
+                )
+            )
+        }
+
+        let cctOnlySegments = updates.filter { $0.cct != nil && $0.col == nil }
+        if !cctOnlySegments.isEmpty {
+            var clearUpdates: [SegmentUpdate] = []
+            clearUpdates.reserveCapacity(cctOnlySegments.count)
+            for segment in cctOnlySegments {
+                let derivedRGB: [Int]
+                if let id = segment.id,
+                   let temps = segmentTemperatures,
+                   id >= 0,
+                   id < temps.count,
+                   let temp = temps[id] {
+                    derivedRGB = rgbArrayForTemperature(temp)
+                } else {
+                    derivedRGB = [0, 0, 0]
+                }
+                let clearColor = supportsWhiteValue ? (derivedRGB + [0]) : derivedRGB
+                clearUpdates.append(
+                    SegmentUpdate(
+                        id: segment.id,
+                        start: segment.start,
+                        stop: segment.stop,
+                        on: on,
+                        col: [clearColor],
+                        fx: effectReset,
+                        pal: effectReset
+                    )
+                )
+            }
+            let clearState = WLEDStateUpdate(
+                on: on,
+                bri: brightness,
+                seg: clearUpdates,
+                transition: nil
+            )
+            do {
+                _ = try await apiService.updateState(for: device, state: clearState)
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to clear RGB before CCT update for device \(device.name): \(error)")
+                #endif
+            }
+        }
+
+        if let existingSegments = device.state?.segments, !existingSegments.isEmpty {
+            let managedIds = Set(0..<count)
+            for (index, segment) in existingSegments.enumerated() {
+                let existingId = segment.id ?? index
+                if !managedIds.contains(existingId) {
+                    updates.append(
+                        SegmentUpdate(
+                            id: existingId,
+                            on: false,
+                            fx: 0,
+                            pal: 0
+                        )
+                    )
+                }
+            }
+        }
+
+        if disableActiveEffect {
+            var segmentStates = effectStates[device.id] ?? [:]
+            let updateIds = Set(updates.compactMap { $0.id })
+            for id in updateIds {
+                let existing = segmentStates[id] ?? .default
+                segmentStates[id] = DeviceEffectState(
+                    effectId: 0,
+                    speed: existing.speed,
+                    intensity: existing.intensity,
+                    paletteId: nil,
+                    isEnabled: false
+                )
+            }
+            effectStates[device.id] = segmentStates
+        }
+
+        let transitionMs = forceNoPerCallTransition ? nil : clampedTransitionMs(for: transitionDurationSeconds)
+        let shouldReleaseRealtime = releaseRealtimeOverride && transitionDurationSeconds != nil && !forceNoPerCallTransition
+        let stateUpdate = WLEDStateUpdate(
+            on: on,
+            bri: brightness,
+            seg: updates,
+            transition: transitionMs,
+            lor: shouldReleaseRealtime ? 0 : nil
+        )
+
+        do {
+            _ = try await apiService.updateState(for: device, state: stateUpdate)
+            if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            }
+            await MainActor.run {
+                gradientApplicationTimes[device.id] = Date()
+                appManagedSegmentLayouts[device.id] = layout
+                let segmentStates: [Segment] = stops.enumerated().map { idx, range in
+                    let length = max(0, range.stop - range.start)
+                    return Segment(
+                        id: idx,
+                        start: range.start,
+                        stop: range.stop,
+                        len: length,
+                        grp: nil,
+                        spc: nil,
+                        ofs: nil,
+                        on: on,
+                        bri: nil,
+                        colors: nil,
+                        cct: nil,
+                        fx: effectReset,
+                        sx: nil,
+                        ix: nil,
+                        pal: nil,
+                        sel: nil,
+                        rev: nil,
+                        mi: nil,
+                        cln: nil,
+                        frz: nil
+                    )
+                }
+                if let index = devices.firstIndex(where: { $0.id == device.id }),
+                   let firstRGB = colors.first {
+                    let firstTemp = segmentTemperatures?.first ?? effectiveTemp
+                    let firstWhite = allowManualWhite ? (manualWhiteLevels?.first ?? effectiveWhite) : nil
+                    let firstUsesCCT = allowCCTTemperatureStops &&
+                        supportsCCTDevice &&
+                        segmentTemperatures?.first != nil &&
+                        firstWhite == nil
+                    if firstUsesCCT, let temp = firstTemp {
+                        devices[index].currentColor = Color.color(fromCCTTemperature: temp)
+                    } else if useWhite, let whiteValue = firstWhite {
+                        devices[index].currentColor = Color.color(fromRGBArray: firstRGB, white: whiteValue)
+                    } else {
+                        devices[index].currentColor = Color(
+                            red: Double(firstRGB[0]) / 255.0,
+                            green: Double(firstRGB[1]) / 255.0,
+                            blue: Double(firstRGB[2]) / 255.0
+                        )
+                    }
+                    devices[index].temperature = firstTemp
+                    if let bri = brightness {
+                        devices[index].brightness = bri
+                    }
+                    if let onValue = on {
+                        devices[index].isOn = onValue
+                    }
+                    if let state = devices[index].state {
+                        devices[index].state = WLEDState(
+                            brightness: state.brightness,
+                            isOn: state.isOn,
+                            segments: segmentStates,
+                            transitionDeciseconds: state.transitionDeciseconds,
+                            presetId: state.presetId,
+                            playlistId: state.playlistId
+                        )
+                    } else {
+                        devices[index].state = WLEDState(
+                            brightness: devices[index].brightness,
+                            isOn: devices[index].isOn,
+                            segments: segmentStates,
+                            transitionDeciseconds: nil,
+                            presetId: nil,
+                            playlistId: nil
+                        )
+                    }
+                }
+                deviceLedCounts[device.id] = totalLEDs
+            }
+        } catch {
+            #if DEBUG
+            print("⚠️ Failed segmented gradient update for device \(device.name): \(error)")
+            #endif
+        }
+    }
+
+    private func segmentedPresetState(
+        device: WLEDDevice,
+        gradient: LEDGradient,
+        brightness: Int,
+        on: Bool,
+        temperature: Double?,
+        whiteLevel: Double?
+    ) -> WLEDStateUpdate {
+        let totalLEDs = totalLEDCount(for: device)
+        let count = segmentCount(for: totalLEDs)
+        let stops = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
+        let colors = segmentColors(for: gradient, count: count)
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == sortedStops.first?.hexColor }
+        let allowCCTTemperatureStops = temperatureStopsUseCCT(for: device)
+        let supportsCCTDevice = supportsCCT(for: device, segmentId: 0)
+        let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: 0)
+        let cctValue: Int? = (isSolidColor && allowCCTTemperatureStops && supportsCCTDevice)
+            ? temperature.map { temp in
+                usesKelvin
+                    ? kelvinValue(for: device, normalized: temp)
+                    : Segment.eightBitValue(fromNormalized: temp)
+            }
+            : nil
+        let whiteValue = whiteLevel.map { Int(round(max(0.0, min(1.0, $0)) * 255.0)) }
+        let useCCTOnly = isSolidColor && cctValue != nil && whiteValue == nil
+
+        var updates: [SegmentUpdate] = []
+        for (idx, range) in stops.enumerated() {
+            let rgb = colors[idx]
+            var col: [[Int]]? = [[rgb[0], rgb[1], rgb[2]]]
+            if useCCTOnly {
+                col = nil
+            } else if let whiteValue {
+                col = [[rgb[0], rgb[1], rgb[2], whiteValue]]
+            }
+            updates.append(
+                SegmentUpdate(
+                    id: idx,
+                    start: range.start,
+                    stop: range.stop,
+                    on: on,
+                    col: col,
+                    cct: useCCTOnly ? cctValue : nil,
+                    fx: 0,
+                    pal: 0
+                )
+            )
+        }
+
+        return WLEDStateUpdate(
+            on: on,
+            bri: brightness,
+            seg: updates
+        )
+    }
+
+    private func availableIds(from maxId: Int, excluding used: Set<Int>, count: Int) -> [Int]? {
+        guard count > 0 else { return [] }
+        var results: [Int] = []
+        for id in stride(from: maxId, through: 1, by: -1) {
+            guard !used.contains(id) else { continue }
+            results.append(id)
+            if results.count == count {
+                break
+            }
+        }
+        return results.count == count ? results : nil
+    }
+
+    private func availablePlaylistId(excluding used: Set<Int>) -> Int? {
+        for id in stride(from: 250, through: 1, by: -1) {
+            if !used.contains(id) {
+                return id
+            }
+        }
+        return nil
+    }
+
+    private func savePresetWithRetry(_ request: WLEDPresetSaveRequest, device: WLEDDevice) async throws {
+        var lastError: Error?
+        for attempt in 1...presetSaveRetryAttempts {
+            do {
+                try await apiService.savePreset(request, to: device)
+                let delay = presetSaveDelayNanos * UInt64(attempt)
+                try? await Task.sleep(nanoseconds: delay)
+                return
+            } catch {
+                lastError = error
+                if attempt < presetSaveRetryAttempts {
+                    let delay = presetSaveDelayNanos * UInt64(attempt)
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+            }
+        }
+        throw lastError ?? WLEDAPIError.invalidResponse
+    }
+
+    private func verifyPresetIds(_ presetIds: [Int], device: WLEDDevice) async -> Bool {
+        for attempt in 1...presetVerifyRetryAttempts {
+            if let presets = try? await apiService.fetchPresets(for: device) {
+                let savedIds = Set(presets.map { $0.id })
+                if presetIds.allSatisfy({ savedIds.contains($0) }) {
+                    return true
+                }
+            }
+            if attempt < presetVerifyRetryAttempts {
+                let delay = presetVerifyDelayNanos * UInt64(attempt)
+                try? await Task.sleep(nanoseconds: delay)
+            }
+        }
+        return false
+    }
+
+    private func savePlaylistWithRetry(_ request: WLEDPlaylistSaveRequest, device: WLEDDevice) async throws {
+        var lastError: Error?
+        for attempt in 1...playlistSaveRetryAttempts {
+            do {
+                _ = try await apiService.savePlaylist(request, to: device)
+                let delay = playlistSaveDelayNanos * UInt64(attempt)
+                try? await Task.sleep(nanoseconds: delay)
+                return
+            } catch {
+                lastError = error
+                if attempt < playlistSaveRetryAttempts {
+                    let delay = playlistSaveDelayNanos * UInt64(attempt)
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+            }
+        }
+        throw lastError ?? WLEDAPIError.invalidResponse
+    }
+
+    private func verifyPlaylistId(_ playlistId: Int, device: WLEDDevice) async -> Bool {
+        if !(await apiService.isPlaylistStoreSupported(for: device)) {
+            if let presets = try? await apiService.fetchPresets(for: device) {
+                let savedIds = Set(presets.map { $0.id })
+                return savedIds.contains(playlistId)
+            }
+            return true
+        }
+        for attempt in 1...playlistVerifyRetryAttempts {
+            if let playlists = try? await apiService.fetchPlaylists(for: device),
+               playlists.contains(where: { $0.id == playlistId }) {
+                return true
+            }
+            if attempt < playlistVerifyRetryAttempts {
+                let delay = playlistVerifyDelayNanos * UInt64(attempt)
+                try? await Task.sleep(nanoseconds: delay)
+            }
+        }
+        return false
+    }
+
+    struct TransitionPlaylistResult {
+        let playlistId: Int
+        let stepPresetIds: [Int]
+    }
+
+    func createTransitionPlaylist(
+        device: WLEDDevice,
+        from: LEDGradient,
+        to: LEDGradient,
+        durationSeconds: Double,
+        startBrightness: Int,
+        endBrightness: Int,
+        persist: Bool = false,
+        label: String? = nil,
+        existingPlaylistId: Int? = nil,
+        existingStepPresetIds: [Int]? = nil,
+        startTemperature: Double? = nil,
+        endTemperature: Double? = nil,
+        startWhiteLevel: Double? = nil,
+        endWhiteLevel: Double? = nil
+    ) async -> TransitionPlaylistResult? {
+        let autoStepPrefix = persist ? "Automation Step " : "Auto Step "
+        let autoTransitionPrefix = persist ? "Automation Transition " : "Auto Transition "
+        var playlistStoreSupported = await apiService.isPlaylistStoreSupported(for: device)
+        var existingPlaylists: [WLEDPlaylist] = []
+        if playlistStoreSupported {
+            do {
+                existingPlaylists = try await apiService.fetchPlaylists(for: device)
+            } catch {
+                if !(await apiService.isPlaylistStoreSupported(for: device)) {
+                    playlistStoreSupported = false
+                    #if DEBUG
+                    print("⚠️ Playlist store unsupported for \(device.name); falling back to psave playlists.")
+                    #endif
+                } else {
+                    #if DEBUG
+                    print("⚠️ Playlist creation failed: unable to fetch playlists for \(device.name): \(error.localizedDescription)")
+                    #endif
+                    playlistUnsupportedDevices.insert(device.id)
+                    return nil
+                }
+            }
+        }
+        #if DEBUG
+        let storageMode = persist ? "persistent" : "temporary"
+        let playlistStorage = playlistStoreSupported ? "playlist-store" : "psave"
+        print("🔎 Playlist build for \(device.name): mode=2-preset, storage=\(storageMode), playlist=\(playlistStorage), duration=\(String(format: "%.1f", durationSeconds))s")
+        #endif
+
+        var existingPresets: [WLEDPreset]
+        do {
+            existingPresets = try await apiService.fetchPresets(for: device)
+        } catch {
+            let apiError = error as? WLEDAPIError
+            if !persist,
+               case .httpError(let statusCode) = apiError,
+               statusCode == 501 {
+                #if DEBUG
+                print("⚠️ Playlist creation warning: preset list unavailable for \(device.name); using empty preset set for auto IDs.")
+                #endif
+                existingPresets = []
+            } else {
+                #if DEBUG
+                print("⚠️ Playlist creation failed: unable to fetch presets for \(device.name): \(error.localizedDescription)")
+                #endif
+                return nil
+            }
+        }
+        var usedPresetIds = Set(existingPresets.map { $0.id })
+        var reusableStepPresetIds: [Int] = []
+        if let existingStepPresetIds, existingStepPresetIds.count == 2 {
+            reusableStepPresetIds = existingStepPresetIds
+            reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
+        }
+        var usedPlaylistIds: Set<Int>
+        if playlistStoreSupported {
+            usedPlaylistIds = Set(existingPlaylists.map { $0.id })
+        } else {
+            usedPlaylistIds = usedPresetIds
+        }
+        var resolvedPlaylistId: Int? = nil
+        if let existingPlaylistId, usedPlaylistIds.contains(existingPlaylistId) {
+            resolvedPlaylistId = existingPlaylistId
+            usedPlaylistIds.remove(existingPlaylistId)
+        }
+        if resolvedPlaylistId == nil {
+            var selectedId = availablePlaylistId(excluding: usedPlaylistIds)
+            if selectedId == nil && !persist {
+                if playlistStoreSupported {
+                    let autoPlaylistIds = existingPlaylists
+                        .filter { $0.name.hasPrefix(autoTransitionPrefix) }
+                        .map { $0.id }
+                    if !autoPlaylistIds.isEmpty {
+                        #if DEBUG
+                        print("🧹 Cleaning \(autoPlaylistIds.count) auto playlists to free slots for \(device.name).")
+                        #endif
+                        for listId in autoPlaylistIds {
+                            _ = try? await apiService.deletePlaylist(id: listId, device: device)
+                        }
+                        let refreshedPlaylists = (try? await apiService.fetchPlaylists(for: device)) ?? []
+                        usedPlaylistIds = Set(refreshedPlaylists.map { $0.id })
+                        selectedId = availablePlaylistId(excluding: usedPlaylistIds)
+                    }
+                } else {
+                    let autoTransitionIds = existingPresets
+                        .filter { $0.name.hasPrefix(autoTransitionPrefix) }
+                        .map { $0.id }
+                    if !autoTransitionIds.isEmpty {
+                        #if DEBUG
+                        print("🧹 Cleaning \(autoTransitionIds.count) auto transition presets to free slots for \(device.name).")
+                        #endif
+                        for presetId in autoTransitionIds {
+                            _ = try? await apiService.deletePreset(id: presetId, device: device)
+                        }
+                        existingPresets = (try? await apiService.fetchPresets(for: device)) ?? []
+                        usedPresetIds = Set(existingPresets.map { $0.id })
+                        reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
+                        usedPlaylistIds = usedPresetIds
+                        selectedId = availablePlaylistId(excluding: usedPlaylistIds)
+                    }
+                }
+            }
+            guard let resolvedId = selectedId else {
+                #if DEBUG
+                print("⚠️ Playlist creation failed: no available playlist IDs for \(device.name).")
+                #endif
+                return nil
+            }
+            resolvedPlaylistId = resolvedId
+        }
+        if let resolvedPlaylistId, !playlistStoreSupported {
+            usedPresetIds.insert(resolvedPlaylistId)
+        }
+
+        let needsStepIds = reusableStepPresetIds.count != 2
+        var allocatedPresetIds: [Int]? = nil
+        if needsStepIds {
+            allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: 2)
+            if allocatedPresetIds == nil && !persist {
+                let autoPresetIds = existingPresets.filter {
+                    $0.name.hasPrefix(autoStepPrefix)
+                }
+                    .map { $0.id }
+                if !autoPresetIds.isEmpty {
+                    #if DEBUG
+                    print("🧹 Cleaning \(autoPresetIds.count) auto presets to free slots for \(device.name).")
+                    #endif
+                    for presetId in autoPresetIds {
+                        _ = try? await apiService.deletePreset(id: presetId, device: device)
+                    }
+                    let refreshedPresets = (try? await apiService.fetchPresets(for: device)) ?? []
+                    usedPresetIds = Set(refreshedPresets.map { $0.id })
+                    reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
+                    allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: 2)
+                }
+            }
+        }
+
+        if needsStepIds, allocatedPresetIds == nil {
+            #if DEBUG
+            print("⚠️ Playlist creation failed: insufficient preset slots (2 needed) for \(device.name).")
+            #endif
+            return nil
+        }
+
+        var stepPresetIds = reusableStepPresetIds
+        if needsStepIds, let allocatedPresetIds {
+            stepPresetIds = Array(allocatedPresetIds.prefix(2))
+        }
+
+        guard let playlistId = resolvedPlaylistId, stepPresetIds.count == 2 else {
+            #if DEBUG
+            print("⚠️ Playlist creation failed: missing playlist or step presets for \(device.name).")
+            #endif
+            return nil
+        }
+
+        let shouldCleanupStepPresets = needsStepIds
+        func cleanupAllocatedStepPresets() async {
+            guard shouldCleanupStepPresets, !stepPresetIds.isEmpty else { return }
+            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: stepPresetIds)
+        }
+
+        let stepCount = stepPresetIds.count
+        let stepDenom = Double(max(1, stepCount - 1))
+        for (idx, presetId) in stepPresetIds.enumerated() {
+            let t = Double(idx) / stepDenom
+            let stops = interpolateStops(from: from, to: to, t: t)
+            let brightness = Int(round(Double(startBrightness) * (1.0 - t) + Double(endBrightness) * t))
+            let state = segmentedPresetState(
+                device: device,
+                gradient: LEDGradient(stops: stops, interpolation: to.interpolation),
+                brightness: brightness,
+                on: true,
+                temperature: idx == 0 ? startTemperature : endTemperature,
+                whiteLevel: idx == 0 ? startWhiteLevel : endWhiteLevel
+            )
+            let request = WLEDPresetSaveRequest(
+                id: presetId,
+                name: "Auto Step \(presetId)",
+                quickLoad: false,
+                state: state
+            )
+            do {
+                try await savePresetWithRetry(request, device: device)
+            } catch {
+                #if DEBUG
+                print("⚠️ Playlist creation failed: preset save error for \(device.name): \(error.localizedDescription)")
+                #endif
+                await cleanupAllocatedStepPresets()
+                return nil
+            }
+        }
+        // Verify presets exist before building playlist.
+        if !(await verifyPresetIds(stepPresetIds, device: device)) {
+            #if DEBUG
+            print("⚠️ Playlist creation failed: missing presets after save for \(device.name): \(stepPresetIds)")
+            #endif
+            await cleanupAllocatedStepPresets()
+            return nil
+        }
+
+        let transitionDeciseconds = min(maxWLEDTransitionDeciseconds, Int(durationSeconds * 10.0))
+        let durations = [1, 0]  // Use a non-zero hold for entry 1 for better device compatibility
+        let transitions = [transitionDeciseconds, 0]
+        let playlistName = label?.isEmpty == false ? label! : "\(autoTransitionPrefix)\(playlistId)"
+        let playlistRequest = WLEDPlaylistSaveRequest(
+            id: playlistId,
+            name: playlistName,
+            ps: stepPresetIds,
+            dur: durations,
+            transition: transitions,
+            repeat: nil
+        )
+
+        do {
+            try await savePlaylistWithRetry(playlistRequest, device: device)
+            #if DEBUG
+            if let playlists = try? await apiService.fetchPlaylists(for: device),
+               let saved = playlists.first(where: { $0.id == playlistId }) {
+                print("🔎 Playlist saved for \(device.name): id=\(saved.id), ps=\(saved.presets.count), dur=\(saved.duration.count), transition=\(saved.transition.count)")
+            }
+            #endif
+            if !(await verifyPlaylistId(playlistId, device: device)) {
+                #if DEBUG
+                print("⚠️ Playlist still missing after verification for \(device.name).")
+                #endif
+                playlistUnsupportedDevices.insert(device.id)
+                await cleanupAllocatedStepPresets()
+                return nil
+            }
+        } catch {
+            #if DEBUG
+            print("⚠️ Playlist creation failed: playlist save error for \(device.name): \(error.localizedDescription)")
+            #endif
+            await cleanupAllocatedStepPresets()
+            return nil
+        }
+
+        if !persist {
+            await MainActor.run {
+                temporaryPlaylistIds[device.id] = playlistId
+                temporaryPresetIds[device.id] = stepPresetIds
+            }
+        }
+        return TransitionPlaylistResult(playlistId: playlistId, stepPresetIds: stepPresetIds)
+    }
+
+    func saveTransitionPresetToDevice(_ preset: TransitionPreset, device: WLEDDevice) async -> TransitionPlaylistResult? {
+        let result = await createTransitionPlaylist(
             device: device,
-            from: from,
-            to: to,
-            durationSec: durationSec,
-            fps: fps,
-            segmentId: 0,
-            onProgress: nil
+            from: preset.gradientA,
+            to: preset.gradientB,
+            durationSeconds: preset.durationSec,
+            startBrightness: preset.brightnessA,
+            endBrightness: preset.brightnessB,
+            persist: true,
+            label: preset.name,
+            existingPlaylistId: preset.wledPlaylistId,
+            existingStepPresetIds: preset.wledStepPresetIds,
+            startTemperature: preset.temperatureA,
+            endTemperature: preset.temperatureB,
+            startWhiteLevel: preset.whiteLevelA,
+            endWhiteLevel: preset.whiteLevelB
+        )
+
+        guard let result else { return nil }
+
+        if let existingPlaylistId = preset.wledPlaylistId, existingPlaylistId != result.playlistId {
+            await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [existingPlaylistId])
+        }
+        if let existingStepPresetIds = preset.wledStepPresetIds,
+           Set(existingStepPresetIds) != Set(result.stepPresetIds) {
+            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: existingStepPresetIds)
+        }
+
+        return result
+    }
+
+    func startPlaylist(device: WLEDDevice, playlistId: Int) async -> Bool {
+        do {
+            let state = try await apiService.applyPlaylist(playlistId, to: device, releaseRealtime: true)
+            #if DEBUG
+            print("✅ Playlist started for \(device.name): playlistId=\(playlistId)")
+            print("🔎 Playlist state for \(device.name): pl=\(state.playlistId.map(String.init) ?? "nil"), ps=\(state.presetId.map(String.init) ?? "nil"), tt=\(state.transitionDeciseconds.map(String.init) ?? "nil")")
+            #endif
+            let immediateMatch = state.playlistId == playlistId || state.presetId == playlistId
+            if immediateMatch {
+                return true
+            }
+
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if let fetched = try? await apiService.getState(for: device) {
+                let fetchedState = fetched.state
+                #if DEBUG
+                print("🔎 Playlist fetched state for \(device.name): pl=\(fetchedState.playlistId.map(String.init) ?? "nil"), ps=\(fetchedState.presetId.map(String.init) ?? "nil"), tt=\(fetchedState.transitionDeciseconds.map(String.init) ?? "nil")")
+                #endif
+                if fetchedState.playlistId == playlistId || fetchedState.presetId == playlistId {
+                    return true
+                }
+            } else {
+                #if DEBUG
+                print("⚠️ Failed to fetch state after playlist start for \(device.name)")
+                #endif
+            }
+
+            return false
+        } catch {
+            #if DEBUG
+            print("⚠️ Failed to start playlist \(playlistId) for \(device.name): \(error.localizedDescription)")
+            #endif
+            return false
+        }
+    }
+
+    func cleanupTransitionPlaylist(device: WLEDDevice) async {
+        let playlistId = temporaryPlaylistIds[device.id]
+        let presetIds = temporaryPresetIds[device.id] ?? []
+        guard playlistId != nil || !presetIds.isEmpty else { return }
+
+        if let playlistId {
+            await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [playlistId])
+        }
+        if !presetIds.isEmpty {
+            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: presetIds)
+        }
+        temporaryPlaylistIds.removeValue(forKey: device.id)
+        temporaryPresetIds.removeValue(forKey: device.id)
+    }
+
+    private func interpolateStops(from: LEDGradient, to: LEDGradient, t: Double) -> [GradientStop] {
+        let a = from.stops.sorted { $0.position < $1.position }
+        let b = to.stops.sorted { $0.position < $1.position }
+        let count = max(a.count, b.count, 2)
+        let denom = Double(max(1, count - 1))
+        let positions = (0..<count).map { Double($0) / denom }
+        return positions.map { pos in
+            let ca = GradientSampler.sampleColor(at: pos, stops: a, interpolation: from.interpolation).toRGBArray()
+            let cb = GradientSampler.sampleColor(at: pos, stops: b, interpolation: to.interpolation).toRGBArray()
+            let r = Int(round(Double(ca[0]) * (1.0 - t) + Double(cb[0]) * t))
+            let g = Int(round(Double(ca[1]) * (1.0 - t) + Double(cb[1]) * t))
+            let b = Int(round(Double(ca[2]) * (1.0 - t) + Double(cb[2]) * t))
+            let mixed = Color(red: Double(r) / 255.0, green: Double(g) / 255.0, blue: Double(b) / 255.0)
+            return GradientStop(position: pos, hexColor: mixed.toHex())
+        }
+    }
+
+    func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 60, aBrightness: Int? = nil, bBrightness: Int? = nil) async {
+        let startBrightness = aBrightness ?? device.brightness
+        let endBrightness = bBrightness ?? device.brightness
+        await runAutomationTransition(
+            for: device,
+            startGradient: from,
+            startBrightness: startBrightness,
+            endGradient: to,
+            endBrightness: endBrightness,
+            durationSeconds: durationSec,
+            segmentId: 0
         )
     }
 
@@ -3210,15 +4815,19 @@ class DeviceControlViewModel: ObservableObject {
         latestGradientStops[device.id] = sortedStops
         persistLatestGradient(sortedStops, for: device.id)
         // Apply gradient with optional brightness override
-        let ledCount = device.state?.segments.first?.len ?? 120
-        let frame = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: gradient.interpolation)
-        var intent = ColorIntent(deviceId: device.id, mode: .perLED)
-        intent.segmentId = 0
-        intent.perLEDHex = frame
-        if let brightness = aBrightness {
-            intent.brightness = brightness
-        }
-        await colorPipeline.apply(intent, to: device)
+        let ledCount = totalLEDCount(for: device)
+        await applyGradientStopsAcrossStrip(
+            device,
+            stops: sortedStops,
+            ledCount: ledCount,
+            disableActiveEffect: true,
+            segmentId: 0,
+            interpolation: gradient.interpolation,
+            brightness: aBrightness,
+            on: true,
+            userInitiated: false,
+            preferSegmented: true
+        )
     }
     
     func applyGradientB(_ gradient: LEDGradient, bBrightness: Int?, to device: WLEDDevice) async {
@@ -3233,7 +4842,20 @@ class DeviceControlViewModel: ObservableObject {
     
     /// Cancel any active run (transition/automation) for a device
     /// This is called automatically on manual user input, or can be called manually via UI
-    func cancelActiveRun(for device: WLEDDevice) async {
+    func cancelActiveRun(for device: WLEDDevice, releaseRealtimeOverride: Bool = true, force: Bool = false) async {
+        if !force,
+           let lockUntil = transitionCancelLockUntil[device.id],
+           Date() < lockUntil,
+           let run = activeRunStatus[device.id],
+           run.kind == .transition {
+            #if DEBUG
+            print("⏳ Skipping cancel for \(device.name) (transition lock active)")
+            #endif
+            return
+        }
+        let runId = await MainActor.run {
+            activeRunStatus[device.id]?.id
+        }
         // Check if there's a native WLED transition running that needs to be stopped
         let nativeTransitionInfo = await MainActor.run {
             activeRunStatus[device.id]?.nativeTransition
@@ -3269,14 +4891,18 @@ class DeviceControlViewModel: ObservableObject {
         await cancelActiveTransitionIfNeeded(for: device)
         
         // Release real-time override if needed
-        await apiService.releaseRealtimeOverride(for: device)
+        if releaseRealtimeOverride {
+            await apiService.releaseRealtimeOverride(for: device)
+        }
         
         // Clear active run status
         await MainActor.run {
             activeRunStatus.removeValue(forKey: device.id)
             // Clear watchdog
             runWatchdogs.removeValue(forKey: device.id)
+            transitionCancelLockUntil.removeValue(forKey: device.id)
         }
+        await restoreTransitionDefaultIfNeeded(for: device, runId: runId)
         
         #if DEBUG
         print("🛑 Cancelled active run for device \(device.name)")
@@ -3289,7 +4915,7 @@ class DeviceControlViewModel: ObservableObject {
     private func startWatchdogTaskIfNeeded() {
         guard watchdogTask == nil || watchdogTask?.isCancelled == true else { return }
         
-        watchdogTask = Task { [weak self] in
+        watchdogTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             while !Task.isCancelled {
                 await self.checkForStalledRuns()
@@ -3318,17 +4944,30 @@ class DeviceControlViewModel: ObservableObject {
                 continue
             }
             
-            // State-based completion detection for native transitions
-            if let expectedEnd = runStatus.expectedEnd, now >= expectedEnd {
-                // Native transition should have completed - clear status if runId still matches
-                if runStatus.id == activeRunStatus[deviceId]?.id {
+            // State-based progress for native/device-side transitions.
+            if let expectedEnd = runStatus.expectedEnd {
+                let total = expectedEnd.timeIntervalSince(runStatus.startDate)
+                if total > 0 {
+                    let elapsed = now.timeIntervalSince(runStatus.startDate)
+                    let progress = min(1.0, max(0.0, elapsed / total))
+                    if runStatus.progress != progress, runStatus.id == activeRunStatus[deviceId]?.id {
+                        activeRunStatus[deviceId]?.progress = progress
+                        runWatchdogs[deviceId]?.lastProgressAt = now
+                        runWatchdogs[deviceId]?.lastProgressValue = progress
+                    }
+                }
+                if now >= expectedEnd, runStatus.id == activeRunStatus[deviceId]?.id {
                     #if DEBUG
-                    print("✅ Watchdog: Native transition completed for device \(deviceId)")
+                    if runStatus.nativeTransition != nil {
+                        print("✅ Watchdog: Native transition completed for device \(deviceId)")
+                    } else {
+                        print("✅ Watchdog: Timed transition completed for device \(deviceId)")
+                    }
                     #endif
                     activeRunStatus.removeValue(forKey: deviceId)
                     runWatchdogs.removeValue(forKey: deviceId)
-                    continue
                 }
+                continue
             }
             
             // Check if progress has stalled (only for client-side transitions with progress callbacks)
@@ -3408,31 +5047,40 @@ class DeviceControlViewModel: ObservableObject {
         await colorPipeline.apply(intent, to: device)
     }
     
-    func startTransition(from: LEDGradient, aBrightness: Int, to: LEDGradient, bBrightness: Int, durationSec: Double, device: WLEDDevice, fps: Int = 60) async {
-        // Use existing transitionRunner with brightness tweening
-        if currentEffectState(for: device, segmentId: 0).isEnabled {
-            await disableEffect(for: device, segmentId: 0)
-        }
-        await colorPipeline.cancelUploads(for: device.id)
-        await apiService.releaseRealtimeOverride(for: device)
-        await transitionRunner.cancel(deviceId: device.id)
+    func startTransition(
+        from: LEDGradient,
+        aBrightness: Int,
+        to: LEDGradient,
+        bBrightness: Int,
+        durationSec: Double,
+        device: WLEDDevice,
+        startStopTemperatures: [UUID: Double]? = nil,
+        startStopWhiteLevels: [UUID: Double]? = nil,
+        endStopTemperatures: [UUID: Double]? = nil,
+        endStopWhiteLevels: [UUID: Double]? = nil
+    ) async {
+        await cancelActiveTransitionIfNeeded(for: device)
         setTransitionDuration(durationSec, for: device.id)
-        await transitionRunner.start(
-            device: device,
-            from: from,
-            to: to,
-            durationSec: durationSec,
-            fps: fps,
-            segmentId: 0,
-            aBrightness: aBrightness,
-            bBrightness: bBrightness,
-            onProgress: nil
-        )
+        Task { @MainActor [weak self] in
+            await self?.runAutomationTransition(
+                for: device,
+                startGradient: from,
+                startBrightness: aBrightness,
+                endGradient: to,
+                endBrightness: bBrightness,
+                durationSeconds: durationSec,
+                startStopTemperatures: startStopTemperatures,
+                startStopWhiteLevels: startStopWhiteLevels,
+                endStopTemperatures: endStopTemperatures,
+                endStopWhiteLevels: endStopWhiteLevels,
+                segmentId: 0
+            )
+        }
     }
     
     func stopTransitionAndRevertToA(device: WLEDDevice) async {
         // Cancel runner, apply gradient A
-        await transitionRunner.cancel(deviceId: device.id)
+        await cancelActiveRun(for: device, force: true)
         // Note: caller should apply gradient A after this
     }
 
@@ -3512,8 +5160,8 @@ class DeviceControlViewModel: ObservableObject {
                 bBrightness: scene.bBrightness
             )
         } else {
-            let ledCount = device.state?.segments.first?.len ?? 120
-            await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops, ledCount: ledCount, userInitiated: userInitiated)
+            let ledCount = totalLEDCount(for: device)
+            await applyGradientStopsAcrossStrip(device, stops: scene.primaryStops, ledCount: ledCount, userInitiated: userInitiated, preferSegmented: true)
         }
     }
     

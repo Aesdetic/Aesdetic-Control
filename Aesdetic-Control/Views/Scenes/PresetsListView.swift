@@ -52,17 +52,16 @@ struct PresetsListView: View {
                                 _ = try? await apiService.applyPreset(presetId, to: device)
                             } else {
                                 // Apply preset directly using gradient stops and brightness
-                                // CRITICAL: Get LED count from segment 0 (default segment for presets)
-                                // If segmentId support is added later, this should be updated to use the specific segment
-                                let segmentId = 0  // Presets currently use segment 0
-                                let ledCount = device.state?.segments.first(where: { $0.id == segmentId })?.len 
-                                    ?? device.state?.segments.first?.len 
-                                    ?? 120
+                                let ledCount = viewModel.totalLEDCount(for: device)
                                 
-                                // Convert temperature to stopTemperatures map if present
+                                // Convert temperature/white to stop maps if present
                                 var stopTemperatures: [UUID: Double]? = nil
+                                var stopWhiteLevels: [UUID: Double]? = nil
                                 if let temp = preset.temperature {
                                     stopTemperatures = Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, temp) })
+                                }
+                                if let white = preset.whiteLevel {
+                                    stopWhiteLevels = Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, white) })
                                 }
                                 
                                 // Apply gradient
@@ -70,7 +69,9 @@ struct PresetsListView: View {
                                     device,
                                     stops: preset.gradientStops,
                                     ledCount: ledCount,
-                                    stopTemperatures: stopTemperatures
+                                    stopTemperatures: stopTemperatures,
+                                    stopWhiteLevels: stopWhiteLevels,
+                                    preferSegmented: true
                                 )
                                 
                                 // Apply brightness via API
@@ -132,17 +133,33 @@ struct PresetsListView: View {
                                     }
                                     // Fallback to client-side transition if playlist failed
                                 } else {
-                                    // Apply transition directly
-                                }
-                                await viewModel.startTransition(
-                                    from: preset.gradientA,
-                                    aBrightness: preset.brightnessA,
-                                    to: preset.gradientB,
-                                    bBrightness: preset.brightnessB,
-                                    durationSec: preset.durationSec,
-                                    device: device
-                                )
+                                // Apply transition directly
                             }
+                            let startTemps = preset.temperatureA.map { temp in
+                                Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, temp) })
+                            }
+                            let startWhites = preset.whiteLevelA.map { white in
+                                Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, white) })
+                            }
+                            let endTemps = preset.temperatureB.map { temp in
+                                Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, temp) })
+                            }
+                            let endWhites = preset.whiteLevelB.map { white in
+                                Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, white) })
+                            }
+                            await viewModel.startTransition(
+                                from: preset.gradientA,
+                                aBrightness: preset.brightnessA,
+                                to: preset.gradientB,
+                                bBrightness: preset.brightnessB,
+                                durationSec: preset.durationSec,
+                                device: device,
+                                startStopTemperatures: startTemps,
+                                startStopWhiteLevels: startWhites,
+                                endStopTemperatures: endTemps,
+                                endStopWhiteLevels: endWhites
+                            )
+                        }
                         }, onEdit: {
                             onRequestRename(.transition(preset))
                         }, onDelete: {
@@ -264,10 +281,10 @@ struct PresetsListView: View {
 
     private func requestTransitionPresetDeletion(_ preset: TransitionPreset, on device: WLEDDevice) async {
         guard let playlistId = preset.wledPlaylistId else { return }
-        let presetAId = playlistId * 100
-        let presetBId = playlistId * 100 + 1
         await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [playlistId])
-        await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [presetAId, presetBId])
+        if let stepIds = preset.wledStepPresetIds, !stepIds.isEmpty {
+            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: stepIds)
+        }
     }
 
     private func requestEffectPresetDeletion(_ preset: WLEDEffectPreset, on device: WLEDDevice) async {

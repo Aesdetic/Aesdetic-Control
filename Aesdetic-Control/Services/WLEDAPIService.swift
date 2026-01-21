@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import os.log
+import SwiftUI
 
 // MARK: - API Service Protocol
 
@@ -64,6 +65,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let logger = Logger(subsystem: "com.aesdetic.control", category: "APIService")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
+    private let defaultPresetSegmentCount: Int = 12
+    private let maxPresetSegmentCount: Int = 16
+    private var presetStoreUnsupportedDevices: Set<String> = []
+    private var playlistStoreUnsupportedDevices: Set<String> = []
     
     // Performance optimization: Request batching and caching
     private var requestCache: [String: (response: WLEDResponse, timestamp: Date)] = [:]
@@ -72,6 +77,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let maxCacheSize = 50 // Maximum number of cached responses
     private var lastCacheEviction: Date = .distantPast
     private let cacheEvictionInterval: TimeInterval = 10.0 // Only evict every 10 seconds
+    private var lastStatePayloadByDevice: [String: (payload: Data, timestamp: Date)] = [:]
     
     private init() {
         let config = URLSessionConfiguration.default
@@ -135,9 +141,39 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         
         do {
             let jsonData = try encoder.encode(state)
+            let now = Date()
+            if let last = lastStatePayloadByDevice[device.id],
+               last.payload == jsonData,
+               now.timeIntervalSince(last.timestamp) < 0.25 {
+                #if DEBUG
+                logger.debug("🔵 [Dedup] Skipping identical state update for \(device.name)")
+                #endif
+                return createSuccessResponse(for: device)
+            }
+            lastStatePayloadByDevice[device.id] = (jsonData, now)
             request.httpBody = jsonData
             
             #if DEBUG
+            if let segments = state.seg {
+                let cctSegments = segments.compactMap { segment -> String? in
+                    guard let cctValue = segment.cct else { return nil }
+                    let segId = segment.id ?? -1
+                    return "id=\(segId),cct=\(cctValue)"
+                }
+                if !cctSegments.isEmpty {
+                    print("🔵 [CCT] Sending CCT update to \(device.name): \(cctSegments.joined(separator: ", "))")
+                }
+                let whiteSegments = segments.compactMap { segment -> String? in
+                    guard let col = segment.col?.first, col.count >= 4 else { return nil }
+                    let whiteValue = col[3]
+                    guard whiteValue > 0 else { return nil }
+                    let segId = segment.id ?? -1
+                    return "id=\(segId),w=\(whiteValue)"
+                }
+                if !whiteSegments.isEmpty {
+                    print("🔵 [White] Sending manual white to \(device.name): \(whiteSegments.joined(separator: ", "))")
+                }
+            }
             // Log the actual JSON being sent for effects debugging
             if state.seg?.first?.fx != nil {
                 if let jsonString = String(data: jsonData, encoding: .utf8) {
@@ -191,16 +227,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         // For RGBW strips: [[255, 165, 0, 128]] (where last value is white component 0-255)
         // CCT: 0-255 (0=warm, 255=cool) for RGBCCT strips
         
+        let resolvedWhite = white
         let colorArray: [Int]
-        if let whiteValue = white {
+        if let whiteValue = resolvedWhite {
             // RGBW: Include white channel as 4th element
             colorArray = [color[0], color[1], color[2], max(0, min(255, whiteValue))]
         } else {
             // RGB: Standard 3-element array
             colorArray = [color[0], color[1], color[2]]
         }
-        
-        let segment = SegmentUpdate(id: 0, col: [colorArray], cct: cct)
+
+        let segment = SegmentUpdate(id: 0, col: [colorArray])
         let stateUpdate = WLEDStateUpdate(seg: [segment], transition: transition)
         return try await updateState(for: device, state: stateUpdate)
     }
@@ -227,7 +264,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private func setCCTInternal(for device: WLEDDevice, cct: Int, segmentId: Int = 0) async throws -> WLEDResponse {
         // CRITICAL: When setting CCT, we must also disable effects (fx: 0) 
         // Otherwise WLED may keep using effect colors instead of CCT
-        // Also ensure col is NOT included - WLED ignores CCT if col is present
+        // Also ensure col is NOT included for explicit CCT-only updates
         let segment = SegmentUpdate(id: segmentId, cct: cct, fx: 0)
         let stateUpdate = WLEDStateUpdate(seg: [segment])
         
@@ -258,27 +295,28 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         do {
             let (data, response) = try await urlSession.data(for: request)
             try validateHTTPResponse(response, device: device)
-            let json = try JSONSerialization.jsonObject(with: data, options: [])
-            guard let dictionary = json as? [String: Any] else { return [] }
-            var presets: [WLEDPreset] = []
-            for (key, value) in dictionary {
-                guard let id = Int(key), let presetDict = value as? [String: Any] else { continue }
-                let name = presetDict["n"] as? String ?? "Preset \(id)"
-                let quickLoad = presetDict["ql"] as? Bool
-                var segment: SegmentUpdate? = nil
-                if let win = presetDict["win"] {
-                    if let winData = try? JSONSerialization.data(withJSONObject: win, options: []) {
-                        if let stateUpdate = try? decoder.decode(WLEDStateUpdate.self, from: winData) {
-                            segment = stateUpdate.seg?.first
-                        }
-                    }
+            if let errorCode = wledErrorCode(from: data) {
+                if errorCode == 4 {
+                    presetStoreUnsupportedDevices.insert(device.id)
+                    #if DEBUG
+                    print("⚠️ Preset fetch returned ERR_NOT_IMPL for \(device.name); falling back to /presets.json")
+                    #endif
+                    return try await fetchPresetsFromFile(device: device)
                 }
-                let preset = WLEDPreset(id: id, name: name, quickLoad: quickLoad, segment: segment)
-                presets.append(preset)
+                throw WLEDAPIError.invalidResponse
             }
-            return presets.sorted { $0.id < $1.id }
+            return try parsePresets(from: data)
         } catch {
-            throw handleError(error, device: device)
+            let mappedError = handleError(error, device: device)
+            if case .httpError(let statusCode) = mappedError,
+               statusCode == 404 || statusCode == 405 || statusCode == 501 {
+                presetStoreUnsupportedDevices.insert(device.id)
+                #if DEBUG
+                print("⚠️ Preset fetch fallback to /presets.json for \(device.name): status=\(statusCode)")
+                #endif
+                return try await fetchPresetsFromFile(device: device)
+            }
+            throw mappedError
         }
     }
     
@@ -286,19 +324,61 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard request.id >= 0 else {
             throw WLEDAPIError.invalidConfiguration
         }
+        if presetStoreUnsupportedDevices.contains(device.id) {
+            #if DEBUG
+            print("⚠️ Preset save using psave for \(device.name): id=\(request.id) (preset store unsupported)")
+            #endif
+            try await savePresetViaState(request, device: device)
+            return
+        }
         guard let url = URL(string: "http://\(device.ipAddress)/json/presets") else {
             throw WLEDAPIError.invalidURL
         }
         var httpRequest = URLRequest(url: url)
         httpRequest.httpMethod = "POST"
         httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body = PresetStorePayload(ps: [String(request.id): PresetStoreBody(n: request.name, ql: request.quickLoad, win: request.state)])
+        let body = PresetStorePayload(
+            ps: [
+                String(request.id): PresetStoreBody(
+                    n: request.name,
+                    ql: request.quickLoad,
+                    win: request.state,
+                    playlist: nil
+                )
+            ]
+        )
         httpRequest.httpBody = try encoder.encode(body)
         do {
-            let (_, response) = try await urlSession.data(for: httpRequest)
+            let (data, response) = try await urlSession.data(for: httpRequest)
             try validateHTTPResponse(response, device: device)
+            if let errorCode = wledErrorCode(from: data) {
+                if errorCode == 4 {
+                    presetStoreUnsupportedDevices.insert(device.id)
+                    #if DEBUG
+                    print("⚠️ Preset save returned ERR_NOT_IMPL for \(device.name); falling back to psave.")
+                    #endif
+                    try await savePresetViaState(request, device: device)
+                    return
+                }
+                throw WLEDAPIError.invalidResponse
+            }
+            #if DEBUG
+            if let httpResponse = response as? HTTPURLResponse {
+                print("✅ Preset saved via /json/presets for \(device.name): id=\(request.id) status=\(httpResponse.statusCode) bytes=\(data.count)")
+            }
+            #endif
         } catch {
-            throw handleError(error, device: device)
+            let mappedError = handleError(error, device: device)
+            if case .httpError(let statusCode) = mappedError,
+               statusCode == 404 || statusCode == 405 || statusCode == 501 {
+                presetStoreUnsupportedDevices.insert(device.id)
+                #if DEBUG
+                print("⚠️ Preset save fallback to psave for \(device.name): id=\(request.id) status=\(statusCode)")
+                #endif
+                try await savePresetViaState(request, device: device)
+                return
+            }
+            throw mappedError
         }
     }
     
@@ -307,6 +387,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws -> [WLEDPlaylist] {
         guard request.id >= 0 else {
             throw WLEDAPIError.invalidConfiguration
+        }
+        if playlistStoreUnsupportedDevices.contains(device.id) {
+            #if DEBUG
+            print("⚠️ Playlist save using psave for \(device.name): id=\(request.id) (playlist store unsupported)")
+            #endif
+            try await savePlaylistViaState(request, device: device)
+            return []
         }
         guard let url = URL(string: "http://\(device.ipAddress)/json/playlists") else {
             throw WLEDAPIError.invalidURL
@@ -325,6 +412,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         do {
             let (data, response) = try await urlSession.data(for: httpRequest)
             try validateHTTPResponse(response, device: device)
+            if let errorCode = wledErrorCode(from: data) {
+                if errorCode == 4 {
+                    playlistStoreUnsupportedDevices.insert(device.id)
+                    #if DEBUG
+                    print("⚠️ Playlist save returned ERR_NOT_IMPL for \(device.name); falling back to psave.")
+                    #endif
+                    try await savePlaylistViaState(request, device: device)
+                    return []
+                }
+                throw WLEDAPIError.invalidResponse
+            }
             let json = try JSONSerialization.jsonObject(with: data, options: [])
             guard let dictionary = json as? [String: Any] else { return [] }
             var playlists: [WLEDPlaylist] = []
@@ -347,7 +445,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             }
             return playlists.sorted { $0.id < $1.id }
         } catch {
-            throw handleError(error, device: device)
+            let mappedError = handleError(error, device: device)
+            if case .httpError(let statusCode) = mappedError,
+               statusCode == 404 || statusCode == 405 || statusCode == 501 {
+                playlistStoreUnsupportedDevices.insert(device.id)
+                #if DEBUG
+                print("⚠️ Playlist save fallback to psave for \(device.name): id=\(request.id) status=\(statusCode)")
+                #endif
+                try await savePlaylistViaState(request, device: device)
+                return []
+            }
+            throw mappedError
         }
     }
     
@@ -359,33 +467,49 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         do {
             let (data, response) = try await urlSession.data(for: request)
             try validateHTTPResponse(response, device: device)
-            let json = try JSONSerialization.jsonObject(with: data, options: [])
-            guard let dictionary = json as? [String: Any] else { return [] }
-            var playlists: [WLEDPlaylist] = []
-            for (key, value) in dictionary {
-                guard let id = Int(key), let playlistDict = value as? [String: Any] else { continue }
-                let name = playlistDict["n"] as? String ?? "Playlist \(id)"
-                let presets = playlistDict["ps"] as? [Int] ?? []
-                let durations = playlistDict["dur"] as? [Int] ?? []
-                let transitions = playlistDict["transition"] as? [Int] ?? []
-                let repeatCount = playlistDict["repeat"] as? Int
-                let playlist = WLEDPlaylist(
-                    id: id,
-                    name: name,
-                    presets: presets,
-                    duration: durations,
-                    transition: transitions,
-                    repeat: repeatCount
-                )
-                playlists.append(playlist)
+            if let errorCode = wledErrorCode(from: data) {
+                if errorCode == 4 {
+                    playlistStoreUnsupportedDevices.insert(device.id)
+                    #if DEBUG
+                    print("⚠️ Playlist fetch returned ERR_NOT_IMPL for \(device.name); falling back to /playlists.json")
+                    #endif
+                    return try await fetchPlaylistsFromFile(device: device)
+                }
+                throw WLEDAPIError.invalidResponse
             }
-            return playlists.sorted { $0.id < $1.id }
+            return try parsePlaylists(from: data)
         } catch {
-            throw handleError(error, device: device)
+            let mappedError = handleError(error, device: device)
+            if case .httpError(let statusCode) = mappedError,
+               statusCode == 404 || statusCode == 405 || statusCode == 501 {
+                playlistStoreUnsupportedDevices.insert(device.id)
+                #if DEBUG
+                print("⚠️ Playlist fetch fallback to /playlists.json for \(device.name): status=\(statusCode)")
+                #endif
+                do {
+                    return try await fetchPlaylistsFromFile(device: device)
+                } catch {
+                    let fallbackError = handleError(error, device: device)
+                    if case .httpError(let fallbackStatus) = fallbackError,
+                       fallbackStatus == 404 || fallbackStatus == 405 || fallbackStatus == 501 {
+                        playlistStoreUnsupportedDevices.insert(device.id)
+                    }
+                    throw fallbackError
+                }
+            }
+            throw mappedError
         }
     }
+
+    func isPlaylistStoreSupported(for device: WLEDDevice) -> Bool {
+        !playlistStoreUnsupportedDevices.contains(device.id)
+    }
+
+    func isPresetStoreSupported(for device: WLEDDevice) -> Bool {
+        !presetStoreUnsupportedDevices.contains(device.id)
+    }
     
-    /// Apply a playlist to a WLED device using the `pl` field in state update
+    /// Apply a playlist by selecting its preset ID (`ps`); `pl` is read-only in WLED JSON API.
     /// - Parameters:
     ///   - playlistId: The playlist ID to apply (0-250)
     ///   - device: The target WLED device
@@ -395,8 +519,16 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard playlistId >= 0 && playlistId <= 250 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        
-        let stateUpdate = WLEDStateUpdate(pl: playlistId)
+        let stateUpdate = WLEDStateUpdate(ps: playlistId)
+        let response = try await updateState(for: device, state: stateUpdate)
+        return response.state
+    }
+
+    func applyPlaylist(_ playlistId: Int, to device: WLEDDevice, releaseRealtime: Bool) async throws -> WLEDState {
+        guard playlistId >= 0 && playlistId <= 250 else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        let stateUpdate = WLEDStateUpdate(ps: playlistId, lor: releaseRealtime ? 0 : nil)
         let response = try await updateState(for: device, state: stateUpdate)
         return response.state
     }
@@ -616,6 +748,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard id >= 0 && id <= 250 else {
             throw WLEDAPIError.invalidConfiguration
         }
+        if playlistStoreUnsupportedDevices.contains(device.id) {
+            return try await deletePreset(id: id, device: device)
+        }
         
         guard let deleteUrl = URL(string: "http://\(device.ipAddress)/json/playlists") else {
             throw WLEDAPIError.invalidURL
@@ -640,6 +775,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             try validateHTTPResponse(response, device: device)
             return true
         } catch {
+            if let apiError = error as? WLEDAPIError,
+               case .httpError(let statusCode) = apiError,
+               statusCode == 404 || statusCode == 405 || statusCode == 501 {
+                playlistStoreUnsupportedDevices.insert(device.id)
+                return try await deletePreset(id: id, device: device)
+            }
             logger.warning("Playlist deletion failed for \(id) on device \(device.id), will retry later")
             return false
         }
@@ -649,34 +790,16 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     
     /// Save a ColorPreset as a WLED preset with per-LED colors
     func saveColorPreset(_ preset: ColorPreset, to device: WLEDDevice, presetId: Int) async throws -> Int {
-        let ledCount = device.state?.segments.first?.len ?? 120
-        let interpolation = preset.gradientInterpolation ?? .linear  // Use saved interpolation or default to linear
+        let interpolation = preset.gradientInterpolation ?? .linear
         let gradient = LEDGradient(stops: preset.gradientStops, interpolation: interpolation)
-        let hexColors = GradientSampler.sample(gradient, ledCount: ledCount, interpolation: gradient.interpolation)
-        
-        // First, send per-LED colors using setSegmentPixels
-        try await setSegmentPixels(
-            for: device,
-            segmentId: 0,
-            startIndex: 0,
-            hexColors: hexColors,
-            cct: preset.temperature != nil ? Int(round(preset.temperature! * 255.0)) : nil
+        let stateUpdate = segmentedPresetState(
+            device: device,
+            gradient: gradient,
+            brightness: preset.brightness,
+            on: true,
+            temperature: preset.temperature,
+            whiteLevel: preset.whiteLevel
         )
-        
-        // Build segment update with brightness and CCT
-        let segmentUpdate = SegmentUpdate(
-            id: 0,
-            bri: preset.brightness,
-            cct: preset.temperature != nil ? Int(round(preset.temperature! * 255.0)) : nil
-        )
-        
-        // Create state update with segment
-        let stateUpdate = WLEDStateUpdate(
-            bri: preset.brightness,
-            seg: [segmentUpdate]
-        )
-        
-        // Then save current state as preset (per-LED colors are already set via setSegmentPixels)
         let saveRequest = WLEDPresetSaveRequest(
             id: presetId,
             name: preset.name,
@@ -690,35 +813,47 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     
     /// Save a TransitionPreset as a WLED playlist (A→B, no loop)
     func saveTransitionPreset(_ preset: TransitionPreset, to device: WLEDDevice, playlistId: Int) async throws -> Int {
-        let ledCount = device.state?.segments.first?.len ?? 120
-        
+        let existingPresets = try await fetchPresets(for: device)
+        var usedPresetIds = Set(existingPresets.map { $0.id })
+        usedPresetIds.insert(playlistId)
+        guard let presetIds = allocateIds(from: 250, excluding: usedPresetIds, count: 2) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        let presetAId = presetIds[0]
+        let presetBId = presetIds[1]
+
         // Save Gradient A as preset
         let gradientA = preset.gradientA
-        let hexColorsA = GradientSampler.sample(gradientA, ledCount: ledCount, interpolation: gradientA.interpolation)
-        try await setSegmentPixels(for: device, segmentId: 0, startIndex: 0, hexColors: hexColorsA)
-        
-        let stateA = WLEDStateUpdate(bri: preset.brightnessA, seg: [SegmentUpdate(id: 0, bri: preset.brightnessA)])
-        let presetAId = playlistId * 100  // Use playlist ID * 100 for preset A
+        let stateA = segmentedPresetState(
+            device: device,
+            gradient: gradientA,
+            brightness: preset.brightnessA,
+            on: true,
+            temperature: preset.temperatureA,
+            whiteLevel: preset.whiteLevelA
+        )
         try await savePreset(WLEDPresetSaveRequest(id: presetAId, name: "\(preset.name) - A", quickLoad: false, state: stateA), to: device)
         
         // Save Gradient B as preset
         let gradientB = preset.gradientB
-        let hexColorsB = GradientSampler.sample(gradientB, ledCount: ledCount, interpolation: gradientB.interpolation)
-        try await setSegmentPixels(for: device, segmentId: 0, startIndex: 0, hexColors: hexColorsB)
-        
-        let stateB = WLEDStateUpdate(bri: preset.brightnessB, seg: [SegmentUpdate(id: 0, bri: preset.brightnessB)])
-        let presetBId = playlistId * 100 + 1  // Use playlist ID * 100 + 1 for preset B
+        let stateB = segmentedPresetState(
+            device: device,
+            gradient: gradientB,
+            brightness: preset.brightnessB,
+            on: true,
+            temperature: preset.temperatureB,
+            whiteLevel: preset.whiteLevelB
+        )
         try await savePreset(WLEDPresetSaveRequest(id: presetBId, name: "\(preset.name) - B", quickLoad: false, state: stateB), to: device)
         
         // Create playlist: A→B, no loop (repeat: nil means no repeat)
-        let durationSec = Int(preset.durationSec)
-        let transitionDeciseconds = Int(preset.durationSec * 10)  // Convert seconds to deciseconds
+        let transitionDeciseconds = min(maxWLEDTransitionDeciseconds, Int(preset.durationSec * 10))  // Clamp to WLED max
         
         let playlistRequest = WLEDPlaylistSaveRequest(
             id: playlistId,
             name: preset.name,
             ps: [presetAId, presetBId],
-            dur: [durationSec, 0],  // Duration for A, then B stays (0 = hold)
+            dur: [1, 0],  // Use a non-zero hold for entry 1 for better device compatibility
             transition: [transitionDeciseconds, 0],  // Transition from A to B, then stop
             repeat: nil  // No loop - stops at B
         )
@@ -1244,7 +1379,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             grp: baseSegment?.grp,
             spc: baseSegment?.spc,
             ofs: baseSegment?.ofs,
-            on: turnOn ?? true,  // Explicitly turn on segment when applying effect
+            on: turnOn,
             bri: nil,  // Don't override segment brightness - use device brightness
             col: colors,
             cct: nil,  // Don't send CCT when applying effects (CCT conflicts with effects)
@@ -1266,19 +1401,26 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         
         // CRITICAL: Always include brightness when applying effects to prevent flash
         // Even if turnOn is nil, we should preserve current brightness atomically
-        let deviceBrightness = device.brightness > 0 ? device.brightness : 255
+        let deviceBrightness: Int?
+        if turnOn == true {
+            deviceBrightness = device.brightness > 0 ? device.brightness : nil
+        } else if device.brightness > 0 {
+            deviceBrightness = device.brightness
+        } else {
+            deviceBrightness = nil
+        }
         // CRITICAL: Include lor: 0 atomically if needed to release realtime override
         // This prevents flash by combining realtime release with effect application in one call
         // Also always include brightness to prevent brightness reset during effect switch
         let stateUpdate = WLEDStateUpdate(
-            on: turnOn == true ? true : nil,  // Turn device on if segment is being turned on
-            bri: deviceBrightness,  // CRITICAL: Always include brightness atomically to prevent flash
+            on: turnOn,
+            bri: deviceBrightness,
             seg: [segment],
             lor: releaseRealtime ? 0 : nil  // Release realtime override atomically if needed
         )
         
         #if DEBUG
-        print("[Effects][API] State update includes: on=\(String(describing: turnOn)) bri=\(turnOn == true ? deviceBrightness : -1)")
+        print("[Effects][API] State update includes: on=\(String(describing: turnOn)) bri=\(String(describing: deviceBrightness))")
         #endif
         
         let response = try await updateState(for: device, state: stateUpdate)
@@ -1469,6 +1611,140 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             throw WLEDAPIError.httpError(httpResponse.statusCode)
         }
     }
+
+    private func wledErrorCode(from data: Data) -> Int? {
+        guard let json = try? JSONSerialization.jsonObject(with: data, options: []),
+              let dictionary = json as? [String: Any],
+              let errorValue = dictionary["error"] else {
+            return nil
+        }
+        if let code = errorValue as? Int {
+            return code
+        }
+        if let number = errorValue as? NSNumber {
+            return number.intValue
+        }
+        if let string = errorValue as? String, let code = Int(string) {
+            return code
+        }
+        return nil
+    }
+
+    private func parsePresets(from data: Data) throws -> [WLEDPreset] {
+        let json = try JSONSerialization.jsonObject(with: data, options: [])
+        let dictionary = json as? [String: Any] ?? [:]
+        let payload = dictionary["presets"] as? [String: Any] ?? dictionary
+        var presets: [WLEDPreset] = []
+        for (key, value) in payload {
+            guard let id = Int(key), let presetDict = value as? [String: Any] else { continue }
+            let name = presetDict["n"] as? String ?? "Preset \(id)"
+            let quickLoad = presetDict["ql"] as? Bool
+            let segment = parsePresetSegment(from: presetDict["seg"])
+            presets.append(
+                WLEDPreset(
+                    id: id,
+                    name: name,
+                    quickLoad: quickLoad,
+                    segment: segment
+                )
+            )
+        }
+        return presets.sorted { $0.id < $1.id }
+    }
+
+    private func parsePlaylists(from data: Data) throws -> [WLEDPlaylist] {
+        let json = try JSONSerialization.jsonObject(with: data, options: [])
+        let dictionary = json as? [String: Any] ?? [:]
+        let payload = dictionary["playlists"] as? [String: Any]
+            ?? dictionary["playlist"] as? [String: Any]
+            ?? dictionary
+        var playlists: [WLEDPlaylist] = []
+        for (key, value) in payload {
+            guard let id = Int(key), let playlistDict = value as? [String: Any] else { continue }
+            let name = playlistDict["n"] as? String ?? "Playlist \(id)"
+            let presets = decodeIntArray(playlistDict["ps"])
+            let durations = decodeIntArray(playlistDict["dur"])
+            let transitions = decodeIntArray(playlistDict["transition"])
+            let repeatCount = decodeInt(playlistDict["repeat"])
+            playlists.append(
+                WLEDPlaylist(
+                    id: id,
+                    name: name,
+                    presets: presets,
+                    duration: durations,
+                    transition: transitions,
+                    repeat: repeatCount
+                )
+            )
+        }
+        return playlists.sorted { $0.id < $1.id }
+    }
+
+    private func parsePresetSegment(from value: Any?) -> SegmentUpdate? {
+        guard let value else { return nil }
+        if let segments = value as? [[String: Any]], let first = segments.first {
+            return decodeSegmentUpdate(from: first)
+        }
+        if let segment = value as? [String: Any] {
+            return decodeSegmentUpdate(from: segment)
+        }
+        return nil
+    }
+
+    private func decodeSegmentUpdate(from dict: [String: Any]) -> SegmentUpdate? {
+        guard JSONSerialization.isValidJSONObject(dict) else { return nil }
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []) else { return nil }
+        return try? decoder.decode(SegmentUpdate.self, from: data)
+    }
+
+    private func decodeIntArray(_ value: Any?) -> [Int] {
+        if let ints = value as? [Int] { return ints }
+        if let numbers = value as? [NSNumber] { return numbers.map { $0.intValue } }
+        if let strings = value as? [String] { return strings.compactMap { Int($0) } }
+        if let mixed = value as? [Any] {
+            return mixed.compactMap { decodeInt($0) }
+        }
+        return []
+    }
+
+    private func decodeInt(_ value: Any?) -> Int? {
+        if let intValue = value as? Int { return intValue }
+        if let number = value as? NSNumber { return number.intValue }
+        if let string = value as? String { return Int(string) }
+        return nil
+    }
+
+    private func fetchPresetsFromFile(device: WLEDDevice) async throws -> [WLEDPreset] {
+        guard let url = URL(string: "http://\(device.ipAddress)/presets.json") else {
+            throw WLEDAPIError.invalidURL
+        }
+        let request = URLRequest(url: url)
+        let (data, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+        if let errorCode = wledErrorCode(from: data) {
+            if errorCode == 4 {
+                throw WLEDAPIError.httpError(501)
+            }
+            throw WLEDAPIError.invalidResponse
+        }
+        return try parsePresets(from: data)
+    }
+
+    private func fetchPlaylistsFromFile(device: WLEDDevice) async throws -> [WLEDPlaylist] {
+        guard let url = URL(string: "http://\(device.ipAddress)/playlists.json") else {
+            throw WLEDAPIError.invalidURL
+        }
+        let request = URLRequest(url: url)
+        let (data, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+        if let errorCode = wledErrorCode(from: data) {
+            if errorCode == 4 {
+                throw WLEDAPIError.httpError(501)
+            }
+            throw WLEDAPIError.invalidResponse
+        }
+        return try parsePlaylists(from: data)
+    }
     
     private func parseResponse(data: Data, device: WLEDDevice) throws -> WLEDResponse {
         // Handle empty data by creating a default success response
@@ -1496,12 +1772,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 name: device.name,
                 mac: device.id,
                 ver: "0.14.0",
-                leds: LedInfo(count: 30, seglc: nil)
+                leds: LedInfo(count: 30, seglc: nil, lc: nil, cct: nil, rgbw: nil, wv: nil)
             ),
             state: WLEDState(
                 brightness: device.brightness,
                 isOn: device.isOn,
-                segments: []
+                segments: [],
+                transitionDeciseconds: nil,
+                presetId: nil,
+                playlistId: nil
             )
         )
     }
@@ -1530,6 +1809,181 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 }
 
     // MARK: - Internal helpers
+    private func segmentedPresetState(
+        device: WLEDDevice,
+        gradient: LEDGradient,
+        brightness: Int,
+        on: Bool,
+        temperature: Double?,
+        whiteLevel: Double?
+    ) -> WLEDStateUpdate {
+        let totalLEDs = device.state?.segments.compactMap { $0.stop }.max().map { max(1, $0) }
+            ?? device.state?.segments.compactMap { $0.len }.reduce(0, +)
+            ?? 120
+        let segmentCount = min(maxPresetSegmentCount, max(2, min(defaultPresetSegmentCount, totalLEDs)))
+        let stops = presetSegmentStops(totalLEDs: totalLEDs, segmentCount: segmentCount)
+        let colors = presetSegmentColors(for: gradient, count: segmentCount)
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == sortedStops.first?.hexColor }
+        let cctValue = temperature.map { Int(round($0 * 255.0)) }
+        var whiteValue = whiteLevel.map { Int(round(max(0.0, min(1.0, $0)) * 255.0)) }
+        if whiteValue == nil, cctValue != nil {
+            whiteValue = 255
+        }
+        let useWhite = whiteValue != nil
+        let useCCTOnly = isSolidColor && cctValue != nil && !useWhite
+
+        var updates: [SegmentUpdate] = []
+        for (idx, range) in stops.enumerated() {
+            let rgb = colors[idx]
+            var col: [[Int]]? = [[rgb[0], rgb[1], rgb[2]]]
+            if useCCTOnly {
+                col = nil
+            } else if useWhite, let whiteValue {
+                col = [[rgb[0], rgb[1], rgb[2], whiteValue]]
+            }
+            updates.append(
+                SegmentUpdate(
+                    id: idx,
+                    start: range.start,
+                    stop: range.stop,
+                    on: on,
+                    col: col,
+                    cct: cctValue
+                )
+            )
+        }
+
+        return WLEDStateUpdate(
+            on: on,
+            bri: brightness,
+            seg: updates
+        )
+    }
+
+    private func presetSegmentStops(totalLEDs: Int, segmentCount: Int) -> [(start: Int, stop: Int)] {
+        guard totalLEDs > 0, segmentCount > 0 else { return [] }
+        let base = totalLEDs / segmentCount
+        let remainder = totalLEDs % segmentCount
+        var stops: [(Int, Int)] = []
+        var cursor = 0
+        for idx in 0..<segmentCount {
+            let extra = idx < remainder ? 1 : 0
+            let len = max(1, base + extra)
+            let start = cursor
+            let stop = min(totalLEDs, cursor + len)
+            stops.append((start: start, stop: stop))
+            cursor = stop
+        }
+        return stops
+    }
+
+    private func allocateIds(from start: Int, excluding used: Set<Int>, count: Int) -> [Int]? {
+        guard count > 0 else { return [] }
+        var results: [Int] = []
+        for id in stride(from: start, through: 1, by: -1) {
+            if !used.contains(id) {
+                results.append(id)
+                if results.count == count {
+                    break
+                }
+            }
+        }
+        return results.count == count ? results : nil
+    }
+
+    private func presetSegmentColors(for gradient: LEDGradient, count: Int) -> [[Int]] {
+        guard count > 0 else { return [] }
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let denom = Double(count)
+        return (0..<count).map { idx in
+            let t = (Double(idx) + 0.5) / denom
+            let color = GradientSampler.sampleColor(at: t, stops: sortedStops, interpolation: gradient.interpolation)
+            return color.toRGBArray()
+        }
+    }
+
+    private func savePresetViaState(_ request: WLEDPresetSaveRequest, device: WLEDDevice) async throws {
+        var body: [String: Any] = [
+            "psave": request.id,
+            "n": request.name,
+            "ib": true,
+            "sb": true,
+            "sc": true
+        ]
+        if let quickLoad = request.quickLoad {
+            body["ql"] = quickLoad
+        }
+        if let state = request.state {
+            let stateData = try encoder.encode(state)
+            if let stateDict = try JSONSerialization.jsonObject(with: stateData, options: []) as? [String: Any] {
+                for (key, value) in stateDict {
+                    body[key] = value
+                }
+            }
+        }
+        #if DEBUG
+        let keys = body.keys.sorted().joined(separator: ",")
+        print("🔎 Preset psave request for \(device.name): id=\(request.id) keys=[\(keys)]")
+        #endif
+        _ = try await postState(device, body: body)
+    }
+
+    private func savePlaylistViaState(_ request: WLEDPlaylistSaveRequest, device: WLEDDevice) async throws {
+        var playlist: [String: Any] = [
+            "ps": request.ps,
+            "dur": request.dur,
+            "transition": request.transition
+        ]
+        if let repeatCount = request.repeat {
+            playlist["repeat"] = repeatCount
+        }
+        let body: [String: Any] = [
+            "psave": request.id,
+            "n": request.name,
+            "playlist": playlist,
+            "o": true
+        ]
+        #if DEBUG
+        let keys = body.keys.sorted().joined(separator: ",")
+        print("🔎 Playlist psave request for \(device.name): id=\(request.id) keys=[\(keys)]")
+        #endif
+        _ = try await postState(device, body: body)
+    }
+
+    private func savePlaylistViaPresetStore(_ request: WLEDPlaylistSaveRequest, device: WLEDDevice) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/presets") else {
+            throw WLEDAPIError.invalidURL
+        }
+        var httpRequest = URLRequest(url: url)
+        httpRequest.httpMethod = "POST"
+        httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let playlistBody = PresetPlaylistBody(
+            ps: request.ps,
+            dur: request.dur,
+            transition: request.transition,
+            repeat: request.repeat
+        )
+        let body = PresetStorePayload(
+            ps: [
+                String(request.id): PresetStoreBody(
+                    n: request.name,
+                    ql: nil,
+                    win: nil,
+                    playlist: playlistBody
+                )
+            ]
+        )
+        httpRequest.httpBody = try encoder.encode(body)
+        let (data, response) = try await urlSession.data(for: httpRequest)
+        try validateHTTPResponse(response, device: device)
+        #if DEBUG
+        if let httpResponse = response as? HTTPURLResponse {
+            print("✅ Playlist saved via /json/presets for \(device.name): id=\(request.id) status=\(httpResponse.statusCode) bytes=\(data.count)")
+        }
+        #endif
+    }
+
     private func postState(_ device: WLEDDevice, body: [String: Any]) async throws -> WLEDResponse {
         guard let url = URL(string: device.jsonEndpoint) else {
             throw WLEDAPIError.invalidURL
@@ -1540,8 +1994,24 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         let (data, response) = try await urlSession.data(for: request)
         try validateHTTPResponse(response, device: device)
+        #if DEBUG
+        if let httpResponse = response as? HTTPURLResponse {
+            let snippet = debugPayloadSnippet(data, limit: 200)
+            print("✅ State POST for \(device.name): status=\(httpResponse.statusCode) bytes=\(data.count) body=\(snippet)")
+        }
+        #endif
         return try parseResponse(data: data, device: device)
-}
+    }
+
+    private func debugPayloadSnippet(_ data: Data, limit: Int) -> String {
+        guard !data.isEmpty else { return "<empty>" }
+        let text = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+        if text.count <= limit {
+            return text
+        }
+        let end = text.index(text.startIndex, offsetBy: limit)
+        return String(text[..<end]) + "..."
+    }
 
     // MARK: - LED Configuration API
     
@@ -1649,6 +2119,25 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let maxTotalCurrent = led["maxpwr"] as? Int ?? 3850
             let usePerOutputLimiter = firstLED["per"] as? Bool ?? false
             let enableABL = led["abl"] as? Bool ?? true
+            let cctRangeSource = led["cct"] ?? firstLED["cct"]
+            let (cctMin, cctMax): (Int?, Int?) = {
+                if let range = cctRangeSource as? [Int], range.count >= 2 {
+                    return (range[0], range[1])
+                }
+                if let range = cctRangeSource as? [Double], range.count >= 2 {
+                    return (Int(round(range[0])), Int(round(range[1])))
+                }
+                if let dict = cctRangeSource as? [String: Any] {
+                    let minInt = dict["min"] as? Int
+                    let minDouble = dict["min"] as? Double
+                    let maxInt = dict["max"] as? Int
+                    let maxDouble = dict["max"] as? Double
+                    let resolvedMin = minInt ?? minDouble.map { Int(round($0)) }
+                    let resolvedMax = maxInt ?? maxDouble.map { Int(round($0)) }
+                    return (resolvedMin, resolvedMax)
+                }
+                return (nil, nil)
+            }()
             
             return LEDConfiguration(
                 stripType: stripType,
@@ -1660,6 +2149,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 reverseDirection: reverseDirection,
                 offRefresh: offRefresh,
                 autoWhiteMode: autoWhiteMode,
+                cctKelvinMin: cctMin,
+                cctKelvinMax: cctMax,
                 maxCurrentPerLED: maxCurrentPerLED,
                 maxTotalCurrent: maxTotalCurrent,
                 usePerOutputLimiter: usePerOutputLimiter,
@@ -1703,6 +2194,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             reverseDirection: currentConfig.reverseDirection,
             offRefresh: currentConfig.offRefresh,
             autoWhiteMode: currentConfig.autoWhiteMode,
+            cctKelvinMin: currentConfig.cctKelvinMin,
+            cctKelvinMax: currentConfig.cctKelvinMax,
             maxCurrentPerLED: currentConfig.maxCurrentPerLED,
             maxTotalCurrent: maxCurrent ?? currentConfig.maxTotalCurrent,
             usePerOutputLimiter: currentConfig.usePerOutputLimiter,
@@ -1780,15 +2273,23 @@ private struct PresetStoreBody: Encodable {
     let n: String
     let ql: Bool?
     let win: WLEDStateUpdate?
+    let playlist: PresetPlaylistBody?
 }
 
 // MARK: - Playlist Models
+
+private struct PresetPlaylistBody: Encodable {
+    let ps: [Int]
+    let dur: [Int]
+    let transition: [Int]
+    let `repeat`: Int?
+}
 
 struct WLEDPlaylistSaveRequest: Encodable {
     let id: Int
     let name: String
     let ps: [Int]  // Preset IDs
-    let dur: [Int]  // Durations in seconds (per preset)
+    let dur: [Int]  // Durations in deciseconds (per preset)
     let transition: [Int]  // Transition times in deciseconds (per preset)
     let `repeat`: Int?  // Repeat count (nil = no repeat, 0 = infinite)
 }

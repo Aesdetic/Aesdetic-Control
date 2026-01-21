@@ -5,6 +5,7 @@ struct SaveColorPresetDialog: View {
     let currentGradient: LEDGradient
     let currentBrightness: Int
     let currentTemperature: Double?
+    let currentWhiteLevel: Double?
     let onSave: (ColorPreset) -> Void
     
     @Environment(\.dismiss) private var dismiss
@@ -12,11 +13,12 @@ struct SaveColorPresetDialog: View {
     
     @State private var presetName: String = ""
     
-    init(device: WLEDDevice, currentGradient: LEDGradient, currentBrightness: Int, currentTemperature: Double?, onSave: @escaping (ColorPreset) -> Void) {
+    init(device: WLEDDevice, currentGradient: LEDGradient, currentBrightness: Int, currentTemperature: Double?, currentWhiteLevel: Double? = nil, onSave: @escaping (ColorPreset) -> Void) {
         self.device = device
         self.currentGradient = currentGradient
         self.currentBrightness = currentBrightness
         self.currentTemperature = currentTemperature
+        self.currentWhiteLevel = currentWhiteLevel
         self.onSave = onSave
     }
     
@@ -41,6 +43,10 @@ struct SaveColorPresetDialog: View {
                             .foregroundColor(.white)
                         if let temp = currentTemperature {
                             Text("CCT \(Int(temp * 100))%")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        } else if let white = currentWhiteLevel {
+                            Text("White \(Int(white * 100))%")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.7))
                         }
@@ -120,7 +126,8 @@ struct SaveColorPresetDialog: View {
             gradientStops: currentGradient.stops,
             gradientInterpolation: currentGradient.interpolation,
             brightness: currentBrightness,
-            temperature: currentTemperature
+            temperature: currentTemperature,
+            whiteLevel: currentWhiteLevel
         )
         onSave(preset)
         dismiss()

@@ -208,6 +208,7 @@ struct WLEDSettingsView: View {
     @State private var isEditingName: Bool = false
     @State private var currentName: String
     @State private var editingName: String
+    @State private var temperatureStopsUseCCT: Bool = false
 
     init(device: WLEDDevice) {
         self.device = device
@@ -343,6 +344,18 @@ struct WLEDSettingsView: View {
             if let ver = info?.ver { infoRow(label: "Firmware", value: ver) }
             infoRow(label: "MAC", value: device.id)
             infoRow(label: "LEDs", value: "\(segStop)")
+            if viewModel.supportsCCT(for: device, segmentId: 0) {
+                SettingsSectionHeader(title: "Temperature")
+                Toggle("Use CCT for temperature stops", isOn: $temperatureStopsUseCCT)
+                    .tint(.white)
+                    .foregroundColor(.white)
+                    .onChange(of: temperatureStopsUseCCT) { _, value in
+                        viewModel.setTemperatureStopsUseCCT(value, for: device)
+                    }
+                Text("Enabled: temperature-only stops send CCT per segment. Disabled: temperature maps to RGB.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
         }
         .padding(16)
         .background(Color.white.opacity(0.08))
@@ -580,6 +593,7 @@ struct WLEDSettingsView: View {
         brightnessDouble = Double(device.brightness) / 255.0 * 100.0
         segStart = 0
         segStop = device.state?.segments.first?.len ?? segStop
+        temperatureStopsUseCCT = viewModel.temperatureStopsUseCCT(for: device)
         do {
             let resp = try await WLEDAPIService.shared.getState(for: device)
             await MainActor.run {

@@ -4,6 +4,8 @@
 <dict>
 	<key>com.apple.developer.device-discovery.pairing-access</key>
 	<string>default</string>
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.aesdetic.control</string>

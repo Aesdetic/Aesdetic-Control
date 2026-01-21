@@ -16,6 +16,7 @@ struct WLEDDevice: Identifiable, Hashable {
     var brightness: Int // 0-255 from API
     var currentColor: Color // Derived from state
     var temperature: Double? // Color temperature (0.0-1.0, from CCT 0-255)
+    var autoWhiteMode: AutoWhiteMode?
     var productType: ProductType
     var location: DeviceLocation
     var lastSeen: Date
@@ -33,7 +34,10 @@ struct WLEDDevice: Identifiable, Hashable {
                 currentState = WLEDState(
                     brightness: currentState.brightness,
                     isOn: newValue,
-                    segments: currentState.segments
+                    segments: currentState.segments,
+                    transitionDeciseconds: currentState.transitionDeciseconds,
+                    presetId: currentState.presetId,
+                    playlistId: currentState.playlistId
                 )
                 state = currentState
             } else {
@@ -41,7 +45,10 @@ struct WLEDDevice: Identifiable, Hashable {
                 state = WLEDState(
                     brightness: brightness,
                     isOn: newValue,
-                    segments: []
+                    segments: [],
+                    transitionDeciseconds: nil,
+                    presetId: nil,
+                    playlistId: nil
                 )
             }
         }
@@ -56,7 +63,7 @@ struct WLEDDevice: Identifiable, Hashable {
         hasher.combine(id)
     }
     
-    init(id: String, name: String, ipAddress: String, isOnline: Bool = false, brightness: Int = 0, currentColor: Color = .black, temperature: Double? = nil, productType: ProductType = .generic, location: DeviceLocation = .all, lastSeen: Date = Date(), state: WLEDState? = nil) {
+    init(id: String, name: String, ipAddress: String, isOnline: Bool = false, brightness: Int = 0, currentColor: Color = .black, temperature: Double? = nil, autoWhiteMode: AutoWhiteMode? = nil, productType: ProductType = .generic, location: DeviceLocation = .all, lastSeen: Date = Date(), state: WLEDState? = nil) {
         self.id = id
         self.name = name
         self.ipAddress = ipAddress
@@ -64,6 +71,7 @@ struct WLEDDevice: Identifiable, Hashable {
         self.brightness = brightness
         self.currentColor = currentColor
         self.temperature = temperature
+        self.autoWhiteMode = autoWhiteMode
         self.productType = productType
         self.location = location
         self.lastSeen = lastSeen
@@ -100,17 +108,77 @@ struct LedInfo: Codable {
     // Segment LED capabilities (array) - optional, present on newer WLED builds
     // Bit 2 (0b100) indicates CCT/temperature capability for the segment.
     let seglc: [Int]?
+    // Global LED capability flags (bitwise AND of segments)
+    let lc: Int?
+    // Deprecated capability booleans (still present on some builds)
+    let cct: Bool?
+    let rgbw: Bool?
+    let wv: Bool?
+
+    init(
+        count: Int,
+        seglc: [Int]?,
+        lc: Int?,
+        cct: Bool?,
+        rgbw: Bool?,
+        wv: Bool?
+    ) {
+        self.count = count
+        self.seglc = seglc
+        self.lc = lc
+        self.cct = cct
+        self.rgbw = rgbw
+        self.wv = wv
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case count
+        case seglc
+        case lc
+        case cct
+        case rgbw
+        case wv
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        count = try container.decode(Int.self, forKey: .count)
+        seglc = try container.decodeIfPresent([Int].self, forKey: .seglc)
+        lc = try container.decodeIfPresent(Int.self, forKey: .lc)
+        cct = Self.decodeBoolOrInt(from: container, forKey: .cct)
+        rgbw = Self.decodeBoolOrInt(from: container, forKey: .rgbw)
+        wv = Self.decodeBoolOrInt(from: container, forKey: .wv)
+    }
+
+    private static func decodeBoolOrInt(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> Bool? {
+        if let boolValue = try? container.decodeIfPresent(Bool.self, forKey: key) {
+            return boolValue
+        }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return intValue != 0
+        }
+        return nil
+    }
 }
 
 struct WLEDState: Codable {
     let brightness: Int
     let isOn: Bool
     let segments: [Segment]
+    let transitionDeciseconds: Int?
+    let presetId: Int?
+    let playlistId: Int?
 
     enum CodingKeys: String, CodingKey {
         case brightness = "bri"
         case isOn = "on"
         case segments = "seg"
+        case transitionDeciseconds = "transition"
+        case presetId = "ps"
+        case playlistId = "pl"
     }
 }
 
@@ -138,8 +206,8 @@ struct Segment: Codable {
     /// Freeze flag: true = freeze segment (stop animations), false = resume
     let frz: Bool?
 
-    private static let kelvinMin: Double = 1000.0
-    private static let kelvinMax: Double = 20000.0
+    private static let kelvinMin: Double = 1900.0
+    private static let kelvinMax: Double = 10091.0
     private static let kelvinRange: Double = kelvinMax - kelvinMin
 
     static func kelvinValue(fromNormalized normalized: Double) -> Int {
@@ -490,5 +558,28 @@ extension Color {
         let greenInt = Int((components.g * 255).rounded())
         let blueInt = Int((components.b * 255).rounded())
         return String(format: "%02X%02X%02X", redInt, greenInt, blueInt)
+    }
+
+    /// Create a Color from RGBW data by blending the white channel into RGB.
+    /// - Parameters:
+    ///   - rgb: Array containing at least [R,G,B], optionally [R,G,B,W].
+    ///   - white: Optional white channel override (0-255).
+    /// - Returns: Color in sRGB color space.
+    static func color(fromRGBArray rgb: [Int], white: Int? = nil) -> Color {
+        let r = rgb.count > 0 ? rgb[0] : 0
+        let g = rgb.count > 1 ? rgb[1] : 0
+        let b = rgb.count > 2 ? rgb[2] : 0
+        let w = white ?? (rgb.count > 3 ? rgb[3] : 0)
+
+        let blendedR = min(255, r + w)
+        let blendedG = min(255, g + w)
+        let blendedB = min(255, b + w)
+
+        return Color(
+            .sRGB,
+            red: Double(blendedR) / 255.0,
+            green: Double(blendedG) / 255.0,
+            blue: Double(blendedB) / 255.0
+        )
     }
 }

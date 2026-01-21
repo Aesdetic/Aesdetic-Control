@@ -58,7 +58,21 @@ actor GradientTransitionRunner {
         runningDeviceIds.insert(device.id)
 
         let total = max(0.1, durationSec)
-        let ledCount = device.state?.segments.first?.len ?? 120
+        let ledCount: Int = {
+            if let segments = device.state?.segments, !segments.isEmpty {
+                if let maxStop = segments.compactMap({ $0.stop }).max(), maxStop > 0 {
+                    return maxStop
+                }
+                let sumLen = segments.compactMap({ $0.len }).reduce(0, +)
+                if sumLen > 0 {
+                    return sumLen
+                }
+                if let firstLen = segments.first?.len, firstLen > 0 {
+                    return firstLen
+                }
+            }
+            return 120
+        }()
         let frameInterval = 1.0 / Double(max(fps, 1))
         let start = Date()
         defer {
@@ -77,9 +91,9 @@ actor GradientTransitionRunner {
                 : (1.0 - pow(-2.0 * tLinear + 2.0, 3.0) / 2.0)
 
             let interpStops = interpolateStops(from: from, to: to, t: t)
-            // Use linear interpolation for transitions (smooth easing is handled by t calculation)
-            let g = LEDGradient(stops: interpStops, interpolation: .linear)
-            let hex = GradientSampler.sample(g, ledCount: ledCount, interpolation: .linear)
+            // Respect gradient interpolation during transitions.
+            let g = LEDGradient(stops: interpStops, interpolation: to.interpolation)
+            let hex = GradientSampler.sample(g, ledCount: ledCount, interpolation: to.interpolation)
 
             var intent = ColorIntent(deviceId: device.id, mode: .perLED)
             intent.segmentId = segmentId
@@ -113,7 +127,7 @@ actor GradientTransitionRunner {
         let positions = (0..<count).map { Double($0) / denom }
 
         func colorAt(_ stops: [GradientStop], _ pos: Double) -> Color {
-            GradientSampler.sampleColor(at: pos, stops: stops)
+            GradientSampler.sampleColor(at: pos, stops: stops, interpolation: to.interpolation)
         }
 
         return positions.map { pos in
@@ -127,5 +141,3 @@ actor GradientTransitionRunner {
         }
     }
 }
-
-

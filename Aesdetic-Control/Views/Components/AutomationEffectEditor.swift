@@ -6,6 +6,7 @@ struct AutomationEffectEditor: View {
     @ObservedObject private var presetsStore = PresetsStore.shared
     let device: WLEDDevice
     let effectOptions: [EffectMetadata]
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     // Bindings for automation state
     @Binding var effectId: Int
@@ -355,7 +356,10 @@ struct AutomationEffectEditor: View {
             supportsCCT: supportsCCT,
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
-            onColorChange: { color, temperature, whiteLevel in
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+            allowManualWhite: advancedUIEnabled,
+            cctKelvinRange: viewModel.cctKelvinRange(for: device),
+            onColorChange: { color, temperature, _ in
                 guard let idx = gradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }
                 var updatedStops = gradient.stops
                 if let temp = temperature {
@@ -599,4 +603,3 @@ struct AutomationEffectEditor: View {
         return LEDGradient(stops: generatedStops, interpolation: gradient.interpolation)
     }
 }
-

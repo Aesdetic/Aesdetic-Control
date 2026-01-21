@@ -21,21 +21,24 @@ struct WLEDStateUpdate: Codable {
     let udpn: UDPNUpdate?
     /// Transition time in milliseconds (converted to deciseconds for WLED API)
     private let transitionMilliseconds: Int?
+    /// Global transition time in deciseconds (applies to subsequent state changes)
+    private let transitionDeciseconds: Int?
     /// Apply preset by ID
     let ps: Int?
-    /// Apply playlist by ID
+    /// Current playlist ID (read-only in WLED JSON API)
     let pl: Int?
     /// Night Light configuration
     let nl: NightLightUpdate?
     /// Live override release (0 disables realtime streaming)
     let lor: Int?
     
-    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, ps: Int? = nil, pl: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
+    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, transitionDeciseconds: Int? = nil, ps: Int? = nil, pl: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
         self.on = on
         self.bri = bri
         self.seg = seg
         self.udpn = udpn
         self.transitionMilliseconds = transition
+        self.transitionDeciseconds = transitionDeciseconds
         self.ps = ps
         self.pl = pl
         self.nl = nl
@@ -50,6 +53,7 @@ struct WLEDStateUpdate: Codable {
     enum CodingKeys: String, CodingKey {
         case on, bri, seg, udpn
         case transitionDeciseconds = "tt"  // WLED expects "tt" field name
+        case transition = "transition"
         case ps, pl, nl, lor
     }
     
@@ -64,6 +68,9 @@ struct WLEDStateUpdate: Codable {
             // Round to nearest decisecond to preserve intent (e.g. 300ms → 3)
             let deciseconds = max(0, Int((Double(transitionMs) / 100.0).rounded()))
             try container.encode(deciseconds, forKey: .transitionDeciseconds)
+        }
+        if let transitionDeciseconds {
+            try container.encode(transitionDeciseconds, forKey: .transition)
         }
         try container.encodeIfPresent(ps, forKey: .ps)
         try container.encodeIfPresent(pl, forKey: .pl)
@@ -83,6 +90,7 @@ struct WLEDStateUpdate: Codable {
         } else {
             self.transitionMilliseconds = nil
         }
+        self.transitionDeciseconds = try container.decodeIfPresent(Int.self, forKey: .transition)
         self.ps = try container.decodeIfPresent(Int.self, forKey: .ps)
         self.pl = try container.decodeIfPresent(Int.self, forKey: .pl)
         self.nl = try container.decodeIfPresent(NightLightUpdate.self, forKey: .nl)
@@ -184,8 +192,7 @@ struct SegmentUpdate: Codable {
     }
     
     // CRITICAL: Custom encoding to omit col when nil
-    // WLED ignores CCT if col is present (even as null)
-    // So we must completely omit col when sending CCT-only updates
+    // Omit col when intentionally sending CCT-only updates
     enum CodingKeys: String, CodingKey {
         case id, start, stop, len, grp, spc, ofs
         case on, bri, col, cct
@@ -351,6 +358,19 @@ struct WLEDTimerUpdate: Codable {
     }
 }
 
+// MARK: - WLED Transition Constants
+
+/// Maximum WLED transition time in deciseconds (tenths of a second)
+/// WLED's `tt` field accepts values from 0 to 65535 deciseconds
+let maxWLEDTransitionDeciseconds = 65535
+
+/// Maximum WLED transition time in seconds (~109.2 minutes)
+/// Calculated from maxWLEDTransitionDeciseconds: 65535 / 10 = 6553.5 seconds
+let maxWLEDTransitionSeconds = 6553.5
+
+/// Practical upper bound for native transitions in this app (user-configured policy)
+let maxWLEDNativeTransitionSeconds = min(maxWLEDTransitionSeconds, 3600.0)
+
 // MARK: - API Configuration Models
 
 /// Configuration for WLED API client
@@ -473,6 +493,9 @@ struct LEDConfiguration: Codable {
     let offRefresh: Bool
     /// Auto white mode (0=none, 1=brighter, 2=accurate, 3=dual, 4=max)
     let autoWhiteMode: Int
+    /// Optional CCT Kelvin range from config (min/max)
+    let cctKelvinMin: Int?
+    let cctKelvinMax: Int?
     /// Maximum current per LED in mA
     let maxCurrentPerLED: Int
     /// Maximum total current in mA
@@ -481,6 +504,76 @@ struct LEDConfiguration: Codable {
     let usePerOutputLimiter: Bool
     /// Enable automatic brightness limiter
     let enableABL: Bool
+
+    init(
+        stripType: Int,
+        colorOrder: Int,
+        gpioPin: Int,
+        ledCount: Int,
+        startLED: Int,
+        skipFirstLEDs: Int,
+        reverseDirection: Bool,
+        offRefresh: Bool,
+        autoWhiteMode: Int,
+        cctKelvinMin: Int? = nil,
+        cctKelvinMax: Int? = nil,
+        maxCurrentPerLED: Int,
+        maxTotalCurrent: Int,
+        usePerOutputLimiter: Bool,
+        enableABL: Bool
+    ) {
+        self.stripType = stripType
+        self.colorOrder = colorOrder
+        self.gpioPin = gpioPin
+        self.ledCount = ledCount
+        self.startLED = startLED
+        self.skipFirstLEDs = skipFirstLEDs
+        self.reverseDirection = reverseDirection
+        self.offRefresh = offRefresh
+        self.autoWhiteMode = autoWhiteMode
+        self.cctKelvinMin = cctKelvinMin
+        self.cctKelvinMax = cctKelvinMax
+        self.maxCurrentPerLED = maxCurrentPerLED
+        self.maxTotalCurrent = maxTotalCurrent
+        self.usePerOutputLimiter = usePerOutputLimiter
+        self.enableABL = enableABL
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stripType = try container.decode(Int.self, forKey: .stripType)
+        colorOrder = try container.decode(Int.self, forKey: .colorOrder)
+        gpioPin = try container.decode(Int.self, forKey: .gpioPin)
+        ledCount = try container.decode(Int.self, forKey: .ledCount)
+        startLED = try container.decode(Int.self, forKey: .startLED)
+        skipFirstLEDs = try container.decode(Int.self, forKey: .skipFirstLEDs)
+        reverseDirection = try container.decode(Bool.self, forKey: .reverseDirection)
+        offRefresh = try container.decode(Bool.self, forKey: .offRefresh)
+        autoWhiteMode = try container.decode(Int.self, forKey: .autoWhiteMode)
+        maxCurrentPerLED = try container.decode(Int.self, forKey: .maxCurrentPerLED)
+        maxTotalCurrent = try container.decode(Int.self, forKey: .maxTotalCurrent)
+        usePerOutputLimiter = try container.decode(Bool.self, forKey: .usePerOutputLimiter)
+        enableABL = try container.decode(Bool.self, forKey: .enableABL)
+        cctKelvinMin = nil
+        cctKelvinMax = nil
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(stripType, forKey: .stripType)
+        try container.encode(colorOrder, forKey: .colorOrder)
+        try container.encode(gpioPin, forKey: .gpioPin)
+        try container.encode(ledCount, forKey: .ledCount)
+        try container.encode(startLED, forKey: .startLED)
+        try container.encode(skipFirstLEDs, forKey: .skipFirstLEDs)
+        try container.encode(reverseDirection, forKey: .reverseDirection)
+        try container.encode(offRefresh, forKey: .offRefresh)
+        try container.encode(autoWhiteMode, forKey: .autoWhiteMode)
+        try container.encode(maxCurrentPerLED, forKey: .maxCurrentPerLED)
+        try container.encode(maxTotalCurrent, forKey: .maxTotalCurrent)
+        try container.encode(usePerOutputLimiter, forKey: .usePerOutputLimiter)
+        try container.encode(enableABL, forKey: .enableABL)
+    }
     
     enum CodingKeys: String, CodingKey {
         case stripType = "type"

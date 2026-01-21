@@ -39,6 +39,11 @@
     </array>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Aesdetic Control needs local network access to discover and control WLED devices on your network.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoadsInLocalNetwork</key>
+        <true/>
+    </dict>
     <key>NSBonjourServices</key>
     <array>
         <string>_wled._tcp</string>
@@ -48,4 +53,3 @@
     <string>Your approximate location (city-level) is checked once to calculate sunrise and sunset times for automations.</string>
 </dict>
 </plist>
-

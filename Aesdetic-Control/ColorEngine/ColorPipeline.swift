@@ -11,7 +11,7 @@ actor ColorPipeline {
 
     private func flushPendingBrightness(_ device: WLEDDevice) async {
         if let v = pendingBri.removeValue(forKey: device.id) {
-            let st = WLEDStateUpdate(on: true, bri: max(0, min(255, v)))
+            let st = WLEDStateUpdate(bri: max(0, min(255, v)))
             _ = try? await api.updateState(for: device, state: st)
         }
     }
@@ -91,5 +91,4 @@ actor ColorPipeline {
         pendingBri.removeValue(forKey: deviceId)
     }
 }
-
 

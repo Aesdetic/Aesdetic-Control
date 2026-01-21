@@ -20,6 +20,7 @@ extension WLEDDeviceEntity {
     @NSManaged public var isOnline: Bool
     @NSManaged public var brightness: Int16
     @NSManaged public var currentColorHex: String
+    @NSManaged public var autoWhiteMode: Int16
     @NSManaged public var productType: String
     @NSManaged public var location: String
     @NSManaged public var lastSeen: Date
@@ -55,6 +56,11 @@ extension WLEDDeviceEntity {
         self.isOnline = device.isOnline
         self.brightness = Int16(device.brightness)
         self.currentColorHex = device.currentColor.toHex()
+        if let mode = device.autoWhiteMode {
+            self.autoWhiteMode = Int16(mode.rawValue)
+        } else {
+            self.autoWhiteMode = -1
+        }
         self.productType = device.productType.rawValue
         self.location = device.location.rawValue
         
@@ -109,6 +115,7 @@ extension WLEDStateEntity {
     
     @NSManaged public var brightness: Int16
     @NSManaged public var isOn: Bool
+    @NSManaged public var transitionDeciseconds: NSNumber?
     @NSManaged public var device: WLEDDeviceEntity?
     @NSManaged public var segments: NSSet?
     
@@ -116,6 +123,10 @@ extension WLEDStateEntity {
     var brightnessInt: Int {
         get { Int(brightness) }
         set { brightness = Int16(newValue) }
+    }
+
+    var transitionDecisecondsInt: Int? {
+        transitionDeciseconds?.intValue
     }
     
     var segmentsArray: [WLEDSegmentEntity] {
@@ -202,6 +213,11 @@ extension WLEDDevice {
         self.isOnline = entity.isOnline
         self.brightness = Int(entity.brightness)
         self.currentColor = Color(hex: entity.currentColorHex)
+        if entity.autoWhiteMode >= 0 {
+            self.autoWhiteMode = AutoWhiteMode(rawValue: Int(entity.autoWhiteMode))
+        } else {
+            self.autoWhiteMode = nil
+        }
         self.productType = ProductType(rawValue: entity.productType) ?? .generic
         self.location = DeviceLocation(rawValue: entity.location)
         self.lastSeen = entity.lastSeen
@@ -216,13 +232,21 @@ extension WLEDStateEntity {
         return WLEDState(
             brightness: self.brightnessInt,
             isOn: self.isOn,
-            segments: segments
+            segments: segments,
+            transitionDeciseconds: self.transitionDecisecondsInt,
+            presetId: nil,
+            playlistId: nil
         )
     }
     
     func update(from state: WLEDState) {
         self.isOn = state.isOn
         self.brightness = Int16(state.brightness)
+        if let deciseconds = state.transitionDeciseconds {
+            self.transitionDeciseconds = NSNumber(value: deciseconds)
+        } else {
+            self.transitionDeciseconds = nil
+        }
         
         // Update segments
         // Remove existing segments

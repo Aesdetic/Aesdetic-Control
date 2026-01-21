@@ -21,6 +21,9 @@ struct ColorPreset: Identifiable, Codable, Equatable {
     // CCT/Temperature (0.0-1.0, nil if not set)
     var temperature: Double?
     
+    // White channel level (0.0-1.0, nil if not set)
+    var whiteLevel: Double?
+    
     // WLED preset IDs per device (nil until saved to device)
     var wledPresetIds: [String: Int]?
     // Legacy single-device preset ID (kept for migration fallback)
@@ -34,6 +37,7 @@ struct ColorPreset: Identifiable, Codable, Equatable {
         gradientInterpolation: GradientInterpolation? = nil,
         brightness: Int,
         temperature: Double? = nil,
+        whiteLevel: Double? = nil,
         wledPresetIds: [String: Int]? = nil,
         wledPresetId: Int? = nil
     ) {
@@ -44,6 +48,7 @@ struct ColorPreset: Identifiable, Codable, Equatable {
         self.gradientInterpolation = gradientInterpolation
         self.brightness = max(0, min(255, brightness))
         self.temperature = temperature
+        self.whiteLevel = whiteLevel
         self.wledPresetIds = wledPresetIds
         self.wledPresetId = wledPresetId
     }
@@ -61,16 +66,22 @@ struct TransitionPreset: Identifiable, Codable, Equatable {
     // Gradient A
     var gradientA: LEDGradient
     var brightnessA: Int
+    var temperatureA: Double?
+    var whiteLevelA: Double?
     
     // Gradient B
     var gradientB: LEDGradient
     var brightnessB: Int
+    var temperatureB: Double?
+    var whiteLevelB: Double?
     
     // Transition duration (seconds)
     var durationSec: Double
     
     // WLED playlist ID (nil until saved to device)
     var wledPlaylistId: Int?
+    // WLED step preset IDs used by this playlist (nil until saved to device)
+    var wledStepPresetIds: [Int]?
     
     init(
         id: UUID = UUID(),
@@ -79,10 +90,15 @@ struct TransitionPreset: Identifiable, Codable, Equatable {
         createdAt: Date = Date(),
         gradientA: LEDGradient,
         brightnessA: Int,
+        temperatureA: Double? = nil,
+        whiteLevelA: Double? = nil,
         gradientB: LEDGradient,
         brightnessB: Int,
+        temperatureB: Double? = nil,
+        whiteLevelB: Double? = nil,
         durationSec: Double,
-        wledPlaylistId: Int? = nil
+        wledPlaylistId: Int? = nil,
+        wledStepPresetIds: [Int]? = nil
     ) {
         self.id = id
         self.name = name
@@ -90,10 +106,15 @@ struct TransitionPreset: Identifiable, Codable, Equatable {
         self.createdAt = createdAt
         self.gradientA = gradientA
         self.brightnessA = max(0, min(255, brightnessA))
+        self.temperatureA = temperatureA
+        self.whiteLevelA = whiteLevelA
         self.gradientB = gradientB
         self.brightnessB = max(0, min(255, brightnessB))
+        self.temperatureB = temperatureB
+        self.whiteLevelB = whiteLevelB
         self.durationSec = max(0.1, durationSec)
         self.wledPlaylistId = wledPlaylistId
+        self.wledStepPresetIds = wledStepPresetIds
     }
 }
 
@@ -147,5 +168,3 @@ struct WLEDEffectPreset: Identifiable, Codable, Equatable {
         self.wledPresetId = wledPresetId
     }
 }
-
-

@@ -27,6 +27,7 @@ struct ComprehensiveSettingsView: View {
     @State private var nightLightTargetBri: Int = 0
     @State private var isEditingName: Bool = false
     @State private var editingName: String = ""
+    @State private var temperatureStopsUseCCT: Bool = false
     
     // New state variables for comprehensive settings
     @State private var selectedSettingsCategory: SettingsCategory = .info
@@ -43,6 +44,7 @@ struct ComprehensiveSettingsView: View {
     @State private var currentWiFiInfo: WiFiInfo?
     @State private var showAllNetworks: Bool = true
     @State private var showConnectedMessage: Bool = true
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     enum SettingsCategory: String, CaseIterable {
         case info = "Info"
@@ -257,7 +259,7 @@ struct ComprehensiveSettingsView: View {
                     if let ledCount = info?.leds.count {
                         InfoRow(label: "LED Count (API)", value: "\(ledCount)")
                     }
-                    
+
                     Button(action: { showWebConfig = true }) {
                         SettingsButton(title: "Open Web Config", icon: "globe")
                     }
@@ -531,15 +533,37 @@ struct ComprehensiveSettingsView: View {
                     }
                 }
             }
+
+            if supportsCCTInSettings {
+                SettingsCard(title: "Temperature") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Use CCT for temperature stops", isOn: $temperatureStopsUseCCT)
+                            .tint(.white)
+                            .foregroundColor(.white)
+                            .onChange(of: temperatureStopsUseCCT) { _, value in
+                                viewModel.setTemperatureStopsUseCCT(value, for: device)
+                            }
+                        Text("Enabled: temperature-only stops send CCT per segment. Disabled: temperature maps to RGB.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                }
+            }
             
             SettingsCard(title: "Segment Configuration") {
-                SegmentBoundsRow(
-                    device: device,
-                    segmentId: 0,
-                    start: segStart,
-                    stop: segStop
-                )
-                .environmentObject(viewModel)
+                if advancedUIEnabled {
+                    SegmentBoundsRow(
+                        device: device,
+                        segmentId: 0,
+                        start: segStart,
+                        stop: segStop
+                    )
+                    .environmentObject(viewModel)
+                } else {
+                    Text("Enable Advanced UI to edit segment bounds.")
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.7))
+                }
             }
         }
     }
@@ -561,6 +585,11 @@ struct ComprehensiveSettingsView: View {
     
     private var uiSection: some View {
         VStack(spacing: 12) {
+            SettingsCard(title: "Advanced UI") {
+                Toggle("Enable Advanced UI", isOn: $advancedUIEnabled)
+                    .tint(.white)
+                    .foregroundColor(.white)
+            }
             SettingsCard(title: "User Interface") {
                 VStack(spacing: 12) {
                     Button(action: { openURL(URL(string: "http://\(device.ipAddress)/settings/ui")!) }) {
@@ -774,6 +803,7 @@ struct ComprehensiveSettingsView: View {
             brightnessDouble = Double(effectiveBrightness) / 255.0 * 100.0
             segStart = 0
             segStop = liveDevice.state?.segments.first?.len ?? segStop
+            temperatureStopsUseCCT = viewModel.temperatureStopsUseCCT(for: device)
         }
         
         do {
@@ -800,8 +830,27 @@ struct ComprehensiveSettingsView: View {
                     }
                 }
                 if let len = resp.state.segments.first?.len { segStop = len }
+                temperatureStopsUseCCT = viewModel.temperatureStopsUseCCT(for: device)
             }
         } catch { }
+    }
+
+    private var supportsCCTInSettings: Bool {
+        if viewModel.supportsCCT(for: device, segmentId: 0) {
+            return true
+        }
+        if let info = info {
+            if info.leds.cct == true {
+                return true
+            }
+            if let lc = info.leds.lc, (lc & 0b100) != 0 {
+                return true
+            }
+            if let seglc = info.leds.seglc, seglc.contains(where: { ($0 & 0b100) != 0 }) {
+                return true
+            }
+        }
+        return false
     }
     
     // MARK: - WiFi Helper Functions

@@ -29,6 +29,7 @@ struct EffectsPane: View {
     @State private var stagedIntensityValue: Double?
     @State private var isAdjustingSpeed = false
     @State private var isAdjustingFxIntensity = false
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     private static let defaultEffectGradient = LEDGradient(stops: [
         GradientStop(position: 0.0, hexColor: "FFA000"),
@@ -94,6 +95,9 @@ struct EffectsPane: View {
             supportsCCT: supportsCCT,
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+            allowManualWhite: advancedUIEnabled,
+            cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, _, _ in
                 if canEditGradient {
                     // In gradient mode, we need a selected stop
@@ -182,9 +186,12 @@ struct EffectsPane: View {
                 .fill(backgroundFill)
         )
         .task {
-            if effectOptions.isEmpty {
+            let needsFetch = metadataBundle?.effects.isEmpty ?? true
+            if needsFetch {
                 isLoadingMetadata = true
-                await viewModel.loadEffectMetadata(for: device)
+            }
+            await viewModel.loadEffectMetadata(for: device)
+            if needsFetch {
                 isLoadingMetadata = false
             }
             syncEffectSelectionIfNeeded()
@@ -376,6 +383,15 @@ struct EffectsPane: View {
                 Text(isLoadingMetadata ? "Loading effects…" : "No color-safe effects available")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
+            }
+
+            if advancedUIEnabled {
+                let usesFallback = metadataBundle?.effects.isEmpty != false
+                let sourceLabel = usesFallback ? "Fallback list" : "WLED fxdata"
+                let mappingName = activeEffectMetadata?.name ?? "Unknown"
+                Text("Effect ID \(effectSelectionId) · \(mappingName) · \(sourceLabel)")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
             }
         }
     }
@@ -950,7 +966,7 @@ private extension EffectsPane {
         isSavingPreset = true
         let presetName = "Effect " + Date().formatted(date: .omitted, time: .shortened)
         let preparedGradient = preparedGradientForSlotCount(effectGradient, slotCount: slotCount)
-        let preset = WLEDEffectPreset(
+        var preset = WLEDEffectPreset(
             name: presetName,
             deviceId: device.id,
             effectId: effectSelectionId,
@@ -961,16 +977,29 @@ private extension EffectsPane {
             gradientInterpolation: preparedGradient.interpolation,
             brightness: device.brightness
         )
-        await MainActor.run {
-            PresetsStore.shared.addEffectPreset(preset)
-            isSavingPreset = false
-            showSaveSuccess = true
-        }
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        await MainActor.run {
-            showSaveSuccess = false
+        do {
+            let savedId = try await PresetSyncManager.shared.saveEffectPreset(preset, to: device)
+            await MainActor.run {
+                preset.wledPresetId = savedId
+                PresetsStore.shared.addEffectPreset(preset)
+                isSavingPreset = false
+                showSaveSuccess = true
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await MainActor.run {
+                showSaveSuccess = false
+            }
+            #if DEBUG
+            print("✅ Effect preset saved to WLED device: ID \(savedId)")
+            #endif
+        } catch {
+            await MainActor.run {
+                isSavingPreset = false
+                showSaveSuccess = false
+            }
+            #if DEBUG
+            print("⚠️ Failed to save effect preset to WLED: \(error.localizedDescription)")
+            #endif
         }
     }
 }
-
-

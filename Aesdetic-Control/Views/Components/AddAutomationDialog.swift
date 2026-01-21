@@ -54,6 +54,8 @@ struct AddAutomationDialog: View {
     @State private var gradientDuration: Double = 10
     @State private var gradientInterpolation: GradientInterpolation = .linear
     @State private var selectedColorPresetId: UUID?
+    @State private var gradientTemperature: Double?
+    @State private var gradientWhiteLevel: Double?
     @State private var selectedTransitionPresetId: UUID?
     @State private var selectedEffectPresetId: UUID?
     @State private var enableColorFade: Bool = false
@@ -66,6 +68,10 @@ struct AddAutomationDialog: View {
     @State private var transitionEndGradient: LEDGradient?
     @State private var transitionStartBrightness: Double = 128
     @State private var transitionEndBrightness: Double = 255
+    @State private var transitionStartTemperature: Double?
+    @State private var transitionStartWhiteLevel: Double?
+    @State private var transitionEndTemperature: Double?
+    @State private var transitionEndWhiteLevel: Double?
     @State private var templateEffectSettings: TemplateEffectSettings?
     @State private var templateMetadata: AutomationMetadata?
     @State private var lockedAction: AutomationAction?
@@ -119,6 +125,8 @@ struct AddAutomationDialog: View {
         var initialEnableColorFade = false
         var initialTransitionDuration: Double = 600
         var initialTemplateGradient: LEDGradient?
+        var initialGradientTemperature: Double?
+        var initialGradientWhiteLevel: Double?
         var initialTemplateTransition: TransitionActionPayload?
         var initialTemplateEffect: TemplateEffectSettings?
         var initialMetadata: AutomationMetadata?
@@ -127,6 +135,10 @@ struct AddAutomationDialog: View {
         var initialTransitionEndGradient: LEDGradient?
         var initialTransitionStartBrightness: Double = 128
         var initialTransitionEndBrightness: Double = 255
+        var initialTransitionStartTemperature: Double?
+        var initialTransitionStartWhiteLevel: Double?
+        var initialTransitionEndTemperature: Double?
+        var initialTransitionEndWhiteLevel: Double?
         var initialSelectedColorPresetId: UUID?
         var initialSelectedTransitionPresetId: UUID?
         var initialSelectedEffectPresetId: UUID?
@@ -182,6 +194,8 @@ struct AddAutomationDialog: View {
                 initialEnableColorFade = payload.durationSeconds > 0
                 initialGradientDuration = payload.durationSeconds  // Preserve actual duration, don't clamp
                 initialSelectedColorPresetId = payload.presetId
+                initialGradientTemperature = payload.temperature
+                initialGradientWhiteLevel = payload.whiteLevel
                 // Note: interpolation is stored in the gradient itself
             case .transition(let payload):
                 initialActionSelection = .transition
@@ -194,6 +208,10 @@ struct AddAutomationDialog: View {
                 initialTransitionEndGradient = payload.endGradient
                 initialTransitionStartBrightness = Double(payload.startBrightness)
                 initialTransitionEndBrightness = Double(payload.endBrightness)
+                initialTransitionStartTemperature = payload.startTemperature
+                initialTransitionStartWhiteLevel = payload.startWhiteLevel
+                initialTransitionEndTemperature = payload.endTemperature
+                initialTransitionEndWhiteLevel = payload.endWhiteLevel
             case .effect(let payload):
                 initialActionSelection = .effect
                 initialEffectId = payload.effectId
@@ -248,6 +266,10 @@ struct AddAutomationDialog: View {
                 if let endBrightness {
                     initialGradientBrightness = Double(endBrightness)
                 }
+                initialTransitionStartTemperature = payload.startTemperature
+                initialTransitionStartWhiteLevel = payload.startWhiteLevel
+                initialTransitionEndTemperature = payload.endTemperature
+                initialTransitionEndWhiteLevel = payload.endWhiteLevel
             case .effect(let effectId, let brightness, let gradient, let speed, let intensity):
                 initialActionSelection = .effect
                 initialEffectId = effectId
@@ -269,6 +291,8 @@ struct AddAutomationDialog: View {
         _selectedDeviceIds = State(initialValue: initialDeviceIds)
         _activeDevice = State(initialValue: initialActiveDevice)
         _selectedColorPresetId = State(initialValue: initialSelectedColorPresetId)
+        _gradientTemperature = State(initialValue: initialGradientTemperature)
+        _gradientWhiteLevel = State(initialValue: initialGradientWhiteLevel)
         _selectedTransitionPresetId = State(initialValue: initialSelectedTransitionPresetId)
         _selectedEffectPresetId = State(initialValue: initialSelectedEffectPresetId)
         _customTransitionDuration = State(initialValue: initialTransitionDuration)
@@ -299,6 +323,10 @@ struct AddAutomationDialog: View {
         _transitionEndGradient = State(initialValue: initialTransitionEndGradient ?? defaultEndGradient)
         _transitionStartBrightness = State(initialValue: initialTransitionStartBrightness)
         _transitionEndBrightness = State(initialValue: initialTransitionEndBrightness)
+        _transitionStartTemperature = State(initialValue: initialTransitionStartTemperature)
+        _transitionStartWhiteLevel = State(initialValue: initialTransitionStartWhiteLevel)
+        _transitionEndTemperature = State(initialValue: initialTransitionEndTemperature)
+        _transitionEndWhiteLevel = State(initialValue: initialTransitionEndWhiteLevel)
     }
     
     private var weekdayNames: [String] { ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"] }
@@ -990,7 +1018,9 @@ struct AddAutomationDialog: View {
             interpolation: $gradientInterpolation,
             fadeDuration: $gradientDuration,
             enableFade: $enableColorFade,
-            selectedPresetId: $selectedColorPresetId
+            selectedPresetId: $selectedColorPresetId,
+            temperature: $gradientTemperature,
+            whiteLevel: $gradientWhiteLevel
         )
     }
     private var transitionActionControls: some View {
@@ -1019,7 +1049,11 @@ struct AddAutomationDialog: View {
             ),
             startBrightness: $transitionStartBrightness,
             endBrightness: $transitionEndBrightness,
-            durationSeconds: $customTransitionDuration
+            durationSeconds: $customTransitionDuration,
+            startTemperature: $transitionStartTemperature,
+            startWhiteLevel: $transitionStartWhiteLevel,
+            endTemperature: $transitionEndTemperature,
+            endWhiteLevel: $transitionEndWhiteLevel
         )
     }
     
@@ -1115,6 +1149,8 @@ struct AddAutomationDialog: View {
                         gradient: gradient,
                         brightness: Int(gradientBrightness),
                         durationSeconds: duration,
+                        temperature: gradientTemperature,
+                        whiteLevel: gradientWhiteLevel,
                         shouldLoop: false,
                         presetId: selectedColorPresetId,
                         presetName: selectedColorPreset?.name
@@ -1195,8 +1231,12 @@ private extension AddAutomationDialog {
                 TransitionActionPayload(
                     startGradient: preset.gradientA,
                     startBrightness: preset.brightnessA,
+                    startTemperature: preset.temperatureA,
+                    startWhiteLevel: preset.whiteLevelA,
                     endGradient: preset.gradientB,
                     endBrightness: preset.brightnessB,
+                    endTemperature: preset.temperatureB,
+                    endWhiteLevel: preset.whiteLevelB,
                     durationSeconds: preset.durationSec,
                     shouldLoop: false,
                     presetId: preset.id,
@@ -1219,8 +1259,12 @@ private extension AddAutomationDialog {
             TransitionActionPayload(
                 startGradient: startGrad,
                 startBrightness: Int(transitionStartBrightness),
+                startTemperature: transitionStartTemperature,
+                startWhiteLevel: transitionStartWhiteLevel,
                 endGradient: endGrad,
                 endBrightness: Int(transitionEndBrightness),
+                endTemperature: transitionEndTemperature,
+                endWhiteLevel: transitionEndWhiteLevel,
                 durationSeconds: customTransitionDuration,
                 shouldLoop: false,
                 presetId: nil,

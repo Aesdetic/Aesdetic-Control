@@ -7,6 +7,10 @@ struct SaveTransitionPresetDialog: View {
     let currentBrightnessA: Int
     let currentBrightnessB: Int
     let currentDurationSec: Double
+    let currentTemperatureA: Double?
+    let currentWhiteLevelA: Double?
+    let currentTemperatureB: Double?
+    let currentWhiteLevelB: Double?
     let onSave: (TransitionPreset) -> Void
     
     @Environment(\.dismiss) private var dismiss
@@ -14,13 +18,17 @@ struct SaveTransitionPresetDialog: View {
     
     @State private var presetName: String = ""
     
-    init(device: WLEDDevice, currentGradientA: LEDGradient, currentGradientB: LEDGradient, currentBrightnessA: Int, currentBrightnessB: Int, currentDurationSec: Double, onSave: @escaping (TransitionPreset) -> Void) {
+    init(device: WLEDDevice, currentGradientA: LEDGradient, currentGradientB: LEDGradient, currentBrightnessA: Int, currentBrightnessB: Int, currentDurationSec: Double, currentTemperatureA: Double? = nil, currentWhiteLevelA: Double? = nil, currentTemperatureB: Double? = nil, currentWhiteLevelB: Double? = nil, onSave: @escaping (TransitionPreset) -> Void) {
         self.device = device
         self.currentGradientA = currentGradientA
         self.currentGradientB = currentGradientB
         self.currentBrightnessA = currentBrightnessA
         self.currentBrightnessB = currentBrightnessB
         self.currentDurationSec = currentDurationSec
+        self.currentTemperatureA = currentTemperatureA
+        self.currentWhiteLevelA = currentWhiteLevelA
+        self.currentTemperatureB = currentTemperatureB
+        self.currentWhiteLevelB = currentWhiteLevelB
         self.onSave = onSave
     }
     
@@ -141,8 +149,12 @@ struct SaveTransitionPresetDialog: View {
             deviceId: device.id,
             gradientA: currentGradientA,
             brightnessA: currentBrightnessA,
+            temperatureA: currentTemperatureA,
+            whiteLevelA: currentWhiteLevelA,
             gradientB: currentGradientB,
             brightnessB: currentBrightnessB,
+            temperatureB: currentTemperatureB,
+            whiteLevelB: currentWhiteLevelB,
             durationSec: currentDurationSec
         )
         onSave(preset)

@@ -12,10 +12,11 @@ import Combine
 
 struct DeviceControlView: View {
     @ObservedObject private var viewModel = DeviceControlViewModel.shared
-    @State private var showAddDevice: Bool = false
     @State private var showRealTimeSettings: Bool = false
     @State private var selectedDevice: WLEDDevice?
     @State private var selectedLocation: DeviceLocation = .all
+    @State private var showManualEntry: Bool = false
+    @State private var manualIP: String = ""
 
     var body: some View {
         NavigationStack {
@@ -49,7 +50,9 @@ struct DeviceControlView: View {
                             
                             // Add Device Button
                             Button {
-                                showAddDevice = true
+                                showManualEntry = false
+                                viewModel.enableActiveHealthChecksIfNeeded()
+                                Task { await viewModel.startScanning() }
                             } label: {
                                 Image(systemName: "plus")
                                     .font(.title2)
@@ -67,29 +70,47 @@ struct DeviceControlView: View {
                     // Main Content
                     if filteredDevicesByLocation.isEmpty && !viewModel.isScanning {
                         EmptyStateView(
-                            onScan: { Task { await viewModel.startScanning() } },
-                            onAddDevice: { showAddDevice = true }
+                            onScan: {
+                                showManualEntry = false
+                                viewModel.enableActiveHealthChecksIfNeeded()
+                                Task { await viewModel.startScanning() }
+                            },
+                            onAddDevice: {
+                                showManualEntry = true
+                                viewModel.enableActiveHealthChecksIfNeeded()
+                                Task { await viewModel.startScanning() }
+                            }
                         )
                     } else {
                         // Optional: Show small scanning indicator at top if still scanning
                         if viewModel.isScanning {
-                            HStack {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                Text("Discovering devices...")
-                                    .font(.caption)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text("Discovering devices...")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                    Spacer()
+                                    Text("\(viewModel.devices.count) found")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                }
+                                
+                                Text("Listening for WLED broadcasts (up to 30s).")
+                                    .font(.caption2)
                                     .foregroundColor(.gray)
-                                Spacer()
-                                Text("\(viewModel.devices.count) found")
-                                    .font(.caption)
-                                    .foregroundColor(.green)
                             }
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 10)
                             .background(Color.gray.opacity(0.1))
                             .cornerRadius(8)
                             .padding(.horizontal, 16)
                             .transition(.opacity)
+                        }
+                        
+                        if viewModel.isScanning && viewModel.devices.isEmpty {
+                            manualAddRow
                         }
                         
                         DeviceListView(viewModel: viewModel, selectedDevice: $selectedDevice, devices: filteredDevicesByLocation)
@@ -103,9 +124,6 @@ struct DeviceControlView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showAddDevice) {
-            AddDeviceSheet(viewModel: viewModel)
-        }
             .sheet(isPresented: $showRealTimeSettings) {
                 RealTimeSettingsView(viewModel: viewModel)
             }
@@ -115,9 +133,14 @@ struct DeviceControlView: View {
             .navigationBarHidden(true)
             .onReceive(viewModel.$devices) { _ in
                 updateAvailableLocations()
+                if !viewModel.devices.isEmpty {
+                    showManualEntry = false
+                }
             }
             .onAppear {
                 updateAvailableLocations()
+                viewModel.startPassiveDiscovery()
+                viewModel.enableActiveHealthChecksIfNeeded()
             }
         }
     }
@@ -208,6 +231,53 @@ struct DeviceControlView: View {
         if sortedLocations != cachedAvailableLocations {
             cachedAvailableLocations = sortedLocations
         }
+    }
+    
+    private var manualAddRow: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Add device manually")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                Button(showManualEntry ? "Hide" : "Enter IP") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showManualEntry.toggle()
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.blue)
+            }
+            
+            if showManualEntry {
+                HStack(spacing: 12) {
+                    TextField("192.168.1.100", text: $manualIP)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.gray.opacity(0.2))
+                        .cornerRadius(10)
+                        .keyboardType(.numbersAndPunctuation)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    
+                    Button("Add") {
+                        guard !manualIP.isEmpty else { return }
+                        viewModel.addDeviceByIP(manualIP)
+                        manualIP = ""
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(manualIP.isEmpty)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(12)
+        .padding(.horizontal, 16)
     }
 }
 

@@ -5,6 +5,7 @@ struct AutomationTransitionEditor: View {
     @ObservedObject var viewModel: DeviceControlViewModel
     @ObservedObject private var presetsStore = PresetsStore.shared
     let device: WLEDDevice
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     // Bindings for automation state
     @Binding var startGradient: LEDGradient
@@ -12,6 +13,10 @@ struct AutomationTransitionEditor: View {
     @Binding var startBrightness: Double
     @Binding var endBrightness: Double
     @Binding var durationSeconds: Double
+    @Binding var startTemperature: Double?
+    @Binding var startWhiteLevel: Double?
+    @Binding var endTemperature: Double?
+    @Binding var endWhiteLevel: Double?
     
     // Preview state
     @State private var previewEnabled: Bool = false
@@ -22,6 +27,10 @@ struct AutomationTransitionEditor: View {
     @State private var showWheel: Bool = false
     @State private var wheelInitial: Color = .white
     @State private var wheelTarget: Character = "A" // 'A' or 'B'
+    @State private var stopTemperaturesA: [UUID: Double] = [:]
+    @State private var stopTemperaturesB: [UUID: Double] = [:]
+    @State private var stopWhiteLevelsA: [UUID: Double] = [:]
+    @State private var stopWhiteLevelsB: [UUID: Double] = [:]
     @State private var selectedStartPresetId: UUID?
     @State private var selectedEndPresetId: UUID?
     @State private var selectedTransitionPresetId: UUID?
@@ -63,6 +72,7 @@ struct AutomationTransitionEditor: View {
         .onAppear {
             // Initialize duration from durationSeconds
             updateDurationFromSeconds(durationSeconds)
+            hydrateStopMapsIfNeeded()
         }
         .onChange(of: durationSeconds) { _, newValue in
             updateDurationFromSeconds(newValue)
@@ -124,6 +134,22 @@ struct AutomationTransitionEditor: View {
             startBrightness = Double(preset.brightnessA)
             endBrightness = Double(preset.brightnessB)
             durationSeconds = preset.durationSec
+            stopTemperaturesA = preset.temperatureA.map { temp in
+                Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, temp) })
+            } ?? [:]
+            stopWhiteLevelsA = preset.whiteLevelA.map { white in
+                Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, white) })
+            } ?? [:]
+            stopTemperaturesB = preset.temperatureB.map { temp in
+                Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, temp) })
+            } ?? [:]
+            stopWhiteLevelsB = preset.whiteLevelB.map { white in
+                Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, white) })
+            } ?? [:]
+            startTemperature = preset.temperatureA
+            startWhiteLevel = preset.whiteLevelA
+            endTemperature = preset.temperatureB
+            endWhiteLevel = preset.whiteLevelB
             
             if previewEnabled {
                 Task {
@@ -267,6 +293,44 @@ struct AutomationTransitionEditor: View {
                     var updatedStops = startGradient.stops
                     updatedStops.append(new)
                     updatedStops.sort { $0.position < $1.position }
+                    if !stopTemperaturesA.isEmpty {
+                        if let newIndex = updatedStops.firstIndex(where: { $0.id == new.id }) {
+                            var nearestTemp: Double? = nil
+                            var minDistance: Double = Double.greatestFiniteMagnitude
+                            for (idx, stop) in updatedStops.enumerated() {
+                                if idx != newIndex, let temp = stopTemperaturesA[stop.id] {
+                                    let distance = abs(stop.position - new.position)
+                                    if distance < minDistance {
+                                        minDistance = distance
+                                        nearestTemp = temp
+                                    }
+                                }
+                            }
+                            if let inheritedTemp = nearestTemp {
+                                stopTemperaturesA[new.id] = inheritedTemp
+                            }
+                        }
+                    }
+                    if !stopWhiteLevelsA.isEmpty {
+                        if let newIndex = updatedStops.firstIndex(where: { $0.id == new.id }) {
+                            var nearestWhite: Double? = nil
+                            var minDistance: Double = Double.greatestFiniteMagnitude
+                            for (idx, stop) in updatedStops.enumerated() {
+                                if idx != newIndex, let white = stopWhiteLevelsA[stop.id] {
+                                    let distance = abs(stop.position - new.position)
+                                    if distance < minDistance {
+                                        minDistance = distance
+                                        nearestWhite = white
+                                    }
+                                }
+                            }
+                            if let inheritedWhite = nearestWhite {
+                                stopWhiteLevelsA[new.id] = inheritedWhite
+                            }
+                        }
+                    }
+                    startTemperature = stopTemperaturesA.values.first
+                    startWhiteLevel = stopWhiteLevelsA.values.first
                     startGradient = LEDGradient(stops: updatedStops, interpolation: startGradient.interpolation)
                     selectedA = new.id
                     
@@ -278,6 +342,11 @@ struct AutomationTransitionEditor: View {
                 },
                 onStopsChanged: { stops, phase in
                     startGradient = LEDGradient(stops: stops, interpolation: startGradient.interpolation)
+                    let stopIds = Set(stops.map { $0.id })
+                    stopTemperaturesA = stopTemperaturesA.filter { stopIds.contains($0.key) }
+                    stopWhiteLevelsA = stopWhiteLevelsA.filter { stopIds.contains($0.key) }
+                    startTemperature = stopTemperaturesA.values.first
+                    startWhiteLevel = stopWhiteLevelsA.values.first
                     if previewEnabled && phase == .ended {
                         Task {
                             await previewTransition()
@@ -342,6 +411,44 @@ struct AutomationTransitionEditor: View {
                     var updatedStops = endGradient.stops
                     updatedStops.append(new)
                     updatedStops.sort { $0.position < $1.position }
+                    if !stopTemperaturesB.isEmpty {
+                        if let newIndex = updatedStops.firstIndex(where: { $0.id == new.id }) {
+                            var nearestTemp: Double? = nil
+                            var minDistance: Double = Double.greatestFiniteMagnitude
+                            for (idx, stop) in updatedStops.enumerated() {
+                                if idx != newIndex, let temp = stopTemperaturesB[stop.id] {
+                                    let distance = abs(stop.position - new.position)
+                                    if distance < minDistance {
+                                        minDistance = distance
+                                        nearestTemp = temp
+                                    }
+                                }
+                            }
+                            if let inheritedTemp = nearestTemp {
+                                stopTemperaturesB[new.id] = inheritedTemp
+                            }
+                        }
+                    }
+                    if !stopWhiteLevelsB.isEmpty {
+                        if let newIndex = updatedStops.firstIndex(where: { $0.id == new.id }) {
+                            var nearestWhite: Double? = nil
+                            var minDistance: Double = Double.greatestFiniteMagnitude
+                            for (idx, stop) in updatedStops.enumerated() {
+                                if idx != newIndex, let white = stopWhiteLevelsB[stop.id] {
+                                    let distance = abs(stop.position - new.position)
+                                    if distance < minDistance {
+                                        minDistance = distance
+                                        nearestWhite = white
+                                    }
+                                }
+                            }
+                            if let inheritedWhite = nearestWhite {
+                                stopWhiteLevelsB[new.id] = inheritedWhite
+                            }
+                        }
+                    }
+                    endTemperature = stopTemperaturesB.values.first
+                    endWhiteLevel = stopWhiteLevelsB.values.first
                     endGradient = LEDGradient(stops: updatedStops, interpolation: endGradient.interpolation)
                     selectedB = new.id
                     
@@ -353,6 +460,11 @@ struct AutomationTransitionEditor: View {
                 },
                 onStopsChanged: { stops, phase in
                     endGradient = LEDGradient(stops: stops, interpolation: endGradient.interpolation)
+                    let stopIds = Set(stops.map { $0.id })
+                    stopTemperaturesB = stopTemperaturesB.filter { stopIds.contains($0.key) }
+                    stopWhiteLevelsB = stopWhiteLevelsB.filter { stopIds.contains($0.key) }
+                    endTemperature = stopTemperaturesB.values.first
+                    endWhiteLevel = stopWhiteLevelsB.values.first
                     if previewEnabled && phase == .ended {
                         Task {
                             await previewTransition()
@@ -399,10 +511,26 @@ struct AutomationTransitionEditor: View {
                 selectedStartPresetId = preset.id
                 startGradient = LEDGradient(stops: preset.gradientStops, interpolation: preset.gradientInterpolation ?? .linear)
                 startBrightness = Double(preset.brightness)
+                stopTemperaturesA = preset.temperature.map { temp in
+                    Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, temp) })
+                } ?? [:]
+                stopWhiteLevelsA = preset.whiteLevel.map { white in
+                    Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, white) })
+                } ?? [:]
+                startTemperature = preset.temperature
+                startWhiteLevel = preset.whiteLevel
             } else {
                 selectedEndPresetId = preset.id
                 endGradient = LEDGradient(stops: preset.gradientStops, interpolation: preset.gradientInterpolation ?? .linear)
                 endBrightness = Double(preset.brightness)
+                stopTemperaturesB = preset.temperature.map { temp in
+                    Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, temp) })
+                } ?? [:]
+                stopWhiteLevelsB = preset.whiteLevel.map { white in
+                    Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, white) })
+                } ?? [:]
+                endTemperature = preset.temperature
+                endWhiteLevel = preset.whiteLevel
             }
             
             if previewEnabled {
@@ -433,32 +561,67 @@ struct AutomationTransitionEditor: View {
         let supportsCCT = viewModel.supportsCCT(for: device, segmentId: 0)
         let supportsWhite = viewModel.supportsWhite(for: device, segmentId: 0)
         let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: 0)
+        let initialTemp = target == .start ? stopTemperaturesA[selectedId] : stopTemperaturesB[selectedId]
+        let initialWhite = target == .start ? stopWhiteLevelsA[selectedId] : stopWhiteLevelsB[selectedId]
         
         ColorWheelInline(
             initialColor: wheelInitial,
+            initialTemperature: initialTemp,
+            initialWhiteLevel: initialWhite,
             canRemove: canRemove,
             supportsCCT: supportsCCT,
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+            allowManualWhite: advancedUIEnabled,
+            cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, whiteLevel in
                 if target == .start {
                     guard let idx = startGradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }
                     var updatedStops = startGradient.stops
                     if let temp = temperature {
                         updatedStops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
+                        stopTemperaturesA[selectedId] = temp
+                        if let white = whiteLevel {
+                            stopWhiteLevelsA[selectedId] = white
+                        } else {
+                            stopWhiteLevelsA.removeValue(forKey: selectedId)
+                        }
                     } else {
                         updatedStops[idx].hexColor = color.toHex()
+                        stopTemperaturesA.removeValue(forKey: selectedId)
+                        if let white = whiteLevel {
+                            stopWhiteLevelsA[selectedId] = white
+                        } else {
+                            stopWhiteLevelsA.removeValue(forKey: selectedId)
+                        }
                     }
                     startGradient = LEDGradient(stops: updatedStops, interpolation: startGradient.interpolation)
+                    startTemperature = stopTemperaturesA.values.first
+                    startWhiteLevel = stopWhiteLevelsA.values.first
                 } else {
                     guard let idx = endGradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }
                     var updatedStops = endGradient.stops
                     if let temp = temperature {
                         updatedStops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
+                        stopTemperaturesB[selectedId] = temp
+                        if let white = whiteLevel {
+                            stopWhiteLevelsB[selectedId] = white
+                        } else {
+                            stopWhiteLevelsB.removeValue(forKey: selectedId)
+                        }
                     } else {
                         updatedStops[idx].hexColor = color.toHex()
+                        stopTemperaturesB.removeValue(forKey: selectedId)
+                        if let white = whiteLevel {
+                            stopWhiteLevelsB[selectedId] = white
+                        } else {
+                            stopWhiteLevelsB.removeValue(forKey: selectedId)
+                        }
                     }
                     endGradient = LEDGradient(stops: updatedStops, interpolation: endGradient.interpolation)
+                    endTemperature = stopTemperaturesB.values.first
+                    endWhiteLevel = stopWhiteLevelsB.values.first
                 }
                 
                 if previewEnabled {
@@ -473,6 +636,10 @@ struct AutomationTransitionEditor: View {
                         var updatedStops = startGradient.stops
                         updatedStops.removeAll { $0.id == selectedId }
                         startGradient = LEDGradient(stops: updatedStops, interpolation: startGradient.interpolation)
+                        stopTemperaturesA.removeValue(forKey: selectedId)
+                        stopWhiteLevelsA.removeValue(forKey: selectedId)
+                        startTemperature = stopTemperaturesA.values.first
+                        startWhiteLevel = stopWhiteLevelsA.values.first
                         selectedA = nil
                     }
                 } else {
@@ -480,6 +647,10 @@ struct AutomationTransitionEditor: View {
                         var updatedStops = endGradient.stops
                         updatedStops.removeAll { $0.id == selectedId }
                         endGradient = LEDGradient(stops: updatedStops, interpolation: endGradient.interpolation)
+                        stopTemperaturesB.removeValue(forKey: selectedId)
+                        stopWhiteLevelsB.removeValue(forKey: selectedId)
+                        endTemperature = stopTemperaturesB.values.first
+                        endWhiteLevel = stopWhiteLevelsB.values.first
                         selectedB = nil
                     }
                 }
@@ -526,6 +697,21 @@ struct AutomationTransitionEditor: View {
     private func updateDurationToSeconds() {
         durationSeconds = Double(max(0, durationHours * 3600 + durationMinutes * 60))
     }
+
+    private func hydrateStopMapsIfNeeded() {
+        if stopTemperaturesA.isEmpty, let temp = startTemperature {
+            stopTemperaturesA = Dictionary(uniqueKeysWithValues: startGradient.stops.map { ($0.id, temp) })
+        }
+        if stopWhiteLevelsA.isEmpty, let white = startWhiteLevel {
+            stopWhiteLevelsA = Dictionary(uniqueKeysWithValues: startGradient.stops.map { ($0.id, white) })
+        }
+        if stopTemperaturesB.isEmpty, let temp = endTemperature {
+            stopTemperaturesB = Dictionary(uniqueKeysWithValues: endGradient.stops.map { ($0.id, temp) })
+        }
+        if stopWhiteLevelsB.isEmpty, let white = endWhiteLevel {
+            stopWhiteLevelsB = Dictionary(uniqueKeysWithValues: endGradient.stops.map { ($0.id, white) })
+        }
+    }
     
     // MARK: - Preview Functions
     
@@ -537,13 +723,21 @@ struct AutomationTransitionEditor: View {
         await viewModel.cancelActiveTransitionIfNeeded(for: device)
         try? await Task.sleep(nanoseconds: 120_000_000)
         
+        let startTemps = stopTemperaturesA.isEmpty ? nil : stopTemperaturesA
+        let startWhites = stopWhiteLevelsA.isEmpty ? nil : stopWhiteLevelsA
+        let resolvedEndTemps = stopTemperaturesB.isEmpty ? startTemps : stopTemperaturesB
+        let resolvedEndWhites = stopWhiteLevelsB.isEmpty ? startWhites : stopWhiteLevelsB
         await viewModel.startTransition(
             from: startGradient,
             aBrightness: Int(startBrightness),
             to: endGradient,
             bBrightness: Int(endBrightness),
             durationSec: durationSeconds,
-            device: device
+            device: device,
+            startStopTemperatures: startTemps,
+            startStopWhiteLevels: startWhites,
+            endStopTemperatures: resolvedEndTemps,
+            endStopWhiteLevels: resolvedEndWhites
         )
         
         await MainActor.run {
@@ -560,4 +754,3 @@ struct AutomationTransitionEditor: View {
         }
     }
 }
-
