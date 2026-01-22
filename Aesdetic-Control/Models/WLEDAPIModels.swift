@@ -376,6 +376,10 @@ let maxWLEDNativeTransitionSeconds = min(maxWLEDTransitionSeconds, 3600.0)
 let maxWLEDPlaylistEntries = 100
 let maxWLEDPlaylistTransitionSeconds = 60.0
 let playlistInitialHoldDeciseconds = 1
+let maxWLEDPlaylistDurationSeconds = 3600.0
+let playlistHoldThresholdSeconds = 1200.0
+let playlistHoldScaleSeconds = 900.0
+let playlistHoldMaxSeconds = 5.0
 
 // MARK: - API Configuration Models
 

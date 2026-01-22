@@ -574,20 +574,29 @@ class DeviceControlViewModel: ObservableObject {
     }
 
     private func playlistStepPlan(for durationSeconds: Double) -> PlaylistStepPlan {
-        let safeDuration = max(0.1, durationSeconds)
-        let transitionLegs = max(1, Int(ceil(safeDuration / maxWLEDPlaylistTransitionSeconds)))
-        var steps = transitionLegs + 1
-        if steps > maxWLEDPlaylistEntries {
-            steps = maxWLEDPlaylistEntries
-        }
-        let legs = max(1, steps - 1)
-        let effectiveDuration = min(safeDuration, Double(legs) * maxWLEDPlaylistTransitionSeconds)
-        let stepTransitionSeconds = effectiveDuration / Double(legs)
+        let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.1, durationSeconds))
+        let holdSeconds = clampedDuration >= playlistHoldThresholdSeconds
+            ? min(playlistHoldMaxSeconds, clampedDuration / playlistHoldScaleSeconds)
+            : 0.0
+        let targetLegSeconds = maxWLEDPlaylistTransitionSeconds + holdSeconds
+        var legs = max(1, Int(ceil(clampedDuration / targetLegSeconds)))
+        legs = min(maxWLEDPlaylistEntries - 1, legs)
+        let stepTransitionSeconds = max(
+            0.1,
+            min(
+                maxWLEDPlaylistTransitionSeconds,
+                (clampedDuration / Double(legs)) - holdSeconds
+            )
+        )
         let transitionDeciseconds = max(1, min(maxWLEDTransitionDeciseconds, Int(round(stepTransitionSeconds * 10.0))))
-        var durations = Array(repeating: transitionDeciseconds, count: steps)
-        durations[0] = min(playlistInitialHoldDeciseconds, transitionDeciseconds)
+        let holdDeciseconds = max(0, Int(round(holdSeconds * 10.0)))
+        let durationDeciseconds = min(maxWLEDTransitionDeciseconds, transitionDeciseconds + holdDeciseconds)
+        let steps = legs + 1
+        var durations = Array(repeating: durationDeciseconds, count: steps)
+        durations[0] = min(playlistInitialHoldDeciseconds, durationDeciseconds)
         var transitions = Array(repeating: transitionDeciseconds, count: steps)
         transitions[0] = 0
+        let effectiveDuration = Double(legs) * (Double(durationDeciseconds) / 10.0)
         return PlaylistStepPlan(
             steps: steps,
             transitionDeciseconds: transitionDeciseconds,
