@@ -406,7 +406,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             ps: request.ps,
             dur: request.dur,
             transition: request.transition,
-            repeat: request.repeat
+            repeat: request.repeat,
+            end: request.endPresetId
         )])
         httpRequest.httpBody = try encoder.encode(body)
         do {
@@ -433,13 +434,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 let durations = playlistDict["dur"] as? [Int] ?? []
                 let transitions = playlistDict["transition"] as? [Int] ?? []
                 let repeatCount = playlistDict["repeat"] as? Int
+                let endPresetId = playlistDict["end"] as? Int
                 let playlist = WLEDPlaylist(
                     id: id,
                     name: name,
                     presets: presets,
                     duration: durations,
                     transition: transitions,
-                    repeat: repeatCount
+                    repeat: repeatCount,
+                    endPresetId: endPresetId
                 )
                 playlists.append(playlist)
             }
@@ -846,7 +849,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )
         try await savePreset(WLEDPresetSaveRequest(id: presetBId, name: "\(preset.name) - B", quickLoad: false, state: stateB), to: device)
         
-        // Create playlist: A→B, no loop (repeat: nil means no repeat)
+        // Create playlist: A→B, one cycle
         let transitionDeciseconds = min(maxWLEDTransitionDeciseconds, Int(preset.durationSec * 10))  // Clamp to WLED max
         
         let playlistRequest = WLEDPlaylistSaveRequest(
@@ -855,7 +858,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             ps: [presetAId, presetBId],
             dur: [1, 0],  // Use a non-zero hold for entry 1 for better device compatibility
             transition: [transitionDeciseconds, 0],  // Transition from A to B, then stop
-            repeat: nil  // No loop - stops at B
+            repeat: 1,  // One cycle - stops at B
+            endPresetId: presetBId
         )
         
         _ = try await savePlaylist(playlistRequest, to: device)
@@ -1666,6 +1670,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let durations = decodeIntArray(playlistDict["dur"])
             let transitions = decodeIntArray(playlistDict["transition"])
             let repeatCount = decodeInt(playlistDict["repeat"])
+            let endPresetId = decodeInt(playlistDict["end"])
             playlists.append(
                 WLEDPlaylist(
                     id: id,
@@ -1673,7 +1678,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                     presets: presets,
                     duration: durations,
                     transition: transitions,
-                    repeat: repeatCount
+                    repeat: repeatCount,
+                    endPresetId: endPresetId
                 )
             )
         }
@@ -1938,6 +1944,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         if let repeatCount = request.repeat {
             playlist["repeat"] = repeatCount
         }
+        if let endPresetId = request.endPresetId {
+            playlist["end"] = endPresetId
+        }
         let body: [String: Any] = [
             "psave": request.id,
             "n": request.name,
@@ -1962,7 +1971,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             ps: request.ps,
             dur: request.dur,
             transition: request.transition,
-            repeat: request.repeat
+            repeat: request.repeat,
+            end: request.endPresetId
         )
         let body = PresetStorePayload(
             ps: [
@@ -2283,6 +2293,7 @@ private struct PresetPlaylistBody: Encodable {
     let dur: [Int]
     let transition: [Int]
     let `repeat`: Int?
+    let end: Int?
 }
 
 struct WLEDPlaylistSaveRequest: Encodable {
@@ -2291,7 +2302,8 @@ struct WLEDPlaylistSaveRequest: Encodable {
     let ps: [Int]  // Preset IDs
     let dur: [Int]  // Durations in deciseconds (per preset)
     let transition: [Int]  // Transition times in deciseconds (per preset)
-    let `repeat`: Int?  // Repeat count (nil = no repeat, 0 = infinite)
+    let `repeat`: Int?  // Repeat count (1 = one cycle, 0 = infinite, nil = WLED default)
+    let endPresetId: Int?  // Preset to apply at end (optional)
 }
 
 private struct PlaylistStorePayload: Encodable {
@@ -2304,4 +2316,5 @@ private struct PlaylistStoreBody: Encodable {
     let dur: [Int]
     let transition: [Int]
     let `repeat`: Int?
+    let end: Int?
 } 

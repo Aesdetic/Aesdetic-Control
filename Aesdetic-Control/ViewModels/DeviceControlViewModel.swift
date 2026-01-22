@@ -664,7 +664,7 @@ class DeviceControlViewModel: ObservableObject {
         let requestedDuration = durationSeconds
         var durationSeconds = durationSeconds
         let ledCount = totalLEDCount(for: device)
-        // Use native transition up to 1 hour (policy), then clamp for manual transitions.
+        // Use native transition up to the app policy cap (WLED supports up to maxWLEDTransitionSeconds).
         let maxNativeSeconds = maxWLEDNativeTransitionSeconds
         #if DEBUG
         let startStopsCount = startGradient.stops.count
@@ -4582,6 +4582,7 @@ class DeviceControlViewModel: ObservableObject {
         let transitionDeciseconds = min(maxWLEDTransitionDeciseconds, Int(durationSeconds * 10.0))
         let durations = [1, 0]  // Use a non-zero hold for entry 1 for better device compatibility
         let transitions = [transitionDeciseconds, 0]
+        let endPresetId = stepPresetIds.last
         let playlistName = label?.isEmpty == false ? label! : "\(autoTransitionPrefix)\(playlistId)"
         let playlistRequest = WLEDPlaylistSaveRequest(
             id: playlistId,
@@ -4589,7 +4590,8 @@ class DeviceControlViewModel: ObservableObject {
             ps: stepPresetIds,
             dur: durations,
             transition: transitions,
-            repeat: nil
+            repeat: 1,
+            endPresetId: endPresetId
         )
 
         do {

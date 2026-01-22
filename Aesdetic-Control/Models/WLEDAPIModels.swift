@@ -284,6 +284,7 @@ struct WLEDPlaylist: Codable, Identifiable {
     let duration: [Int]
     let transition: [Int]
     let `repeat`: Int?
+    let endPresetId: Int?
 }
 
 /// Model for WLED timer/macro configuration
@@ -368,7 +369,7 @@ let maxWLEDTransitionDeciseconds = 65535
 /// Calculated from maxWLEDTransitionDeciseconds: 65535 / 10 = 6553.5 seconds
 let maxWLEDTransitionSeconds = 6553.5
 
-/// Practical upper bound for native transitions in this app (user-configured policy)
+/// Practical upper bound for native transitions in this app (policy cap below WLED max)
 let maxWLEDNativeTransitionSeconds = min(maxWLEDTransitionSeconds, 3600.0)
 
 // MARK: - API Configuration Models
