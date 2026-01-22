@@ -372,6 +372,11 @@ let maxWLEDTransitionSeconds = 6553.5
 /// Practical upper bound for native transitions in this app (policy cap below WLED max)
 let maxWLEDNativeTransitionSeconds = min(maxWLEDTransitionSeconds, 3600.0)
 
+/// Playlist constraints: WLED uses uint16 ms transitions and 100-entry playlists.
+let maxWLEDPlaylistEntries = 100
+let maxWLEDPlaylistTransitionSeconds = 60.0
+let playlistInitialHoldDeciseconds = 1
+
 // MARK: - API Configuration Models
 
 /// Configuration for WLED API client

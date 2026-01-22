@@ -565,6 +565,38 @@ class DeviceControlViewModel: ObservableObject {
         return (steps, actualStep)
     }
 
+    private struct PlaylistStepPlan {
+        let steps: Int
+        let transitionDeciseconds: Int
+        let durations: [Int]
+        let transitions: [Int]
+        let effectiveDurationSeconds: Double
+    }
+
+    private func playlistStepPlan(for durationSeconds: Double) -> PlaylistStepPlan {
+        let safeDuration = max(0.1, durationSeconds)
+        let transitionLegs = max(1, Int(ceil(safeDuration / maxWLEDPlaylistTransitionSeconds)))
+        var steps = transitionLegs + 1
+        if steps > maxWLEDPlaylistEntries {
+            steps = maxWLEDPlaylistEntries
+        }
+        let legs = max(1, steps - 1)
+        let effectiveDuration = min(safeDuration, Double(legs) * maxWLEDPlaylistTransitionSeconds)
+        let stepTransitionSeconds = effectiveDuration / Double(legs)
+        let transitionDeciseconds = max(1, min(maxWLEDTransitionDeciseconds, Int(round(stepTransitionSeconds * 10.0))))
+        var durations = Array(repeating: transitionDeciseconds, count: steps)
+        durations[0] = min(playlistInitialHoldDeciseconds, transitionDeciseconds)
+        var transitions = Array(repeating: transitionDeciseconds, count: steps)
+        transitions[0] = 0
+        return PlaylistStepPlan(
+            steps: steps,
+            transitionDeciseconds: transitionDeciseconds,
+            durations: durations,
+            transitions: transitions,
+            effectiveDurationSeconds: effectiveDuration
+        )
+    }
+
     private func isRunActive(deviceId: String, runId: UUID) async -> Bool {
         await MainActor.run {
             activeRunStatus[deviceId]?.id == runId
@@ -4426,8 +4458,10 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
         var usedPresetIds = Set(existingPresets.map { $0.id })
+        let stepPlan = playlistStepPlan(for: durationSeconds)
+        let stepCount = stepPlan.steps
         var reusableStepPresetIds: [Int] = []
-        if let existingStepPresetIds, existingStepPresetIds.count == 2 {
+        if let existingStepPresetIds, existingStepPresetIds.count == stepCount {
             reusableStepPresetIds = existingStepPresetIds
             reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
         }
@@ -4491,10 +4525,10 @@ class DeviceControlViewModel: ObservableObject {
             usedPresetIds.insert(resolvedPlaylistId)
         }
 
-        let needsStepIds = reusableStepPresetIds.count != 2
+        let needsStepIds = reusableStepPresetIds.count != stepCount
         var allocatedPresetIds: [Int]? = nil
         if needsStepIds {
-            allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: 2)
+            allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: stepCount)
             if allocatedPresetIds == nil && !persist {
                 let autoPresetIds = existingPresets.filter {
                     $0.name.hasPrefix(autoStepPrefix)
@@ -4510,24 +4544,24 @@ class DeviceControlViewModel: ObservableObject {
                     let refreshedPresets = (try? await apiService.fetchPresets(for: device)) ?? []
                     usedPresetIds = Set(refreshedPresets.map { $0.id })
                     reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
-                    allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: 2)
+                    allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: stepCount)
                 }
             }
         }
 
         if needsStepIds, allocatedPresetIds == nil {
             #if DEBUG
-            print("⚠️ Playlist creation failed: insufficient preset slots (2 needed) for \(device.name).")
+            print("⚠️ Playlist creation failed: insufficient preset slots (\(stepCount) needed) for \(device.name).")
             #endif
             return nil
         }
 
         var stepPresetIds = reusableStepPresetIds
         if needsStepIds, let allocatedPresetIds {
-            stepPresetIds = Array(allocatedPresetIds.prefix(2))
+            stepPresetIds = Array(allocatedPresetIds.prefix(stepCount))
         }
 
-        guard let playlistId = resolvedPlaylistId, stepPresetIds.count == 2 else {
+        guard let playlistId = resolvedPlaylistId, stepPresetIds.count == stepCount else {
             #if DEBUG
             print("⚠️ Playlist creation failed: missing playlist or step presets for \(device.name).")
             #endif
@@ -4542,17 +4576,28 @@ class DeviceControlViewModel: ObservableObject {
 
         let stepCount = stepPresetIds.count
         let stepDenom = Double(max(1, stepCount - 1))
+        if stepPlan.effectiveDurationSeconds < durationSeconds {
+            #if DEBUG
+            print("⚠️ Playlist duration capped for \(device.name): requested=\(String(format: "%.1f", durationSeconds))s, effective=\(String(format: "%.1f", stepPlan.effectiveDurationSeconds))s")
+            #endif
+        }
+        #if DEBUG
+        let stepTransitionSeconds = Double(stepPlan.transitionDeciseconds) / 10.0
+        print("🔎 Playlist step plan for \(device.name): steps=\(stepCount), step=\(String(format: "%.2f", stepTransitionSeconds))s")
+        #endif
         for (idx, presetId) in stepPresetIds.enumerated() {
             let t = Double(idx) / stepDenom
             let stops = interpolateStops(from: from, to: to, t: t)
             let brightness = Int(round(Double(startBrightness) * (1.0 - t) + Double(endBrightness) * t))
+            let tempValue = interpolateOptional(startTemperature, endTemperature, t: t)
+            let whiteValue = interpolateOptional(startWhiteLevel, endWhiteLevel, t: t)
             let state = segmentedPresetState(
                 device: device,
                 gradient: LEDGradient(stops: stops, interpolation: to.interpolation),
                 brightness: brightness,
                 on: true,
-                temperature: idx == 0 ? startTemperature : endTemperature,
-                whiteLevel: idx == 0 ? startWhiteLevel : endWhiteLevel
+                temperature: tempValue,
+                whiteLevel: whiteValue
             )
             let request = WLEDPresetSaveRequest(
                 id: presetId,
@@ -4579,9 +4624,8 @@ class DeviceControlViewModel: ObservableObject {
             return nil
         }
 
-        let transitionDeciseconds = min(maxWLEDTransitionDeciseconds, Int(durationSeconds * 10.0))
-        let durations = [1, 0]  // Use a non-zero hold for entry 1 for better device compatibility
-        let transitions = [transitionDeciseconds, 0]
+        let durations = stepPlan.durations
+        let transitions = stepPlan.transitions
         let endPresetId = stepPresetIds.last
         let playlistName = label?.isEmpty == false ? label! : "\(autoTransitionPrefix)\(playlistId)"
         let playlistRequest = WLEDPlaylistSaveRequest(
@@ -4724,6 +4768,13 @@ class DeviceControlViewModel: ObservableObject {
             let mixed = Color(red: Double(r) / 255.0, green: Double(g) / 255.0, blue: Double(b) / 255.0)
             return GradientStop(position: pos, hexColor: mixed.toHex())
         }
+    }
+
+    private func interpolateOptional(_ start: Double?, _ end: Double?, t: Double) -> Double? {
+        if let start, let end {
+            return start + (end - start) * t
+        }
+        return start ?? end
     }
 
     func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 60, aBrightness: Int? = nil, bBrightness: Int? = nil) async {

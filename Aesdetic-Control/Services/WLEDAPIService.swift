@@ -814,52 +814,52 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return presetId
     }
     
-    /// Save a TransitionPreset as a WLED playlist (A→B, no loop)
+    /// Save a TransitionPreset as a multi-step WLED playlist (A→B, one cycle)
     func saveTransitionPreset(_ preset: TransitionPreset, to device: WLEDDevice, playlistId: Int) async throws -> Int {
         let existingPresets = try await fetchPresets(for: device)
         var usedPresetIds = Set(existingPresets.map { $0.id })
         usedPresetIds.insert(playlistId)
-        guard let presetIds = allocateIds(from: 250, excluding: usedPresetIds, count: 2) else {
+        let stepPlan = playlistStepPlan(for: preset.durationSec)
+        let stepCount = stepPlan.steps
+        guard let presetIds = allocateIds(from: 250, excluding: usedPresetIds, count: stepCount) else {
             throw WLEDAPIError.invalidConfiguration
         }
-        let presetAId = presetIds[0]
-        let presetBId = presetIds[1]
 
-        // Save Gradient A as preset
-        let gradientA = preset.gradientA
-        let stateA = segmentedPresetState(
-            device: device,
-            gradient: gradientA,
-            brightness: preset.brightnessA,
-            on: true,
-            temperature: preset.temperatureA,
-            whiteLevel: preset.whiteLevelA
-        )
-        try await savePreset(WLEDPresetSaveRequest(id: presetAId, name: "\(preset.name) - A", quickLoad: false, state: stateA), to: device)
-        
-        // Save Gradient B as preset
-        let gradientB = preset.gradientB
-        let stateB = segmentedPresetState(
-            device: device,
-            gradient: gradientB,
-            brightness: preset.brightnessB,
-            on: true,
-            temperature: preset.temperatureB,
-            whiteLevel: preset.whiteLevelB
-        )
-        try await savePreset(WLEDPresetSaveRequest(id: presetBId, name: "\(preset.name) - B", quickLoad: false, state: stateB), to: device)
+        let denom = Double(max(1, stepCount - 1))
+        for (idx, presetId) in presetIds.enumerated() {
+            let t = Double(idx) / denom
+            let gradient = interpolatedGradient(from: preset.gradientA, to: preset.gradientB, t: t)
+            let brightness = Int(round(Double(preset.brightnessA) * (1.0 - t) + Double(preset.brightnessB) * t))
+            let temperature = interpolateOptional(preset.temperatureA, preset.temperatureB, t: t)
+            let whiteLevel = interpolateOptional(preset.whiteLevelA, preset.whiteLevelB, t: t)
+            let state = segmentedPresetState(
+                device: device,
+                gradient: gradient,
+                brightness: brightness,
+                on: true,
+                temperature: temperature,
+                whiteLevel: whiteLevel
+            )
+            try await savePreset(
+                WLEDPresetSaveRequest(
+                    id: presetId,
+                    name: "\(preset.name) Step \(idx + 1)",
+                    quickLoad: false,
+                    state: state
+                ),
+                to: device
+            )
+        }
         
         // Create playlist: A→B, one cycle
-        let transitionDeciseconds = min(maxWLEDTransitionDeciseconds, Int(preset.durationSec * 10))  // Clamp to WLED max
-        
         let playlistRequest = WLEDPlaylistSaveRequest(
             id: playlistId,
             name: preset.name,
-            ps: [presetAId, presetBId],
-            dur: [1, 0],  // Use a non-zero hold for entry 1 for better device compatibility
-            transition: [transitionDeciseconds, 0],  // Transition from A to B, then stop
+            ps: presetIds,
+            dur: stepPlan.durations,
+            transition: stepPlan.transitions,
             repeat: 1,  // One cycle - stops at B
-            endPresetId: presetBId
+            endPresetId: presetIds.last
         )
         
         _ = try await savePlaylist(playlistRequest, to: device)
@@ -1865,6 +1865,55 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             bri: brightness,
             seg: updates
         )
+    }
+
+    private struct PlaylistStepPlan {
+        let steps: Int
+        let durations: [Int]
+        let transitions: [Int]
+    }
+
+    private func playlistStepPlan(for durationSeconds: Double) -> PlaylistStepPlan {
+        let safeDuration = max(0.1, durationSeconds)
+        let transitionLegs = max(1, Int(ceil(safeDuration / maxWLEDPlaylistTransitionSeconds)))
+        var steps = transitionLegs + 1
+        if steps > maxWLEDPlaylistEntries {
+            steps = maxWLEDPlaylistEntries
+        }
+        let legs = max(1, steps - 1)
+        let effectiveDuration = min(safeDuration, Double(legs) * maxWLEDPlaylistTransitionSeconds)
+        let stepTransitionSeconds = effectiveDuration / Double(legs)
+        let transitionDeciseconds = max(1, min(maxWLEDTransitionDeciseconds, Int(round(stepTransitionSeconds * 10.0))))
+        var durations = Array(repeating: transitionDeciseconds, count: steps)
+        durations[0] = min(playlistInitialHoldDeciseconds, transitionDeciseconds)
+        var transitions = Array(repeating: transitionDeciseconds, count: steps)
+        transitions[0] = 0
+        return PlaylistStepPlan(steps: steps, durations: durations, transitions: transitions)
+    }
+
+    private func interpolatedGradient(from: LEDGradient, to: LEDGradient, t: Double) -> LEDGradient {
+        let a = from.stops.sorted { $0.position < $1.position }
+        let b = to.stops.sorted { $0.position < $1.position }
+        let count = max(a.count, b.count, 2)
+        let denom = Double(max(1, count - 1))
+        let positions = (0..<count).map { Double($0) / denom }
+        let stops = positions.map { pos in
+            let ca = GradientSampler.sampleColor(at: pos, stops: a, interpolation: from.interpolation).toRGBArray()
+            let cb = GradientSampler.sampleColor(at: pos, stops: b, interpolation: to.interpolation).toRGBArray()
+            let r = Int(round(Double(ca[0]) * (1.0 - t) + Double(cb[0]) * t))
+            let g = Int(round(Double(ca[1]) * (1.0 - t) + Double(cb[1]) * t))
+            let b = Int(round(Double(ca[2]) * (1.0 - t) + Double(cb[2]) * t))
+            let mixed = Color(red: Double(r) / 255.0, green: Double(g) / 255.0, blue: Double(b) / 255.0)
+            return GradientStop(position: pos, hexColor: mixed.toHex())
+        }
+        return LEDGradient(stops: stops, interpolation: to.interpolation)
+    }
+
+    private func interpolateOptional(_ start: Double?, _ end: Double?, t: Double) -> Double? {
+        if let start, let end {
+            return start + (end - start) * t
+        }
+        return start ?? end
     }
 
     private func presetSegmentStops(totalLEDs: Int, segmentCount: Int) -> [(start: Int, stop: Int)] {
