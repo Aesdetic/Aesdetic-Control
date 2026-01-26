@@ -453,6 +453,7 @@ class DeviceControlViewModel: ObservableObject {
     @Published var isScanning: Bool = false
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    @Published private(set) var presetSlotStatus: [String: PresetSlotAvailability] = [:]
     @Published var currentError: WLEDError?
     @Published var reconnectionStatus: [String: String] = [:]
     private var allowActiveHealthChecks: Bool = false
@@ -519,6 +520,7 @@ class DeviceControlViewModel: ObservableObject {
     private let playlistVerifyRetryAttempts: Int = 4
     private let playlistSaveDelayNanos: UInt64 = 600_000_000
     private let playlistVerifyDelayNanos: UInt64 = 700_000_000
+    private let playlistStartDelayNanos: UInt64 = 400_000_000
     private var temporaryPlaylistIds: [String: Int] = [:]
     private var temporaryPresetIds: [String: [Int]] = [:]
     
@@ -592,10 +594,8 @@ class DeviceControlViewModel: ObservableObject {
         let holdDeciseconds = max(0, Int(round(holdSeconds * 10.0)))
         let durationDeciseconds = min(maxWLEDTransitionDeciseconds, transitionDeciseconds + holdDeciseconds)
         let steps = legs + 1
-        var durations = Array(repeating: durationDeciseconds, count: steps)
-        durations[0] = min(playlistInitialHoldDeciseconds, durationDeciseconds)
-        var transitions = Array(repeating: transitionDeciseconds, count: steps)
-        transitions[0] = 0
+        let durations = Array(repeating: durationDeciseconds, count: steps)
+        let transitions = Array(repeating: transitionDeciseconds, count: steps)
         let effectiveDuration = Double(legs) * (Double(durationDeciseconds) / 10.0)
         return PlaylistStepPlan(
             steps: steps,
@@ -655,6 +655,33 @@ class DeviceControlViewModel: ObservableObject {
         let perLedEnabled = UserDefaults.standard.bool(forKey: "perLedTransitionsEnabled")
         let ledCount = totalLEDCount(for: device)
         return perLedEnabled && advancedEnabled && ledCount <= perLedFallbackLedLimit
+    }
+
+    func preparePlaylistStart(
+        device: WLEDDevice,
+        startGradient: LEDGradient,
+        startBrightness: Int,
+        startStopTemperatures: [UUID: Double]?,
+        startStopWhiteLevels: [UUID: Double]?,
+        segmentId: Int
+    ) async {
+        await applyGradientStopsAcrossStrip(
+            device,
+            stops: startGradient.stops,
+            ledCount: totalLEDCount(for: device),
+            stopTemperatures: startStopTemperatures,
+            stopWhiteLevels: startStopWhiteLevels,
+            disableActiveEffect: true,
+            segmentId: segmentId,
+            interpolation: startGradient.interpolation,
+            brightness: startBrightness,
+            on: true,
+            forceNoPerCallTransition: true,
+            releaseRealtimeOverride: false,
+            userInitiated: false,
+            preferSegmented: true
+        )
+        try? await Task.sleep(nanoseconds: playlistStartDelayNanos)
     }
 
     func totalLEDCount(for device: WLEDDevice) -> Int {
@@ -717,7 +744,8 @@ class DeviceControlViewModel: ObservableObject {
         let endIsSolid = isSolidGradient(endGradient)
         let requiresSegmentedStepper = !(startIsSolid && endIsSolid)
         let exceedsNativeCap = durationSeconds > maxNativeSeconds
-        let usePlaylistForLongTransition = automationName == nil && durationSeconds >= playlistLongTransitionThresholdSeconds
+        let shouldPersistPlaylist = automationName != nil
+        let usePlaylistForLongTransition = requestedDuration >= playlistLongTransitionThresholdSeconds
         let useSegmentedStepper = requiresSegmentedStepper || exceedsNativeCap
 
         if !useSegmentedStepper, durationSeconds > maxNativeSeconds {
@@ -804,17 +832,42 @@ class DeviceControlViewModel: ObservableObject {
                 durationSeconds: requestedDuration,
                 startBrightness: startBrightness,
                 endBrightness: endBrightness,
-                persist: false,
-                label: nil
-            ),
-            await startPlaylist(device: device, playlistId: playlist.playlistId) {
+                persist: shouldPersistPlaylist,
+                label: shouldPersistPlaylist ? automationName : nil
+            ) {
+                await preparePlaylistStart(
+                    device: device,
+                    startGradient: startGradient,
+                    startBrightness: startBrightness,
+                    startStopTemperatures: startStopTemperatures,
+                    startStopWhiteLevels: startStopWhiteLevels,
+                    segmentId: segmentId
+                )
+                if await startPlaylist(device: device, playlistId: playlist.playlistId) {
                 #if DEBUG
                 print("✅ Transition playlist started for \(device.name): playlistId=\(playlist.playlistId)")
                 #endif
                 await MainActor.run {
                     latestGradientStops[device.id] = endGradient.stops
                 }
+                if !shouldPersistPlaylist {
+                    let cleanupDelaySeconds = playlistStepPlan(for: requestedDuration).effectiveDurationSeconds
+                    let playlistId = playlist.playlistId
+                    Task { [weak self] in
+                        guard let self else { return }
+                        if cleanupDelaySeconds > 0 {
+                            let nanos = UInt64(cleanupDelaySeconds * 1_000_000_000.0)
+                            try? await Task.sleep(nanoseconds: nanos)
+                        }
+                        let shouldCleanup = await MainActor.run {
+                            temporaryPlaylistIds[device.id] == playlistId
+                        }
+                        guard shouldCleanup else { return }
+                        await cleanupTransitionPlaylist(device: device)
+                    }
+                }
                 return
+                }
             } else {
                 #if DEBUG
                 print("⚠️ Transition playlist failed for \(device.name). Falling back to stepper/native.")
@@ -4378,13 +4431,6 @@ class DeviceControlViewModel: ObservableObject {
     }
 
     private func verifyPlaylistId(_ playlistId: Int, device: WLEDDevice) async -> Bool {
-        if !(await apiService.isPlaylistStoreSupported(for: device)) {
-            if let presets = try? await apiService.fetchPresets(for: device) {
-                let savedIds = Set(presets.map { $0.id })
-                return savedIds.contains(playlistId)
-            }
-            return true
-        }
         for attempt in 1...playlistVerifyRetryAttempts {
             if let playlists = try? await apiService.fetchPlaylists(for: device),
                playlists.contains(where: { $0.id == playlistId }) {
@@ -4421,30 +4467,9 @@ class DeviceControlViewModel: ObservableObject {
     ) async -> TransitionPlaylistResult? {
         let autoStepPrefix = persist ? "Automation Step " : "Auto Step "
         let autoTransitionPrefix = persist ? "Automation Transition " : "Auto Transition "
-        var playlistStoreSupported = await apiService.isPlaylistStoreSupported(for: device)
-        var existingPlaylists: [WLEDPlaylist] = []
-        if playlistStoreSupported {
-            do {
-                existingPlaylists = try await apiService.fetchPlaylists(for: device)
-            } catch {
-                if !(await apiService.isPlaylistStoreSupported(for: device)) {
-                    playlistStoreSupported = false
-                    #if DEBUG
-                    print("⚠️ Playlist store unsupported for \(device.name); falling back to psave playlists.")
-                    #endif
-                } else {
-                    #if DEBUG
-                    print("⚠️ Playlist creation failed: unable to fetch playlists for \(device.name): \(error.localizedDescription)")
-                    #endif
-                    playlistUnsupportedDevices.insert(device.id)
-                    return nil
-                }
-            }
-        }
         #if DEBUG
         let storageMode = persist ? "persistent" : "temporary"
-        let playlistStorage = playlistStoreSupported ? "playlist-store" : "psave"
-        print("🔎 Playlist build for \(device.name): mode=2-preset, storage=\(storageMode), playlist=\(playlistStorage), duration=\(String(format: "%.1f", durationSeconds))s")
+        print("🔎 Playlist build for \(device.name): mode=2-preset, storage=\(storageMode), playlist=psave, duration=\(String(format: "%.1f", durationSeconds))s")
         #endif
 
         var existingPresets: [WLEDPreset]
@@ -4466,20 +4491,25 @@ class DeviceControlViewModel: ObservableObject {
                 return nil
             }
         }
+        updatePresetSlotStatus(for: device, presets: existingPresets)
         var usedPresetIds = Set(existingPresets.map { $0.id })
         let stepPlan = playlistStepPlan(for: durationSeconds)
         let stepCount = stepPlan.steps
+        let playlistSlotCount = 1
+        let requiredSlots = stepCount + playlistSlotCount
+        if !hasPresetCapacity(for: device, requiredSlots: requiredSlots, presets: existingPresets) {
+            #if DEBUG
+            let remaining = max(0, maxWLEDPresetSlots - existingPresets.count)
+            print("⚠️ Playlist creation blocked: remaining=\(remaining), reserve=\(presetSlotReserve), required=\(requiredSlots) for \(device.name).")
+            #endif
+            return nil
+        }
         var reusableStepPresetIds: [Int] = []
         if let existingStepPresetIds, existingStepPresetIds.count == stepCount {
             reusableStepPresetIds = existingStepPresetIds
             reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
         }
-        var usedPlaylistIds: Set<Int>
-        if playlistStoreSupported {
-            usedPlaylistIds = Set(existingPlaylists.map { $0.id })
-        } else {
-            usedPlaylistIds = usedPresetIds
-        }
+        var usedPlaylistIds = usedPresetIds
         var resolvedPlaylistId: Int? = nil
         if let existingPlaylistId, usedPlaylistIds.contains(existingPlaylistId) {
             resolvedPlaylistId = existingPlaylistId
@@ -4488,38 +4518,21 @@ class DeviceControlViewModel: ObservableObject {
         if resolvedPlaylistId == nil {
             var selectedId = availablePlaylistId(excluding: usedPlaylistIds)
             if selectedId == nil && !persist {
-                if playlistStoreSupported {
-                    let autoPlaylistIds = existingPlaylists
-                        .filter { $0.name.hasPrefix(autoTransitionPrefix) }
-                        .map { $0.id }
-                    if !autoPlaylistIds.isEmpty {
-                        #if DEBUG
-                        print("🧹 Cleaning \(autoPlaylistIds.count) auto playlists to free slots for \(device.name).")
-                        #endif
-                        for listId in autoPlaylistIds {
-                            _ = try? await apiService.deletePlaylist(id: listId, device: device)
-                        }
-                        let refreshedPlaylists = (try? await apiService.fetchPlaylists(for: device)) ?? []
-                        usedPlaylistIds = Set(refreshedPlaylists.map { $0.id })
-                        selectedId = availablePlaylistId(excluding: usedPlaylistIds)
+                let autoTransitionIds = existingPresets
+                    .filter { $0.name.hasPrefix(autoTransitionPrefix) }
+                    .map { $0.id }
+                if !autoTransitionIds.isEmpty {
+                    #if DEBUG
+                    print("🧹 Cleaning \(autoTransitionIds.count) auto transition presets to free slots for \(device.name).")
+                    #endif
+                    for presetId in autoTransitionIds {
+                        _ = try? await apiService.deletePreset(id: presetId, device: device)
                     }
-                } else {
-                    let autoTransitionIds = existingPresets
-                        .filter { $0.name.hasPrefix(autoTransitionPrefix) }
-                        .map { $0.id }
-                    if !autoTransitionIds.isEmpty {
-                        #if DEBUG
-                        print("🧹 Cleaning \(autoTransitionIds.count) auto transition presets to free slots for \(device.name).")
-                        #endif
-                        for presetId in autoTransitionIds {
-                            _ = try? await apiService.deletePreset(id: presetId, device: device)
-                        }
-                        existingPresets = (try? await apiService.fetchPresets(for: device)) ?? []
-                        usedPresetIds = Set(existingPresets.map { $0.id })
-                        reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
-                        usedPlaylistIds = usedPresetIds
-                        selectedId = availablePlaylistId(excluding: usedPlaylistIds)
-                    }
+                    existingPresets = (try? await apiService.fetchPresets(for: device)) ?? []
+                    usedPresetIds = Set(existingPresets.map { $0.id })
+                    reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
+                    usedPlaylistIds = usedPresetIds
+                    selectedId = availablePlaylistId(excluding: usedPlaylistIds)
                 }
             }
             guard let resolvedId = selectedId else {
@@ -4530,7 +4543,7 @@ class DeviceControlViewModel: ObservableObject {
             }
             resolvedPlaylistId = resolvedId
         }
-        if let resolvedPlaylistId, !playlistStoreSupported {
+        if let resolvedPlaylistId {
             usedPresetIds.insert(resolvedPlaylistId)
         }
 
@@ -4583,8 +4596,8 @@ class DeviceControlViewModel: ObservableObject {
             await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: stepPresetIds)
         }
 
-        let stepCount = stepPresetIds.count
-        let stepDenom = Double(max(1, stepCount - 1))
+        let stepPresetCount = stepPresetIds.count
+        let stepDenom = Double(max(1, stepPresetCount - 1))
         if stepPlan.effectiveDurationSeconds < durationSeconds {
             #if DEBUG
             print("⚠️ Playlist duration capped for \(device.name): requested=\(String(format: "%.1f", durationSeconds))s, effective=\(String(format: "%.1f", stepPlan.effectiveDurationSeconds))s")
@@ -4592,7 +4605,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         #if DEBUG
         let stepTransitionSeconds = Double(stepPlan.transitionDeciseconds) / 10.0
-        print("🔎 Playlist step plan for \(device.name): steps=\(stepCount), step=\(String(format: "%.2f", stepTransitionSeconds))s")
+        print("🔎 Playlist step plan for \(device.name): steps=\(stepPresetCount), step=\(String(format: "%.2f", stepTransitionSeconds))s")
         #endif
         for (idx, presetId) in stepPresetIds.enumerated() {
             let t = Double(idx) / stepDenom
@@ -4612,7 +4625,8 @@ class DeviceControlViewModel: ObservableObject {
                 id: presetId,
                 name: "Auto Step \(presetId)",
                 quickLoad: false,
-                state: state
+                state: state,
+                saveOnly: true
             )
             do {
                 try await savePresetWithRetry(request, device: device)
@@ -4711,7 +4725,39 @@ class DeviceControlViewModel: ObservableObject {
         return result
     }
 
-    func startPlaylist(device: WLEDDevice, playlistId: Int) async -> Bool {
+    func startPlaylist(
+        device: WLEDDevice,
+        playlistId: Int,
+        runTitle: String? = nil,
+        expectedDurationSeconds: Double? = nil,
+        runKind: ActiveRunStatus.RunKind = .transition
+    ) async -> Bool {
+        func recordRunIfNeeded() {
+            guard runTitle != nil || expectedDurationSeconds != nil else { return }
+            let startDate = Date()
+            let title = (runTitle?.isEmpty == false) ? runTitle! : "Transition"
+            let expectedEnd = (expectedDurationSeconds ?? 0) > 0
+                ? startDate.addingTimeInterval(expectedDurationSeconds ?? 0)
+                : nil
+            let runId = UUID()
+            activeRunStatus[device.id] = ActiveRunStatus(
+                id: runId,
+                deviceId: device.id,
+                kind: runKind,
+                title: title,
+                startDate: startDate,
+                progress: 0.0,
+                isCancellable: true,
+                expectedEnd: expectedEnd
+            )
+            runWatchdogs[device.id] = RunWatchdog(
+                lastProgressAt: startDate,
+                lastProgressValue: 0.0,
+                runStartAt: startDate
+            )
+            startWatchdogTaskIfNeeded()
+        }
+
         do {
             let state = try await apiService.applyPlaylist(playlistId, to: device, releaseRealtime: true)
             #if DEBUG
@@ -4720,6 +4766,7 @@ class DeviceControlViewModel: ObservableObject {
             #endif
             let immediateMatch = state.playlistId == playlistId || state.presetId == playlistId
             if immediateMatch {
+                recordRunIfNeeded()
                 return true
             }
 
@@ -4730,6 +4777,7 @@ class DeviceControlViewModel: ObservableObject {
                 print("🔎 Playlist fetched state for \(device.name): pl=\(fetchedState.playlistId.map(String.init) ?? "nil"), ps=\(fetchedState.presetId.map(String.init) ?? "nil"), tt=\(fetchedState.transitionDeciseconds.map(String.init) ?? "nil")")
                 #endif
                 if fetchedState.playlistId == playlistId || fetchedState.presetId == playlistId {
+                    recordRunIfNeeded()
                     return true
                 }
             } else {
@@ -5250,6 +5298,7 @@ class DeviceControlViewModel: ObservableObject {
         do {
             let presets = try await apiService.fetchPresets(for: device)
             presetsCache[device.id] = presets
+            updatePresetSlotStatus(for: device, presets: presets)
             clearError()
         } catch {
             let mappedError = mapToWLEDError(error, device: device)
@@ -5278,12 +5327,22 @@ class DeviceControlViewModel: ObservableObject {
         markUserInteraction(device.id)
         presetLoadingStates[device.id] = true
         do {
+            let existingIds = Set(presets(for: device).map { $0.id })
+            let targetId = presetId ?? nextPresetId(for: device)
+            let isNew = !existingIds.contains(targetId)
+            if isNew && !hasPresetCapacity(for: device, requiredSlots: 1) {
+                updatePresetSlotStatus(for: device)
+                presentError(.apiError(message: "Preset storage nearly full. Free up presets before saving a new one."))
+                presetLoadingStates[device.id] = false
+                return
+            }
             let response = try await apiService.getState(for: device)
             let stateUpdate = stateUpdate(from: response.state)
-            let id = presetId ?? nextPresetId(for: device)
-            let request = WLEDPresetSaveRequest(id: id, name: name, quickLoad: quickLoad, state: stateUpdate)
+            let request = WLEDPresetSaveRequest(id: targetId, name: name, quickLoad: quickLoad, state: stateUpdate)
             try await apiService.savePreset(request, to: device)
-            presetsCache[device.id] = try await apiService.fetchPresets(for: device)
+            let presets = try await apiService.fetchPresets(for: device)
+            presetsCache[device.id] = presets
+            updatePresetSlotStatus(for: device, presets: presets)
             clearError()
         } catch {
             let mappedError = mapToWLEDError(error, device: device)
@@ -5385,4 +5444,45 @@ class DeviceControlViewModel: ObservableObject {
         print("🔄 Cleared all protection windows and released real-time override for device \(device.name)")
         #endif
     }
-} 
+}
+
+extension DeviceControlViewModel {
+    struct PresetSlotAvailability: Equatable {
+        let used: Int
+        let remaining: Int
+        let reserve: Int
+        let available: Int
+        let total: Int
+    }
+
+    private func updatePresetSlotStatus(for device: WLEDDevice, presets: [WLEDPreset]? = nil) {
+        let used = presets?.count ?? presetsCache[device.id]?.count ?? 0
+        let total = maxWLEDPresetSlots
+        let remaining = max(0, total - used)
+        let reserve = presetSlotReserve
+        let available = max(0, remaining - reserve)
+        presetSlotStatus[device.id] = PresetSlotAvailability(
+            used: used,
+            remaining: remaining,
+            reserve: reserve,
+            available: available,
+            total: total
+        )
+    }
+
+    private func hasPresetCapacity(for device: WLEDDevice, requiredSlots: Int, presets: [WLEDPreset]? = nil) -> Bool {
+        let used = presets?.count ?? presetsCache[device.id]?.count ?? 0
+        let remaining = max(0, maxWLEDPresetSlots - used)
+        let available = max(0, remaining - presetSlotReserve)
+        return available >= requiredSlots
+    }
+
+    func presetSlotAvailability(for device: WLEDDevice) -> PresetSlotAvailability? {
+        presetSlotStatus[device.id]
+    }
+
+    func requiredPresetSlotsForTransition(durationSeconds: Double, device: WLEDDevice) -> Int {
+        let stepPlan = playlistStepPlan(for: durationSeconds)
+        return stepPlan.steps + 1
+    }
+}

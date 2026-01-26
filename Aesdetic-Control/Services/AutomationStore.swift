@@ -158,8 +158,20 @@ class AutomationStore: ObservableObject {
     
     private func triggerAutomation(_ automation: Automation) {
         logger.info("Triggering automation: \(automation.name)")
+        if shouldDeferToDeviceTimer(automation) {
+            logger.info("Skipping local run for on-device transition automation: \(automation.name, privacy: .public)")
+            scheduleNext()
+            return
+        }
         applyAutomation(automation)
         scheduleNext()
+    }
+
+    private func shouldDeferToDeviceTimer(_ automation: Automation) -> Bool {
+        guard automation.metadata.runOnDevice else { return false }
+        guard case .specificTime = automation.trigger else { return false }
+        guard case .transition = automation.action else { return false }
+        return true
     }
     
     private func resolveNextAutomation(referenceDate: Date) async -> (Automation, Date)? {
@@ -384,6 +396,14 @@ class AutomationStore: ObservableObject {
                     startBrightness: device.brightness,
                     endBrightness: payload.brightness
                 ) {
+                    await viewModel.preparePlaylistStart(
+                        device: device,
+                        startGradient: startGradient,
+                        startBrightness: device.brightness,
+                        startStopTemperatures: stopTemperatures,
+                        startStopWhiteLevels: stopWhiteLevels,
+                        segmentId: 0
+                    )
                     let runId = UUID()
                     let startDate = Date()
                     let expectedEnd = startDate.addingTimeInterval(durationSeconds)

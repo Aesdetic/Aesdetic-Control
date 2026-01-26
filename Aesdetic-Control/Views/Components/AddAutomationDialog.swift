@@ -377,6 +377,12 @@ struct AddAutomationDialog: View {
                             .cornerRadius(16)
                     }
                     .disabled(!canSave)
+                    if let message = presetCapacityMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundColor(presetCapacitySatisfied ? .white.opacity(0.7) : .orange)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(20)
                 .background(Color.black.opacity(0.95))
@@ -418,6 +424,15 @@ struct AddAutomationDialog: View {
                     Button("Cancel") { dismiss() }
                         .foregroundColor(.white)
                 }
+            }
+            .task {
+                await loadPresetSlots()
+            }
+            .onChange(of: selectedDeviceIds) { _, _ in
+                Task { await loadPresetSlots() }
+            }
+            .onChange(of: activeDevice.id) { _, _ in
+                Task { await loadPresetSlots() }
             }
         }
     }
@@ -1068,11 +1083,65 @@ struct AddAutomationDialog: View {
         if actionSelection == .effect {
             return selectedEffectId != nil
         }
+        if requiredPresetSlots > 0 {
+            return presetCapacitySatisfied
+        }
         return true
     }
     
     private var selectedSolarEvent: SolarEvent {
         triggerSelection == .sunrise ? .sunrise : .sunset
+    }
+
+    private var targetDevicesForCapacity: [WLEDDevice] {
+        let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
+        let targets = availableDevices.filter { targetIds.contains($0.id) }
+        return targets.isEmpty ? [activeDevice] : targets
+    }
+
+    private var requiredPresetSlots: Int {
+        switch actionSelection {
+        case .transition:
+            return viewModel.requiredPresetSlotsForTransition(
+                durationSeconds: customTransitionDuration,
+                device: activeDevice
+            )
+        case .color where enableColorFade && gradientDuration > maxWLEDNativeTransitionSeconds:
+            return viewModel.requiredPresetSlotsForTransition(
+                durationSeconds: gradientDuration,
+                device: activeDevice
+            )
+        default:
+            return 0
+        }
+    }
+
+    private var presetCapacityContext: (device: WLEDDevice, status: DeviceControlViewModel.PresetSlotAvailability)? {
+        let candidates = targetDevicesForCapacity.compactMap { device -> (WLEDDevice, DeviceControlViewModel.PresetSlotAvailability)? in
+            guard let status = viewModel.presetSlotAvailability(for: device) else { return nil }
+            return (device, status)
+        }
+        return candidates.min { $0.1.available < $1.1.available }
+    }
+
+    private var presetCapacitySatisfied: Bool {
+        guard requiredPresetSlots > 0 else { return true }
+        return targetDevicesForCapacity.allSatisfy { device in
+            guard let status = viewModel.presetSlotAvailability(for: device) else { return false }
+            return status.available >= requiredPresetSlots
+        }
+    }
+
+    private var presetCapacityMessage: String? {
+        guard requiredPresetSlots > 0 else { return nil }
+        guard let context = presetCapacityContext else {
+            return "Checking preset storage..."
+        }
+        let status = context.status
+        if status.available < requiredPresetSlots {
+            return "Not enough preset slots on \(context.device.name). \(status.remaining) remaining (\(status.reserve) reserved), need \(requiredPresetSlots)."
+        }
+        return "Preset slots on \(context.device.name): \(status.remaining) remaining (\(status.reserve) reserved). This automation needs \(requiredPresetSlots)."
     }
     
     // MARK: - Actions
@@ -1082,6 +1151,12 @@ struct AddAutomationDialog: View {
         guard let automation = buildAutomation() else { return }
         onSave(automation)
         dismiss()
+    }
+
+    private func loadPresetSlots() async {
+        for device in targetDevicesForCapacity {
+            await viewModel.loadPresets(for: device)
+        }
     }
     
     private func buildAutomation() -> Automation? {

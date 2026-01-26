@@ -125,6 +125,7 @@ struct DashboardView: View {
                 // Scenes & Automations
                 ScenesAutomationsSection(
                     automations: automationViewModel.automations,
+                    deviceViewModel: deviceControlViewModel,
                     onToggle: { automation in
                         Task { automationViewModel.toggleAutomation(automation) }
                     }
@@ -236,6 +237,7 @@ struct DashboardView: View {
     private func scenesSection(geometry: GeometryProxy) -> some View {
         ScenesAutomationsSection(
             automations: automationViewModel.automations,
+            deviceViewModel: deviceControlViewModel,
             onToggle: { automation in
                 Task { automationViewModel.toggleAutomation(automation) }
             }
@@ -305,36 +307,81 @@ struct DashboardView: View {
 
 struct ScenesAutomationsSection: View {
     let automations: [Automation]
+    let deviceViewModel: DeviceControlViewModel
     let onToggle: (Automation) -> Void
+    @ObservedObject private var scenesStore = ScenesStore.shared
+    @ObservedObject private var presetsStore = PresetsStore.shared
+    @StateObject private var usageStore = DashboardShortcutUsageStore.shared
+    @StateObject private var favoritesStore = SceneFavoritesStore.shared
+    @StateObject private var presetFavoritesStore = PresetFavoritesStore.shared
     
     var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-            Text("Scenes & Automations")
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Scenes")
                 .font(.title2)
                 .fontWeight(.semibold)
                 .foregroundColor(.white)
                 .padding(.horizontal, 20)
             
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 12) {
-                    // Always show "Add Scene" button
+                LazyHStack(spacing: 8) {
                     AddSceneButton()
                     
-                    // Show existing automations
-                    ForEach(automations) { automation in
-                        SceneAutomationButton(
-                            automation: automation,
-                            onToggle: { onToggle(automation) }
+                    ForEach(displayedSceneShortcuts) { item in
+                        DashboardPillButton(
+                            title: item.title,
+                            isSelected: false,
+                            action: {
+                                usageStore.increment(key: item.usageKey)
+                                handleSceneShortcut(item)
+                            }
                         )
+                        .contextMenu {
+                            Button(item.isFavorite ? "Unfavorite" : "Favorite") {
+                                toggleFavorite(for: item)
+                            }
+                        }
                     }
-                    
-                    // Always show "Add Automation" button
-                    AddAutomationButton()
                 }
                 .padding(.horizontal, 20)
-                .background(Color.clear)
             }
-            .frame(height: 52)
+            .scrollIndicators(.hidden)
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            .scrollClipDisabled()
+            
+            Text("Automations")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .padding(.horizontal, 20)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 8) {
+                    AddAutomationButton()
+                    
+                    ForEach(displayedAutomations) { automation in
+                        DashboardPillButton(
+                            title: automation.name,
+                            isSelected: automation.enabled,
+                            action: {
+                                usageStore.increment(key: "automation:\(automation.id.uuidString)")
+                                onToggle(automation)
+                            }
+                        )
+                        .contextMenu {
+                            Button((automation.metadata.pinnedToShortcuts ?? false) ? "Unfavorite" : "Favorite") {
+                                var updated = automation
+                                var metadata = updated.metadata
+                                metadata.pinnedToShortcuts = !(automation.metadata.pinnedToShortcuts ?? false)
+                                updated.metadata = metadata
+                                AutomationStore.shared.update(updated)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
             .scrollIndicators(.hidden)
             .scrollContentBackground(.hidden)
             .background(Color.clear)
@@ -342,37 +389,281 @@ struct ScenesAutomationsSection: View {
         }
         .background(Color.clear)
     }
+    
+    private var displayedSceneShortcuts: [SceneShortcutItem] {
+        let sceneItems = scenesStore.scenes.map { scene in
+            SceneShortcutItem(
+                id: "scene:\(scene.id.uuidString)",
+                title: scene.name,
+                createdAt: scene.createdAt,
+                usageKey: "scene:\(scene.id.uuidString)",
+                kind: .scene(scene),
+                isFavorite: favoritesStore.contains(scene.id)
+            )
+        }
+        let presetItems = presetsStore.colorPresets.map { preset in
+            SceneShortcutItem(
+                id: "preset:\(preset.id.uuidString)",
+                title: preset.name,
+                createdAt: preset.createdAt,
+                usageKey: "preset:\(preset.id.uuidString)",
+                kind: .preset(preset),
+                isFavorite: presetFavoritesStore.contains(preset.id)
+            )
+        }
+        let items = sceneItems + presetItems
+        let favorites = items.filter { $0.isFavorite }
+        let base = favorites.isEmpty ? items : favorites
+        let sorted = base.sorted { lhs, rhs in
+            let lhsCount = usageStore.count(for: lhs.usageKey)
+            let rhsCount = usageStore.count(for: rhs.usageKey)
+            if lhsCount != rhsCount {
+                return lhsCount > rhsCount
+            }
+            return lhs.createdAt > rhs.createdAt
+        }
+        return favorites.isEmpty ? Array(sorted.prefix(3)) : sorted
+    }
+    
+    private var displayedAutomations: [Automation] {
+        let favorites = automations.filter { $0.metadata.pinnedToShortcuts ?? false }
+        let base = favorites.isEmpty ? automations : favorites
+        let sorted = base.sorted { lhs, rhs in
+            let lhsCount = usageStore.count(for: "automation:\(lhs.id.uuidString)")
+            let rhsCount = usageStore.count(for: "automation:\(rhs.id.uuidString)")
+            if lhsCount != rhsCount {
+                return lhsCount > rhsCount
+            }
+            let lhsDate = lhs.lastTriggered ?? lhs.updatedAt
+            let rhsDate = rhs.lastTriggered ?? rhs.updatedAt
+            return lhsDate > rhsDate
+        }
+        return favorites.isEmpty ? Array(sorted.prefix(3)) : sorted
+    }
+    
+    private func applyScene(_ scene: Scene) {
+        guard let device = deviceViewModel.devices.first(where: { $0.id == scene.deviceId }) else { return }
+        Task { await deviceViewModel.applyScene(scene, to: device) }
+    }
+    
+    private func applyPreset(_ preset: ColorPreset) {
+        guard let device = deviceViewModel.devices.first(where: { $0.isOnline }) ?? deviceViewModel.devices.first else { return }
+        Task {
+            await deviceViewModel.cancelActiveTransitionIfNeeded(for: device)
+            let presetId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId
+            if let presetId = presetId {
+                let apiService = WLEDAPIService.shared
+                _ = try? await apiService.applyPreset(presetId, to: device)
+            } else {
+                let ledCount = deviceViewModel.totalLEDCount(for: device)
+                var stopTemperatures: [UUID: Double]? = nil
+                var stopWhiteLevels: [UUID: Double]? = nil
+                if let temp = preset.temperature {
+                    stopTemperatures = Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, temp) })
+                }
+                if let white = preset.whiteLevel {
+                    stopWhiteLevels = Dictionary(uniqueKeysWithValues: preset.gradientStops.map { ($0.id, white) })
+                }
+                await deviceViewModel.applyGradientStopsAcrossStrip(
+                    device,
+                    stops: preset.gradientStops,
+                    ledCount: ledCount,
+                    stopTemperatures: stopTemperatures,
+                    stopWhiteLevels: stopWhiteLevels,
+                    preferSegmented: true
+                )
+                let apiService = WLEDAPIService.shared
+                _ = try? await apiService.setBrightness(for: device, brightness: preset.brightness)
+            }
+        }
+    }
+    
+    private func handleSceneShortcut(_ item: SceneShortcutItem) {
+        switch item.kind {
+        case .scene(let scene):
+            applyScene(scene)
+        case .preset(let preset):
+            applyPreset(preset)
+        }
+    }
+    
+    private func toggleFavorite(for item: SceneShortcutItem) {
+        switch item.kind {
+        case .scene(let scene):
+            favoritesStore.toggle(scene.id)
+        case .preset(let preset):
+            presetFavoritesStore.toggle(preset.id)
+        }
+    }
+    
+    private struct SceneShortcutItem: Identifiable {
+        enum Kind {
+            case scene(Scene)
+            case preset(ColorPreset)
+        }
+        
+        let id: String
+        let title: String
+        let createdAt: Date
+        let usageKey: String
+        let kind: Kind
+        let isFavorite: Bool
+    }
 }
 
-// MARK: - Scene/Automation Button (Apple Home App Style)
+// MARK: - Dashboard Pill Button (Matches Device Location Pills)
 
-struct SceneAutomationButton: View {
-    let automation: Automation
-    let onToggle: () -> Void
+struct DashboardPillButton: View {
+    let title: String
+    let isSelected: Bool
+    var iconName: String? = nil
+    var trailingText: String? = nil
+    let action: () -> Void
     
     var body: some View {
-        Button(action: onToggle) {
+        Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: "clock")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 22, height: 22)
-
-                Text(automation.name)
-                    .font(.headline)
-                    .foregroundColor(.white)
+                if let iconName = iconName {
+                    Image(systemName: iconName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(isSelected ? .black : .white)
+                }
+                
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(isSelected ? .black : .white)
                     .lineLimit(1)
-
-                Spacer(minLength: 0)
+                
+                if let trailingText = trailingText {
+                    Text(trailingText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(isSelected ? .black.opacity(0.6) : .white.opacity(0.6))
+                }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(minWidth: 160, maxWidth: 220)
-            .liquidGlassButton(cornerRadius: 18, active: automation.enabled, tint: .gray)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isSelected ? Color.white : Color.white.opacity(0.15))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0 : 0.3), lineWidth: 1)
+            )
         }
-        .buttonStyle(PlainButtonStyle())
-        .scaleEffect(1.0)
-        .animation(.easeInOut(duration: 0.2), value: automation.enabled)
+        .buttonStyle(.plain)
+    }
+}
+
+@MainActor
+final class DashboardShortcutUsageStore: ObservableObject {
+    static let shared = DashboardShortcutUsageStore()
+    @Published private(set) var counts: [String: Int] = [:]
+    private let key = "aesdetic_dashboard_shortcut_usage_v1"
+    
+    private init() {
+        load()
+    }
+    
+    func count(for key: String) -> Int {
+        counts[key] ?? 0
+    }
+    
+    func increment(key: String) {
+        var updated = counts
+        updated[key, default: 0] += 1
+        counts = updated
+        save()
+    }
+    
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([String: Int].self, from: data) else { return }
+        counts = decoded
+    }
+    
+    private func save() {
+        if let data = try? JSONEncoder().encode(counts) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+}
+
+@MainActor
+final class SceneFavoritesStore: ObservableObject {
+    static let shared = SceneFavoritesStore()
+    @Published private(set) var sceneIds: Set<UUID> = []
+    private let key = "aesdetic_scene_favorites_v1"
+    
+    private init() {
+        load()
+    }
+    
+    func contains(_ id: UUID) -> Bool {
+        sceneIds.contains(id)
+    }
+    
+    func toggle(_ id: UUID) {
+        var updated = sceneIds
+        if updated.contains(id) {
+            updated.remove(id)
+        } else {
+            updated.insert(id)
+        }
+        sceneIds = updated
+        save()
+    }
+    
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([String].self, from: data) else { return }
+        sceneIds = Set(decoded.compactMap { UUID(uuidString: $0) })
+    }
+    
+    private func save() {
+        let list = sceneIds.map { $0.uuidString }
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+}
+
+@MainActor
+final class PresetFavoritesStore: ObservableObject {
+    static let shared = PresetFavoritesStore()
+    @Published private(set) var presetIds: Set<UUID> = []
+    private let key = "aesdetic_preset_favorites_v1"
+    
+    private init() {
+        load()
+    }
+    
+    func contains(_ id: UUID) -> Bool {
+        presetIds.contains(id)
+    }
+    
+    func toggle(_ id: UUID) {
+        var updated = presetIds
+        if updated.contains(id) {
+            updated.remove(id)
+        } else {
+            updated.insert(id)
+        }
+        presetIds = updated
+        save()
+    }
+    
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([String].self, from: data) else { return }
+        presetIds = Set(decoded.compactMap { UUID(uuidString: $0) })
+    }
+    
+    private func save() {
+        let list = presetIds.map { $0.uuidString }
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
     }
 }
 
@@ -406,6 +697,7 @@ struct UnifiedStatsCard: View {
     let totalDevices: Int
     let activeDevices: Int
     let activeAutomations: Int
+    private let cornerRadius: CGFloat = 20
     
     var body: some View {
         HStack(spacing: 0) {
@@ -434,7 +726,16 @@ struct UnifiedStatsCard: View {
             )
         }
         .frame(height: 68)
-        .liquidGlassButton(cornerRadius: 20, active: true, tint: .gray)
+        .background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.white.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -695,33 +996,12 @@ struct AddSceneButton: View {
     @State private var showAddScene = false
     
     var body: some View {
-        Button(action: {
-            showAddScene = true
-        }) {
-            HStack(spacing: 8) {
-                Image(systemName: "plus.circle")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 22, height: 22)
-                
-                Text("Add Scene")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.15))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
+        DashboardPillButton(
+            title: "Add Scene",
+            isSelected: false,
+            iconName: "plus.circle",
+            action: { showAddScene = true }
+        )
         .sheet(isPresented: $showAddScene) {
             Text("Add Scene - Coming Soon")
                 .presentationDetents([.medium])
@@ -736,33 +1016,12 @@ struct AddAutomationButton: View {
     @State private var pendingTemplate: AutomationTemplate?
     
     var body: some View {
-        Button(action: {
-            showAddAutomation = true
-        }) {
-            HStack(spacing: 8) {
-                Image(systemName: "plus.circle")
-                    .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 22, height: 22)
-                
-                Text("Add Automation")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.15))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
+        DashboardPillButton(
+            title: "Add Automation",
+            isSelected: false,
+            iconName: "plus.circle",
+            action: { showAddAutomation = true }
+        )
         .sheet(isPresented: $showAddAutomation, onDismiss: {
             builderDevice = nil
             pendingTemplate = nil

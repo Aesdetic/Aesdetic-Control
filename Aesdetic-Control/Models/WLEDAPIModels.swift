@@ -274,6 +274,15 @@ struct WLEDPresetSaveRequest {
     let name: String
     let quickLoad: Bool?
     let state: WLEDStateUpdate?
+    let saveOnly: Bool?
+
+    init(id: Int, name: String, quickLoad: Bool?, state: WLEDStateUpdate?, saveOnly: Bool? = nil) {
+        self.id = id
+        self.name = name
+        self.quickLoad = quickLoad
+        self.state = state
+        self.saveOnly = saveOnly
+    }
 }
 
 /// Model for WLED playlist management
@@ -375,11 +384,12 @@ let maxWLEDNativeTransitionSeconds = min(maxWLEDTransitionSeconds, 3600.0)
 /// Playlist constraints: WLED uses uint16 ms transitions and 100-entry playlists.
 let maxWLEDPlaylistEntries = 100
 let maxWLEDPlaylistTransitionSeconds = 60.0
-let playlistInitialHoldDeciseconds = 1
 let maxWLEDPlaylistDurationSeconds = 3600.0
 let playlistHoldThresholdSeconds = 1200.0
-let playlistHoldScaleSeconds = 900.0
-let playlistHoldMaxSeconds = 5.0
+let playlistHoldScaleSeconds = 2400.0
+let playlistHoldMaxSeconds = 30.0
+let maxWLEDPresetSlots = 250
+let presetSlotReserve = 20
 
 // MARK: - API Configuration Models
 

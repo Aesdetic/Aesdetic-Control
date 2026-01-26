@@ -122,50 +122,53 @@ struct PresetsListView: View {
                     VStack(spacing: 8) {
                         ForEach(transitionPresets) { preset in
                             TransitionPresetRow(preset: preset, onApply: {
-                            Task {
-                                await viewModel.cancelActiveTransitionIfNeeded(for: device)
-                                // Try WLED playlist ID first (if synced), otherwise apply directly
-                                if let playlistId = preset.wledPlaylistId {
-                                    let apiService = WLEDAPIService.shared
-                                    let applied = (try? await apiService.applyPlaylist(playlistId, to: device)) != nil
-                                    if applied {
-                                        return
+                                Task {
+                                    await viewModel.cancelActiveTransitionIfNeeded(for: device)
+                                    // Try WLED playlist ID first (if synced), otherwise apply directly
+                                    if let playlistId = preset.wledPlaylistId {
+                                        let applied = await viewModel.startPlaylist(
+                                            device: device,
+                                            playlistId: playlistId,
+                                            runTitle: preset.name,
+                                            expectedDurationSeconds: preset.durationSec,
+                                            runKind: .transition
+                                        )
+                                        if applied {
+                                            return
+                                        }
+                                        // Fallback to client-side transition if playlist failed
                                     }
-                                    // Fallback to client-side transition if playlist failed
-                                } else {
-                                // Apply transition directly
-                            }
-                            let startTemps = preset.temperatureA.map { temp in
-                                Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, temp) })
-                            }
-                            let startWhites = preset.whiteLevelA.map { white in
-                                Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, white) })
-                            }
-                            let endTemps = preset.temperatureB.map { temp in
-                                Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, temp) })
-                            }
-                            let endWhites = preset.whiteLevelB.map { white in
-                                Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, white) })
-                            }
-                            await viewModel.startTransition(
-                                from: preset.gradientA,
-                                aBrightness: preset.brightnessA,
-                                to: preset.gradientB,
-                                bBrightness: preset.brightnessB,
-                                durationSec: preset.durationSec,
-                                device: device,
-                                startStopTemperatures: startTemps,
-                                startStopWhiteLevels: startWhites,
-                                endStopTemperatures: endTemps,
-                                endStopWhiteLevels: endWhites
-                            )
-                        }
-                        }, onEdit: {
-                            onRequestRename(.transition(preset))
-                        }, onDelete: {
-                            Task { await requestTransitionPresetDeletion(preset, on: device) }
-                            store.removeTransitionPreset(preset.id)
-                        })
+                                    let startTemps = preset.temperatureA.map { temp in
+                                        Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, temp) })
+                                    }
+                                    let startWhites = preset.whiteLevelA.map { white in
+                                        Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, white) })
+                                    }
+                                    let endTemps = preset.temperatureB.map { temp in
+                                        Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, temp) })
+                                    }
+                                    let endWhites = preset.whiteLevelB.map { white in
+                                        Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, white) })
+                                    }
+                                    await viewModel.startTransition(
+                                        from: preset.gradientA,
+                                        aBrightness: preset.brightnessA,
+                                        to: preset.gradientB,
+                                        bBrightness: preset.brightnessB,
+                                        durationSec: preset.durationSec,
+                                        device: device,
+                                        startStopTemperatures: startTemps,
+                                        startStopWhiteLevels: startWhites,
+                                        endStopTemperatures: endTemps,
+                                        endStopWhiteLevels: endWhites
+                                    )
+                                }
+                            }, onEdit: {
+                                onRequestRename(.transition(preset))
+                            }, onDelete: {
+                                Task { await requestTransitionPresetDeletion(preset, on: device) }
+                                store.removeTransitionPreset(preset.id)
+                            })
                         }
                     }
                 }

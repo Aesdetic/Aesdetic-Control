@@ -67,8 +67,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let encoder = JSONEncoder()
     private let defaultPresetSegmentCount: Int = 12
     private let maxPresetSegmentCount: Int = 16
-    private var presetStoreUnsupportedDevices: Set<String> = []
-    private var playlistStoreUnsupportedDevices: Set<String> = []
     
     // Performance optimization: Request batching and caching
     private var requestCache: [String: (response: WLEDResponse, timestamp: Date)] = [:]
@@ -288,98 +286,14 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset] {
-        guard let url = URL(string: "http://\(device.ipAddress)/json/presets") else {
-            throw WLEDAPIError.invalidURL
-        }
-        let request = URLRequest(url: url)
-        do {
-            let (data, response) = try await urlSession.data(for: request)
-            try validateHTTPResponse(response, device: device)
-            if let errorCode = wledErrorCode(from: data) {
-                if errorCode == 4 {
-                    presetStoreUnsupportedDevices.insert(device.id)
-                    #if DEBUG
-                    print("⚠️ Preset fetch returned ERR_NOT_IMPL for \(device.name); falling back to /presets.json")
-                    #endif
-                    return try await fetchPresetsFromFile(device: device)
-                }
-                throw WLEDAPIError.invalidResponse
-            }
-            return try parsePresets(from: data)
-        } catch {
-            let mappedError = handleError(error, device: device)
-            if case .httpError(let statusCode) = mappedError,
-               statusCode == 404 || statusCode == 405 || statusCode == 501 {
-                presetStoreUnsupportedDevices.insert(device.id)
-                #if DEBUG
-                print("⚠️ Preset fetch fallback to /presets.json for \(device.name): status=\(statusCode)")
-                #endif
-                return try await fetchPresetsFromFile(device: device)
-            }
-            throw mappedError
-        }
+        return try await fetchPresetsFromFile(device: device)
     }
     
     func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws {
         guard request.id >= 0 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        if presetStoreUnsupportedDevices.contains(device.id) {
-            #if DEBUG
-            print("⚠️ Preset save using psave for \(device.name): id=\(request.id) (preset store unsupported)")
-            #endif
-            try await savePresetViaState(request, device: device)
-            return
-        }
-        guard let url = URL(string: "http://\(device.ipAddress)/json/presets") else {
-            throw WLEDAPIError.invalidURL
-        }
-        var httpRequest = URLRequest(url: url)
-        httpRequest.httpMethod = "POST"
-        httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body = PresetStorePayload(
-            ps: [
-                String(request.id): PresetStoreBody(
-                    n: request.name,
-                    ql: request.quickLoad,
-                    win: request.state,
-                    playlist: nil
-                )
-            ]
-        )
-        httpRequest.httpBody = try encoder.encode(body)
-        do {
-            let (data, response) = try await urlSession.data(for: httpRequest)
-            try validateHTTPResponse(response, device: device)
-            if let errorCode = wledErrorCode(from: data) {
-                if errorCode == 4 {
-                    presetStoreUnsupportedDevices.insert(device.id)
-                    #if DEBUG
-                    print("⚠️ Preset save returned ERR_NOT_IMPL for \(device.name); falling back to psave.")
-                    #endif
-                    try await savePresetViaState(request, device: device)
-                    return
-                }
-                throw WLEDAPIError.invalidResponse
-            }
-            #if DEBUG
-            if let httpResponse = response as? HTTPURLResponse {
-                print("✅ Preset saved via /json/presets for \(device.name): id=\(request.id) status=\(httpResponse.statusCode) bytes=\(data.count)")
-            }
-            #endif
-        } catch {
-            let mappedError = handleError(error, device: device)
-            if case .httpError(let statusCode) = mappedError,
-               statusCode == 404 || statusCode == 405 || statusCode == 501 {
-                presetStoreUnsupportedDevices.insert(device.id)
-                #if DEBUG
-                print("⚠️ Preset save fallback to psave for \(device.name): id=\(request.id) status=\(statusCode)")
-                #endif
-                try await savePresetViaState(request, device: device)
-                return
-            }
-            throw mappedError
-        }
+        try await savePresetViaState(request, device: device)
     }
     
     // MARK: - Playlist Management
@@ -388,128 +302,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard request.id >= 0 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        if playlistStoreUnsupportedDevices.contains(device.id) {
-            #if DEBUG
-            print("⚠️ Playlist save using psave for \(device.name): id=\(request.id) (playlist store unsupported)")
-            #endif
-            try await savePlaylistViaState(request, device: device)
-            return []
-        }
-        guard let url = URL(string: "http://\(device.ipAddress)/json/playlists") else {
-            throw WLEDAPIError.invalidURL
-        }
-        var httpRequest = URLRequest(url: url)
-        httpRequest.httpMethod = "POST"
-        httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body = PlaylistStorePayload(playlist: [String(request.id): PlaylistStoreBody(
-            n: request.name,
-            ps: request.ps,
-            dur: request.dur,
-            transition: request.transition,
-            repeat: request.repeat,
-            end: request.endPresetId
-        )])
-        httpRequest.httpBody = try encoder.encode(body)
-        do {
-            let (data, response) = try await urlSession.data(for: httpRequest)
-            try validateHTTPResponse(response, device: device)
-            if let errorCode = wledErrorCode(from: data) {
-                if errorCode == 4 {
-                    playlistStoreUnsupportedDevices.insert(device.id)
-                    #if DEBUG
-                    print("⚠️ Playlist save returned ERR_NOT_IMPL for \(device.name); falling back to psave.")
-                    #endif
-                    try await savePlaylistViaState(request, device: device)
-                    return []
-                }
-                throw WLEDAPIError.invalidResponse
-            }
-            let json = try JSONSerialization.jsonObject(with: data, options: [])
-            guard let dictionary = json as? [String: Any] else { return [] }
-            var playlists: [WLEDPlaylist] = []
-            for (key, value) in dictionary {
-                guard let id = Int(key), let playlistDict = value as? [String: Any] else { continue }
-                let name = playlistDict["n"] as? String ?? "Playlist \(id)"
-                let presets = playlistDict["ps"] as? [Int] ?? []
-                let durations = playlistDict["dur"] as? [Int] ?? []
-                let transitions = playlistDict["transition"] as? [Int] ?? []
-                let repeatCount = playlistDict["repeat"] as? Int
-                let endPresetId = playlistDict["end"] as? Int
-                let playlist = WLEDPlaylist(
-                    id: id,
-                    name: name,
-                    presets: presets,
-                    duration: durations,
-                    transition: transitions,
-                    repeat: repeatCount,
-                    endPresetId: endPresetId
-                )
-                playlists.append(playlist)
-            }
-            return playlists.sorted { $0.id < $1.id }
-        } catch {
-            let mappedError = handleError(error, device: device)
-            if case .httpError(let statusCode) = mappedError,
-               statusCode == 404 || statusCode == 405 || statusCode == 501 {
-                playlistStoreUnsupportedDevices.insert(device.id)
-                #if DEBUG
-                print("⚠️ Playlist save fallback to psave for \(device.name): id=\(request.id) status=\(statusCode)")
-                #endif
-                try await savePlaylistViaState(request, device: device)
-                return []
-            }
-            throw mappedError
-        }
+        try await savePlaylistViaState(request, device: device)
+        return []
     }
     
     func fetchPlaylists(for device: WLEDDevice) async throws -> [WLEDPlaylist] {
-        guard let url = URL(string: "http://\(device.ipAddress)/json/playlists") else {
-            throw WLEDAPIError.invalidURL
-        }
-        let request = URLRequest(url: url)
-        do {
-            let (data, response) = try await urlSession.data(for: request)
-            try validateHTTPResponse(response, device: device)
-            if let errorCode = wledErrorCode(from: data) {
-                if errorCode == 4 {
-                    playlistStoreUnsupportedDevices.insert(device.id)
-                    #if DEBUG
-                    print("⚠️ Playlist fetch returned ERR_NOT_IMPL for \(device.name); falling back to /playlists.json")
-                    #endif
-                    return try await fetchPlaylistsFromFile(device: device)
-                }
-                throw WLEDAPIError.invalidResponse
-            }
-            return try parsePlaylists(from: data)
-        } catch {
-            let mappedError = handleError(error, device: device)
-            if case .httpError(let statusCode) = mappedError,
-               statusCode == 404 || statusCode == 405 || statusCode == 501 {
-                playlistStoreUnsupportedDevices.insert(device.id)
-                #if DEBUG
-                print("⚠️ Playlist fetch fallback to /playlists.json for \(device.name): status=\(statusCode)")
-                #endif
-                do {
-                    return try await fetchPlaylistsFromFile(device: device)
-                } catch {
-                    let fallbackError = handleError(error, device: device)
-                    if case .httpError(let fallbackStatus) = fallbackError,
-                       fallbackStatus == 404 || fallbackStatus == 405 || fallbackStatus == 501 {
-                        playlistStoreUnsupportedDevices.insert(device.id)
-                    }
-                    throw fallbackError
-                }
-            }
-            throw mappedError
-        }
-    }
-
-    func isPlaylistStoreSupported(for device: WLEDDevice) -> Bool {
-        !playlistStoreUnsupportedDevices.contains(device.id)
-    }
-
-    func isPresetStoreSupported(for device: WLEDDevice) -> Bool {
-        !presetStoreUnsupportedDevices.contains(device.id)
+        return try await fetchPlaylistsFromPresetsFile(device: device)
     }
     
     /// Apply a playlist by selecting its preset ID (`ps`); `pl` is read-only in WLED JSON API.
@@ -712,30 +510,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard id >= 0 && id <= 250 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        
-        guard let deleteUrl = URL(string: "http://\(device.ipAddress)/json/presets") else {
-            throw WLEDAPIError.invalidURL
-        }
-        
-        var request = URLRequest(url: deleteUrl)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "ps": [String(id): NSNull()]
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-        
         do {
-            let (_, response) = try await urlSession.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 404 {
-                    return true
-                }
-                return (200...299).contains(httpResponse.statusCode)
-            }
-            try validateHTTPResponse(response, device: device)
+            _ = try await postState(device, body: ["pdel": id])
             return true
         } catch {
+            if let apiError = error as? WLEDAPIError,
+               case .httpError(let statusCode) = apiError,
+               statusCode == 404 {
+                return true
+            }
             logger.warning("Preset deletion failed for \(id) on device \(device.id), will retry later")
             return false
         }
@@ -751,42 +534,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard id >= 0 && id <= 250 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        if playlistStoreUnsupportedDevices.contains(device.id) {
-            return try await deletePreset(id: id, device: device)
-        }
-        
-        guard let deleteUrl = URL(string: "http://\(device.ipAddress)/json/playlists") else {
-            throw WLEDAPIError.invalidURL
-        }
-        
-        var request = URLRequest(url: deleteUrl)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "playlist": [String(id): NSNull()]
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-        
-        do {
-            let (_, response) = try await urlSession.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 404 {
-                    return true
-                }
-                return (200...299).contains(httpResponse.statusCode)
-            }
-            try validateHTTPResponse(response, device: device)
-            return true
-        } catch {
-            if let apiError = error as? WLEDAPIError,
-               case .httpError(let statusCode) = apiError,
-               statusCode == 404 || statusCode == 405 || statusCode == 501 {
-                playlistStoreUnsupportedDevices.insert(device.id)
-                return try await deletePreset(id: id, device: device)
-            }
-            logger.warning("Playlist deletion failed for \(id) on device \(device.id), will retry later")
-            return false
-        }
+        return try await deletePreset(id: id, device: device)
     }
     
     // MARK: - Preset Saving Helpers
@@ -845,7 +593,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                     id: presetId,
                     name: "\(preset.name) Step \(idx + 1)",
                     quickLoad: false,
-                    state: state
+                    state: state,
+                    saveOnly: true
                 ),
                 to: device
             )
@@ -1686,6 +1435,34 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return playlists.sorted { $0.id < $1.id }
     }
 
+    private func parsePlaylistsFromPresets(data: Data) throws -> [WLEDPlaylist] {
+        let json = try JSONSerialization.jsonObject(with: data, options: [])
+        let dictionary = json as? [String: Any] ?? [:]
+        var playlists: [WLEDPlaylist] = []
+        for (key, value) in dictionary {
+            guard let id = Int(key), let presetDict = value as? [String: Any] else { continue }
+            guard let playlistDict = presetDict["playlist"] as? [String: Any] else { continue }
+            let name = presetDict["n"] as? String ?? "Playlist \(id)"
+            let presets = decodeIntArray(playlistDict["ps"])
+            let durations = decodeIntArray(playlistDict["dur"])
+            let transitions = decodeIntArray(playlistDict["transition"])
+            let repeatCount = decodeInt(playlistDict["repeat"])
+            let endPresetId = decodeInt(playlistDict["end"])
+            playlists.append(
+                WLEDPlaylist(
+                    id: id,
+                    name: name,
+                    presets: presets,
+                    duration: durations,
+                    transition: transitions,
+                    repeat: repeatCount,
+                    endPresetId: endPresetId
+                )
+            )
+        }
+        return playlists.sorted { $0.id < $1.id }
+    }
+
     private func parsePresetSegment(from value: Any?) -> SegmentUpdate? {
         guard let value else { return nil }
         if let segments = value as? [[String: Any]], let first = segments.first {
@@ -1736,8 +1513,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try parsePresets(from: data)
     }
 
-    private func fetchPlaylistsFromFile(device: WLEDDevice) async throws -> [WLEDPlaylist] {
-        guard let url = URL(string: "http://\(device.ipAddress)/playlists.json") else {
+    private func fetchPlaylistsFromPresetsFile(device: WLEDDevice) async throws -> [WLEDPlaylist] {
+        guard let url = URL(string: "http://\(device.ipAddress)/presets.json") else {
             throw WLEDAPIError.invalidURL
         }
         let request = URLRequest(url: url)
@@ -1749,7 +1526,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             }
             throw WLEDAPIError.invalidResponse
         }
-        return try parsePlaylists(from: data)
+        return try parsePlaylistsFromPresets(data: data)
     }
     
     private func parseResponse(data: Data, device: WLEDDevice) throws -> WLEDResponse {
@@ -1892,10 +1669,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let holdDeciseconds = max(0, Int(round(holdSeconds * 10.0)))
         let durationDeciseconds = min(maxWLEDTransitionDeciseconds, transitionDeciseconds + holdDeciseconds)
         let steps = legs + 1
-        var durations = Array(repeating: durationDeciseconds, count: steps)
-        durations[0] = min(playlistInitialHoldDeciseconds, durationDeciseconds)
-        var transitions = Array(repeating: transitionDeciseconds, count: steps)
-        transitions[0] = 0
+        let durations = Array(repeating: durationDeciseconds, count: steps)
+        let transitions = Array(repeating: transitionDeciseconds, count: steps)
         return PlaylistStepPlan(steps: steps, durations: durations, transitions: transitions)
     }
 
@@ -1974,6 +1749,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             "sb": true,
             "sc": true
         ]
+        if request.saveOnly == true {
+            body["o"] = true
+        }
         if let quickLoad = request.quickLoad {
             body["ql"] = quickLoad
         }
@@ -2015,40 +1793,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         print("🔎 Playlist psave request for \(device.name): id=\(request.id) keys=[\(keys)]")
         #endif
         _ = try await postState(device, body: body)
-    }
-
-    private func savePlaylistViaPresetStore(_ request: WLEDPlaylistSaveRequest, device: WLEDDevice) async throws {
-        guard let url = URL(string: "http://\(device.ipAddress)/json/presets") else {
-            throw WLEDAPIError.invalidURL
-        }
-        var httpRequest = URLRequest(url: url)
-        httpRequest.httpMethod = "POST"
-        httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let playlistBody = PresetPlaylistBody(
-            ps: request.ps,
-            dur: request.dur,
-            transition: request.transition,
-            repeat: request.repeat,
-            end: request.endPresetId
-        )
-        let body = PresetStorePayload(
-            ps: [
-                String(request.id): PresetStoreBody(
-                    n: request.name,
-                    ql: nil,
-                    win: nil,
-                    playlist: playlistBody
-                )
-            ]
-        )
-        httpRequest.httpBody = try encoder.encode(body)
-        let (data, response) = try await urlSession.data(for: httpRequest)
-        try validateHTTPResponse(response, device: device)
-        #if DEBUG
-        if let httpResponse = response as? HTTPURLResponse {
-            print("✅ Playlist saved via /json/presets for \(device.name): id=\(request.id) status=\(httpResponse.statusCode) bytes=\(data.count)")
-        }
-        #endif
     }
 
     private func postState(_ device: WLEDDevice, body: [String: Any]) async throws -> WLEDResponse {

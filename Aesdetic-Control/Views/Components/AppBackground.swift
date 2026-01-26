@@ -5,12 +5,13 @@ struct AppBackground: View {
     @State private var currentTime = Date()
     private let dayStartHour = 6
     private let nightStartHour = 19
+    private let forceDarkMode = true
     private let updateTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         GeometryReader { proxy in
             let maxDimension = max(proxy.size.width, proxy.size.height)
-            let isNight = isNightTime(currentTime)
+            let isNight = forceDarkMode ? true : isNightTime(currentTime)
 
             ZStack {
                 lightLayer(maxDimension: maxDimension)
