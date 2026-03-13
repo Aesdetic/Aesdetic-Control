@@ -18,6 +18,8 @@ struct AutomationColorEditor: View {
     
     // Preview state
     @State private var previewEnabled: Bool = false
+    @State private var gradientPreviewTask: Task<Void, Never>?
+    @State private var brightnessPreviewTask: Task<Void, Never>?
     
     // Internal UI state
     @State private var selectedStopId: UUID? = nil
@@ -51,13 +53,16 @@ struct AutomationColorEditor: View {
         )
         .onChange(of: previewEnabled) { _, enabled in
             if enabled {
-                Task {
-                    await previewGradient(gradient)
-                }
+                scheduleGradientPreview(gradient)
+            } else {
+                cancelPreviewTasks()
             }
         }
         .onAppear {
             hydrateStopMapsIfNeeded()
+        }
+        .onDisappear {
+            cancelPreviewTasks()
         }
     }
     
@@ -110,9 +115,7 @@ struct AutomationColorEditor: View {
             whiteLevel = stopWhiteLevels.values.first
             
             if previewEnabled {
-                Task {
-                    await previewGradient(gradient)
-                }
+                scheduleGradientPreview(gradient)
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
@@ -207,9 +210,7 @@ struct AutomationColorEditor: View {
                 .tint(.white)
                 .onChange(of: brightness) { _, newValue in
                     if previewEnabled {
-                        Task {
-                            await previewBrightness(Int(newValue))
-                        }
+                        scheduleBrightnessPreview(Int(newValue))
                     }
                 }
         }
@@ -246,9 +247,7 @@ struct AutomationColorEditor: View {
             gradient = updatedGradient
             selectedPresetId = nil // Clear preset when manually changing interpolation
             if previewEnabled {
-                Task {
-                    await previewGradient(updatedGradient)
-                }
+                scheduleGradientPreview(updatedGradient)
             }
         }) {
             Text(mode.displayName)
@@ -342,9 +341,7 @@ struct AutomationColorEditor: View {
         selectedPresetId = nil // Clear preset when manually adding a stop
         
         if previewEnabled {
-            Task {
-                await previewGradient(updatedGradient)
-            }
+            scheduleGradientPreview(updatedGradient)
         }
     }
     
@@ -360,9 +357,7 @@ struct AutomationColorEditor: View {
         whiteLevel = stopWhiteLevels.values.first
         
         if previewEnabled && phase == .ended {
-            Task {
-                await previewGradient(updatedGradient)
-            }
+            scheduleGradientPreview(updatedGradient)
         }
     }
     
@@ -388,8 +383,10 @@ struct AutomationColorEditor: View {
             supportsCCT: supportsCCT,
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
-            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device)
+                && viewModel.supportsCCTOutput(for: device, segmentId: 0),
             allowManualWhite: advancedUIEnabled,
+            autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
             cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, whiteLevel in
                 handleColorChange(selectedId: selectedId, color: color, temperature: temperature, whiteLevel: whiteLevel)
@@ -432,9 +429,7 @@ struct AutomationColorEditor: View {
         selectedPresetId = nil // Clear preset when manually changing a stop color
         
         if previewEnabled {
-            Task {
-                await previewGradient(updatedGradient)
-            }
+            scheduleGradientPreview(updatedGradient)
         }
     }
     
@@ -451,9 +446,7 @@ struct AutomationColorEditor: View {
             selectedPresetId = nil // Clear preset when manually removing a stop
             
             if previewEnabled {
-                Task {
-                    await previewGradient(updatedGradient)
-                }
+                scheduleGradientPreview(updatedGradient)
             }
         }
     }
@@ -484,8 +477,36 @@ struct AutomationColorEditor: View {
     }
     
     // MARK: - Preview Functions
+
+    private func scheduleGradientPreview(_ gradient: LEDGradient) {
+        gradientPreviewTask?.cancel()
+        gradientPreviewTask = Task {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            await previewGradient(gradient)
+        }
+    }
+
+    private func scheduleBrightnessPreview(_ brightness: Int) {
+        brightnessPreviewTask?.cancel()
+        brightnessPreviewTask = Task {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+            await previewBrightness(brightness)
+        }
+    }
+
+    private func cancelPreviewTasks() {
+        gradientPreviewTask?.cancel()
+        gradientPreviewTask = nil
+        brightnessPreviewTask?.cancel()
+        brightnessPreviewTask = nil
+    }
     
     private func previewGradient(_ gradient: LEDGradient) async {
+        if viewModel.activeRunStatus[device.id] != nil {
+            return
+        }
         let ledCount = viewModel.totalLEDCount(for: device)
         await viewModel.applyGradientStopsAcrossStrip(
             device,
@@ -496,12 +517,16 @@ struct AutomationColorEditor: View {
             disableActiveEffect: true,
             segmentId: 0,
             interpolation: gradient.interpolation,
-            preferSegmented: true
+            preferSegmented: true,
+            forceSegmentedOnly: true
         )
     }
     
     private func previewBrightness(_ brightness: Int) async {
-        await viewModel.updateDeviceBrightness(device, brightness: brightness)
+        if viewModel.activeRunStatus[device.id] != nil {
+            return
+        }
+        await viewModel.updateDeviceBrightness(device, brightness: brightness, userInitiated: false)
     }
     
     // MARK: - Preset Saving
@@ -512,7 +537,7 @@ struct AutomationColorEditor: View {
             showSaveSuccess = false
         }
         
-        let presetName = "Color Preset \(Date().formatted(date: .omitted, time: .shortened))"
+        let presetName = "Color Preset \(Date().presetNameTimestamp())"
         var preset = ColorPreset(
             name: presetName,
             gradientStops: gradient.stops,

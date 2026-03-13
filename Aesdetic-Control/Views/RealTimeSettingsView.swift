@@ -239,6 +239,8 @@ struct RealTimeSettingsView: View {
 
 // MARK: - Preview
 
-#Preview {
-    RealTimeSettingsView(viewModel: DeviceControlViewModel.shared)
-} 
+struct RealTimeSettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        RealTimeSettingsView(viewModel: DeviceControlViewModel.shared)
+    }
+}

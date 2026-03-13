@@ -5,6 +5,10 @@ struct PresetsListView: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
     let onRequestRename: (PresetRenameContext) -> Void
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
+    @State private var isPlaylistEditorPresented = false
+    @State private var playlistEditorOriginalId: Int?
+    @State private var playlistEditorDraft = PlaylistEditorDraft.defaultDraft
     
     var body: some View {
         ScrollView {
@@ -19,6 +23,64 @@ struct PresetsListView: View {
             .padding(.horizontal, 16)
         }
         .navigationTitle("Presets")
+        .sheet(isPresented: $isPlaylistEditorPresented) {
+            PlaylistEditorSheet(
+                draft: $playlistEditorDraft,
+                originalId: playlistEditorOriginalId,
+                device: device,
+                availablePresetIds: viewModel.presets(for: device).map(\.id),
+                onCancel: {
+                    isPlaylistEditorPresented = false
+                },
+                onSave: { draft in
+                    Task {
+                        let resolvedId: Int
+                        if let existingId = playlistEditorOriginalId {
+                            resolvedId = existingId
+                        } else if let nextId = viewModel.nextPlaylistId(for: device) {
+                            resolvedId = nextId
+                        } else {
+                            return
+                        }
+                        let request = draft.asSaveRequest(withId: resolvedId)
+                        let success = await viewModel.savePlaylistRecord(request, for: device)
+                        if success {
+                            isPlaylistEditorPresented = false
+                        }
+                    }
+                },
+                onTest: { draft in
+                    Task {
+                        let request = draft.asSaveRequest(withId: playlistEditorOriginalId ?? 1)
+                        _ = await viewModel.testPlaylistRecord(request, for: device)
+                    }
+                },
+                onRun: { playlistId in
+                    Task {
+                        let targetId = playlistId ?? playlistEditorOriginalId
+                        guard let targetId else { return }
+                        _ = await viewModel.startPlaylist(
+                            device: device,
+                            playlistId: targetId,
+                            runTitle: playlistEditorDraft.name,
+                            expectedDurationSeconds: nil,
+                            transitionDeciseconds: nil,
+                            runKind: .effect,
+                            preferWebSocketFirst: true
+                        )
+                    }
+                },
+                onStop: {
+                    Task {
+                        _ = await viewModel.stopPlaylist(for: device)
+                    }
+                }
+            )
+            .presentationDetents([.large])
+        }
+        .task {
+            await viewModel.refreshPresetsIfModified(for: device)
+        }
     }
     
     // MARK: - Color Presets Section
@@ -48,8 +110,7 @@ struct PresetsListView: View {
                             // Try WLED preset ID first (if synced), otherwise apply directly
                             let presetId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId
                             if let presetId = presetId {
-                                let apiService = WLEDAPIService.shared
-                                _ = try? await apiService.applyPreset(presetId, to: device)
+                                _ = await viewModel.applyPresetId(presetId, to: device)
                             } else {
                                 // Apply preset directly using gradient stops and brightness
                                 let ledCount = viewModel.totalLEDCount(for: device)
@@ -120,48 +181,14 @@ struct PresetsListView: View {
                     )
                 } else {
                     VStack(spacing: 8) {
+                        let queuedPresetId = viewModel.queuedTransitionPresetApplyByDeviceId[device.id]
                         ForEach(transitionPresets) { preset in
-                            TransitionPresetRow(preset: preset, onApply: {
+                            TransitionPresetRow(
+                                preset: preset,
+                                isQueued: queuedPresetId == preset.id,
+                                onApply: {
                                 Task {
-                                    await viewModel.cancelActiveTransitionIfNeeded(for: device)
-                                    // Try WLED playlist ID first (if synced), otherwise apply directly
-                                    if let playlistId = preset.wledPlaylistId {
-                                        let applied = await viewModel.startPlaylist(
-                                            device: device,
-                                            playlistId: playlistId,
-                                            runTitle: preset.name,
-                                            expectedDurationSeconds: preset.durationSec,
-                                            runKind: .transition
-                                        )
-                                        if applied {
-                                            return
-                                        }
-                                        // Fallback to client-side transition if playlist failed
-                                    }
-                                    let startTemps = preset.temperatureA.map { temp in
-                                        Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, temp) })
-                                    }
-                                    let startWhites = preset.whiteLevelA.map { white in
-                                        Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, white) })
-                                    }
-                                    let endTemps = preset.temperatureB.map { temp in
-                                        Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, temp) })
-                                    }
-                                    let endWhites = preset.whiteLevelB.map { white in
-                                        Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, white) })
-                                    }
-                                    await viewModel.startTransition(
-                                        from: preset.gradientA,
-                                        aBrightness: preset.brightnessA,
-                                        to: preset.gradientB,
-                                        bBrightness: preset.brightnessB,
-                                        durationSec: preset.durationSec,
-                                        device: device,
-                                        startStopTemperatures: startTemps,
-                                        startStopWhiteLevels: startWhites,
-                                        endStopTemperatures: endTemps,
-                                        endStopWhiteLevels: endWhites
-                                    )
+                                    _ = await viewModel.applyTransitionPreset(preset, to: device)
                                 }
                             }, onEdit: {
                                 onRequestRename(.transition(preset))
@@ -212,8 +239,7 @@ struct PresetsListView: View {
                                         device: device
                                     )
                                 } else if let presetId = preset.wledPresetId {
-                                    let apiService = WLEDAPIService.shared
-                                    _ = try? await apiService.applyPreset(presetId, to: device)
+                                    _ = await viewModel.applyPresetId(presetId, to: device)
                                 } else {
                                     // Apply effect directly
                                     let apiService = WLEDAPIService.shared
@@ -248,6 +274,201 @@ struct PresetsListView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Advanced Playlists Section (WLED)
+
+    private var playlistDiscoverabilitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Device Playlists", systemImage: "list.bullet.rectangle")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+            }
+
+            Text("Device playlist controls are available in Advanced mode.")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.75))
+            Text("Enable Advanced mode to view, run, and delete playlists synced from WLED.")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.55))
+
+            Button {
+                advancedUIEnabled = true
+                Task { await viewModel.loadPlaylists(for: device, force: false) }
+            } label: {
+                Label("Enable Advanced Mode", systemImage: "slider.horizontal.3")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(PrimaryButtonStyle())
+        }
+    }
+
+    private var advancedPlaylistsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Device Playlists", systemImage: "list.bullet.rectangle")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+                Button("New") {
+                    playlistEditorOriginalId = nil
+                    playlistEditorDraft = PlaylistEditorDraft.defaultDraft
+                    isPlaylistEditorPresented = true
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.white.opacity(0.12))
+                )
+                Button("Stop") {
+                    Task { _ = await viewModel.stopPlaylist(for: device) }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.white.opacity(0.12))
+                )
+                Button("Refresh") {
+                    Task { await viewModel.refreshPlaylists(for: device) }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.white.opacity(0.12))
+                )
+            }
+
+            let playlists = viewModel.playlists(for: device)
+            if playlists.isEmpty {
+                emptyStateView(
+                    icon: "list.bullet.rectangle",
+                    message: viewModel.isLoadingPlaylists(for: device) ? "Loading playlists…" : "No playlists found",
+                    hint: "Playlists saved in WLED will appear here"
+                )
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(playlists) { playlist in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(playlist.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundColor(.white)
+                                Text("Steps: \(playlist.presets.count)")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.6))
+                                Text(playlistSummary(playlist))
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.55))
+                                if viewModel.isPlaylistRenamePending(playlist.id, for: device) {
+                                    Text("Rename pending sync")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundColor(.yellow.opacity(0.9))
+                                }
+                            }
+                            Spacer()
+                            Button("Run") {
+                                Task {
+                                    _ = await viewModel.startPlaylist(
+                                        device: device,
+                                        playlistId: playlist.id,
+                                        runTitle: playlist.name,
+                                        expectedDurationSeconds: nil,
+                                        transitionDeciseconds: nil,
+                                        runKind: .effect,
+                                        preferWebSocketFirst: true
+                                    )
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.blue.opacity(0.7))
+                            )
+
+                            Button("Edit") {
+                                playlistEditorOriginalId = playlist.id
+                                playlistEditorDraft = PlaylistEditorDraft(playlist: playlist)
+                                isPlaylistEditorPresented = true
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.white.opacity(0.18))
+                            )
+
+                            Button("Copy") {
+                                Task {
+                                    _ = await viewModel.duplicatePlaylist(playlist, for: device)
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.white.opacity(0.18))
+                            )
+
+                            Button("Delete") {
+                                Task { await viewModel.deletePlaylist(playlist, for: device) }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.red.opacity(0.55))
+                            )
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func playlistSummary(_ playlist: WLEDPlaylist) -> String {
+        let repeatText: String
+        if let repeatValue = playlist.repeat {
+            repeatText = repeatValue == 0 ? "∞" : "\(repeatValue)x"
+        } else {
+            repeatText = "default"
+        }
+        let shuffleText = playlist.shuffle == 1 ? "On" : "Off"
+        let endText: String
+        switch playlist.endPresetId {
+        case 255:
+            endText = "Restore"
+        case let id? where id > 0:
+            endText = "Preset \(id)"
+        default:
+            endText = "None"
+        }
+        return "Repeat \(repeatText) • Shuffle \(shuffleText) • End \(endText)"
     }
     
     private func emptyStateView(icon: String, message: String, hint: String) -> some View {
@@ -425,6 +646,7 @@ struct ColorPresetRow: View {
 
 struct TransitionPresetRow: View {
     let preset: TransitionPreset
+    let isQueued: Bool
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -441,6 +663,18 @@ struct TransitionPresetRow: View {
                 Text(formattedDuration)
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
+
+                if let status = statusBadgeText {
+                    Text(status)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.12))
+                        )
+                }
                 
                 Spacer()
                 
@@ -562,14 +796,21 @@ struct TransitionPresetRow: View {
     }
     
     private var formattedDuration: String {
-        let total = Int(preset.durationSec.rounded(.toNearestOrAwayFromZero))
-        if total <= 0 { return "Instant" }
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        if hours == 0 && minutes == 0 { return "<1 min" }
-        if hours == 0 { return "\(minutes) min" }
-        if minutes == 0 { return "\(hours) hr" }
-        return "\(hours) hr \(minutes) min"
+        TransitionDurationPicker.summaryString(seconds: preset.durationSec)
+    }
+
+    private var statusBadgeText: String? {
+        if isQueued { return "Queued" }
+        switch preset.wledSyncState {
+        case .synced:
+            return nil
+        case .pendingSync:
+            return "Sync pending"
+        case .needsMigration:
+            return "Needs migration"
+        case .syncFailed:
+            return "Sync issue"
+        }
     }
 }
 
@@ -764,6 +1005,283 @@ struct EffectPresetRow: View {
             return Color(.sRGB, white: 0.42)
         } else {
             return .white
+        }
+    }
+}
+
+// MARK: - Playlist Editor (Advanced)
+
+private struct PlaylistStepDraft: Identifiable, Equatable {
+    let id: UUID
+    var presetId: Int
+    var durationDs: Int
+    var transitionDs: Int
+
+    init(id: UUID = UUID(), presetId: Int, durationDs: Int, transitionDs: Int) {
+        self.id = id
+        self.presetId = presetId
+        self.durationDs = durationDs
+        self.transitionDs = transitionDs
+    }
+}
+
+private struct PlaylistEditorDraft: Equatable {
+    var name: String
+    var steps: [PlaylistStepDraft]
+    var repeatCount: Int
+    var shuffle: Int
+    var endPresetId: Int
+
+    static let defaultDraft = PlaylistEditorDraft(
+        name: "New Playlist",
+        steps: [PlaylistStepDraft(presetId: 1, durationDs: 100, transitionDs: 7)],
+        repeatCount: 1,
+        shuffle: 0,
+        endPresetId: 0
+    )
+
+    init(
+        name: String,
+        steps: [PlaylistStepDraft],
+        repeatCount: Int,
+        shuffle: Int,
+        endPresetId: Int
+    ) {
+        self.name = name
+        self.steps = steps
+        self.repeatCount = repeatCount
+        self.shuffle = shuffle
+        self.endPresetId = endPresetId
+    }
+
+    init(playlist: WLEDPlaylist) {
+        let stepCount = max(playlist.presets.count, playlist.duration.count, playlist.transition.count)
+        var builtSteps: [PlaylistStepDraft] = []
+        for index in 0..<max(1, stepCount) {
+            let presetId = index < playlist.presets.count ? playlist.presets[index] : (playlist.presets.last ?? 1)
+            let duration = index < playlist.duration.count ? playlist.duration[index] : (playlist.duration.last ?? 100)
+            let transition = index < playlist.transition.count ? playlist.transition[index] : (playlist.transition.last ?? 7)
+            builtSteps.append(
+                PlaylistStepDraft(
+                    presetId: max(1, min(250, presetId)),
+                    durationDs: max(0, min(65530, duration)),
+                    transitionDs: max(0, min(65530, transition))
+                )
+            )
+        }
+        self.init(
+            name: playlist.name,
+            steps: builtSteps,
+            repeatCount: min(max(playlist.repeat ?? 1, 0), 127),
+            shuffle: playlist.shuffle == 1 ? 1 : 0,
+            endPresetId: playlist.endPresetId ?? 0
+        )
+    }
+
+    var isManualAdvance: Bool {
+        !steps.isEmpty && steps.allSatisfy { $0.durationDs == 0 }
+    }
+
+    mutating func setManualAdvance(_ enabled: Bool) {
+        guard !steps.isEmpty else { return }
+        if enabled {
+            for index in steps.indices {
+                steps[index].durationDs = 0
+            }
+        } else {
+            for index in steps.indices where steps[index].durationDs == 0 {
+                steps[index].durationDs = 100
+            }
+        }
+    }
+
+    func asSaveRequest(withId id: Int) -> WLEDPlaylistSaveRequest {
+        WLEDPlaylistSaveRequest(
+            id: id,
+            name: name,
+            ps: steps.map(\.presetId),
+            dur: steps.map(\.durationDs),
+            transition: steps.map(\.transitionDs),
+            repeat: repeatCount,
+            endPresetId: endPresetId,
+            shuffle: shuffle
+        )
+    }
+}
+
+private struct PlaylistEditorSheet: View {
+    @Binding var draft: PlaylistEditorDraft
+    let originalId: Int?
+    let device: WLEDDevice
+    let availablePresetIds: [Int]
+    let onCancel: () -> Void
+    let onSave: (PlaylistEditorDraft) -> Void
+    let onTest: (PlaylistEditorDraft) -> Void
+    let onRun: (Int?) -> Void
+    let onStop: () -> Void
+
+    private var endPresetOptions: [Int] {
+        let presetIds = availablePresetIds.filter { (1...250).contains($0) }.sorted()
+        return [0, 255] + presetIds
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Device: \(device.name)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Playlist Name")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                        TextField("Playlist name", text: $draft.name)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    Toggle(
+                        "Shuffle",
+                        isOn: Binding(
+                            get: { draft.shuffle == 1 },
+                            set: { draft.shuffle = $0 ? 1 : 0 }
+                        )
+                    )
+
+                    Toggle(
+                        "Manual advance (duration = 0 for each step)",
+                        isOn: Binding(
+                            get: { draft.isManualAdvance },
+                            set: { draft.setManualAdvance($0) }
+                        )
+                    )
+
+                    Stepper("Repeat count: \(draft.repeatCount) (0 = infinite)", value: $draft.repeatCount, in: 0...127)
+
+                    Picker("End preset", selection: $draft.endPresetId) {
+                        Text("None").tag(0)
+                        Text("Restore previous preset").tag(255)
+                        ForEach(endPresetOptions.filter { $0 != 0 && $0 != 255 }, id: \.self) { presetId in
+                            Text("Preset \(presetId)").tag(presetId)
+                        }
+                    }
+
+                    Divider()
+
+                    HStack {
+                        Text("Steps")
+                            .font(.headline)
+                        Spacer()
+                        Button {
+                            let seed = draft.steps.last ?? PlaylistStepDraft(presetId: 1, durationDs: 100, transitionDs: 7)
+                            draft.steps.append(
+                                PlaylistStepDraft(
+                                    presetId: seed.presetId,
+                                    durationDs: seed.durationDs,
+                                    transitionDs: seed.transitionDs
+                                )
+                            )
+                        } label: {
+                            Label("Add Step", systemImage: "plus")
+                                .font(.caption.weight(.semibold))
+                        }
+                    }
+
+                    ForEach(Array(draft.steps.indices), id: \.self) { index in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Step \(index + 1)")
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                if draft.steps.count > 1 {
+                                    Button {
+                                        draft.steps.remove(at: index)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .foregroundColor(.red)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                Button {
+                                    guard index > 0 else { return }
+                                    draft.steps.swapAt(index, index - 1)
+                                } label: {
+                                    Image(systemName: "arrow.up")
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == 0)
+                                Button {
+                                    guard index < draft.steps.count - 1 else { return }
+                                    draft.steps.swapAt(index, index + 1)
+                                } label: {
+                                    Image(systemName: "arrow.down")
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(index == draft.steps.count - 1)
+                            }
+
+                            Stepper(
+                                "Preset ID: \(draft.steps[index].presetId)",
+                                value: $draft.steps[index].presetId,
+                                in: 1...250
+                            )
+                            Stepper(
+                                "Duration: \(String(format: "%.1f", Double(draft.steps[index].durationDs) / 10.0))s",
+                                value: $draft.steps[index].durationDs,
+                                in: 0...65530,
+                                step: 1
+                            )
+                            Stepper(
+                                "Transition: \(String(format: "%.1f", Double(draft.steps[index].transitionDs) / 10.0))s",
+                                value: $draft.steps[index].transitionDs,
+                                in: 0...65530,
+                                step: 1
+                            )
+                        }
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle(originalId == nil ? "New Playlist" : "Edit Playlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(draft)
+                    }
+                    .disabled(draft.steps.isEmpty)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 10) {
+                    Button("Test") {
+                        onTest(draft)
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    Button("Run") {
+                        onRun(originalId)
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(originalId == nil)
+                    Button("Stop") {
+                        onStop()
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+                .background(.ultraThinMaterial)
+            }
         }
     }
 }

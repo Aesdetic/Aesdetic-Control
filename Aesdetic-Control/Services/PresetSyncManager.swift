@@ -67,9 +67,15 @@ actor PresetSyncManager {
         }
     }
 
+    @available(*, deprecated, message: "Transition UI saves must use DeviceControlViewModel.createTransitionPlaylist(... persist: true)")
     func saveTransitionPreset(_ preset: TransitionPreset, to device: WLEDDevice) async throws -> Int {
-        try await enqueue(deviceId: device.id) {
+        #if DEBUG
+        print("transition_preset.legacy_save_path_blocked device=\(device.id)")
+        assertionFailure("Use DeviceControlViewModel.saveTransitionPresetToDevice/createTransitionPlaylist for transition presets")
+        #endif
+        return try await enqueue(deviceId: device.id) {
             let existingId = preset.wledPlaylistId
+            let existingStepIds = preset.wledStepPresetIds ?? []
             let playlistId = try await self.resolvePlaylistId(for: preset, device: device, existingId: existingId)
             #if DEBUG
             print("🔎 Save transition preset for \(device.name): id=\(playlistId) existing=\(existingId.map(String.init) ?? "nil")")
@@ -81,6 +87,15 @@ actor PresetSyncManager {
             if let existingId, existingId != playlistId {
                 _ = try? await self.apiService.deletePlaylist(id: existingId, device: device)
             }
+            if !existingStepIds.isEmpty,
+               let playlists = try? await self.apiService.fetchPlaylists(for: device),
+               let playlist = playlists.first(where: { $0.id == playlistId }) {
+                let newStepIds = Set(playlist.presets)
+                let staleStepIds = existingStepIds.filter { !newStepIds.contains($0) }
+                for presetId in staleStepIds {
+                    _ = try? await self.apiService.deletePreset(id: presetId, device: device)
+                }
+            }
             return playlistId
         }
     }
@@ -88,8 +103,8 @@ actor PresetSyncManager {
     private func resolvePresetId(for preset: ColorPreset, device: WLEDDevice, existingId: Int?) async throws -> Int {
         let existingPresets = try await apiService.fetchPresets(for: device)
         let used = Set(existingPresets.map { $0.id })
-        if existingId != nil, let newId = allocateId(used: used) {
-            return newId
+        if let existingId, (1...250).contains(existingId) {
+            return existingId
         }
         return allocateId(used: used) ?? 1
     }
@@ -97,8 +112,8 @@ actor PresetSyncManager {
     private func resolvePresetId(for preset: WLEDEffectPreset, device: WLEDDevice, existingId: Int?) async throws -> Int {
         let existingPresets = try await apiService.fetchPresets(for: device)
         let used = Set(existingPresets.map { $0.id })
-        if existingId != nil, let newId = allocateId(used: used) {
-            return newId
+        if let existingId, (1...250).contains(existingId) {
+            return existingId
         }
         return allocateId(used: used) ?? 1
     }
@@ -106,8 +121,8 @@ actor PresetSyncManager {
     private func resolvePlaylistId(for preset: TransitionPreset, device: WLEDDevice, existingId: Int?) async throws -> Int {
         let existingPresets = try await apiService.fetchPresets(for: device)
         let used = Set(existingPresets.map { $0.id })
-        if existingId != nil, let newId = allocateId(used: used) {
-            return newId
+        if let existingId, (1...250).contains(existingId) {
+            return existingId
         }
         return allocateId(used: used) ?? 1
     }
@@ -121,11 +136,19 @@ actor PresetSyncManager {
 
     private func verifyPresetExists(id: Int, device: WLEDDevice) async throws {
         for attempt in 1...verifyRetryAttempts {
-            let presets = try await apiService.fetchPresets(for: device)
-            #if DEBUG
-            print("🔎 Verify preset \(id) on \(device.name): attempt=\(attempt) count=\(presets.count)")
-            #endif
-            if presets.contains(where: { $0.id == id }) {
+            do {
+                let presets = try await apiService.fetchPresets(for: device)
+                #if DEBUG
+                print("🔎 Verify preset \(id) on \(device.name): attempt=\(attempt) count=\(presets.count)")
+                #endif
+                if presets.contains(where: { $0.id == id }) {
+                    return
+                }
+            } catch {
+                #if DEBUG
+                print("⚠️ Verify preset \(id) failed to fetch presets on \(device.name): \(error.localizedDescription)")
+                #endif
+                // If we can't read presets.json, don't block saves.
                 return
             }
             if attempt < verifyRetryAttempts {
@@ -138,11 +161,19 @@ actor PresetSyncManager {
 
     private func verifyPlaylistExists(id: Int, device: WLEDDevice) async throws {
         for attempt in 1...verifyRetryAttempts {
-            let playlists = try await apiService.fetchPlaylists(for: device)
-            #if DEBUG
-            print("🔎 Verify playlist \(id) on \(device.name): attempt=\(attempt) count=\(playlists.count)")
-            #endif
-            if playlists.contains(where: { $0.id == id }) {
+            do {
+                let playlists = try await apiService.fetchPlaylists(for: device)
+                #if DEBUG
+                print("🔎 Verify playlist \(id) on \(device.name): attempt=\(attempt) count=\(playlists.count)")
+                #endif
+                if playlists.contains(where: { $0.id == id }) {
+                    return
+                }
+            } catch {
+                #if DEBUG
+                print("⚠️ Verify playlist \(id) failed to fetch playlists on \(device.name): \(error.localizedDescription)")
+                #endif
+                // If we can't read presets.json, don't block saves.
                 return
             }
             if attempt < verifyRetryAttempts {

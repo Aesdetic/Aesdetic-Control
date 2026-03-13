@@ -2,180 +2,146 @@ import SwiftUI
 import UIKit
 
 struct AppBackground: View {
-    @State private var currentTime = Date()
-    private let dayStartHour = 6
-    private let nightStartHour = 19
-    private let forceDarkMode = true
-    private let updateTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
-
     var body: some View {
         GeometryReader { proxy in
-            let maxDimension = max(proxy.size.width, proxy.size.height)
-            let isNight = forceDarkMode ? true : isNightTime(currentTime)
+            let width = proxy.size.width
+            let height = proxy.size.height
 
             ZStack {
-                lightLayer(maxDimension: maxDimension)
-
-                darkLayer(maxDimension: maxDimension)
-                    .opacity(isNight ? 1 : 0)
-                    .animation(.easeInOut(duration: 4.0), value: isNight)
+                neutralGlassLayer(width: width, height: height)
 
                 NoiseTexture()
-                    .opacity(0.12)
+                    .opacity(0.02)
                     .blendMode(.overlay)
             }
             .ignoresSafeArea()
         }
         .allowsHitTesting(false)
-        .onReceive(updateTimer) { now in
-            currentTime = now
-        }
     }
 
-    private func lightLayer(maxDimension: CGFloat) -> some View {
-        ZStack {
-            RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 1.0, green: 0.97, blue: 0.95), location: 0.0),
-                    .init(color: Color(red: 0.99, green: 0.92, blue: 0.90), location: 0.33),
-                    .init(color: Color(red: 0.90, green: 0.90, blue: 0.95), location: 1.0)
-                ]),
-                center: .topLeading,
-                startRadius: 0,
-                endRadius: maxDimension * 1.1
-            )
+    private func neutralGlassLayer(width: CGFloat, height: CGFloat) -> some View {
+        // Keep the 03C composition mapped to the full portrait canvas.
+        // Radii are width-based to avoid zoom-like scaling across tab containers.
+        let topLeftRadius = width * 0.92
+        let topRightRadius = width * 0.88
+        let midLeftRadius = width * 0.78
+        let centerRadius = width * 0.86
+        let lowerLeftRadius = width * 0.74
+        let bottomRightRadius = width * 1.02
+        let vignetteOuterRadius = max(width, height) * 0.96
 
-            RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 1.0, green: 0.84, blue: 0.78).opacity(0.65), location: 0.0),
-                    .init(color: Color(red: 1.0, green: 0.86, blue: 0.80).opacity(0.0), location: 0.7)
-                ]),
-                center: UnitPoint(x: 0.12, y: 0.42),
-                startRadius: 0,
-                endRadius: maxDimension * 0.8
-            )
-            .blendMode(.screen)
-
-            RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.95, green: 0.86, blue: 1.0).opacity(0.55), location: 0.0),
-                    .init(color: Color(red: 0.95, green: 0.88, blue: 1.0).opacity(0.0), location: 0.68)
-                ]),
-                center: UnitPoint(x: 0.78, y: 0.38),
-                startRadius: 0,
-                endRadius: maxDimension * 0.75
-            )
-            .blendMode(.screen)
-
-            RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.76, green: 0.94, blue: 1.0).opacity(0.45), location: 0.0),
-                    .init(color: Color(red: 0.78, green: 0.93, blue: 1.0).opacity(0.0), location: 0.7)
-                ]),
-                center: UnitPoint(x: 0.88, y: 0.78),
-                startRadius: 0,
-                endRadius: maxDimension * 0.7
-            )
-            .blendMode(.screen)
-
+        return ZStack {
             LinearGradient(
                 colors: [
-                    Color.white.opacity(0.32),
-                    Color.white.opacity(0.06),
-                    Color.black.opacity(0.08)
+                    Color(red: 0.953, green: 0.949, blue: 0.941),
+                    Color(red: 0.922, green: 0.906, blue: 0.886)
                 ],
-                startPoint: .top,
-                endPoint: .bottom
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             )
-            .blendMode(.softLight)
+
+            // Portrait-optimized blob layout (tuned for vertical screens)
+            RadialGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.835, green: 0.804, blue: 0.768).opacity(0.62), location: 0.0),
+                    .init(color: Color(red: 0.867, green: 0.839, blue: 0.804).opacity(0.0), location: 0.6)
+                ]),
+                center: UnitPoint(x: 0.18, y: 0.16),
+                startRadius: 0,
+                endRadius: topLeftRadius
+            )
+            .blendMode(.multiply)
+
+            RadialGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.825, green: 0.799, blue: 0.765).opacity(0.42), location: 0.0),
+                    .init(color: Color(red: 0.825, green: 0.799, blue: 0.765).opacity(0.0), location: 0.65)
+                ]),
+                center: UnitPoint(x: 0.22, y: 0.42),
+                startRadius: 0,
+                endRadius: midLeftRadius
+            )
+            .blendMode(.multiply)
+
+            RadialGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.742, green: 0.769, blue: 0.792).opacity(0.56), location: 0.0),
+                    .init(color: Color(red: 0.788, green: 0.812, blue: 0.831).opacity(0.0), location: 0.6)
+                ]),
+                center: UnitPoint(x: 0.78, y: 0.18),
+                startRadius: 0,
+                endRadius: topRightRadius
+            )
+            .blendMode(.multiply)
+
+            RadialGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.809, green: 0.791, blue: 0.760).opacity(0.34), location: 0.0),
+                    .init(color: Color(red: 0.809, green: 0.791, blue: 0.760).opacity(0.0), location: 0.66)
+                ]),
+                center: UnitPoint(x: 0.52, y: 0.56),
+                startRadius: 0,
+                endRadius: centerRadius
+            )
+            .blendMode(.multiply)
+
+            RadialGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.834, green: 0.813, blue: 0.785).opacity(0.30), location: 0.0),
+                    .init(color: Color(red: 0.834, green: 0.813, blue: 0.785).opacity(0.0), location: 0.68)
+                ]),
+                center: UnitPoint(x: 0.22, y: 0.86),
+                startRadius: 0,
+                endRadius: lowerLeftRadius
+            )
+            .blendMode(.multiply)
+
+            RadialGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.815, green: 0.793, blue: 0.764).opacity(0.56), location: 0.0),
+                    .init(color: Color(red: 0.847, green: 0.827, blue: 0.800).opacity(0.0), location: 0.6)
+                ]),
+                center: UnitPoint(x: 0.84, y: 0.92),
+                startRadius: 0,
+                endRadius: bottomRightRadius
+            )
+            .blendMode(.multiply)
 
             RadialGradient(
                 gradient: Gradient(colors: [
                     Color.black.opacity(0.0),
-                    Color.black.opacity(0.2)
+                    Color.black.opacity(0.11)
                 ]),
                 center: .center,
-                startRadius: maxDimension * 0.2,
-                endRadius: maxDimension * 0.95
+                startRadius: width * 0.22,
+                endRadius: vignetteOuterRadius
             )
             .blendMode(.multiply)
-        }
-    }
-
-    private func darkLayer(maxDimension: CGFloat) -> some View {
-        ZStack {
-            RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.16, green: 0.16, blue: 0.2), location: 0.0),
-                    .init(color: Color(red: 0.12, green: 0.12, blue: 0.16), location: 0.45),
-                    .init(color: Color(red: 0.06, green: 0.07, blue: 0.1), location: 1.0)
-                ]),
-                center: .topLeading,
-                startRadius: 0,
-                endRadius: maxDimension * 1.1
-            )
 
             RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.58, green: 0.36, blue: 0.3).opacity(0.32), location: 0.0),
-                    .init(color: Color(red: 0.52, green: 0.36, blue: 0.32).opacity(0.0), location: 0.7)
+                gradient: Gradient(colors: [
+                    Color.white.opacity(0.24),
+                    .clear
                 ]),
-                center: UnitPoint(x: 0.14, y: 0.48),
+                center: UnitPoint(x: 0.5, y: 0.0),
                 startRadius: 0,
-                endRadius: maxDimension * 0.85
-            )
-            .blendMode(.screen)
-
-            RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.38, green: 0.3, blue: 0.55).opacity(0.3), location: 0.0),
-                    .init(color: Color(red: 0.34, green: 0.30, blue: 0.50).opacity(0.0), location: 0.7)
-                ]),
-                center: UnitPoint(x: 0.82, y: 0.42),
-                startRadius: 0,
-                endRadius: maxDimension * 0.8
-            )
-            .blendMode(.screen)
-
-            RadialGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.18, green: 0.42, blue: 0.55).opacity(0.28), location: 0.0),
-                    .init(color: Color(red: 0.20, green: 0.36, blue: 0.48).opacity(0.0), location: 0.7)
-                ]),
-                center: UnitPoint(x: 0.86, y: 0.78),
-                startRadius: 0,
-                endRadius: maxDimension * 0.75
+                endRadius: width * 1.05
             )
             .blendMode(.screen)
 
             LinearGradient(
                 colors: [
                     Color.white.opacity(0.08),
-                    Color.white.opacity(0.0),
-                    Color.black.opacity(0.28)
+                    .clear,
+                    Color.black.opacity(0.05)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
             .blendMode(.softLight)
-
-            RadialGradient(
-                gradient: Gradient(colors: [
-                    Color.black.opacity(0.18),
-                    Color.black.opacity(0.6)
-                ]),
-                center: .center,
-                startRadius: maxDimension * 0.2,
-                endRadius: maxDimension * 0.95
-            )
-            .blendMode(.multiply)
         }
     }
 
-    private func isNightTime(_ date: Date) -> Bool {
-        let hour = Calendar.current.component(.hour, from: date)
-        return hour >= nightStartHour || hour < dayStartHour
-    }
 }
 
 private struct NoiseTexture: View {

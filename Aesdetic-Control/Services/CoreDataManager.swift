@@ -24,8 +24,10 @@ class CoreDataManager: ObservableObject {
         
         container.loadPersistentStores { _, error in
             if let error = error as NSError? {
+                #if DEBUG
                 print("❌ Core Data loading error: \(error.localizedDescription)")
                 print("Error details: \(error.userInfo)")
+                #endif
                 
                 // For now, we'll continue without Core Data rather than crash
                 // In a production app, we might want to create an in-memory store as fallback
@@ -33,7 +35,9 @@ class CoreDataManager: ObservableObject {
                 print("⚠️ Continuing without persistent storage. App functionality will be limited.")
                 #endif
             } else {
+                #if DEBUG
                 print("✅ Core Data loaded successfully")
+                #endif
             }
         }
         
@@ -66,7 +70,9 @@ class CoreDataManager: ObservableObject {
                 try context.save()
             } catch {
                 let nsError = error as NSError
+                #if DEBUG
                 print("Core Data save error: \(nsError), \(nsError.userInfo)")
+                #endif
             }
         }
     }
@@ -81,7 +87,9 @@ class CoreDataManager: ObservableObject {
                 try context.save()
             } catch {
                 let nsError = error as NSError
+                #if DEBUG
                 print("Core Data background save error: \(nsError), \(nsError.userInfo)")
+                #endif
             }
         }
     }
@@ -114,8 +122,39 @@ class CoreDataManager: ObservableObject {
                 let entities = try self.viewContext.fetch(request)
                 return entities.compactMap { $0.toWLEDDevice() }
             } catch {
-                self.logger.error("Failed to fetch devices: \\(error)")
+                self.logger.error("Failed to fetch devices: \(error.localizedDescription, privacy: .public)")
                 return []
+            }
+        }
+    }
+    
+    /// Synchronously fetch all devices (used to avoid UI flicker on launch)
+    func fetchDevicesSync() -> [WLEDDevice] {
+        var result: [WLEDDevice] = []
+        viewContext.performAndWait {
+            let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
+            do {
+                let entities = try self.viewContext.fetch(request)
+                result = entities.compactMap { $0.toWLEDDevice() }
+            } catch {
+                self.logger.error("Failed to fetch devices (sync): \(error.localizedDescription, privacy: .public)")
+                result = []
+            }
+        }
+        return result
+    }
+
+    /// Fetch a single device by ID (MAC address).
+    func fetchDevice(id: String) async -> WLEDDevice? {
+        await viewContext.perform {
+            let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", id)
+            request.fetchLimit = 1
+            do {
+                return try self.viewContext.fetch(request).first?.toWLEDDevice()
+            } catch {
+                self.logger.error("Failed to fetch device \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                return nil
             }
         }
     }
@@ -132,8 +171,72 @@ class CoreDataManager: ObservableObject {
                     context.delete(entity)
                 }
             } catch {
-                self.logger.error("Failed to delete device \\(id): \\(error)")
+                self.logger.error("Failed to delete device \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
+        }
+    }
+
+    // MARK: - Wellness Entries
+
+    func fetchWellnessEntry(for date: Date) async -> WellnessEntrySnapshot? {
+        let normalizedDate = Calendar.current.startOfDay(for: date)
+        return await viewContext.perform {
+            let request: NSFetchRequest<WellnessEntryEntity> = WellnessEntryEntity.fetchRequest()
+            request.predicate = NSPredicate(format: "date == %@", normalizedDate as NSDate)
+            request.fetchLimit = 1
+
+            do {
+                let entity = try self.viewContext.fetch(request).first
+                return entity?.toSnapshot()
+            } catch {
+                self.logger.error("Failed to fetch wellness entry: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+        }
+    }
+
+    func fetchWellnessEntries(limit: Int? = nil) async -> [WellnessEntrySnapshot] {
+        await viewContext.perform {
+            let request: NSFetchRequest<WellnessEntryEntity> = WellnessEntryEntity.fetchRequest()
+            request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
+            if let limit {
+                request.fetchLimit = limit
+            }
+            do {
+                let entities = try self.viewContext.fetch(request)
+                return entities.map { $0.toSnapshot() }
+            } catch {
+                self.logger.error("Failed to fetch wellness entries: \(error.localizedDescription, privacy: .public)")
+                return []
+            }
+        }
+    }
+
+    func fetchWellnessEntries(from startDate: Date, to endDate: Date) async -> [WellnessEntrySnapshot] {
+        let start = Calendar.current.startOfDay(for: startDate)
+        let end = Calendar.current.startOfDay(for: endDate)
+        return await viewContext.perform {
+            let request: NSFetchRequest<WellnessEntryEntity> = WellnessEntryEntity.fetchRequest()
+            request.predicate = NSPredicate(format: "date >= %@ AND date <= %@", start as NSDate, end as NSDate)
+            request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
+            do {
+                let entities = try self.viewContext.fetch(request)
+                return entities.map { $0.toSnapshot() }
+            } catch {
+                self.logger.error("Failed to fetch wellness entries by range: \(error.localizedDescription, privacy: .public)")
+                return []
+            }
+        }
+    }
+
+    func saveWellnessEntry(_ entry: WellnessEntrySnapshot) async {
+        var normalizedEntry = entry
+        normalizedEntry.date = Calendar.current.startOfDay(for: entry.date)
+        normalizedEntry.updatedAt = Date()
+
+        await performBackgroundSave { context in
+            let entity = WellnessEntryEntity.findOrCreate(for: normalizedEntry.date, in: context)
+            entity.update(from: normalizedEntry)
         }
     }
     
@@ -151,7 +254,9 @@ class CoreDataManager: ObservableObject {
             do {
                 try context.save()
             } catch {
+                #if DEBUG
                 print("Background save error: \(error)")
+                #endif
             }
         }
     }
@@ -172,7 +277,9 @@ class CoreDataManager: ObservableObject {
                 // Reduce memory pressure by resetting context after batch operation
                 context.reset()
             } catch {
+                #if DEBUG
                 print("Batch save error: \(error)")
+                #endif
             }
         }
     }
@@ -200,7 +307,9 @@ class CoreDataManager: ObservableObject {
                     
                     continuation.resume(returning: (total: total, online: online, offline: offline))
                 } catch {
+                    #if DEBUG
                     print("Error fetching device statistics: \(error)")
+                    #endif
                     continuation.resume(returning: (total: 0, online: 0, offline: 0))
                 }
             }

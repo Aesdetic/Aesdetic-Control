@@ -64,7 +64,7 @@ struct SaveTransitionPresetDialog: View {
                     }
                     
                     HStack(spacing: 16) {
-                        Label("\(Int(currentDurationSec))s", systemImage: "clock")
+                        Label(formatDuration(currentDurationSec), systemImage: "clock")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                         Label("A: \(Int(round(Double(currentBrightnessA)/255.0*100)))%", systemImage: "sun.max")
@@ -135,7 +135,7 @@ struct SaveTransitionPresetDialog: View {
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {
-            presetName = "Transition \(Date().formatted(date: .omitted, time: .shortened))"
+            presetName = "Transition \(Date().presetNameTimestamp())"
             // Auto-focus text field after a brief delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isTextFieldFocused = true
@@ -143,6 +143,10 @@ struct SaveTransitionPresetDialog: View {
         }
     }
     
+    private func formatDuration(_ seconds: Double) -> String {
+        TransitionDurationPicker.clockString(seconds: seconds)
+    }
+
     private func savePreset() {
         let preset = TransitionPreset(
             name: presetName,

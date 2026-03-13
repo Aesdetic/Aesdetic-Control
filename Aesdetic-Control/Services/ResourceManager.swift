@@ -335,6 +335,9 @@ class ResourceManager: ObservableObject {
         
         // Reduce WebSocket activity
         WLEDWebSocketManager.shared.pauseBackgroundOperations()
+        
+        // Pause connection monitoring
+        WLEDConnectionMonitor.shared.pauseBackgroundOperations()
     }
     
     @MainActor
@@ -345,6 +348,9 @@ class ResourceManager: ObservableObject {
         
         // Resume WebSocket activity
         WLEDWebSocketManager.shared.resumeBackgroundOperations()
+        
+        // Resume connection monitoring
+        WLEDConnectionMonitor.shared.resumeBackgroundOperations()
     }
     
     // MARK: - Public Interface
@@ -396,13 +402,11 @@ extension WLEDWebSocketManager {
     }
     
     func pauseBackgroundOperations() {
-        // Pause non-essential WebSocket operations
-        // WebSocket connections are maintained but health checks are reduced
+        suspendAllConnections()
     }
     
     func resumeBackgroundOperations() {
-        // Resume WebSocket operations
-        // Full health check frequency is restored
+        // Connections will be re-established by the ViewModel when app becomes active.
     }
 }
 

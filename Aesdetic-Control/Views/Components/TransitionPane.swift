@@ -30,12 +30,14 @@ struct TransitionPane: View {
     @State private var bBrightness: Double
     @State private var transitionOn: Bool = false
     @State private var applyWorkItem: DispatchWorkItem? = nil
-    @State private var durationHours: Int = 0
-    @State private var durationMinutes: Int = 1
+    @State private var durationMinutesPart: Int = 1
+    @State private var durationSecondsPart: Int = 0
     @State private var selectedStartPresetId: UUID?
     @State private var selectedEndPresetId: UUID?
     @State private var isApplyingTransition: Bool = false
+    @State private var isCancellingTransition: Bool = false
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
+    @AppStorage("perLedTransitionsEnabled") private var perLedTransitionsEnabled: Bool = false
 
     init(
         device: WLEDDevice,
@@ -88,21 +90,55 @@ struct TransitionPane: View {
         }
         return status.id
     }
+
+    private var hasActiveTransitionRun: Bool {
+        activeTransitionId != nil
+    }
     
     private var durationTotalSeconds: Double {
-        Double(max(0, durationHours * 3600 + durationMinutes * 60))
+        Double(transitionPickerDurationSeconds())
     }
 
     private var isTransitionActive: Bool {
         transitionOn && isExpanded
     }
 
+    private var isTransitionLoading: Bool {
+        guard let status = viewModel.activeRunStatus[device.id], status.kind == .transition else {
+            return viewModel.presetWriteInProgress.contains(device.id)
+        }
+        return status.title == "Loading..." || viewModel.presetWriteInProgress.contains(device.id)
+    }
+
+    private var isPresetButtonDisabled: Bool {
+        isSavingPreset || viewModel.isTransitionPresetButtonDisabled(for: device.id)
+    }
+
     private var isApplyDisabled: Bool {
-        durationTotalSeconds <= 0 || isApplyingTransition
+        durationTotalSeconds <= 0
+            || isApplyingTransition
+            || viewModel.isTransitionCleanupInProgress(for: device.id)
+    }
+
+    private var isCancelDisabled: Bool {
+        isCancellingTransition
+            || viewModel.isTransitionCleanupInProgress(for: device.id)
+    }
+
+    private var preferSegmentedUpdates: Bool {
+        !(advancedUIEnabled && perLedTransitionsEnabled)
     }
     
-    private var allowedMinuteValues: [Int] {
-        durationHours >= 24 ? [0] : Array(0...59)
+    private var allowedSecondValues: [Int] {
+        durationMinutesPart >= 60 ? [0] : Array(0...59)
+    }
+
+    private var selectedDurationSeconds: Int {
+        transitionPickerDurationSeconds()
+    }
+
+    private var transitionExceedsRecommendedMax: Bool {
+        TransitionDurationPicker.exceedsRecommendedMax(Double(selectedDurationSeconds))
     }
     
     private var colorPresets: [ColorPreset] {
@@ -110,6 +146,13 @@ struct TransitionPane: View {
     }
 
     var body: some View {
+        let base = paneCardContent
+        let runtimeBound = applyRuntimeModifiers(to: base)
+        applyDraftPersistenceModifiers(to: runtimeBound)
+    }
+
+    @ViewBuilder
+    private var paneCardContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerSection
 
@@ -123,21 +166,43 @@ struct TransitionPane: View {
                 applySection
             }
         }
-        .onAppear {
-            if activeTransitionId == nil {
-                transitionOn = false
-            }
-        }
-        .onChange(of: activeTransitionId) { _, newValue in
-            isApplyingTransition = newValue != nil
-        }
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(backgroundFill)
         )
+    }
+
+    @ViewBuilder
+    private func applyRuntimeModifiers<Content: View>(to content: Content) -> some View {
+        content
+        .onAppear {
+            restoreDraftSessionIfAvailable()
+            if activeTransitionId != nil || isSavingPreset {
+                transitionOn = true
+                isExpanded = true
+            } else if activeTransitionId == nil, !transitionOn {
+                transitionOn = false
+            }
+            persistDraftSession()
+        }
+        .onDisappear {
+            persistDraftSession()
+        }
+        .onChange(of: activeTransitionId) { _, newValue in
+            isApplyingTransition = newValue != nil
+            if newValue == nil {
+                isCancellingTransition = false
+            }
+            if newValue != nil {
+                transitionOn = true
+                isExpanded = true
+            }
+            persistDraftSession()
+        }
         .task {
             // Initialize gradients on first appearance
+            await viewModel.refreshTransitionCleanupPendingCount(for: device.id)
             if let storedDuration = viewModel.transitionDuration(for: device.id) {
                 applyIncomingDuration(storedDuration)
             }
@@ -151,6 +216,12 @@ struct TransitionPane: View {
             if gradientB == nil {
                 gradientB = LEDGradient(stops: [])
                 stopsB = []
+            }
+        }
+        .task(id: device.id) {
+            while !Task.isCancelled {
+                await viewModel.refreshTransitionCleanupPendingCount(for: device.id)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeviceUpdated"))) { _ in
@@ -169,48 +240,68 @@ struct TransitionPane: View {
                 showWheel = false
             }
         }
-        .onChange(of: durationHours) { _, newValue in
-            if newValue >= 24 {
-                if durationHours != 24 {
-                    durationHours = 24
-                }
-                if durationMinutes != 0 {
-                    durationMinutes = 0
-                }
+    }
+
+    @ViewBuilder
+    private func applyDraftPersistenceModifiers<Content: View>(to content: Content) -> some View {
+        content
+        .onChange(of: durationMinutesPart) { _, _ in
+            if durationMinutesPart > 60 {
+                durationMinutesPart = 60
+            }
+            if durationMinutesPart < 0 {
+                durationMinutesPart = 0
+            }
+            if durationMinutesPart == 60, durationSecondsPart != 0 {
+                durationSecondsPart = 0
             }
             persistDurationSelection()
+            persistDraftSession()
         }
-        .onChange(of: durationMinutes) { _, newValue in
-            if durationHours >= 24 && newValue != 0 {
-                durationMinutes = 0
+        .onChange(of: durationSecondsPart) { _, _ in
+            if durationMinutesPart == 60, durationSecondsPart != 0 {
+                durationSecondsPart = 0
+            }
+            if durationSecondsPart < 0 {
+                durationSecondsPart = 0
+            }
+            if durationSecondsPart > 59 {
+                durationSecondsPart = 59
             }
             persistDurationSelection()
+            persistDraftSession()
         }
         .onChange(of: isExpanded) { _, expanded in
-            if !expanded && transitionOn {
-                transitionOn = false
-                Task { await stopAndRevertTransition() }
-            }
+            // UI-only: pane collapse (including tab switches/view recreation) must not stop transitions.
+            persistDraftSession()
         }
+        .onChange(of: transitionOn) { _, _ in persistDraftSession() }
+        .onChange(of: gradientA) { _, _ in persistDraftSession() }
+        .onChange(of: gradientB) { _, _ in persistDraftSession() }
+        .onChange(of: stopTemperaturesA) { _, _ in persistDraftSession() }
+        .onChange(of: stopTemperaturesB) { _, _ in persistDraftSession() }
+        .onChange(of: stopWhiteLevelsA) { _, _ in persistDraftSession() }
+        .onChange(of: stopWhiteLevelsB) { _, _ in persistDraftSession() }
+        .onChange(of: aBrightness) { _, _ in persistDraftSession() }
+        .onChange(of: bBrightness) { _, _ in persistDraftSession() }
+        .onChange(of: selectedStartPresetId) { _, _ in persistDraftSession() }
+        .onChange(of: selectedEndPresetId) { _, _ in persistDraftSession() }
+        .onChange(of: isSavingPreset) { _, _ in persistDraftSession() }
+        .onChange(of: showSaveSuccess) { _, _ in persistDraftSession() }
     }
 
     private func applyIncomingDuration(_ seconds: Double) {
-        let clamped = max(0, min(seconds, 24 * 3600))
-        var hours = Int(clamped) / 3600
-        var minutes = (Int(clamped) % 3600) / 60
-        if clamped > 0, hours == 0, minutes == 0 {
-            minutes = 1
-        }
-        if hours >= 24 {
-            hours = 24
-            minutes = 0
-        }
-        durationHours = hours
-        durationMinutes = minutes
+        let components = TransitionDurationPicker.components(from: seconds)
+        durationMinutesPart = components.minutes
+        durationSecondsPart = components.seconds
     }
     
     private func persistDurationSelection() {
         viewModel.setTransitionDuration(durationTotalSeconds, for: device.id)
+    }
+
+    private func transitionPickerDurationSeconds() -> Int {
+        TransitionDurationPicker.totalSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart)
     }
 
     private enum PresetTarget {
@@ -344,7 +435,8 @@ struct TransitionPane: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    .disabled(isSavingPreset)
+                    .disabled(isPresetButtonDisabled)
+                    .opacity(isPresetButtonDisabled ? 0.45 : 1.0)
                 }
 
                 Button(action: {
@@ -407,27 +499,11 @@ struct TransitionPane: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 16) {
                 VStack(spacing: 4) {
-                    Text("Hours")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.6))
-                    Picker("Hours", selection: $durationHours) {
-                        ForEach(0...24, id: \.self) { value in
-                            Text("\(value)")
-                                .tag(value)
-                        }
-                    }
-                    .pickerStyle(.wheel)
-                    .frame(height: 110)
-                    .clipped()
-                    .accessibilityLabel("Transition hours")
-                }
-
-                VStack(spacing: 4) {
                     Text("Minutes")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.6))
-                    Picker("Minutes", selection: $durationMinutes) {
-                        ForEach(allowedMinuteValues, id: \.self) { value in
+                    Picker("Minutes", selection: $durationMinutesPart) {
+                        ForEach(0...60, id: \.self) { value in
                             Text(String(format: "%02d", value))
                                 .tag(value)
                         }
@@ -437,8 +513,76 @@ struct TransitionPane: View {
                     .clipped()
                     .accessibilityLabel("Transition minutes")
                 }
+
+                VStack(spacing: 4) {
+                    Text("Seconds")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.6))
+                    Picker("Seconds", selection: $durationSecondsPart) {
+                        ForEach(allowedSecondValues, id: \.self) { value in
+                            Text(String(format: "%02d", value))
+                                .tag(value)
+                        }
+                    }
+                    .pickerStyle(.wheel)
+                    .frame(height: 110)
+                    .clipped()
+                    .accessibilityLabel("Transition seconds")
+                }
             }
             .frame(maxWidth: .infinity)
+
+            durationRecommendationGuide
+        }
+    }
+
+    private var durationRecommendationGuide: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            GeometryReader { geo in
+                let width = max(1, geo.size.width)
+                let progress = min(
+                    1.0,
+                    Double(selectedDurationSeconds) / Double(TransitionDurationPicker.maxSeconds)
+                )
+                let markerX = width * TransitionDurationPicker.recommendedMaxRatio
+
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(height: 6)
+
+                    Capsule()
+                        .fill(transitionExceedsRecommendedMax ? Color.orange.opacity(0.9) : Color.white.opacity(0.45))
+                        .frame(width: width * progress, height: 6)
+
+                    Rectangle()
+                        .fill(Color.orange.opacity(0.95))
+                        .frame(width: 2, height: 12)
+                        .offset(x: max(0, min(width - 2, markerX - 1)))
+                }
+                .frame(height: 12)
+            }
+            .frame(height: 12)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Recommended transition duration marker")
+            .accessibilityValue("Recommended max \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds)))")
+
+            HStack {
+                Text("0:00")
+                Spacer()
+                Text("\(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) recommended")
+                    .foregroundColor(.orange.opacity(0.9))
+                Spacer()
+                Text("60:00")
+            }
+            .font(.caption2)
+            .foregroundColor(.white.opacity(0.55))
+
+            if transitionExceedsRecommendedMax {
+                Text("Above \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) may be less reliable on some devices and use more preset storage.")
+                    .font(.caption2)
+                    .foregroundColor(.orange.opacity(0.9))
+            }
         }
     }
 
@@ -610,8 +754,10 @@ struct TransitionPane: View {
                 supportsCCT: supportsCCT,
                 supportsWhite: supportsWhite,
                 usesKelvinCCT: usesKelvin,
-                allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+                allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device)
+                    && viewModel.supportsCCTOutput(for: device, segmentId: 0),
                 allowManualWhite: advancedUIEnabled,
+                autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
                 cctKelvinRange: viewModel.cctKelvinRange(for: device),
                 onColorChange: { color, temperature, whiteLevel in
                     if let idx = currentGradientA.stops.firstIndex(where: { $0.id == selectedId }) {
@@ -829,8 +975,10 @@ struct TransitionPane: View {
                 supportsCCT: supportsCCT,
                 supportsWhite: supportsWhite,
                 usesKelvinCCT: usesKelvin,
-                allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+                allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device)
+                    && viewModel.supportsCCTOutput(for: device, segmentId: 0),
                 allowManualWhite: advancedUIEnabled,
+                autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
                 cctKelvinRange: viewModel.cctKelvinRange(for: device),
                 onColorChange: { color, temperature, whiteLevel in
                     var src = currentGradientB.stops.isEmpty ? currentGradientA.stops : currentGradientB.stops
@@ -881,33 +1029,69 @@ struct TransitionPane: View {
     @ViewBuilder
     private var applySection: some View {
         VStack(spacing: 8) {
-            Button(action: applyTransition) {
-                Group {
-                    if isApplyingTransition {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                            .scaleEffect(0.85)
-                    } else {
-                        Text("Apply")
-                            .font(.callout.weight(.semibold))
+            if hasActiveTransitionRun {
+                Button(action: cancelTransition) {
+                    Group {
+                        if isCancellingTransition || viewModel.isTransitionCleanupInProgress(for: device.id) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                                .scaleEffect(0.85)
+                        } else {
+                            Text("Cancel")
+                                .font(.callout.weight(.semibold))
+                        }
                     }
+                    .foregroundColor(.white)
+                    .frame(height: 20)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.red.opacity(0.30))
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .foregroundColor(.white)
-                .frame(height: 20)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(0.18))
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .buttonStyle(.plain)
+                .opacity(isCancelDisabled ? 0.45 : 1)
+                .accessibilityLabel("Cancel transition")
+                .accessibilityHint("Stop the currently running transition.")
+                .disabled(isCancelDisabled)
+            } else {
+                Button(action: applyTransition) {
+                    Group {
+                        if isApplyingTransition || viewModel.isTransitionCleanupInProgress(for: device.id) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                                .scaleEffect(0.85)
+                        } else {
+                            Text("Apply")
+                                .font(.callout.weight(.semibold))
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .frame(height: 20)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.18))
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .opacity(isApplyDisabled ? 0.45 : 1)
+                .accessibilityLabel("Apply transition")
+                .accessibilityHint("Preview the transition using the selected gradients.")
+                .disabled(isApplyDisabled)
             }
-            .buttonStyle(.plain)
-            .opacity(isApplyDisabled ? 0.45 : 1)
-            .accessibilityLabel("Apply transition")
-            .accessibilityHint("Preview the transition using the selected gradients.")
-            .disabled(isApplyDisabled)
+
+            Text("Transitions here are temporary and require the app to keep running. For offline playback, save as Preset or Automation.")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.64))
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .transition(.opacity)
     }
@@ -929,7 +1113,7 @@ struct TransitionPane: View {
                         stopTemperatures: stopTemperaturesA.isEmpty ? nil : stopTemperaturesA,
                         stopWhiteLevels: stopWhiteLevelsA.isEmpty ? nil : stopWhiteLevelsA,
                         interpolation: interpolation,
-                        preferSegmented: true
+                        preferSegmented: preferSegmentedUpdates
                     )
                 }
             }
@@ -948,7 +1132,7 @@ struct TransitionPane: View {
                     stopTemperatures: stopTemperaturesA.isEmpty ? nil : stopTemperaturesA,
                     stopWhiteLevels: stopWhiteLevelsA.isEmpty ? nil : stopWhiteLevelsA,
                     interpolation: interpolation,
-                    preferSegmented: true
+                    preferSegmented: preferSegmentedUpdates
                 )
             }
         }
@@ -976,7 +1160,7 @@ struct TransitionPane: View {
                         stopTemperatures: stopTemperaturesB.isEmpty ? nil : stopTemperaturesB,
                         stopWhiteLevels: stopWhiteLevelsB.isEmpty ? nil : stopWhiteLevelsB,
                         interpolation: interpolation,
-                        preferSegmented: true
+                        preferSegmented: preferSegmentedUpdates
                     )
                 }
             }
@@ -995,7 +1179,7 @@ struct TransitionPane: View {
                     stopTemperatures: stopTemperaturesB.isEmpty ? nil : stopTemperaturesB,
                     stopWhiteLevels: stopWhiteLevelsB.isEmpty ? nil : stopWhiteLevelsB,
                     interpolation: interpolation,
-                    preferSegmented: true
+                    preferSegmented: preferSegmentedUpdates
                 )
             }
         }
@@ -1019,7 +1203,7 @@ struct TransitionPane: View {
             stopTemperatures: tempMap,
             stopWhiteLevels: whiteMap,
             interpolation: interpolation,
-            preferSegmented: true
+            preferSegmented: preferSegmentedUpdates
         )
     }
     
@@ -1041,7 +1225,7 @@ struct TransitionPane: View {
             stopTemperatures: tempMap,
             stopWhiteLevels: whiteMap,
             interpolation: interpolation,
-            preferSegmented: true
+            preferSegmented: preferSegmentedUpdates
         )
     }
     
@@ -1058,7 +1242,7 @@ struct TransitionPane: View {
             ledCount: output.1,
             stopTemperatures: stopTemperaturesA.isEmpty ? nil : stopTemperaturesA,
             stopWhiteLevels: stopWhiteLevelsA.isEmpty ? nil : stopWhiteLevelsA,
-            preferSegmented: true
+            preferSegmented: preferSegmentedUpdates
         )
     }
     
@@ -1110,8 +1294,29 @@ struct TransitionPane: View {
                 startStopTemperatures: startTemps,
                 startStopWhiteLevels: startWhites,
                 endStopTemperatures: endTemps,
-                endStopWhiteLevels: endWhites
+                endStopWhiteLevels: endWhites,
+                forceSegmentedOnly: false
             )
+        }
+    }
+
+    private func cancelTransition() {
+        guard !isCancellingTransition else { return }
+
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        isCancellingTransition = true
+
+        Task {
+            await viewModel.cancelActiveRun(
+                for: device,
+                releaseRealtimeOverride: false,
+                force: false,
+                endReason: .cancelledByManualInput
+            )
+            await MainActor.run {
+                isCancellingTransition = false
+            }
         }
     }
     
@@ -1121,16 +1326,72 @@ private extension TransitionPane {
     var backgroundFill: Color {
         Color.white.opacity(colorSchemeContrast == .increased ? 0.12 : 0.06)
     }
+
+    func persistDraftSession() {
+        let session = TransitionDraftSession(
+            gradientA: currentGradientA,
+            gradientB: currentGradientB,
+            stopTemperaturesA: stopTemperaturesA,
+            stopTemperaturesB: stopTemperaturesB,
+            stopWhiteLevelsA: stopWhiteLevelsA,
+            stopWhiteLevelsB: stopWhiteLevelsB,
+            brightnessA: aBrightness,
+            brightnessB: bBrightness,
+            selectedStartPresetId: selectedStartPresetId,
+            selectedEndPresetId: selectedEndPresetId,
+            transitionOn: transitionOn,
+            isExpanded: isExpanded,
+            isSavingPreset: isSavingPreset,
+            showSaveSuccess: showSaveSuccess,
+            updatedAt: Date()
+        )
+        viewModel.setTransitionDraftSession(session, for: device.id)
+    }
+
+    func restoreDraftSessionIfAvailable() {
+        guard let session = viewModel.transitionDraftSession(for: device.id) else { return }
+        gradientA = session.gradientA
+        stopsA = session.gradientA.stops
+        gradientB = session.gradientB
+        stopsB = session.gradientB.stops
+        stopTemperaturesA = session.stopTemperaturesA
+        stopTemperaturesB = session.stopTemperaturesB
+        stopWhiteLevelsA = session.stopWhiteLevelsA
+        stopWhiteLevelsB = session.stopWhiteLevelsB
+        aBrightness = session.brightnessA
+        bBrightness = session.brightnessB
+        selectedStartPresetId = session.selectedStartPresetId
+        selectedEndPresetId = session.selectedEndPresetId
+        transitionOn = session.transitionOn || activeTransitionId != nil
+        isExpanded = session.isExpanded || activeTransitionId != nil || session.isSavingPreset
+        isSavingPreset = session.isSavingPreset
+        showSaveSuccess = session.showSaveSuccess
+    }
     
     // MARK: - Direct Preset Saving
     
     func saveTransitionPresetDirectly() async {
+        guard viewModel.shouldAllowInteractivePresetSaveTap(for: device.id) else {
+            #if DEBUG
+            let reason = viewModel.transitionPresetSaveBlockReasonDebug(for: device.id) ?? "unknown"
+            print("⚠️ Preset save blocked for \(device.name): \(reason)")
+            #endif
+            return
+        }
         await MainActor.run {
             isSavingPreset = true
             showSaveSuccess = false
+            viewModel.updateTransitionDraftSaveUIState(
+                deviceId: device.id,
+                isSavingPreset: true,
+                showSaveSuccess: false
+            )
+        }
+        await MainActor.run {
+            persistDraftSession()
         }
         
-        let presetName = "Transition \(Date().formatted(date: .omitted, time: .shortened))"
+        let presetName = "Transition \(Date().presetNameTimestamp())"
         let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
         let resolvedTempB = stopTemperaturesB.values.first ?? stopTemperaturesA.values.first
         let resolvedWhiteB = stopWhiteLevelsB.values.first ?? stopWhiteLevelsA.values.first
@@ -1149,29 +1410,99 @@ private extension TransitionPane {
             durationSec: duration
         )
 
-        if let result = await viewModel.saveTransitionPresetToDevice(preset, device: device) {
+        let outcome = await viewModel.saveTransitionPresetWithActiveRunHandling(
+            device: device,
+            presetInputSnapshot: preset
+        )
+
+        switch outcome {
+        case .some(.saved(let result)):
             await MainActor.run {
                 preset.wledPlaylistId = result.playlistId
                 preset.wledStepPresetIds = result.stepPresetIds
+                preset.wledSyncState = .synced
+                preset.lastWLEDSyncError = nil
+                preset.lastWLEDSyncAt = Date()
                 PresetsStore.shared.addTransitionPreset(preset)
                 isSavingPreset = false
                 showSaveSuccess = true
+                persistDraftSession()
+                viewModel.updateTransitionDraftSaveUIState(
+                    deviceId: device.id,
+                    isSavingPreset: false,
+                    showSaveSuccess: true
+                )
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await MainActor.run {
                 showSaveSuccess = false
+                persistDraftSession()
+                viewModel.updateTransitionDraftSaveUIState(
+                    deviceId: device.id,
+                    isSavingPreset: false,
+                    showSaveSuccess: false
+                )
             }
             #if DEBUG
             print("✅ Transition preset saved to WLED device: Playlist ID \(result.playlistId)")
+            print("transition_preset.save.synced playlist=\(result.playlistId) stepIds=\(result.stepPresetIds)")
             #endif
-        } else {
+        case .some(.deferred):
+            await MainActor.run {
+                preset.wledPlaylistId = nil
+                preset.wledStepPresetIds = nil
+                preset.wledSyncState = .pendingSync
+                preset.lastWLEDSyncError = "Deferred WLED sync"
+                preset.lastWLEDSyncAt = nil
+                PresetsStore.shared.addTransitionPreset(preset)
+                isSavingPreset = false
+                showSaveSuccess = true
+                persistDraftSession()
+                viewModel.updateTransitionDraftSaveUIState(
+                    deviceId: device.id,
+                    isSavingPreset: false,
+                    showSaveSuccess: true
+                )
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run {
+                showSaveSuccess = false
+                persistDraftSession()
+                viewModel.updateTransitionDraftSaveUIState(
+                    deviceId: device.id,
+                    isSavingPreset: false,
+                    showSaveSuccess: false
+                )
+            }
+            #if DEBUG
+            print("⚠️ Transition preset save deferred for WLED device due to preset store health")
+            print("transition_preset.save.deferred_local_only device=\(device.id)")
+            #endif
+        case .some(.suppressedBusy):
             await MainActor.run {
                 isSavingPreset = false
                 showSaveSuccess = false
+                persistDraftSession()
+                viewModel.updateTransitionDraftSaveUIState(
+                    deviceId: device.id,
+                    isSavingPreset: false,
+                    showSaveSuccess: false
+                )
             }
             #if DEBUG
-            print("⚠️ Failed to save transition preset to WLED: playlist build failed")
+            print("preset_save.suppressed_busy_ui device=\(device.id)")
             #endif
+        case .none:
+            await MainActor.run {
+                isSavingPreset = false
+                showSaveSuccess = false
+                persistDraftSession()
+                viewModel.updateTransitionDraftSaveUIState(
+                    deviceId: device.id,
+                    isSavingPreset: false,
+                    showSaveSuccess: false
+                )
+            }
         }
     }
 }

@@ -7,6 +7,14 @@
 
 import SwiftUI
 
+private enum UpdateCheckStatus: Equatable {
+    case idle
+    case checking
+    case upToDate(current: String, latest: String)
+    case updateAvailable(current: String, latest: String)
+    case error(String)
+}
+
 struct ComprehensiveSettingsView: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
@@ -18,7 +26,6 @@ struct ComprehensiveSettingsView: View {
     @State private var segStop: Int = 60
     @State private var udpSend: Bool = false
     @State private var udpRecv: Bool = false
-    @State private var udpNetwork: Int = 0
     @State private var info: Info?
     @State private var isLoading: Bool = false
     @State private var nightLightOn: Bool = false
@@ -32,6 +39,10 @@ struct ComprehensiveSettingsView: View {
     // New state variables for comprehensive settings
     @State private var selectedSettingsCategory: SettingsCategory = .info
     @State private var showWebConfig: Bool = false
+    @State private var showFirmwareUpdate: Bool = false
+    @State private var updateCheckStatus: UpdateCheckStatus = .idle
+    @State private var latestStableVersion: String?
+    @State private var lastUpdateCheck: Date?
     
     // WiFi state variables
     @State private var availableNetworks: [WiFiNetwork] = []
@@ -70,6 +81,14 @@ struct ComprehensiveSettingsView: View {
             case .security: return "lock.shield"
             }
         }
+    }
+
+    private var isRebootWaitActive: Bool {
+        viewModel.isRebootWaitActive(for: device.id)
+    }
+
+    private var rebootWaitRemainingSeconds: Int {
+        viewModel.rebootWaitRemainingSeconds(for: device.id)
     }
     
     var body: some View {
@@ -137,6 +156,11 @@ struct ComprehensiveSettingsView: View {
                     .padding(.bottom, 20)
                 }
             }
+            .disabled(isRebootWaitActive)
+
+            if isRebootWaitActive {
+                rebootWaitOverlay
+            }
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -148,6 +172,53 @@ struct ComprehensiveSettingsView: View {
         .sheet(isPresented: $showWebConfig) {
             WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/settings")!)
         }
+        .sheet(isPresented: $showFirmwareUpdate) {
+            WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/update")!)
+        }
+    }
+
+    private var rebootWaitOverlay: some View {
+        GeometryReader { proxy in
+            let maxCardWidth = min(proxy.size.width - 48, 360)
+            ZStack {
+                Rectangle()
+                    .fill(Color.black.opacity(0.08))
+                    .background(.ultraThinMaterial)
+                    .blur(radius: 2)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        // Intentionally swallow taps while reboot wait is active.
+                    }
+
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .scaleEffect(1.2)
+                    Text("Rebooting Device")
+                        .font(.headline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text("Reconnecting... \(max(0, rebootWaitRemainingSeconds))s")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .frame(maxWidth: maxCardWidth)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.black.opacity(0.28))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.25), lineWidth: 1)
+                        )
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.2), value: isRebootWaitActive)
+        .zIndex(3)
     }
     
     // MARK: - Header Section
@@ -265,10 +336,61 @@ struct ComprehensiveSettingsView: View {
                     }
                 }
             }
+
+            SettingsCard(title: "Firmware Update") {
+                VStack(spacing: 12) {
+                    if let ver = info?.ver {
+                        InfoRow(label: "Current Version", value: ver)
+                    } else {
+                        InfoRow(label: "Current Version", value: "Unknown")
+                    }
+
+                    HStack {
+                        Text("Update Channel")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundColor(.white.opacity(0.9))
+                        Spacer()
+                        Text("Stable")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule().fill(Color.white.opacity(0.15))
+                            )
+                    }
+
+                    updateStatusView
+
+                    if case .updateAvailable = updateCheckStatus {
+                        Button(action: { showFirmwareUpdate = true }) {
+                            SettingsButton(title: "Update Now", icon: "arrow.up.circle.fill")
+                        }
+                    }
+
+                    Button(action: { Task { await checkForStableUpdate() } }) {
+                        SettingsButton(title: "Check for Update", icon: "arrow.clockwise")
+                    }
+
+                    Button(action: { showFirmwareUpdate = true }) {
+                        SettingsButton(title: "Manual Update", icon: "arrow.up.circle")
+                    }
+                }
+            }
             
             SettingsCard(title: "Power Control") {
-                PowerToggleRow(isOn: $isOn, device: device)
-                    .environmentObject(viewModel)
+                VStack(spacing: 12) {
+                    PowerToggleRow(isOn: $isOn, device: device)
+                        .environmentObject(viewModel)
+
+                    Button(action: { Task { await viewModel.rebootDevice(device) } }) {
+                        SettingsButton(
+                            title: isRebootWaitActive ? "Rebooting... \(max(0, rebootWaitRemainingSeconds))s" : "Reboot Device",
+                            icon: "arrow.clockwise.circle"
+                        )
+                    }
+                    .disabled(isRebootWaitActive)
+                }
             }
             
             SettingsCard(title: "Brightness") {
@@ -552,13 +674,34 @@ struct ComprehensiveSettingsView: View {
             
             SettingsCard(title: "Segment Configuration") {
                 if advancedUIEnabled {
-                    SegmentBoundsRow(
-                        device: device,
-                        segmentId: 0,
-                        start: segStart,
-                        stop: segStop
+                    Toggle(
+                        "Manual segment layout",
+                        isOn: Binding(
+                            get: { viewModel.isManualSegmentationEnabled(for: device.id) },
+                            set: { value in
+                                viewModel.setManualSegmentationEnabled(value, for: device.id)
+                            }
+                        )
                     )
-                    .environmentObject(viewModel)
+                    .tint(.white)
+                    .foregroundColor(.white)
+                    Text("Manual layout preserves segment bounds. Auto layout rebuilds segments for the main UI.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+
+                    if viewModel.isManualSegmentationEnabled(for: device.id) {
+                        SegmentBoundsRow(
+                            device: device,
+                            segmentId: 0,
+                            start: segStart,
+                            stop: segStop
+                        )
+                        .environmentObject(viewModel)
+                    } else {
+                        Text("Auto layout is active. Enable manual layout to edit segment bounds.")
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
                 } else {
                     Text("Enable Advanced UI to edit segment bounds.")
                         .font(.footnote)
@@ -589,6 +732,11 @@ struct ComprehensiveSettingsView: View {
                 Toggle("Enable Advanced UI", isOn: $advancedUIEnabled)
                     .tint(.white)
                     .foregroundColor(.white)
+                    .onChange(of: advancedUIEnabled) { _, newValue in
+                        if !newValue {
+                            viewModel.resetManualSegmentationForAllDevices()
+                        }
+                    }
             }
             SettingsCard(title: "User Interface") {
                 VStack(spacing: 12) {
@@ -612,7 +760,6 @@ struct ComprehensiveSettingsView: View {
                 VStack(spacing: 12) {
                     UDPTogglesRow(udpSend: $udpSend, udpRecv: $udpRecv, device: device)
                         .environmentObject(viewModel)
-                    UDPNetworkRow(network: $udpNetwork, device: device)
                 }
             }
             
@@ -852,6 +999,86 @@ struct ComprehensiveSettingsView: View {
         }
         return false
     }
+
+    // MARK: - Firmware Update Helpers
+
+    private var updateStatusView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch updateCheckStatus {
+            case .idle:
+                Text("Check for updates on the stable channel.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+            case .checking:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Checking for updates...")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+            case .upToDate(let current, let latest):
+                Text("Your device is up to date.")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Version \(current) (latest \(latest))")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            case .updateAvailable(let current, let latest):
+                Text("Update available.")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Current \(current) → Latest \(latest)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            case .error(let message):
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.75))
+            }
+
+            if let lastUpdateCheck {
+                Text("Last checked \(lastUpdateCheck.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.5))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func checkForStableUpdate() async {
+        guard let currentVersion = info?.ver, !currentVersion.isEmpty else {
+            await MainActor.run {
+                updateCheckStatus = .error("Current version unavailable.")
+            }
+            return
+        }
+
+        await MainActor.run {
+            updateCheckStatus = .checking
+        }
+
+        do {
+            let latest = try await WLEDUpdateService.shared.fetchLatestStableVersion()
+            let comparison = VersionComparator.compare(currentVersion, latest)
+            let hasBetaSuffix = currentVersion.contains("-b")
+
+            await MainActor.run {
+                latestStableVersion = latest
+                lastUpdateCheck = Date()
+                if comparison == .orderedAscending || (comparison == .orderedSame && hasBetaSuffix) {
+                    updateCheckStatus = .updateAvailable(current: currentVersion, latest: latest)
+                } else {
+                    updateCheckStatus = .upToDate(current: currentVersion, latest: latest)
+                }
+            }
+        } catch {
+            await MainActor.run {
+                lastUpdateCheck = Date()
+                updateCheckStatus = .error("Could not check for updates.")
+            }
+        }
+    }
     
     // MARK: - WiFi Helper Functions
     
@@ -862,7 +1089,9 @@ struct ComprehensiveSettingsView: View {
                 self.currentWiFiInfo = wifiInfo
             }
         } catch {
+            #if DEBUG
             print("Failed to load WiFi info: \(error)")
+            #endif
         }
     }
     
@@ -881,7 +1110,9 @@ struct ComprehensiveSettingsView: View {
             } catch {
                 await MainActor.run {
                     self.isScanning = false
+                    #if DEBUG
                     print("Failed to scan networks: \(error)")
+                    #endif
                 }
             }
         }
@@ -1083,23 +1314,6 @@ fileprivate struct UDPTogglesRow: View {
                 .onChange(of: udpRecv) { _, v in
                     Task { await viewModel.setUDPSync(device, send: nil, recv: v) }
                 }
-        }
-    }
-}
-
-fileprivate struct UDPNetworkRow: View {
-    @Binding var network: Int
-    let device: WLEDDevice
-
-    var body: some View {
-        HStack {
-            Text("Network")
-                .foregroundColor(.white)
-            Spacer()
-            Stepper("\(network)", value: $network, in: 0...255, step: 1, onEditingChanged: { _ in
-                Task { _ = try? await WLEDAPIService.shared.setUDPSync(for: device, send: nil, recv: nil, network: network) }
-            })
-            .labelsHidden()
         }
     }
 }

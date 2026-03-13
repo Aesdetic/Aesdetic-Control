@@ -3,13 +3,15 @@
     <entity name="WLEDDeviceEntity" representedClassName="WLEDDeviceEntity" syncable="YES">
         <attribute name="autoWhiteMode" optional="YES" attributeType="Integer 16" defaultValueString="-1" usesScalarValueType="YES"/>
         <attribute name="brightness" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
-        <attribute name="currentColorHex" optional="YES" attributeType="String"/>
+        <attribute name="currentColorHex" optional="YES" attributeType="String" defaultValueString="FFA000"/>
         <attribute name="id" optional="YES" attributeType="String"/>
         <attribute name="ipAddress" optional="YES" attributeType="String"/>
         <attribute name="isOnline" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="lastSeen" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="location" optional="YES" attributeType="String"/>
         <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="playlistNamesJSON" optional="YES" attributeType="String"/>
+        <attribute name="presetNamesJSON" optional="YES" attributeType="String"/>
         <attribute name="productType" optional="YES" attributeType="String"/>
         <relationship name="state" optional="YES" maxCount="1" deletionRule="Cascade" destinationEntity="WLEDStateEntity" inverseName="device" inverseEntity="WLEDStateEntity"/>
     </entity>
@@ -36,5 +38,53 @@
         <attribute name="transitionDeciseconds" optional="YES" attributeType="Integer 16"/>
         <relationship name="device" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="WLEDDeviceEntity" inverseName="state" inverseEntity="WLEDDeviceEntity"/>
         <relationship name="segments" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="WLEDSegmentEntity" inverseName="state" inverseEntity="WLEDSegmentEntity"/>
+    </entity>
+    <entity name="WellnessEntryEntity" representedClassName="WellnessEntryEntity" syncable="YES">
+        <attribute name="brainDumpText" optional="YES" attributeType="String"/>
+        <attribute name="date" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="dayMoodRating" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="dayRecapText" optional="YES" attributeType="String"/>
+        <attribute name="identityIntentionText" optional="YES" attributeType="String"/>
+        <attribute name="intentionText" optional="YES" attributeType="String"/>
+        <attribute name="isLocked" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="mainTaskDone" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="mainTaskDurationMinutes" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="mainTaskEventId" optional="YES" attributeType="String"/>
+        <attribute name="mainTaskReminderId" optional="YES" attributeType="String"/>
+        <attribute name="mainTaskText" optional="YES" attributeType="String"/>
+        <attribute name="productivityRating" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="secondaryTaskOneDurationMinutes" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="secondaryTaskOneEventId" optional="YES" attributeType="String"/>
+        <attribute name="secondaryTaskOneDone" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="secondaryTaskOneReminderId" optional="YES" attributeType="String"/>
+        <attribute name="secondaryTaskOneText" optional="YES" attributeType="String"/>
+        <attribute name="secondaryTaskTwoDurationMinutes" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="secondaryTaskTwoEventId" optional="YES" attributeType="String"/>
+        <attribute name="secondaryTaskTwoDone" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="secondaryTaskTwoReminderId" optional="YES" attributeType="String"/>
+        <attribute name="secondaryTaskTwoText" optional="YES" attributeType="String"/>
+        <attribute name="sleepNotesText" optional="YES" attributeType="String"/>
+        <attribute name="sleepQuality" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="sleepTime" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="wakeTime" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="smallestNextStepText" optional="YES" attributeType="String"/>
+        <attribute name="middayBlockerText" optional="YES" attributeType="String"/>
+        <attribute name="adjustTomorrowText" optional="YES" attributeType="String"/>
+        <attribute name="sunriseHelped" optional="YES" attributeType="String"/>
+        <attribute name="sunriseLampUsed" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="tomorrowTaskOneText" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskOneDurationMinutes" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="tomorrowTaskOneReminderId" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskOneEventId" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskTwoText" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskTwoDurationMinutes" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="tomorrowTaskTwoReminderId" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskTwoEventId" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskThreeText" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskThreeDurationMinutes" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="tomorrowTaskThreeReminderId" optional="YES" attributeType="String"/>
+        <attribute name="tomorrowTaskThreeEventId" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="wokeOnTime" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
     </entity>
 </model>

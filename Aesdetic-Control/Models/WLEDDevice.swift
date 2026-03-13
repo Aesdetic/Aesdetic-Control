@@ -9,6 +9,9 @@ import Foundation
 import SwiftUI
 
 struct WLEDDevice: Identifiable, Hashable {
+    static let wledBootDefaultHex = "FFA000"
+    static let wledBootDefaultColor = Color(hex: wledBootDefaultHex)
+
     let id: String // mac address
     var name: String
     var ipAddress: String
@@ -21,6 +24,10 @@ struct WLEDDevice: Identifiable, Hashable {
     var location: DeviceLocation
     var lastSeen: Date
     var state: WLEDState?
+    /// Best-effort device-record mapping of preset IDs to names from the latest fetch.
+    var presetNamesById: [Int: String]?
+    /// Best-effort device-record mapping of playlist IDs to names from the latest fetch.
+    var playlistNamesById: [Int: String]?
     
     
     // Computed property for device on/off state
@@ -37,7 +44,8 @@ struct WLEDDevice: Identifiable, Hashable {
                     segments: currentState.segments,
                     transitionDeciseconds: currentState.transitionDeciseconds,
                     presetId: currentState.presetId,
-                    playlistId: currentState.playlistId
+                    playlistId: currentState.playlistId,
+                    mainSegment: currentState.mainSegment
                 )
                 state = currentState
             } else {
@@ -48,7 +56,8 @@ struct WLEDDevice: Identifiable, Hashable {
                     segments: [],
                     transitionDeciseconds: nil,
                     presetId: nil,
-                    playlistId: nil
+                    playlistId: nil,
+                    mainSegment: nil
                 )
             }
         }
@@ -63,7 +72,22 @@ struct WLEDDevice: Identifiable, Hashable {
         hasher.combine(id)
     }
     
-    init(id: String, name: String, ipAddress: String, isOnline: Bool = false, brightness: Int = 0, currentColor: Color = .black, temperature: Double? = nil, autoWhiteMode: AutoWhiteMode? = nil, productType: ProductType = .generic, location: DeviceLocation = .all, lastSeen: Date = Date(), state: WLEDState? = nil) {
+    init(
+        id: String,
+        name: String,
+        ipAddress: String,
+        isOnline: Bool = false,
+        brightness: Int = 0,
+        currentColor: Color = WLEDDevice.wledBootDefaultColor,
+        temperature: Double? = nil,
+        autoWhiteMode: AutoWhiteMode? = nil,
+        productType: ProductType = .generic,
+        location: DeviceLocation = .all,
+        lastSeen: Date = Date(),
+        state: WLEDState? = nil,
+        presetNamesById: [Int: String]? = nil,
+        playlistNamesById: [Int: String]? = nil
+    ) {
         self.id = id
         self.name = name
         self.ipAddress = ipAddress
@@ -76,6 +100,8 @@ struct WLEDDevice: Identifiable, Hashable {
         self.location = location
         self.lastSeen = lastSeen
         self.state = state
+        self.presetNamesById = presetNamesById
+        self.playlistNamesById = playlistNamesById
     }
     
     // WLED API endpoints
@@ -101,6 +127,7 @@ struct Info: Codable {
     let mac: String
     let ver: String
     let leds: LedInfo
+    let fs: FileSystemInfo?
 }
 
 struct LedInfo: Codable {
@@ -114,6 +141,7 @@ struct LedInfo: Codable {
     let cct: Bool?
     let rgbw: Bool?
     let wv: Bool?
+    let matrix: LedMatrix?
 
     init(
         count: Int,
@@ -121,7 +149,8 @@ struct LedInfo: Codable {
         lc: Int?,
         cct: Bool?,
         rgbw: Bool?,
-        wv: Bool?
+        wv: Bool?,
+        matrix: LedMatrix?
     ) {
         self.count = count
         self.seglc = seglc
@@ -129,6 +158,7 @@ struct LedInfo: Codable {
         self.cct = cct
         self.rgbw = rgbw
         self.wv = wv
+        self.matrix = matrix
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -138,6 +168,7 @@ struct LedInfo: Codable {
         case cct
         case rgbw
         case wv
+        case matrix
     }
 
     init(from decoder: Decoder) throws {
@@ -148,6 +179,7 @@ struct LedInfo: Codable {
         cct = Self.decodeBoolOrInt(from: container, forKey: .cct)
         rgbw = Self.decodeBoolOrInt(from: container, forKey: .rgbw)
         wv = Self.decodeBoolOrInt(from: container, forKey: .wv)
+        matrix = try container.decodeIfPresent(LedMatrix.self, forKey: .matrix)
     }
 
     private static func decodeBoolOrInt(
@@ -164,6 +196,23 @@ struct LedInfo: Codable {
     }
 }
 
+struct FileSystemInfo: Codable {
+    let spaceUsed: Int?
+    let spaceTotal: Int?
+    let presetLastModification: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case spaceUsed = "u"
+        case spaceTotal = "t"
+        case presetLastModification = "pmt"
+    }
+}
+
+struct LedMatrix: Codable {
+    let w: Int
+    let h: Int
+}
+
 struct WLEDState: Codable {
     let brightness: Int
     let isOn: Bool
@@ -171,6 +220,7 @@ struct WLEDState: Codable {
     let transitionDeciseconds: Int?
     let presetId: Int?
     let playlistId: Int?
+    let mainSegment: Int?
 
     enum CodingKeys: String, CodingKey {
         case brightness = "bri"
@@ -179,6 +229,7 @@ struct WLEDState: Codable {
         case transitionDeciseconds = "transition"
         case presetId = "ps"
         case playlistId = "pl"
+        case mainSegment = "mainseg"
     }
 }
 
@@ -195,16 +246,93 @@ struct Segment: Codable {
     let bri: Int?
     let colors: [[Int]]?
     let cct: Int?  // Color temperature (0-255 relative or Kelvin)
+    let lc: Int?   // Light capability flags (bitmask)
     let fx: Int?
     let sx: Int?
     let ix: Int?
     let pal: Int?
+    let c1: Int?
+    let c2: Int?
+    let c3: Int?
     let sel: Bool?
     let rev: Bool?
     let mi: Bool?
     let cln: Int?
+    let o1: Bool?
+    let o2: Bool?
+    let o3: Bool?
+    let si: Int?
+    let m12: Int?
+    let setId: Int?
+    let name: String?
     /// Freeze flag: true = freeze segment (stop animations), false = resume
     let frz: Bool?
+
+    init(
+        id: Int? = nil,
+        start: Int? = nil,
+        stop: Int? = nil,
+        len: Int? = nil,
+        grp: Int? = nil,
+        spc: Int? = nil,
+        ofs: Int? = nil,
+        on: Bool? = nil,
+        bri: Int? = nil,
+        colors: [[Int]]? = nil,
+        cct: Int? = nil,
+        lc: Int? = nil,
+        fx: Int? = nil,
+        sx: Int? = nil,
+        ix: Int? = nil,
+        pal: Int? = nil,
+        c1: Int? = nil,
+        c2: Int? = nil,
+        c3: Int? = nil,
+        sel: Bool? = nil,
+        rev: Bool? = nil,
+        mi: Bool? = nil,
+        cln: Int? = nil,
+        o1: Bool? = nil,
+        o2: Bool? = nil,
+        o3: Bool? = nil,
+        si: Int? = nil,
+        m12: Int? = nil,
+        setId: Int? = nil,
+        name: String? = nil,
+        frz: Bool? = nil
+    ) {
+        self.id = id
+        self.start = start
+        self.stop = stop
+        self.len = len
+        self.grp = grp
+        self.spc = spc
+        self.ofs = ofs
+        self.on = on
+        self.bri = bri
+        self.colors = colors
+        self.cct = cct
+        self.lc = lc
+        self.fx = fx
+        self.sx = sx
+        self.ix = ix
+        self.pal = pal
+        self.c1 = c1
+        self.c2 = c2
+        self.c3 = c3
+        self.sel = sel
+        self.rev = rev
+        self.mi = mi
+        self.cln = cln
+        self.o1 = o1
+        self.o2 = o2
+        self.o3 = o3
+        self.si = si
+        self.m12 = m12
+        self.setId = setId
+        self.name = name
+        self.frz = frz
+    }
 
     private static let kelvinMin: Double = 1900.0
     private static let kelvinMax: Double = 10091.0
@@ -245,10 +373,18 @@ struct Segment: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, start, stop, len, grp, spc, ofs, on, bri
+        case id, start, stop, len, grp, spc, on, bri
+        case ofs = "of"
         case colors = "col"
         case cct
-        case fx, sx, ix, pal, sel, rev, mi, cln, frz
+        case lc
+        case fx, sx, ix, pal
+        case c1, c2, c3
+        case sel, rev, mi, cln
+        case o1, o2, o3, si, m12
+        case setId = "set"
+        case name = "n"
+        case frz
     }
 }
 

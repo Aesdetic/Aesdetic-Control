@@ -13,14 +13,19 @@ struct UnifiedColorPane: View {
     @State private var wheelInitial: Color = .white
     @State private var briUI: Double
     @State private var applyWorkItem: DispatchWorkItem? = nil
+    @State private var applyImmediateWorkItem: DispatchWorkItem? = nil
     @State private var stopTemperatures: [UUID: Double] = [:]  // Track temperature (0-1) for each stop
     @State private var stopWhiteLevels: [UUID: Double] = [:]  // Track white level (0-1) for each stop
     @State private var isSavingPreset = false
     @State private var showSaveSuccess = false
+    @State private var showSavePresetDialog = false
     @State private var isAdjustingBrightness = false
     @State private var lastBrightnessSet: Date? = nil  // Track when brightness was last set by user
     @State private var interpolationMode: GradientInterpolation = .linear  // Gradient interpolation mode
+    @State private var activeGradientApplyTask: Task<Void, Never>? = nil
+    @State private var overrideIssuedDuringCurrentDrag: Bool = false
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
+    @AppStorage("perLedTransitionsEnabled") private var perLedTransitionsEnabled: Bool = false
 
     private var liveDevice: WLEDDevice? {
         viewModel.devices.first(where: { $0.id == device.id })
@@ -67,8 +72,12 @@ struct UnifiedColorPane: View {
                 Spacer()
                 
                 Button(action: {
-                    Task {
-                        await saveColorPresetDirectly()
+                    if advancedUIEnabled {
+                        showSavePresetDialog = true
+                    } else {
+                        Task {
+                            await saveColorPresetDirectly()
+                        }
                     }
                 }) {
                     HStack(spacing: 6) {
@@ -161,7 +170,7 @@ struct UnifiedColorPane: View {
                                     updatedGradient.interpolation = mode
                                     gradient = updatedGradient
                                     // Apply immediately when interpolation changes
-                                    Task { await applyNow(stops: updatedGradient.stops) }
+                                    scheduleImmediateApply(stops: updatedGradient.stops)
                                 }) {
                                     Text(mode.displayName)
                                         .font(.caption.weight(.medium))
@@ -182,6 +191,10 @@ struct UnifiedColorPane: View {
                 .padding(.horizontal, 16)
             }
 
+            if advancedUIEnabled {
+                perLedToggleSection
+            }
+
             GradientBar(
                 gradient: Binding(
                     get: { currentGradient },
@@ -191,14 +204,22 @@ struct UnifiedColorPane: View {
                 ),
                 selectedStopId: $selectedStopId,
                 onTapStop: { id in
+                    #if DEBUG
                     print("🎨 onTapStop called with id: \(id)")
+                    #endif
                     if let stop = currentGradient.stops.first(where: { $0.id == id }) {
+                        #if DEBUG
                         print("🎨 Found stop with color: \(stop.color)")
+                        #endif
                         wheelInitial = stop.color
                         showWheel = true
+                        #if DEBUG
                         print("🎨 showWheel set to: \(showWheel)")
+                        #endif
                     } else {
+                        #if DEBUG
                         print("❌ Stop not found for id: \(id)")
+                        #endif
                     }
                 },
                 onTapAnywhere: { t, tapped in
@@ -261,7 +282,7 @@ struct UnifiedColorPane: View {
                     selectedStopId = new.id
                     
                     // Immediately apply the new gradient with the added stop
-                    Task { await applyNow(stops: updatedGradient.stops) }
+                    scheduleImmediateApply(stops: updatedGradient.stops)
                 },
                 onStopsChanged: { stops, phase in
                     throttleApply(stops: stops, phase: phase)
@@ -277,124 +298,9 @@ struct UnifiedColorPane: View {
             // Inline color picker
             // In 1-tab mode (single stop), automatically select the first stop if none selected
             if showWheel {
-                // Ensure selectedStopId is set in 1-tab mode
                 let effectiveSelectedId = selectedStopId ?? currentGradient.stops.first?.id
-                
                 if let selectedId = effectiveSelectedId {
-                    let supportsCCT = viewModel.supportsCCT(for: device, segmentId: segmentId)
-                    let supportsWhite = viewModel.supportsWhite(for: device, segmentId: segmentId)
-                    let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: segmentId)
-                    ColorWheelInline(
-                        initialColor: wheelInitial,
-                        initialTemperature: stopTemperatures[selectedId],
-                        initialWhiteLevel: stopWhiteLevels[selectedId],
-                        canRemove: currentGradient.stops.count > 1,
-                        supportsCCT: supportsCCT,
-                        supportsWhite: supportsWhite,
-                        usesKelvinCCT: usesKelvin,
-                        allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
-                        allowManualWhite: advancedUIEnabled,
-                        cctKelvinRange: viewModel.cctKelvinRange(for: device),
-                        onColorChange: { color, temperature, whiteLevel in
-                            // Use the selectedId (already unwrapped, so guaranteed non-nil)
-                            guard let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) else {
-                                // If no stop found, create/update the first stop
-                                var updatedGradient = currentGradient
-                                if updatedGradient.stops.isEmpty {
-                                    let newStop = GradientStop(position: 0.0, hexColor: color.toHex())
-                                    updatedGradient.stops = [newStop]
-                                    if let temp = temperature {
-                                        stopTemperatures[newStop.id] = temp
-                                        if let white = whiteLevel {
-                                            stopWhiteLevels[newStop.id] = white
-                                        } else {
-                                            stopWhiteLevels.removeValue(forKey: newStop.id)
-                                        }
-                                    } else if let white = whiteLevel {
-                                        stopWhiteLevels[newStop.id] = white
-                                    }
-                                } else {
-                                    let stop = updatedGradient.stops[0]
-                                    if let temp = temperature {
-                                        stopTemperatures[stop.id] = temp
-                                        if let white = whiteLevel {
-                                            stopWhiteLevels[stop.id] = white
-                                        } else {
-                                            stopWhiteLevels.removeValue(forKey: stop.id)
-                                        }
-                                    } else if let white = whiteLevel {
-                                        stopWhiteLevels[stop.id] = white
-                                    } else {
-                                        updatedGradient.stops[0].hexColor = color.toHex()
-                                        stopTemperatures.removeValue(forKey: stop.id)
-                                        stopWhiteLevels.removeValue(forKey: stop.id)
-                                    }
-                                }
-                                gradient = updatedGradient
-                                Task { await applyNow(stops: updatedGradient.stops) }
-                                return
-                            }
-                            
-                            var updatedGradient = currentGradient
-                            
-                            // CRITICAL FIX: When temperature slider is active, don't update hexColor
-                            // The hex color should match what WLED will produce from CCT
-                            // For CCT 0 (warm), WLED produces #FFA000 (orange)
-                            // We should store that hex color instead of extracting from Color object
-                            if let temp = temperature {
-                                // Store temperature for this stop FIRST, before calling applyNow
-                                stopTemperatures[selectedId] = temp
-                                if let white = whiteLevel {
-                                    stopWhiteLevels[selectedId] = white
-                                } else {
-                                    stopWhiteLevels.removeValue(forKey: selectedId)
-                                }
-                                
-                                #if DEBUG
-                                print("🔵 onColorChange: Stored temperature \(temp) for stopId \(selectedId)")
-                                print("🔵 onColorChange: stopTemperatures=\(stopTemperatures)")
-                                #endif
-                                
-                                // Use shared CCT color calculation utility
-                                updatedGradient.stops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
-                                
-                                // Update gradient state
-                                gradient = updatedGradient
-                                
-                                #if DEBUG
-                                print("🔵 onColorChange: Calling applyNow with stops.count=\(updatedGradient.stops.count)")
-                                #endif
-                                // Apply immediately - temperature slider should work in real-time
-                                Task { await applyNow(stops: updatedGradient.stops) }
-                            } else {
-                                // No temperature: use extracted hex color
-                                updatedGradient.stops[idx].hexColor = color.toHex()
-                                stopTemperatures.removeValue(forKey: selectedId)
-                                if let white = whiteLevel {
-                                    stopWhiteLevels[selectedId] = white
-                                } else {
-                                    stopWhiteLevels.removeValue(forKey: selectedId)
-                                }
-                                gradient = updatedGradient
-                                Task { await applyNow(stops: updatedGradient.stops) }
-                            }
-                        },
-                        onRemove: {
-                            if currentGradient.stops.count > 1 {
-                                var updatedGradient = currentGradient
-                                updatedGradient.stops.removeAll { $0.id == selectedId }
-                                // Clean up temperature tracking for removed stop
-                                stopTemperatures.removeValue(forKey: selectedId)
-                                stopWhiteLevels.removeValue(forKey: selectedId)
-                                gradient = updatedGradient
-                                selectedStopId = nil
-                                Task { await applyNow(stops: updatedGradient.stops) }
-                            }
-                        },
-                        onDismiss: { showWheel = false }
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .padding(.horizontal, 16)
+                    colorWheelInline(selectedId: selectedId)
                 }
             }
         }
@@ -424,6 +330,7 @@ struct UnifiedColorPane: View {
             }
             // Only refresh state for brightness/power status, not color (to prevent flash)
             // Color is already correct from persisted gradient
+            await viewModel.refreshLEDPreferences(for: activeDevice)
         }
         .onAppear {
             if let latestStops = viewModel.gradientStops(for: device.id), !latestStops.isEmpty {
@@ -479,6 +386,149 @@ struct UnifiedColorPane: View {
                 briUI = deviceBrightness
             }
         }
+        .onChange(of: liveDevice?.isOnline) { _, isOnline in
+            guard isOnline == true else { return }
+            Task { await viewModel.refreshLEDPreferences(for: activeDevice) }
+        }
+        .onDisappear {
+            applyWorkItem?.cancel()
+            applyImmediateWorkItem?.cancel()
+            activeGradientApplyTask?.cancel()
+        }
+        .sheet(isPresented: $showSavePresetDialog) {
+            SaveColorPresetDialog(
+                device: activeDevice,
+                currentGradient: currentGradient,
+                currentBrightness: Int(round(briUI)),
+                currentTemperature: stopTemperatures.values.first,
+                currentWhiteLevel: stopWhiteLevels.values.first
+            ) { preset in
+                Task {
+                    await saveColorPreset(preset)
+                }
+            }
+        }
+    }
+
+    private var perLedToggleSection: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text("Per-LED Transitions")
+                    .foregroundColor(primaryLabelColor)
+                Spacer()
+            }
+            Toggle(isOn: $perLedTransitionsEnabled) {
+                Text("Enable per-LED blending")
+                    .foregroundColor(secondaryLabelColor)
+            }
+            .tint(.white)
+            Text("Applies gradients per LED when possible. This can be slower on large strips.")
+                .font(.caption)
+                .foregroundColor(secondaryLabelColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    @ViewBuilder
+    private func colorWheelInline(selectedId: UUID) -> some View {
+        let supportsCCT = viewModel.supportsCCT(for: device, segmentId: segmentId)
+        let supportsWhite = viewModel.supportsWhite(for: device, segmentId: segmentId)
+        let usesKelvin = viewModel.segmentUsesKelvinCCT(for: device, segmentId: segmentId)
+        ColorWheelInline(
+            initialColor: wheelInitial,
+            initialTemperature: stopTemperatures[selectedId],
+            initialWhiteLevel: stopWhiteLevels[selectedId],
+            canRemove: currentGradient.stops.count > 1,
+            supportsCCT: supportsCCT,
+            supportsWhite: supportsWhite,
+            usesKelvinCCT: usesKelvin,
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device)
+                && viewModel.supportsCCTOutput(for: device, segmentId: segmentId),
+            allowManualWhite: supportsWhite && advancedUIEnabled,
+            autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
+            cctKelvinRange: viewModel.cctKelvinRange(for: device),
+            onColorChange: { color, temperature, whiteLevel in
+                guard let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) else {
+                    var updatedGradient = currentGradient
+                    if updatedGradient.stops.isEmpty {
+                        let newStop = GradientStop(position: 0.0, hexColor: color.toHex())
+                        updatedGradient.stops = [newStop]
+                        if let temp = temperature {
+                            stopTemperatures[newStop.id] = temp
+                            if let white = whiteLevel {
+                                stopWhiteLevels[newStop.id] = white
+                            } else {
+                                stopWhiteLevels.removeValue(forKey: newStop.id)
+                            }
+                        } else if let white = whiteLevel {
+                            stopWhiteLevels[newStop.id] = white
+                        }
+                    } else {
+                        let stop = updatedGradient.stops[0]
+                        if let temp = temperature {
+                            stopTemperatures[stop.id] = temp
+                            if let white = whiteLevel {
+                                stopWhiteLevels[stop.id] = white
+                            } else {
+                                stopWhiteLevels.removeValue(forKey: stop.id)
+                            }
+                        } else if let white = whiteLevel {
+                            stopWhiteLevels[stop.id] = white
+                        } else {
+                            updatedGradient.stops[0].hexColor = color.toHex()
+                            stopTemperatures.removeValue(forKey: stop.id)
+                            stopWhiteLevels.removeValue(forKey: stop.id)
+                        }
+                    }
+                    gradient = updatedGradient
+                    scheduleImmediateApply(stops: updatedGradient.stops)
+                    return
+                }
+
+                var updatedGradient = currentGradient
+                if let temp = temperature {
+                    stopTemperatures[selectedId] = temp
+                    if let white = whiteLevel {
+                        stopWhiteLevels[selectedId] = white
+                    } else {
+                        stopWhiteLevels.removeValue(forKey: selectedId)
+                    }
+                    updatedGradient.stops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
+                    gradient = updatedGradient
+                    scheduleImmediateApply(stops: updatedGradient.stops)
+                } else {
+                    updatedGradient.stops[idx].hexColor = color.toHex()
+                    stopTemperatures.removeValue(forKey: selectedId)
+                    if let white = whiteLevel {
+                        stopWhiteLevels[selectedId] = white
+                    } else {
+                        stopWhiteLevels.removeValue(forKey: selectedId)
+                    }
+                    gradient = updatedGradient
+                    scheduleImmediateApply(stops: updatedGradient.stops)
+                }
+            },
+            onRemove: {
+                if currentGradient.stops.count > 1 {
+                    var updatedGradient = currentGradient
+                    updatedGradient.stops.removeAll { $0.id == selectedId }
+                    stopTemperatures.removeValue(forKey: selectedId)
+                    stopWhiteLevels.removeValue(forKey: selectedId)
+                    gradient = updatedGradient
+                    selectedStopId = nil
+                    scheduleImmediateApply(stops: updatedGradient.stops)
+                }
+            },
+            onDismiss: { showWheel = false }
+        )
+        #if DEBUG
+        .onAppear {
+            print("🎛️ ColorPicker capabilities for \(device.name): segmentId=\(segmentId) CCT=\(supportsCCT) White=\(supportsWhite) Kelvin=\(usesKelvin)")
+        }
+        #endif
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .padding(.horizontal, 16)
     }
 
     private func applyIncomingGradient(_ stops: [GradientStop]) {
@@ -514,62 +564,89 @@ struct UnifiedColorPane: View {
     }
 
     private func throttleApply(stops: [GradientStop], phase: DragPhase) {
+        let preferSegmentedUpdates = !(advancedUIEnabled && perLedTransitionsEnabled)
         let ledCount = viewModel.totalLEDCount(for: device)
         if phase == .changed {
             applyWorkItem?.cancel()
+            let shouldIssueOverride = !overrideIssuedDuringCurrentDrag
+            if shouldIssueOverride {
+                overrideIssuedDuringCurrentDrag = true
+            }
             let work = DispatchWorkItem {
-                Task {
-                    await viewModel.applyGradientStopsAcrossStrip(
-                        device,
-                        stops: stops,
-                        ledCount: ledCount,
-                        stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
-                        stopWhiteLevels: stopWhiteLevels.isEmpty ? nil : stopWhiteLevels,
-                        disableActiveEffect: true,
-                        segmentId: segmentId,
-                        interpolation: currentGradient.interpolation,
-                        userInitiated: true,
-                        preferSegmented: true
-                    )
-                }
+                startGradientApplyTask(
+                    stops: stops,
+                    ledCount: ledCount,
+                    preferSegmentedUpdates: preferSegmentedUpdates,
+                    userInitiated: shouldIssueOverride
+                )
             }
             applyWorkItem = work
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 60_000_000)  // 60ms throttle for realtime
+                try? await Task.sleep(nanoseconds: 140_000_000)  // 140ms throttle for realtime
                 work.perform()
             }
         } else {
-            Task {
-                await viewModel.applyGradientStopsAcrossStrip(
-                    device,
-                    stops: stops,
-                    ledCount: ledCount,
-                    stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
-                    stopWhiteLevels: stopWhiteLevels.isEmpty ? nil : stopWhiteLevels,
-                    disableActiveEffect: true,
-                    segmentId: segmentId,
-                    interpolation: currentGradient.interpolation,
-                    userInitiated: true,
-                    preferSegmented: true
-                )
+            let shouldIssueOverride = !overrideIssuedDuringCurrentDrag
+            overrideIssuedDuringCurrentDrag = false
+            startGradientApplyTask(
+                stops: stops,
+                ledCount: ledCount,
+                preferSegmentedUpdates: preferSegmentedUpdates,
+                userInitiated: shouldIssueOverride
+            )
+        }
+    }
+
+    private func scheduleImmediateApply(stops: [GradientStop]) {
+        applyImmediateWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            Task { await applyNow(stops: stops) }
+        }
+        applyImmediateWorkItem = work
+        Task { @MainActor in
+            // Small coalescing delay to keep WLED responsive during rapid taps.
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            if !work.isCancelled {
+                work.perform()
             }
         }
     }
 
     private func applyNow(stops: [GradientStop]) async {
+        let preferSegmentedUpdates = !(advancedUIEnabled && perLedTransitionsEnabled)
         let ledCount = viewModel.totalLEDCount(for: device)
-        await viewModel.applyGradientStopsAcrossStrip(
-            device,
+        startGradientApplyTask(
             stops: stops,
             ledCount: ledCount,
-            stopTemperatures: stopTemperatures.isEmpty ? nil : stopTemperatures,
-            stopWhiteLevels: stopWhiteLevels.isEmpty ? nil : stopWhiteLevels,
-            disableActiveEffect: true,
-            segmentId: segmentId,
-            interpolation: currentGradient.interpolation,
-            userInitiated: true,
-            preferSegmented: true
+            preferSegmentedUpdates: preferSegmentedUpdates,
+            userInitiated: true
         )
+    }
+
+    private func startGradientApplyTask(
+        stops: [GradientStop],
+        ledCount: Int,
+        preferSegmentedUpdates: Bool,
+        userInitiated: Bool
+    ) {
+        activeGradientApplyTask?.cancel()
+        let temperatures = stopTemperatures.isEmpty ? nil : stopTemperatures
+        let whiteLevels = stopWhiteLevels.isEmpty ? nil : stopWhiteLevels
+        let interpolation = currentGradient.interpolation
+        activeGradientApplyTask = Task {
+            await viewModel.applyGradientStopsAcrossStrip(
+                device,
+                stops: stops,
+                ledCount: ledCount,
+                stopTemperatures: temperatures,
+                stopWhiteLevels: whiteLevels,
+                disableActiveEffect: true,
+                segmentId: segmentId,
+                interpolation: interpolation,
+                userInitiated: userInitiated,
+                preferSegmented: preferSegmentedUpdates
+            )
+        }
     }
 }
 
@@ -602,20 +679,23 @@ private extension UnifiedColorPane {
     // MARK: - Direct Preset Saving
     
     func saveColorPresetDirectly() async {
-        await MainActor.run {
-            isSavingPreset = true
-            showSaveSuccess = false
-        }
-        
-        let presetName = "Color Preset \(Date().formatted(date: .omitted, time: .shortened))"
-        var preset = ColorPreset(
-            name: presetName,
+        let preset = ColorPreset(
+            name: "Color Preset \(Date().presetNameTimestamp())",
             gradientStops: currentGradient.stops,
             gradientInterpolation: currentGradient.interpolation,
             brightness: Int(briUI),
             temperature: stopTemperatures.values.first ?? (stopTemperatures.isEmpty ? nil : 0.5),
             whiteLevel: stopWhiteLevels.values.first
         )
+        await saveColorPreset(preset)
+    }
+
+    func saveColorPreset(_ presetInput: ColorPreset) async {
+        await MainActor.run {
+            isSavingPreset = true
+            showSaveSuccess = false
+        }
+        var preset = presetInput
 
         do {
             let savedId = try await PresetSyncManager.shared.saveColorPreset(preset, to: device)

@@ -147,9 +147,95 @@ struct TimeTrigger: Codable, Equatable {
     }
 }
 
+enum WeekdayMask {
+    static let allDaysSunFirst = Array(repeating: true, count: 7)
+
+    /// Convert Sunday-first booleans (Sun...Sat) to WLED `dow` bitmask (Mon bit0 ... Sun bit6).
+    static func wledDow(fromSunFirst weekdays: [Bool]) -> Int {
+        let normalized = normalizeSunFirst(weekdays)
+        var dow = 0
+        // WLED bit positions: 0=Mon, 1=Tue, ... 5=Sat, 6=Sun
+        for index in 0..<7 where normalized[index] {
+            let bit: Int
+            if index == 0 {
+                bit = 6 // Sunday
+            } else {
+                bit = index - 1
+            }
+            dow |= (1 << bit)
+        }
+        return dow == 0 ? 0x7F : dow
+    }
+
+    /// Convert WLED `dow` bitmask (Mon bit0 ... Sun bit6) to Sunday-first booleans (Sun...Sat).
+    static func sunFirst(fromWLEDDow dow: Int) -> [Bool] {
+        let normalized = dow == 0 ? 0x7F : dow
+        var weekdays = Array(repeating: false, count: 7)
+        for index in 0..<7 {
+            let bit: Int
+            if index == 0 {
+                bit = 6 // Sunday
+            } else {
+                bit = index - 1
+            }
+            weekdays[index] = ((normalized >> bit) & 0x01) == 1
+        }
+        return weekdays
+    }
+
+    static func normalizeSunFirst(_ weekdays: [Bool]) -> [Bool] {
+        weekdays.count == 7 ? weekdays : allDaysSunFirst
+    }
+}
+
 struct SolarTrigger: Codable, Equatable {
     enum EventOffset: Codable, Equatable {
         case minutes(Int)
+
+        private enum CodingKeys: String, CodingKey {
+            case minutes
+            case legacyValue = "_0"
+        }
+
+        init(from decoder: Decoder) throws {
+            // Legacy shape: "offset": 10
+            if let singleValue = try? decoder.singleValueContainer(),
+               let directMinutes = try? singleValue.decode(Int.self) {
+                self = .minutes(directMinutes)
+                return
+            }
+
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+
+            // Common shape: "offset": { "minutes": 10 }
+            if let directMinutes = try? container.decode(Int.self, forKey: .minutes) {
+                self = .minutes(directMinutes)
+                return
+            }
+
+            // Swift synthesized enum payload shape: { "minutes": { "_0": 10 } }
+            if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .minutes),
+               let nestedMinutes = try? nested.decode(Int.self, forKey: .legacyValue) {
+                self = .minutes(nestedMinutes)
+                return
+            }
+
+            throw DecodingError.typeMismatch(
+                EventOffset.self,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Unsupported SolarTrigger.EventOffset payload."
+                )
+            )
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            switch self {
+            case .minutes(let value):
+                try container.encode(value, forKey: .minutes)
+            }
+        }
     }
     
     enum LocationSource: Codable, Equatable {
@@ -166,10 +252,45 @@ struct SolarTrigger: Codable, Equatable {
     
     var offset: EventOffset
     var location: LocationSource
+    var weekdays: [Bool]
+
+    static let minOnDeviceOffsetMinutes = -59
+    static let maxOnDeviceOffsetMinutes = 59
     
-    init(offset: EventOffset = .minutes(0), location: LocationSource = .followDevice) {
+    init(
+        offset: EventOffset = .minutes(0),
+        location: LocationSource = .followDevice,
+        weekdays: [Bool] = WeekdayMask.allDaysSunFirst
+    ) {
         self.offset = offset
         self.location = location
+        self.weekdays = WeekdayMask.normalizeSunFirst(weekdays)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case offset
+        case location
+        case weekdays
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        offset = try container.decode(EventOffset.self, forKey: .offset)
+        location = try container.decode(LocationSource.self, forKey: .location)
+        weekdays = WeekdayMask.normalizeSunFirst(
+            try container.decodeIfPresent([Bool].self, forKey: .weekdays) ?? WeekdayMask.allDaysSunFirst
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(offset, forKey: .offset)
+        try container.encode(location, forKey: .location)
+        try container.encode(WeekdayMask.normalizeSunFirst(weekdays), forKey: .weekdays)
+    }
+
+    static func clampOnDeviceOffset(_ minutes: Int) -> Int {
+        min(maxOnDeviceOffsetMinutes, max(minOnDeviceOffsetMinutes, minutes))
     }
     
     func displayString(eventName: String) -> String {
@@ -218,6 +339,22 @@ enum AutomationAction: Codable, Equatable {
     case directState(DirectStatePayload)
 }
 
+enum AutomationMacroAssetKind {
+    case playlist
+    case preset
+}
+
+extension AutomationAction {
+    var macroAssetKind: AutomationMacroAssetKind {
+        switch self {
+        case .playlist, .transition:
+            return .playlist
+        case .preset, .gradient, .effect, .directState, .scene:
+            return .preset
+        }
+    }
+}
+
 struct SceneActionPayload: Codable, Equatable {
     var sceneId: UUID
     var sceneName: String?
@@ -231,7 +368,7 @@ struct PresetActionPayload: Codable, Equatable {
 }
 
 struct PlaylistActionPayload: Codable, Equatable {
-    var playlistId: Int  // WLED playlist ID (0-250)
+    var playlistId: Int  // WLED playlist ID (1-250)
     var playlistName: String?
 }
 
@@ -282,10 +419,77 @@ struct DirectStatePayload: Codable, Equatable {
     var brightness: Int
     var temperature: Double? = nil
     var whiteLevel: Double? = nil
-    var transitionMs: Int
+    var transitionDeciseconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case colorHex
+        case brightness
+        case temperature
+        case whiteLevel
+        case transitionDeciseconds
+        case transitionMs
+    }
+
+    init(
+        colorHex: String,
+        brightness: Int,
+        temperature: Double? = nil,
+        whiteLevel: Double? = nil,
+        transitionDeciseconds: Int
+    ) {
+        self.colorHex = colorHex
+        self.brightness = brightness
+        self.temperature = temperature
+        self.whiteLevel = whiteLevel
+        self.transitionDeciseconds = transitionDeciseconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        colorHex = try container.decode(String.self, forKey: .colorHex)
+        brightness = try container.decode(Int.self, forKey: .brightness)
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
+        whiteLevel = try container.decodeIfPresent(Double.self, forKey: .whiteLevel)
+        if let deciseconds = try container.decodeIfPresent(Int.self, forKey: .transitionDeciseconds) {
+            transitionDeciseconds = max(0, deciseconds)
+        } else if let ms = try container.decodeIfPresent(Int.self, forKey: .transitionMs) {
+            transitionDeciseconds = max(0, Int((Double(ms) / 100.0).rounded()))
+        } else {
+            transitionDeciseconds = 0
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(colorHex, forKey: .colorHex)
+        try container.encode(brightness, forKey: .brightness)
+        try container.encodeIfPresent(temperature, forKey: .temperature)
+        try container.encodeIfPresent(whiteLevel, forKey: .whiteLevel)
+        try container.encode(transitionDeciseconds, forKey: .transitionDeciseconds)
+    }
 }
 
 struct AutomationMetadata: Codable, Equatable {
+    enum WLEDSyncState: String, Codable, Equatable {
+        case unknown
+        case syncing
+        case synced
+        case notSynced
+
+        var displayLabel: String {
+            switch self {
+            case .unknown:
+                return "Not ready"
+            case .syncing:
+                return "Getting ready"
+            case .synced:
+                return "Ready"
+            case .notSynced:
+                return "Not ready"
+            }
+        }
+    }
+
     var colorPreviewHex: String?
     var accentColorHex: String?
     var iconName: String?
@@ -295,7 +499,20 @@ struct AutomationMetadata: Codable, Equatable {
     // WLED device-side execution metadata (optional, backwards compatible)
     var wledPlaylistId: Int? = nil  // WLED playlist ID if this automation uses a playlist
     var wledTimerSlot: Int? = nil   // WLED timer slot ID if this automation runs on-device
+    var wledPlaylistIdsByDevice: [String: Int]? = nil  // Per-device playlist IDs
+    var wledPresetIdsByDevice: [String: Int]? = nil    // Per-device preset IDs (snapshots)
+    var wledTimerSlotsByDevice: [String: Int]? = nil   // Per-device timer slots
+    var wledManagedPlaylistSignatureByDevice: [String: String]? = nil
+    var wledManagedPresetSignatureByDevice: [String: String]? = nil
+    var wledSyncStateByDevice: [String: WLEDSyncState]? = nil
+    var wledLastSyncErrorByDevice: [String: String]? = nil
+    var wledLastSyncAtByDevice: [String: Date]? = nil
     var runOnDevice: Bool = false   // Whether this automation should run on WLED device (timer-based)
+    // Optional WLED timer date window (applies to timer.start/end month/day)
+    var onDeviceStartMonth: Int? = nil
+    var onDeviceStartDay: Int? = nil
+    var onDeviceEndMonth: Int? = nil
+    var onDeviceEndDay: Int? = nil
     
     init(
         colorPreviewHex: String? = nil,
@@ -306,7 +523,19 @@ struct AutomationMetadata: Codable, Equatable {
         pinnedToShortcuts: Bool? = nil,
         wledPlaylistId: Int? = nil,
         wledTimerSlot: Int? = nil,
-        runOnDevice: Bool = false
+        wledPlaylistIdsByDevice: [String: Int]? = nil,
+        wledPresetIdsByDevice: [String: Int]? = nil,
+        wledTimerSlotsByDevice: [String: Int]? = nil,
+        wledManagedPlaylistSignatureByDevice: [String: String]? = nil,
+        wledManagedPresetSignatureByDevice: [String: String]? = nil,
+        wledSyncStateByDevice: [String: WLEDSyncState]? = nil,
+        wledLastSyncErrorByDevice: [String: String]? = nil,
+        wledLastSyncAtByDevice: [String: Date]? = nil,
+        runOnDevice: Bool = false,
+        onDeviceStartMonth: Int? = nil,
+        onDeviceStartDay: Int? = nil,
+        onDeviceEndMonth: Int? = nil,
+        onDeviceEndDay: Int? = nil
     ) {
         self.colorPreviewHex = colorPreviewHex
         self.accentColorHex = accentColorHex
@@ -316,6 +545,133 @@ struct AutomationMetadata: Codable, Equatable {
         self.pinnedToShortcuts = pinnedToShortcuts
         self.wledPlaylistId = wledPlaylistId
         self.wledTimerSlot = wledTimerSlot
+        self.wledPlaylistIdsByDevice = wledPlaylistIdsByDevice
+        self.wledPresetIdsByDevice = wledPresetIdsByDevice
+        self.wledTimerSlotsByDevice = wledTimerSlotsByDevice
+        self.wledManagedPlaylistSignatureByDevice = wledManagedPlaylistSignatureByDevice
+        self.wledManagedPresetSignatureByDevice = wledManagedPresetSignatureByDevice
+        self.wledSyncStateByDevice = wledSyncStateByDevice
+        self.wledLastSyncErrorByDevice = wledLastSyncErrorByDevice
+        self.wledLastSyncAtByDevice = wledLastSyncAtByDevice
         self.runOnDevice = runOnDevice
+        self.onDeviceStartMonth = onDeviceStartMonth
+        self.onDeviceStartDay = onDeviceStartDay
+        self.onDeviceEndMonth = onDeviceEndMonth
+        self.onDeviceEndDay = onDeviceEndDay
+    }
+
+    func syncState(for deviceId: String) -> WLEDSyncState {
+        wledSyncStateByDevice?[deviceId] ?? .unknown
+    }
+
+    func lastSyncError(for deviceId: String) -> String? {
+        wledLastSyncErrorByDevice?[deviceId]
+    }
+
+    func lastSyncAt(for deviceId: String) -> Date? {
+        wledLastSyncAtByDevice?[deviceId]
+    }
+
+    func managedPlaylistSignature(for deviceId: String) -> String? {
+        wledManagedPlaylistSignatureByDevice?[deviceId]
+    }
+
+    func managedPresetSignature(for deviceId: String) -> String? {
+        wledManagedPresetSignatureByDevice?[deviceId]
+    }
+
+    mutating func setManagedPlaylistSignature(_ signature: String?, for deviceId: String) {
+        var map = wledManagedPlaylistSignatureByDevice ?? [:]
+        if let signature, !signature.isEmpty {
+            map[deviceId] = signature
+        } else {
+            map.removeValue(forKey: deviceId)
+        }
+        wledManagedPlaylistSignatureByDevice = map.isEmpty ? nil : map
+    }
+
+    mutating func setManagedPresetSignature(_ signature: String?, for deviceId: String) {
+        var map = wledManagedPresetSignatureByDevice ?? [:]
+        if let signature, !signature.isEmpty {
+            map[deviceId] = signature
+        } else {
+            map.removeValue(forKey: deviceId)
+        }
+        wledManagedPresetSignatureByDevice = map.isEmpty ? nil : map
+    }
+
+    mutating func clearWLEDMacroMetadata(for deviceIds: [String], preserveTimerSlots: Bool = true) {
+        let targetIds = Set(deviceIds)
+        if var playlistMap = wledPlaylistIdsByDevice {
+            playlistMap = playlistMap.filter { !targetIds.contains($0.key) }
+            wledPlaylistIdsByDevice = playlistMap.isEmpty ? nil : playlistMap
+        }
+        if var presetMap = wledPresetIdsByDevice {
+            presetMap = presetMap.filter { !targetIds.contains($0.key) }
+            wledPresetIdsByDevice = presetMap.isEmpty ? nil : presetMap
+        }
+        if var playlistSignatures = wledManagedPlaylistSignatureByDevice {
+            playlistSignatures = playlistSignatures.filter { !targetIds.contains($0.key) }
+            wledManagedPlaylistSignatureByDevice = playlistSignatures.isEmpty ? nil : playlistSignatures
+        }
+        if var presetSignatures = wledManagedPresetSignatureByDevice {
+            presetSignatures = presetSignatures.filter { !targetIds.contains($0.key) }
+            wledManagedPresetSignatureByDevice = presetSignatures.isEmpty ? nil : presetSignatures
+        }
+        if var syncMap = wledSyncStateByDevice {
+            for deviceId in targetIds {
+                syncMap[deviceId] = .unknown
+            }
+            wledSyncStateByDevice = syncMap.isEmpty ? nil : syncMap
+        }
+        if var errorMap = wledLastSyncErrorByDevice {
+            for deviceId in targetIds {
+                errorMap.removeValue(forKey: deviceId)
+            }
+            wledLastSyncErrorByDevice = errorMap.isEmpty ? nil : errorMap
+        }
+        if var syncAtMap = wledLastSyncAtByDevice {
+            for deviceId in targetIds {
+                syncAtMap.removeValue(forKey: deviceId)
+            }
+            wledLastSyncAtByDevice = syncAtMap.isEmpty ? nil : syncAtMap
+        }
+        if !preserveTimerSlots {
+            if var slotMap = wledTimerSlotsByDevice {
+                slotMap = slotMap.filter { !targetIds.contains($0.key) }
+                wledTimerSlotsByDevice = slotMap.isEmpty ? nil : slotMap
+            }
+            if targetIds.count <= 1 {
+                wledTimerSlot = nil
+            }
+        }
+        if targetIds.count <= 1 {
+            wledPlaylistId = nil
+        }
+    }
+
+    mutating func normalizeWLEDScalarFallbacks(for targetDeviceIds: [String]) {
+        let targetIds = Set(targetDeviceIds)
+        wledPlaylistIdsByDevice = wledPlaylistIdsByDevice?.filter { targetIds.contains($0.key) }
+        wledPresetIdsByDevice = wledPresetIdsByDevice?.filter { targetIds.contains($0.key) }
+        wledTimerSlotsByDevice = wledTimerSlotsByDevice?.filter { targetIds.contains($0.key) }
+        wledManagedPlaylistSignatureByDevice = wledManagedPlaylistSignatureByDevice?.filter { targetIds.contains($0.key) }
+        wledManagedPresetSignatureByDevice = wledManagedPresetSignatureByDevice?.filter { targetIds.contains($0.key) }
+        wledSyncStateByDevice = wledSyncStateByDevice?.filter { targetIds.contains($0.key) }
+        wledLastSyncErrorByDevice = wledLastSyncErrorByDevice?.filter { targetIds.contains($0.key) }
+        wledLastSyncAtByDevice = wledLastSyncAtByDevice?.filter { targetIds.contains($0.key) }
+
+        guard targetIds.count == 1, let onlyDeviceId = targetIds.first else {
+            wledPlaylistId = nil
+            wledTimerSlot = nil
+            return
+        }
+
+        if let playlistMap = wledPlaylistIdsByDevice {
+            wledPlaylistId = playlistMap[onlyDeviceId]
+        }
+        if let slotMap = wledTimerSlotsByDevice {
+            wledTimerSlot = slotMap[onlyDeviceId]
+        }
     }
 }

@@ -15,14 +15,56 @@ extension OSLog {
     static let effects = OSLog(subsystem: subsystem, category: "effects")
 }
 
+struct DiagnosticsEntry: Identifiable, Equatable {
+    let id = UUID()
+    let timestamp: Date
+    let message: String
+}
+
+private struct PendingPlaylistRename: Codable, Identifiable, Equatable {
+    let id: UUID
+    let deviceId: String
+    let playlistId: Int
+    var desiredName: String
+    var retries: Int
+    var lastAttemptAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        deviceId: String,
+        playlistId: Int,
+        desiredName: String,
+        retries: Int = 0,
+        lastAttemptAt: Date? = nil
+    ) {
+        self.id = id
+        self.deviceId = deviceId
+        self.playlistId = playlistId
+        self.desiredName = desiredName
+        self.retries = retries
+        self.lastAttemptAt = lastAttemptAt
+    }
+}
+
 struct DeviceEffectState {
     var effectId: Int
     var speed: Int
     var intensity: Int
     var paletteId: Int?  // Optional: omit when sending custom colors
+    var custom1: Int?
+    var custom2: Int?
+    var custom3: Int?
+    var option1: Bool?
+    var option2: Bool?
+    var option3: Bool?
     var isEnabled: Bool
     
-    static let `default` = DeviceEffectState(effectId: 0, speed: 128, intensity: 128, paletteId: nil, isEnabled: false)
+    static let `default` = DeviceEffectState(effectId: 0, speed: 128, intensity: 128, paletteId: nil, custom1: nil, custom2: nil, custom3: nil, option1: nil, option2: nil, option3: nil, isEnabled: false)
+}
+
+enum PalettePreviewEntry: Equatable {
+    case color(index: Int, r: Int, g: Int, b: Int)
+    case placeholder(String)
 }
 
 /// Metadata for native WLED transitions (on-device transitions using tt parameter)
@@ -37,6 +79,7 @@ struct ActiveRunStatus: Equatable {
     let id: UUID  // Unique identifier for this run
     let deviceId: String
     let kind: RunKind
+    let automationId: UUID?
     let title: String
     let startDate: Date
     var progress: Double  // 0.0 to 1.0
@@ -55,6 +98,7 @@ struct ActiveRunStatus: Equatable {
         id: UUID = UUID(),
         deviceId: String,
         kind: RunKind,
+        automationId: UUID? = nil,
         title: String,
         startDate: Date,
         progress: Double = 0.0,
@@ -65,6 +109,7 @@ struct ActiveRunStatus: Equatable {
         self.id = id
         self.deviceId = deviceId
         self.kind = kind
+        self.automationId = automationId
         self.title = title
         self.startDate = startDate
         self.progress = progress
@@ -74,8 +119,30 @@ struct ActiveRunStatus: Equatable {
     }
     
     static func == (lhs: ActiveRunStatus, rhs: ActiveRunStatus) -> Bool {
-        lhs.id == rhs.id && lhs.deviceId == rhs.deviceId && lhs.kind == rhs.kind && lhs.title == rhs.title
+        lhs.id == rhs.id
+            && lhs.deviceId == rhs.deviceId
+            && lhs.kind == rhs.kind
+            && lhs.automationId == rhs.automationId
+            && lhs.title == rhs.title
     }
+}
+
+struct TransitionDraftSession: Equatable {
+    var gradientA: LEDGradient
+    var gradientB: LEDGradient
+    var stopTemperaturesA: [UUID: Double]
+    var stopTemperaturesB: [UUID: Double]
+    var stopWhiteLevelsA: [UUID: Double]
+    var stopWhiteLevelsB: [UUID: Double]
+    var brightnessA: Double
+    var brightnessB: Double
+    var selectedStartPresetId: UUID?
+    var selectedEndPresetId: UUID?
+    var transitionOn: Bool
+    var isExpanded: Bool
+    var isSavingPreset: Bool
+    var showSaveSuccess: Bool
+    var updatedAt: Date
 }
 
 @MainActor
@@ -96,6 +163,83 @@ class DeviceControlViewModel: ObservableObject {
         140, // Freqwave (audio-reactive)
         149  // Fireplace
     ]
+
+    private static let mainUIEffectExclusionsNormalized: Set<String> = {
+        let names: [String] = [
+            "blink",
+            "auroa",
+            "aurora",
+            "blink rainbow",
+            "chase flash",
+            "chase flash rnd",
+            "chase rainbow",
+            "chase random",
+            "chunchun",
+            "colorful",
+            "colorwaves",
+            "dancing shadows",
+            "dissolve rnd",
+            "fill noise",
+            "fire flicker",
+            "flow strip",
+            "glitter",
+            "gradient",
+            "haloween eyes",
+            "halloween eyes",
+            "lighthouse",
+            "lightning",
+            "loading",
+            "meteor",
+            "multi comet",
+            "noise 1",
+            "noise 2",
+            "noise 3",
+            "noise 4",
+            "oscillate",
+            "percent",
+            "perlin move",
+            "phased",
+            "phased noise",
+            "popcorn",
+            "pride 2015",
+            "railway",
+            "rain",
+            "rainbow runner",
+            "rsvd",
+            "scan",
+            "scanner",
+            "scanner dual",
+            "sinelon",
+            "sinelon duel",
+            "sinelon dual",
+            "sinelon rainbow",
+            "solid",
+            "solid glitter",
+            "solid pattern",
+            "solid pattern tri",
+            "sparkle",
+            "sparkle dark",
+            "sparkle+",
+            "spots",
+            "spots fade",
+            "stream 2",
+            "strobe",
+            "strobe mega",
+            "strobe rainbow",
+            "tetrix",
+            "theater rainbow",
+            "traffic light",
+            "traffix light",
+            "trifade",
+            "triwipe",
+            "twinkle",
+            "twinklecat",
+            "twinkle fox",
+            "twinkleup",
+            "wavesins"
+        ]
+        return Set(names.map { normalizeEffectName($0) })
+    }()
     
     private static let fallbackGradientFriendlyEffects: [EffectMetadata] = [
         EffectMetadata(
@@ -228,22 +372,11 @@ class DeviceControlViewModel: ObservableObject {
         }
 
         if clampedSlots == 1 {
-            let rgb = sortedStops.first!.color.toRGBArray()
+            let color = GradientSampler.sampleColor(at: 0.5, stops: sortedStops, interpolation: gradient.interpolation)
+            let rgb = color.toRGBArray()
             return [[rgb[0], rgb[1], rgb[2]]]
         }
 
-        // Prefer actual stop colors whenever possible so the effect palette matches UI stops
-        if sortedStops.count >= clampedSlots {
-            let maxIndex = sortedStops.count - 1
-            let positions = (0..<clampedSlots).map { Double($0) / Double(clampedSlots - 1) }
-            let indices = positions.map { Int(round($0 * Double(maxIndex))) }
-            return indices.map { idx in
-                let rgb = sortedStops[min(maxIndex, max(0, idx))].color.toRGBArray()
-                return [rgb[0], rgb[1], rgb[2]]
-            }
-        }
-
-        // Not enough stops to fill every slot – fall back to interpolated colors
         let positions = (0..<clampedSlots).map { Double($0) / Double(clampedSlots - 1) }
         return positions.map { t in
             let color = GradientSampler.sampleColor(at: t, stops: sortedStops, interpolation: gradient.interpolation)
@@ -275,13 +408,13 @@ class DeviceControlViewModel: ObservableObject {
         var id: String {
             switch self {
             case .deviceOffline(let name):
-                return "deviceOffline-\(name ?? "unknown")"
+                return "deviceOffline-" + (name ?? "unknown")
             case .timeout(let name):
-                return "timeout-\(name ?? "unknown")"
+                return "timeout-" + (name ?? "unknown")
             case .invalidResponse:
                 return "invalidResponse"
             case .apiError(let message):
-                return "apiError-\(message)"
+                return "apiError-" + message
             }
         }
         
@@ -289,12 +422,12 @@ class DeviceControlViewModel: ObservableObject {
             switch self {
             case .deviceOffline(let name):
                 if let name, !name.isEmpty {
-                    return "\(name) is offline."
+                    return name + " is offline."
                 }
                 return "The device appears to be offline."
             case .timeout(let name):
                 if let name, !name.isEmpty {
-                    return "\(name) is not responding."
+                    return name + " is not responding."
                 }
                 return "The device did not respond in time."
             case .invalidResponse:
@@ -334,10 +467,32 @@ class DeviceControlViewModel: ObservableObject {
     
     // Active run tracking (automations/transitions)
     @Published var activeRunStatus: [String: ActiveRunStatus] = [:]
+    @Published private(set) var presetWriteInProgress: Set<String> = []
+    @Published private(set) var transitionCleanupInProgress: Set<String> = []
+    @Published private(set) var transitionCleanupPendingCountByDeviceId: [String: Int] = [:]
+    @Published private(set) var transitionCleanupBacklogCountByDeviceId: [String: Int] = [:]
+    @Published private(set) var presetStoreHealthByDeviceId: [String: PresetStoreHealthState] = [:]
+    @Published private(set) var lastPresetStoreHealthEventByDeviceId: [String: Date] = [:]
+    @Published private(set) var lastPresetStoreHealthMessageByDeviceId: [String: String] = [:]
+    @Published private(set) var pendingPresetStoreSyncItemsByDeviceId: [String: [PendingPresetStoreSyncItem]] = [:]
+    @Published private(set) var transitionDraftSessionsByDeviceId: [String: TransitionDraftSession] = [:]
+    @Published private(set) var queuedTransitionPresetApplyByDeviceId: [String: UUID] = [:]
+    @Published private(set) var rebootWaitActiveByDeviceId: Set<String> = []
+    @Published private(set) var rebootWaitRemainingSecondsByDeviceId: [String: Int] = [:]
     private var transitionCancelLockUntil: [String: Date] = [:]
     private var savedTransitionDefaults: [String: Int?] = [:]
     private var savedTransitionDefaultRunIds: [String: UUID] = [:]
     private var playlistUnsupportedDevices: Set<String> = []
+    private struct TransitionFinalState {
+        let runId: UUID
+        let gradient: LEDGradient
+        let brightness: Int
+        let stopTemperatures: [UUID: Double]?
+        let stopWhiteLevels: [UUID: Double]?
+        let segmentId: Int
+        let forceSegmentedOnly: Bool
+    }
+    private var pendingFinalStates: [String: TransitionFinalState] = [:]
     
     // Watchdog state for monitoring stalled runs
     private struct RunWatchdog {
@@ -347,6 +502,60 @@ class DeviceControlViewModel: ObservableObject {
     }
     private var runWatchdogs: [String: RunWatchdog] = [:]
     private var watchdogTask: Task<Void, Never>?
+    private var presetStoreFailureEventsByDeviceId: [String: [Date]] = [:]
+    private var presetStoreWritePauseUntilByDeviceId: [String: Date] = [:]
+    private var recentControlWriteSuccessAtByDeviceId: [String: Date] = [:]
+    private var queuedTransitionPresetApplyTasksByDeviceId: [String: Task<Void, Never>] = [:]
+    private var rebootWaitCountdownTasksByDeviceId: [String: Task<Void, Never>] = [:]
+    private var rebootWaitProbeTasksByDeviceId: [String: Task<Void, Never>] = [:]
+    private let controlWriteOnlineGraceInterval: TimeInterval = 12.0
+
+    enum TransitionPresetSaveOutcome {
+        case saved(TransitionPlaylistResult)
+        case deferred(PendingPresetStoreSyncItem)
+        case suppressedBusy
+    }
+
+    enum TransitionPresetFallbackReason: String {
+        case missingWLEDPlaylistId
+        case pendingSync
+        case playlistStartFailed
+        case playlistInvalidOrMissingSteps
+        case legacyTempRangeIds
+        case busyTimeout
+        case shortDurationDirectApply
+    }
+
+    enum TransitionPresetApplyOutcome {
+        case startedStoredPlaylist(playlistId: Int)
+        case rebuiltTransition(reason: TransitionPresetFallbackReason)
+        case deferredSyncThenRebuilt
+        case suppressedBusy
+        case aborted
+    }
+
+    enum TransitionPresetSaveAvailability: String {
+        case ready
+        case blockedLoading
+        case blockedCleanupPending
+        case blockedCleanupInProgress
+        case blockedPresetWriteInProgress
+        case blockedPresetStorePaused
+    }
+
+    enum HeavyOpQuiescenceResult {
+        case ready
+        case timedOut(reason: String)
+    }
+
+    enum StoredTransitionPlaylistValidation {
+        case valid
+        case missingPlaylistId
+        case missingPlaylistRecord
+        case missingStepPresets([Int])
+        case legacyTempRangeIds
+        case unknownReadFailure
+    }
     
     // Watchdog constants
     private let watchdogTimeoutSeconds: TimeInterval = 10.0  // Cancel if no progress for 10 seconds
@@ -361,7 +570,7 @@ class DeviceControlViewModel: ObservableObject {
             savedTransitionDefaults[device.id] = device.state?.transitionDeciseconds
             savedTransitionDefaultRunIds[device.id] = runId
         }
-        let stateUpdate = WLEDStateUpdate(transitionDeciseconds: max(0, deciseconds))
+        let stateUpdate = WLEDStateUpdate(defaultTransitionDeciseconds: max(0, deciseconds))
         _ = try? await apiService.updateState(for: device, state: stateUpdate)
     }
 
@@ -372,7 +581,7 @@ class DeviceControlViewModel: ObservableObject {
         guard savedTransitionDefaults.keys.contains(device.id) else { return }
         let restoredDeciseconds = savedTransitionDefaults[device.id] ?? nil
         if let restoredDeciseconds {
-            let stateUpdate = WLEDStateUpdate(transitionDeciseconds: max(0, restoredDeciseconds))
+            let stateUpdate = WLEDStateUpdate(defaultTransitionDeciseconds: max(0, restoredDeciseconds))
             _ = try? await apiService.updateState(for: device, state: stateUpdate)
         }
         await MainActor.run {
@@ -384,7 +593,8 @@ class DeviceControlViewModel: ObservableObject {
                     segments: state.segments,
                     transitionDeciseconds: restoredDeciseconds,
                     presetId: state.presetId,
-                    playlistId: state.playlistId
+                    playlistId: state.playlistId,
+                    mainSegment: state.mainSegment
                 )
             }
         }
@@ -453,10 +663,17 @@ class DeviceControlViewModel: ObservableObject {
     @Published var isScanning: Bool = false
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    @Published var discoveryErrorMessage: String?
+    @Published var isNetworkAvailable: Bool = true
+    @Published var diagnosticsLog: [DiagnosticsEntry] = []
     @Published private(set) var presetSlotStatus: [String: PresetSlotAvailability] = [:]
     @Published var currentError: WLEDError?
     @Published var reconnectionStatus: [String: String] = [:]
-    private var allowActiveHealthChecks: Bool = false
+    @Published private(set) var activeDeviceId: String?
+    @Published private(set) var syncProfilesBySource: [String: DeviceSyncProfile] = [:]
+    @Published private(set) var syncDispatchSummaryBySource: [String: SyncDispatchSummary] = [:]
+    private var allowActiveHealthChecks: Bool = true
+    private let diagnosticsLogLimit: Int = 120
     
     // Service dependencies
     private let apiService = WLEDAPIService.shared
@@ -466,6 +683,7 @@ class DeviceControlViewModel: ObservableObject {
     private let coreDataManager = CoreDataManager.shared
     private let webSocketManager = WLEDWebSocketManager.shared
     private let connectionMonitor = WLEDConnectionMonitor.shared
+    private let deviceSyncManager = DeviceSyncManager.shared
     
     // Combine cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
@@ -481,21 +699,41 @@ class DeviceControlViewModel: ObservableObject {
     @Published private(set) var rawEffectMetadata: [String: [String]] = [:]
     @Published private(set) var effectMetadataBundles: [String: EffectMetadataBundle] = [:]
     @Published private(set) var effectStates: [String: [Int: DeviceEffectState]] = [:]
+    @Published private(set) var audioReactiveEnabledByDevice: [String: Bool] = [:]
     @Published private(set) var segmentCCTFormats: [String: [Int: Bool]] = [:]
     @Published private(set) var presetsCache: [String: [WLEDPreset]] = [:]
     @Published private(set) var presetLoadingStates: [String: Bool] = [:]
+    @Published private(set) var playlistsCache: [String: [WLEDPlaylist]] = [:]
+    @Published private(set) var playlistLoadingStates: [String: Bool] = [:]
+    @Published private(set) var presetNameMapsByDevice: [String: [Int: String]] = [:]
+    @Published private(set) var playlistNameMapsByDevice: [String: [Int: String]] = [:]
+    @Published private(set) var pendingPlaylistRenameIdsByDevice: [String: Set<Int>] = [:]
+    private var presetModificationTimes: [String: Int] = [:]
+    @Published private(set) var palettePreviewEntriesByDevice: [String: [Int: [PalettePreviewEntry]]] = [:]
     @Published private(set) var latestGradientStops: [String: [GradientStop]] = [:]
     @Published private(set) var latestEffectGradientStops: [String: [GradientStop]] = [:]
+    @Published private(set) var latestMultiStopEffectGradients: [String: [GradientStop]] = [:]
     @Published private(set) var latestTransitionDurations: [String: Double] = [:]
     private var effectMetadataLastFetched: [String: Date] = [:]
+    private var palettePreviewLastFetched: [String: Date] = [:]
     private var lastGradientBeforeEffect: [String: [GradientStop]] = [:]
+    private let effectGradientMultiDefaultsPrefix = "latestEffectGradientStops.multi."
     private let effectMetadataRefreshInterval: TimeInterval = 300 // 5 minute cache
+    private let palettePreviewRefreshInterval: TimeInterval = 300
     private var ledPreferencesLastFetched: [String: Date] = [:]
     private let ledPreferencesRefreshInterval: TimeInterval = 300
+    private var ledPreferencesFetchInFlight: Set<String> = []
+    private var ledStripTypeByDevice: [String: LEDStripType] = [:]
+    private var ledColorOrderByDevice: [String: LEDColorOrder] = [:]
+    private var deviceIsMatrixById: [String: Bool] = [:]
     private let temperatureStopsCCTKeyPrefix = "temperatureStopsCCTEnabled."
+    private let manualSegmentationKeyPrefix = "manualSegmentationEnabled."
     private let defaultCCTKelvinMin: Int = 1900
     private let defaultCCTKelvinMax: Int = 10091
     private var cctKelvinRanges: [String: ClosedRange<Int>] = [:]
+    private var didPreloadPersistedDevices: Bool = false
+    private var pendingDiscoveryStateRefreshTasks: [String: Task<Void, Never>] = [:]
+    private let discoveryStateRefreshDebounceNanos: UInt64 = 450_000_000
 
     private var appManagedSegmentDevices: Set<String> = []
     private struct SegmentBounds: Equatable {
@@ -511,7 +749,10 @@ class DeviceControlViewModel: ObservableObject {
     private let segmentedTransitionMinStepSeconds: Double = 5.0
     private let segmentedTransitionMaxSteps: Int = 120
     private let segmentedTransitionSleepSliceSeconds: Double = 1.0
-    private let playlistLongTransitionThresholdSeconds: Double = 600.0
+    private let playlistLongTransitionThresholdSeconds: Double = 120.0
+    // Safety default: avoid writing temp transition steps/playlists to presets.json.
+    // Persistent transition saves (+Preset) still use playlist/preset storage.
+    private let enableTemporaryPresetStoreBackedTransitions: Bool = false
     private let presetSaveRetryAttempts: Int = 3
     private let presetVerifyRetryAttempts: Int = 4
     private let presetSaveDelayNanos: UInt64 = 500_000_000
@@ -521,16 +762,27 @@ class DeviceControlViewModel: ObservableObject {
     private let playlistSaveDelayNanos: UInt64 = 600_000_000
     private let playlistVerifyDelayNanos: UInt64 = 700_000_000
     private let playlistStartDelayNanos: UInt64 = 400_000_000
+    private let pendingPlaylistRenameQueueKey = "aesdetic_pending_playlist_renames_v1"
+    private let pendingPlaylistRenameRetryLimit = 10
+    private var pendingPlaylistRenames: [PendingPlaylistRename] = []
     private var temporaryPlaylistIds: [String: Int] = [:]
     private var temporaryPresetIds: [String: [Int]] = [:]
+    private var playlistRunsByDevice: Set<String> = []
     
     private let gradientDefaultsPrefix = "latestGradientStops."
     private let effectGradientDefaultsPrefix = "latestEffectGradientStops."
     private let transitionDurationDefaultsPrefix = "latestTransitionDurations."
+
+    var playlistLongTransitionThreshold: Double {
+        playlistLongTransitionThresholdSeconds
+    }
     
     // User interaction tracking for optimistic updates
     private var lastUserInput: [String: Date] = [:]
     private let userInputProtectionWindow: TimeInterval = 1.5
+    private let rebootWaitMaxSeconds: Int = 10
+    private let rebootProbeInitialDelayNanos: UInt64 = 1_000_000_000
+    private let rebootProbeIntervalNanos: UInt64 = 500_000_000
     
     // Brightness preservation: Store last brightness before turning off
     // This allows restoring brightness when device is turned back on
@@ -545,11 +797,53 @@ class DeviceControlViewModel: ObservableObject {
         lastUserInput[deviceId] = Date()
     }
 
-    private func clampedTransitionMs(for durationSeconds: Double?) -> Int? {
+    private func manualSegmentationKey(for deviceId: String) -> String {
+        manualSegmentationKeyPrefix + deviceId
+    }
+
+    func isManualSegmentationEnabled(for deviceId: String) -> Bool {
+        UserDefaults.standard.bool(forKey: manualSegmentationKey(for: deviceId))
+    }
+
+    func setManualSegmentationEnabled(_ enabled: Bool, for deviceId: String) {
+        UserDefaults.standard.set(enabled, forKey: manualSegmentationKey(for: deviceId))
+        if enabled {
+            appManagedSegmentDevices.remove(deviceId)
+            appManagedSegmentLayouts[deviceId] = nil
+        } else {
+            appManagedSegmentDevices.insert(deviceId)
+        }
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+    }
+
+    func resetManualSegmentationForAllDevices() {
+        for device in devices {
+            setManualSegmentationEnabled(false, for: device.id)
+        }
+    }
+
+    private func usesManualSegmentation(for deviceId: String) -> Bool {
+        UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+            && isManualSegmentationEnabled(for: deviceId)
+    }
+
+    private func allowsAppManagedSegments(for deviceId: String) -> Bool {
+        !UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+            || !isManualSegmentationEnabled(for: deviceId)
+    }
+
+    private func shouldUseAppManagedSegments(for deviceId: String) -> Bool {
+        guard allowsAppManagedSegments(for: deviceId) else { return false }
+        return appManagedSegmentDevices.contains(deviceId)
+            || appManagedSegmentLayouts[deviceId] != nil
+    }
+
+    private func clampedTransitionDeciseconds(for durationSeconds: Double?) -> Int? {
         guard let durationSeconds else { return nil }
-        let ms = Int(durationSeconds * 1000.0)
-        let maxMs = maxWLEDTransitionDeciseconds * 100
-        return min(ms, maxMs)
+        let deciseconds = Int((durationSeconds * 10.0).rounded())
+        return min(max(0, deciseconds), maxWLEDTransitionDeciseconds)
     }
 
     private func isSolidGradient(_ gradient: LEDGradient) -> Bool {
@@ -569,42 +863,494 @@ class DeviceControlViewModel: ObservableObject {
 
     private struct PlaylistStepPlan {
         let steps: Int
+        let durationDeciseconds: Int
         let transitionDeciseconds: Int
         let durations: [Int]
         let transitions: [Int]
         let effectiveDurationSeconds: Double
+        let clampedDurationSeconds: Double
+        let generatedTransitionPadDeciseconds: Int
+        let timingModeLabel: String
+        let totalTransitionSeconds: Double
+    }
+
+    private struct TransitionVisualDelta {
+        let maxRGBDelta: Int
+        let brightnessDelta: Int
+    }
+
+    private struct TransitionKeyframe {
+        let t: Double
+        let stops: [GradientStop]
+        let brightness: Int
+        let temperature: Double?
+        let whiteLevel: Double?
     }
 
     private func playlistStepPlan(for durationSeconds: Double) -> PlaylistStepPlan {
-        let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.1, durationSeconds))
-        let holdSeconds = clampedDuration >= playlistHoldThresholdSeconds
-            ? min(playlistHoldMaxSeconds, clampedDuration / playlistHoldScaleSeconds)
-            : 0.0
-        let targetLegSeconds = maxWLEDPlaylistTransitionSeconds + holdSeconds
-        var legs = max(1, Int(ceil(clampedDuration / targetLegSeconds)))
-        legs = min(maxWLEDPlaylistEntries - 1, legs)
-        let stepTransitionSeconds = max(
-            0.1,
-            min(
-                maxWLEDPlaylistTransitionSeconds,
-                (clampedDuration / Double(legs)) - holdSeconds
-            )
-        )
-        let transitionDeciseconds = max(1, min(maxWLEDTransitionDeciseconds, Int(round(stepTransitionSeconds * 10.0))))
-        let holdDeciseconds = max(0, Int(round(holdSeconds * 10.0)))
-        let durationDeciseconds = min(maxWLEDTransitionDeciseconds, transitionDeciseconds + holdDeciseconds)
-        let steps = legs + 1
-        let durations = Array(repeating: durationDeciseconds, count: steps)
-        let transitions = Array(repeating: transitionDeciseconds, count: steps)
-        let effectiveDuration = Double(legs) * (Double(durationDeciseconds) / 10.0)
-        return PlaylistStepPlan(
-            steps: steps,
-            transitionDeciseconds: transitionDeciseconds,
-            durations: durations,
-            transitions: transitions,
-            effectiveDurationSeconds: effectiveDuration
+        playlistStepPlan(
+            for: durationSeconds,
+            timingUnit: .deciseconds,
+            maxStepSeconds: maxWLEDPlaylistTransitionSeconds,
+            generatedTimingMode: .fullBlend
         )
     }
+
+    func playlistTransitionDeciseconds(for durationSeconds: Double) -> Int {
+        playlistStepPlan(for: durationSeconds, timingUnit: .deciseconds).transitionDeciseconds
+    }
+
+    func playlistEffectiveDurationSeconds(for durationSeconds: Double) -> Double {
+        playlistStepPlan(for: durationSeconds, timingUnit: .deciseconds).effectiveDurationSeconds
+    }
+
+    private enum PlaylistTimingUnit: String {
+        case deciseconds
+    }
+
+    private func playlistTimingUnit(for device: WLEDDevice) -> PlaylistTimingUnit {
+        let key = "playlistTimingUnit.\(device.id)"
+        if let stored = UserDefaults.standard.string(forKey: key),
+           let unit = PlaylistTimingUnit(rawValue: stored),
+           unit == .deciseconds {
+            return unit
+        }
+        if UserDefaults.standard.object(forKey: key) != nil {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        return .deciseconds
+    }
+
+    private func playlistSteps(for durationSeconds: Double, legSeconds: Double) -> Int {
+        let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSeconds))
+        guard clampedDuration > 0 else { return 1 }
+        let safeLeg = min(maxWLEDPlaylistTransitionSeconds, max(1.0, legSeconds))
+        return min(maxWLEDPlaylistEntries, Int(ceil(clampedDuration / safeLeg)) + 1)
+    }
+
+    private func playlistStepPlan(
+        for durationSeconds: Double,
+        timingUnit: PlaylistTimingUnit,
+        maxStepSeconds: Double = maxWLEDPlaylistTransitionSeconds,
+        fixedSteps: Int? = nil,
+        generatedTimingMode: GeneratedPlaylistTimingMode = .fullBlend
+    ) -> PlaylistStepPlan {
+        let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSeconds))
+        if clampedDuration == 0 {
+            return PlaylistStepPlan(
+                steps: 1,
+                durationDeciseconds: 0,
+                transitionDeciseconds: 0,
+                durations: [0],
+                transitions: [0],
+                effectiveDurationSeconds: 0,
+                clampedDurationSeconds: 0,
+                generatedTransitionPadDeciseconds: 0,
+                timingModeLabel: generatedTimingMode.label,
+                totalTransitionSeconds: 0
+            )
+        }
+
+        let unitScale: Double
+        switch timingUnit {
+        case .deciseconds:
+            unitScale = 10.0
+        }
+
+        let requestedUnits = max(1, Int(round(clampedDuration * unitScale)))
+        let stepTarget = fixedSteps ?? playlistSteps(
+            for: clampedDuration,
+            legSeconds: min(maxWLEDPlaylistTransitionSeconds, max(1.0, maxStepSeconds))
+        )
+        let minimumStepsForTransitionLimit = max(
+            1,
+            Int(ceil(Double(requestedUnits) / Double(maxWLEDPlaylistTransitionDeciseconds)))
+        )
+        var steps = max(stepTarget, minimumStepsForTransitionLimit)
+        steps = min(maxWLEDPlaylistEntries, steps)
+        steps = min(steps, requestedUnits)
+        steps = max(1, steps)
+
+        let baseDurationUnits = max(1, requestedUnits / steps)
+        let durationRemainder = max(0, requestedUnits % steps)
+        var durations = Array(repeating: baseDurationUnits, count: steps)
+        if durationRemainder > 0 {
+            for idx in 0..<durationRemainder {
+                durations[idx] += 1
+            }
+        }
+
+        let transitions = durations.map { durationUnits in
+            switch generatedTimingMode {
+            case .fullBlend:
+                return durationUnits > 0 ? min(durationUnits, maxWLEDPlaylistTransitionDeciseconds) : 0
+            case .boundaryCompensated(let padDeciseconds):
+                guard durationUnits > 0 else { return 0 }
+                let clampedDuration = min(durationUnits, maxWLEDPlaylistTransitionDeciseconds)
+                return max(1, min(clampedDuration, clampedDuration - max(0, padDeciseconds)))
+            }
+        }
+        let totalDurationUnits = durations.reduce(0, +)
+        let totalDuration = Double(totalDurationUnits) / unitScale
+        let totalTransitionSeconds = Double(transitions.reduce(0, +)) / unitScale
+        let padDeciseconds = generatedTimingMode.padDeciseconds
+        return PlaylistStepPlan(
+            steps: steps,
+            durationDeciseconds: durations.first ?? 0,
+            transitionDeciseconds: transitions.first ?? 0,
+            durations: durations,
+            transitions: transitions,
+            effectiveDurationSeconds: totalDuration,
+            clampedDurationSeconds: clampedDuration,
+            generatedTransitionPadDeciseconds: padDeciseconds,
+            timingModeLabel: generatedTimingMode.label,
+            totalTransitionSeconds: totalTransitionSeconds
+        )
+    }
+
+    private func usedPresetCount(for device: WLEDDevice) -> Int {
+        presetSlotStatus[device.id]?.used ?? presetsCache[device.id]?.count ?? 0
+    }
+
+    private func sampledTransitionDelta(
+        startGradient: LEDGradient,
+        endGradient: LEDGradient,
+        startBrightness: Int,
+        endBrightness: Int,
+        samples: Int = 12
+    ) -> TransitionVisualDelta {
+        let sampleCount = max(2, samples)
+        let denom = Double(max(1, sampleCount - 1))
+        var maxChannelDelta = 0
+        for index in 0..<sampleCount {
+            let t = Double(index) / denom
+            let a = GradientSampler.sampleColor(at: t, stops: startGradient.stops, interpolation: startGradient.interpolation).toRGBArray()
+            let b = GradientSampler.sampleColor(at: t, stops: endGradient.stops, interpolation: endGradient.interpolation).toRGBArray()
+            let channelDelta = max(abs(a[0] - b[0]), max(abs(a[1] - b[1]), abs(a[2] - b[2])))
+            maxChannelDelta = max(maxChannelDelta, channelDelta)
+        }
+        let brightnessDelta = abs(startBrightness - endBrightness)
+        return TransitionVisualDelta(maxRGBDelta: maxChannelDelta, brightnessDelta: brightnessDelta)
+    }
+
+    private func baseLegSeconds(for delta: TransitionVisualDelta, context: TransitionGenerationContext) -> Double {
+        let highDelta = delta.maxRGBDelta >= 96 || delta.brightnessDelta >= 80
+        let mediumDelta = delta.maxRGBDelta >= 42 || delta.brightnessDelta >= 35
+        switch context {
+        case .temporaryLive:
+            if highDelta { return 20 }
+            if mediumDelta { return 24 }
+            return 30
+        case .persistentAutomation:
+            if highDelta { return 30 }
+            if mediumDelta { return 45 }
+            return 60
+        }
+    }
+
+    private func qualityLabel(for legSeconds: Double, context: TransitionGenerationContext) -> TransitionStepQualityLabel {
+        switch context {
+        case .temporaryLive:
+            if legSeconds <= 22 { return .high }
+            if legSeconds <= 30 { return .balanced }
+            return .conservative
+        case .persistentAutomation:
+            if legSeconds <= 30 { return .high }
+            if legSeconds <= 45 { return .balanced }
+            return .conservative
+        }
+    }
+
+    private func candidateLegSeconds(baseLegSeconds: Double, context: TransitionGenerationContext) -> [Double] {
+        switch context {
+        case .temporaryLive:
+            return [baseLegSeconds]
+        case .persistentAutomation:
+            let all = [30.0, 45.0, 60.0, 65.0]
+            return all.filter { $0 >= baseLegSeconds - 0.001 }
+        }
+    }
+
+    private func maxDurationSeconds(forSlots slots: Int, legSeconds: Double) -> Double {
+        // slotsRequired = steps + 1, steps = ceil(duration/leg) + 1
+        // => ceil(duration/leg) <= slots - 3
+        let maxLegs = max(0, slots - 3)
+        return min(maxWLEDPlaylistDurationSeconds, Double(maxLegs) * legSeconds)
+    }
+
+    func planTransitionPlaylist(
+        durationSec: Double,
+        startGradient: LEDGradient,
+        endGradient: LEDGradient,
+        startBrightness: Int,
+        endBrightness: Int,
+        context: TransitionGenerationContext,
+        device: WLEDDevice,
+        automationGuaranteeCount: Int = 5
+    ) -> TransitionStepProfile {
+        plannedTransitionProfile(
+            durationSec: durationSec,
+            startGradient: startGradient,
+            endGradient: endGradient,
+            startBrightness: startBrightness,
+            endBrightness: endBrightness,
+            context: context,
+            usedPresetCountOverride: nil,
+            device: device,
+            automationGuaranteeCount: automationGuaranteeCount
+        )
+    }
+
+    private func plannedTransitionProfile(
+        durationSec: Double,
+        startGradient: LEDGradient,
+        endGradient: LEDGradient,
+        startBrightness: Int,
+        endBrightness: Int,
+        context: TransitionGenerationContext,
+        usedPresetCountOverride: Int?,
+        device: WLEDDevice,
+        automationGuaranteeCount: Int
+    ) -> TransitionStepProfile {
+        let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSec))
+        let delta = sampledTransitionDelta(
+            startGradient: startGradient,
+            endGradient: endGradient,
+            startBrightness: startBrightness,
+            endBrightness: endBrightness
+        )
+        let baseLeg = baseLegSeconds(for: delta, context: context)
+        let used = max(0, usedPresetCountOverride ?? usedPresetCount(for: device))
+        let available = max(0, maxWLEDPresetSlots - used - presetSlotReserve)
+        let safeGuaranteeCount = max(1, automationGuaranteeCount)
+        let perAutomationBudget = context == .persistentAutomation ? available / safeGuaranteeCount : nil
+
+        let candidates = candidateLegSeconds(baseLegSeconds: baseLeg, context: context)
+        var chosenLeg = candidates.first ?? baseLeg
+        var chosenSteps = playlistSteps(for: clampedDuration, legSeconds: chosenLeg)
+        var chosenSlots = chosenSteps + 1
+        var fitsBudget = true
+
+        if let budget = perAutomationBudget {
+            fitsBudget = chosenSlots <= budget
+            if !fitsBudget {
+                for candidate in candidates.dropFirst() {
+                    let steps = playlistSteps(for: clampedDuration, legSeconds: candidate)
+                    let slots = steps + 1
+                    chosenLeg = candidate
+                    chosenSteps = steps
+                    chosenSlots = slots
+                    fitsBudget = slots <= budget
+                    if fitsBudget {
+                        break
+                    }
+                }
+            }
+        }
+
+        return TransitionStepProfile(
+            context: context,
+            baseLegSeconds: baseLeg,
+            legSeconds: chosenLeg,
+            qualityLabel: qualityLabel(for: chosenLeg, context: context),
+            steps: chosenSteps,
+            slotsRequired: chosenSlots,
+            fitsBudget: fitsBudget,
+            wasCoarsened: chosenLeg > baseLeg + 0.001,
+            availableSlots: context == .persistentAutomation ? available : nil,
+            perAutomationBudget: perAutomationBudget,
+            reserve: context == .persistentAutomation ? presetSlotReserve : nil,
+            maxDurationSecondsAtCurrentQuality: perAutomationBudget.map { maxDurationSeconds(forSlots: $0, legSeconds: chosenLeg) }
+        )
+    }
+
+    private func transitionKeyframeTs(stepCount: Int, context: TransitionGenerationContext) -> [Double] {
+        let count = max(1, stepCount)
+        switch context {
+        case .temporaryLive:
+            return (0..<count).map { Double($0 + 1) / Double(count) }
+        case .persistentAutomation:
+            if count == 1 { return [1.0] }
+            let denom = Double(max(1, count - 1))
+            return (0..<count).map { Double($0) / denom }
+        }
+    }
+
+    private func maxRGBDeltaBetweenStops(_ a: [GradientStop], _ b: [GradientStop], samples: Int = 12) -> Int {
+        let sampleCount = max(2, samples)
+        let denom = Double(max(1, sampleCount - 1))
+        var maxDelta = 0
+        for index in 0..<sampleCount {
+            let t = Double(index) / denom
+            let ca = GradientSampler.sampleColor(at: t, stops: a, interpolation: .linear).toRGBArray()
+            let cb = GradientSampler.sampleColor(at: t, stops: b, interpolation: .linear).toRGBArray()
+            let delta = max(abs(ca[0] - cb[0]), max(abs(ca[1] - cb[1]), abs(ca[2] - cb[2])))
+            maxDelta = max(maxDelta, delta)
+        }
+        return maxDelta
+    }
+
+    private func cullNearDuplicateKeyframes(
+        _ keyframes: [TransitionKeyframe],
+        minimumCount: Int
+    ) -> [TransitionKeyframe] {
+        guard keyframes.count > 1 else { return keyframes }
+        let floorCount = max(1, min(minimumCount, keyframes.count))
+        var filtered: [TransitionKeyframe] = []
+        filtered.reserveCapacity(keyframes.count)
+
+        for (index, keyframe) in keyframes.enumerated() {
+            guard let previous = filtered.last else {
+                filtered.append(keyframe)
+                continue
+            }
+
+            let remainingIncludingCurrent = keyframes.count - index
+            let minimumStillNeeded = max(0, floorCount - filtered.count)
+            if minimumStillNeeded >= remainingIncludingCurrent {
+                filtered.append(keyframe)
+                continue
+            }
+
+            let colorDelta = maxRGBDeltaBetweenStops(previous.stops, keyframe.stops)
+            let brightnessDelta = abs(previous.brightness - keyframe.brightness)
+            if colorDelta < 2 && brightnessDelta < 1 {
+                continue
+            }
+            filtered.append(keyframe)
+        }
+
+        if let final = keyframes.last, filtered.last?.t != final.t {
+            filtered.append(final)
+        }
+        if filtered.count < floorCount {
+            return Array(keyframes.prefix(floorCount))
+        }
+        return filtered
+    }
+
+    #if DEBUG
+    private func debugGradientSummary(_ gradient: LEDGradient) -> String {
+        let stops = gradient.stops.sorted { $0.position < $1.position }
+        let first = stops.first?.hexColor ?? "none"
+        let last = stops.last?.hexColor ?? first
+        return "stops=\(stops.count) first=\(first) last=\(last) interp=\(gradient.interpolation.rawValue)"
+    }
+
+    private func debugArraySummary(_ values: [Int]) -> String {
+        guard !values.isEmpty else { return "[]" }
+        if values.count <= 6 {
+            return "[\(values.map(String.init).joined(separator: ", "))]"
+        }
+        let head = values.prefix(3).map(String.init).joined(separator: ", ")
+        let tail = values.suffix(3).map(String.init).joined(separator: ", ")
+        return "[\(head), ..., \(tail)] (count=\(values.count))"
+    }
+
+    private func debugOperationId(prefix: String) -> String {
+        "\(prefix)-\(UUID().uuidString.prefix(8))"
+    }
+
+    private func debugOperationContext(_ operationId: String?) -> String {
+        guard let operationId else { return "" }
+        return " op=\(operationId)"
+    }
+
+    func debugPlaylistStepPlanForTests(
+        durationSeconds: Double,
+        generatedTimingMode: GeneratedPlaylistTimingMode = .fullBlend
+    ) -> (
+        steps: Int,
+        durations: [Int],
+        transitions: [Int],
+        effectiveDurationSeconds: Double,
+        padDeciseconds: Int,
+        timingModeLabel: String
+    ) {
+        let plan = playlistStepPlan(
+            for: durationSeconds,
+            timingUnit: .deciseconds,
+            generatedTimingMode: generatedTimingMode
+        )
+        return (
+            plan.steps,
+            plan.durations,
+            plan.transitions,
+            plan.effectiveDurationSeconds,
+            plan.generatedTransitionPadDeciseconds,
+            plan.timingModeLabel
+        )
+    }
+
+    func debugTransitionPlanForTests(
+        durationSeconds: Double,
+        startGradient: LEDGradient,
+        endGradient: LEDGradient,
+        startBrightness: Int,
+        endBrightness: Int,
+        context: TransitionGenerationContext,
+        usedPresetCount: Int,
+        automationGuaranteeCount: Int = 5,
+        device: WLEDDevice
+    ) -> TransitionStepProfile {
+        plannedTransitionProfile(
+            durationSec: durationSeconds,
+            startGradient: startGradient,
+            endGradient: endGradient,
+            startBrightness: startBrightness,
+            endBrightness: endBrightness,
+            context: context,
+            usedPresetCountOverride: usedPresetCount,
+            device: device,
+            automationGuaranteeCount: automationGuaranteeCount
+        )
+    }
+
+    func debugTransitionKeyframeTsForTests(stepCount: Int, context: TransitionGenerationContext) -> [Double] {
+        transitionKeyframeTs(stepCount: stepCount, context: context)
+    }
+
+    func debugCulledKeyframeCountForTests(
+        stepCount: Int,
+        context: TransitionGenerationContext,
+        minimumCount: Int,
+        from: LEDGradient,
+        to: LEDGradient,
+        startBrightness: Int,
+        endBrightness: Int
+    ) -> (before: Int, after: Int) {
+        let keyframes = transitionKeyframeTs(stepCount: stepCount, context: context).map { t in
+            TransitionKeyframe(
+                t: t,
+                stops: interpolateStops(from: from, to: to, t: t),
+                brightness: Int(round(Double(startBrightness) * (1.0 - t) + Double(endBrightness) * t)),
+                temperature: nil,
+                whiteLevel: nil
+            )
+        }
+        let culled = cullNearDuplicateKeyframes(keyframes, minimumCount: minimumCount)
+        return (keyframes.count, culled.count)
+    }
+
+    func debugPersistentTransitionIdAllocationForTests(
+        usedIds: Set<Int>,
+        stepCount: Int
+    ) -> (playlistId: Int?, stepPresetIds: [Int]?) {
+        let persistentAllowedUpper = max(1, temporaryTransitionReservedPresetLower - 1)
+        let persistentAllowedRange = 1...persistentAllowedUpper
+        let playlistId = availableFrontmostPlaylistId(excluding: usedIds, range: persistentAllowedRange)
+        var exclusion = usedIds
+        if let playlistId {
+            exclusion.insert(playlistId)
+        }
+        let stepIds = availableContiguousIds(
+            range: persistentAllowedRange,
+            excluding: exclusion,
+            count: stepCount
+        )
+        return (playlistId, stepIds)
+    }
+    #endif
 
     private func isRunActive(deviceId: String, runId: UUID) async -> Bool {
         await MainActor.run {
@@ -629,25 +1375,21 @@ class DeviceControlViewModel: ObservableObject {
         return true
     }
 
-    private func defaultTransitionMs(for device: WLEDDevice) -> Int? {
+    private func defaultTransitionDeciseconds(for device: WLEDDevice) -> Int? {
         if savedTransitionDefaults.keys.contains(device.id) {
             guard let deciseconds = savedTransitionDefaults[device.id] ?? nil else { return nil }
-            let ms = deciseconds * 100
-            let maxMs = maxWLEDTransitionDeciseconds * 100
-            return min(ms, maxMs)
+            return min(deciseconds, maxWLEDTransitionDeciseconds)
         }
         guard let deciseconds = device.state?.transitionDeciseconds else { return nil }
-        let ms = deciseconds * 100
-        let maxMs = maxWLEDTransitionDeciseconds * 100
-        return min(ms, maxMs)
+        return min(deciseconds, maxWLEDTransitionDeciseconds)
     }
 
-    private func resolvedTransitionMs(for device: WLEDDevice, fallbackSeconds: Double?) -> Int? {
-        if let ms = defaultTransitionMs(for: device) {
-            return ms
+    private func resolvedTransitionDeciseconds(for device: WLEDDevice, fallbackSeconds: Double?) -> Int? {
+        if let deciseconds = defaultTransitionDeciseconds(for: device) {
+            return deciseconds
         }
         guard let fallbackSeconds else { return nil }
-        return Int(max(0, fallbackSeconds * 1000.0))
+        return max(0, Int((fallbackSeconds * 10.0).rounded()))
     }
 
     private func allowPerLedFallback(for device: WLEDDevice) -> Bool {
@@ -724,13 +1466,15 @@ class DeviceControlViewModel: ObservableObject {
         endStopTemperatures: [UUID: Double]? = nil,
         endStopWhiteLevels: [UUID: Double]? = nil,
         segmentId: Int = 0,
-        automationName: String? = nil
+        automationName: String? = nil,
+        forceSegmentedOnly: Bool = false
     ) async {
         await cancelActiveTransitionIfNeeded(for: device)
         await transitionRunner.cancel(deviceId: device.id)
         
-        let requestedDuration = durationSeconds
-        var durationSeconds = durationSeconds
+        let requestedDuration = max(0, durationSeconds)
+        var durationSeconds = requestedDuration
+        let roundedDuration = (requestedDuration * 10.0).rounded() / 10.0
         let ledCount = totalLEDCount(for: device)
         // Use native transition up to the app policy cap (WLED supports up to maxWLEDTransitionSeconds).
         let maxNativeSeconds = maxWLEDNativeTransitionSeconds
@@ -742,11 +1486,35 @@ class DeviceControlViewModel: ObservableObject {
 
         let startIsSolid = isSolidGradient(startGradient)
         let endIsSolid = isSolidGradient(endGradient)
+        let startUniformTemp = uniformNormalizedTemperatureIfAvailable(
+            stops: startGradient.stops,
+            stopTemperatures: startStopTemperatures
+        )
+        let endUniformTemp = uniformNormalizedTemperatureIfAvailable(
+            stops: endGradient.stops,
+            stopTemperatures: endStopTemperatures
+        )
+        let startUniformWhite = uniformWhiteLevelIfAvailable(
+            stops: startGradient.stops,
+            stopWhiteLevels: startStopWhiteLevels
+        ).map { Double($0) / 255.0 }
+        let endUniformWhite = uniformWhiteLevelIfAvailable(
+            stops: endGradient.stops,
+            stopWhiteLevels: endStopWhiteLevels
+        ).map { Double($0) / 255.0 }
+        let startPlaylistTemp = startUniformTemp ?? (startIsSolid ? startStopTemperatures?.values.first : nil)
+        let endPlaylistTemp = endUniformTemp ?? (endIsSolid ? endStopTemperatures?.values.first : nil)
+        let startPlaylistWhite = startUniformWhite ?? (startIsSolid ? startStopWhiteLevels?.values.first : nil)
+        let endPlaylistWhite = endUniformWhite ?? (endIsSolid ? endStopWhiteLevels?.values.first : nil)
         let requiresSegmentedStepper = !(startIsSolid && endIsSolid)
         let exceedsNativeCap = durationSeconds > maxNativeSeconds
         let shouldPersistPlaylist = automationName != nil
-        let usePlaylistForLongTransition = requestedDuration >= playlistLongTransitionThresholdSeconds
-        let useSegmentedStepper = requiresSegmentedStepper || exceedsNativeCap
+        let allowPlaylistPathForThisRun = shouldPersistPlaylist || enableTemporaryPresetStoreBackedTransitions
+        let usePlaylistForLongTransition = allowPlaylistPathForThisRun
+            && (roundedDuration >= playlistLongTransitionThresholdSeconds)
+        let useSegmentedStepper = forceSegmentedOnly
+            ? true
+            : ((requiresSegmentedStepper || exceedsNativeCap) && !usePlaylistForLongTransition)
 
         if !useSegmentedStepper, durationSeconds > maxNativeSeconds {
             #if DEBUG
@@ -754,9 +1522,6 @@ class DeviceControlViewModel: ObservableObject {
             #endif
             durationSeconds = maxNativeSeconds
         }
-
-        // Ensure realtime override is released so WLED can honor transitions.
-        await apiService.releaseRealtimeOverride(for: device)
 
         #if DEBUG
         if usePlaylistForLongTransition {
@@ -783,15 +1548,17 @@ class DeviceControlViewModel: ObservableObject {
             forceNoPerCallTransition: true,
             releaseRealtimeOverride: false,
             userInitiated: false,
-            preferSegmented: true
+            preferSegmented: true,
+            forceSegmentedOnly: forceSegmentedOnly
         )
         
         // Set active run status
-        let runTitle = automationName ?? "Transition"
         let startDate = Date()
+        let isLongPlaylist = usePlaylistForLongTransition
+        let runTitle = isLongPlaylist ? "Loading..." : (automationName ?? "Transition")
         let runKind: ActiveRunStatus.RunKind = automationName != nil ? .automation : .transition
         let effectiveDuration = useSegmentedStepper ? requestedDuration : durationSeconds
-        let expectedEnd = effectiveDuration > 0 ? startDate.addingTimeInterval(effectiveDuration) : nil
+        let expectedEnd = (isLongPlaylist && automationName == nil) ? nil : (effectiveDuration > 0 ? startDate.addingTimeInterval(effectiveDuration) : nil)
         let nativeTransition: NativeTransitionInfo? = (!useSegmentedStepper && endIsSolid && startIsSolid)
             ? NativeTransitionInfo(
                 targetColorRGB: Color(hex: endGradient.stops.first?.hexColor ?? "#000000").toRGBArray(),
@@ -833,7 +1600,12 @@ class DeviceControlViewModel: ObservableObject {
                 startBrightness: startBrightness,
                 endBrightness: endBrightness,
                 persist: shouldPersistPlaylist,
-                label: shouldPersistPlaylist ? automationName : nil
+                label: shouldPersistPlaylist ? automationName : nil,
+                runId: runId,
+                startTemperature: startPlaylistTemp,
+                endTemperature: endPlaylistTemp,
+                startWhiteLevel: startPlaylistWhite,
+                endWhiteLevel: endPlaylistWhite
             ) {
                 await preparePlaylistStart(
                     device: device,
@@ -843,35 +1615,106 @@ class DeviceControlViewModel: ObservableObject {
                     startStopWhiteLevels: startStopWhiteLevels,
                     segmentId: segmentId
                 )
-                if await startPlaylist(device: device, playlistId: playlist.playlistId) {
+                if await startPlaylist(
+                    device: device,
+                    playlistId: playlist.playlistId,
+                    assumeStarted: !shouldPersistPlaylist,
+                    strictValidation: shouldPersistPlaylist,
+                    debugExpectedStepPresetIds: playlist.stepPresetIds,
+                    debugExpectedBoundarySeconds: cumulativePlaylistBoundarySeconds(durations: playlist.playlistDurations)
+                ) {
                 #if DEBUG
                 print("✅ Transition playlist started for \(device.name): playlistId=\(playlist.playlistId)")
                 #endif
+                let playbackStart = Date()
+                let effectiveDurationSeconds = playlist.effectiveDurationSeconds
+                if let leaseId = playlist.temporaryLeaseId {
+                    _ = await TemporaryTransitionCleanupService.shared.markRunning(
+                        leaseId: leaseId,
+                        runId: runId,
+                        expectedEndAt: playbackStart.addingTimeInterval(effectiveDurationSeconds)
+                    )
+                }
                 await MainActor.run {
                     latestGradientStops[device.id] = endGradient.stops
-                }
-                if !shouldPersistPlaylist {
-                    let cleanupDelaySeconds = playlistStepPlan(for: requestedDuration).effectiveDurationSeconds
-                    let playlistId = playlist.playlistId
-                    Task { [weak self] in
-                        guard let self else { return }
-                        if cleanupDelaySeconds > 0 {
-                            let nanos = UInt64(cleanupDelaySeconds * 1_000_000_000.0)
-                            try? await Task.sleep(nanoseconds: nanos)
-                        }
-                        let shouldCleanup = await MainActor.run {
-                            temporaryPlaylistIds[device.id] == playlistId
-                        }
-                        guard shouldCleanup else { return }
-                        await cleanupTransitionPlaylist(device: device)
+                    if let current = activeRunStatus[device.id], current.id == runId {
+                        activeRunStatus[device.id] = ActiveRunStatus(
+                            id: runId,
+                            deviceId: device.id,
+                            kind: runKind,
+                            title: automationName ?? "Transition",
+                            startDate: playbackStart,
+                            progress: 0.0,
+                            isCancellable: true,
+                            expectedEnd: playbackStart.addingTimeInterval(effectiveDurationSeconds)
+                        )
                     }
+                    pendingFinalStates[device.id] = TransitionFinalState(
+                        runId: runId,
+                        gradient: endGradient,
+                        brightness: endBrightness,
+                        stopTemperatures: endStopTemperatures,
+                        stopWhiteLevels: endStopWhiteLevels,
+                        segmentId: segmentId,
+                        forceSegmentedOnly: forceSegmentedOnly
+                    )
+                }
+                if !shouldPersistPlaylist, enableTemporaryPresetStoreBackedTransitions {
+                    await TemporaryTransitionCleanupService.shared.requestCleanup(
+                        device: device,
+                        endReason: .completed,
+                        runId: runId,
+                        playlistIdHint: playlist.playlistId,
+                        stepPresetIdsHint: playlist.stepPresetIds
+                    )
+                    await refreshTransitionCleanupPendingCount(for: device.id)
                 }
                 return
+                }
+                if !shouldPersistPlaylist, enableTemporaryPresetStoreBackedTransitions {
+                    if let leaseId = playlist.temporaryLeaseId {
+                        await TemporaryTransitionCleanupService.shared.markCreationFailed(leaseId: leaseId, device: device)
+                    } else {
+                        await cleanupTransitionPlaylist(device: device, endReason: .creationFailed)
+                    }
                 }
             } else {
                 #if DEBUG
                 print("⚠️ Transition playlist failed for \(device.name). Falling back to stepper/native.")
                 #endif
+            }
+        }
+
+        if usePlaylistForLongTransition {
+            let fallbackStart = Date()
+            let fallbackTitle = automationName ?? "Transition"
+            let fallbackExpectedEnd = effectiveDuration > 0 ? fallbackStart.addingTimeInterval(effectiveDuration) : nil
+            let fallbackNative: NativeTransitionInfo? = (!useSegmentedStepper && endIsSolid && startIsSolid)
+                ? NativeTransitionInfo(
+                    targetColorRGB: Color(hex: endGradient.stops.first?.hexColor ?? "#000000").toRGBArray(),
+                    targetBrightness: endBrightness,
+                    durationSeconds: durationSeconds
+                )
+                : nil
+            await MainActor.run {
+                if let current = activeRunStatus[device.id], current.id == runId, current.expectedEnd == nil {
+                    activeRunStatus[device.id] = ActiveRunStatus(
+                        id: runId,
+                        deviceId: device.id,
+                        kind: runKind,
+                        title: fallbackTitle,
+                        startDate: fallbackStart,
+                        progress: 0.0,
+                        isCancellable: true,
+                        expectedEnd: fallbackExpectedEnd,
+                        nativeTransition: fallbackNative
+                    )
+                    runWatchdogs[device.id] = RunWatchdog(
+                        lastProgressAt: fallbackStart,
+                        lastProgressValue: 0.0,
+                        runStartAt: fallbackStart
+                    )
+                }
             }
         }
 
@@ -887,13 +1730,33 @@ class DeviceControlViewModel: ObservableObject {
                 if !(await isRunActive(deviceId: device.id, runId: runId)) { break }
                 let t = Double(step) / Double(steps)
                 let stepStops = interpolateStops(from: startGradient, to: endGradient, t: t)
+                let stepTemperatures = interpolatedStopScalarMap(
+                    stepStops: stepStops,
+                    startStops: startGradient.stops,
+                    startValuesById: startStopTemperatures,
+                    startInterpolation: startGradient.interpolation,
+                    endStops: endGradient.stops,
+                    endValuesById: endStopTemperatures,
+                    endInterpolation: endGradient.interpolation,
+                    t: t
+                )
+                let stepWhiteLevels = interpolatedStopScalarMap(
+                    stepStops: stepStops,
+                    startStops: startGradient.stops,
+                    startValuesById: startStopWhiteLevels,
+                    startInterpolation: startGradient.interpolation,
+                    endStops: endGradient.stops,
+                    endValuesById: endStopWhiteLevels,
+                    endInterpolation: endGradient.interpolation,
+                    t: t
+                )
                 let interpBrightness = Int(round(Double(startBrightness) * (1.0 - t) + Double(endBrightness) * t))
                 let stepGradient = LEDGradient(stops: stepStops, interpolation: endGradient.interpolation)
                 await applySegmentedGradient(
                     device,
                     gradient: stepGradient,
-                    stopTemperatures: nil,
-                    stopWhiteLevels: nil,
+                    stopTemperatures: stepTemperatures,
+                    stopWhiteLevels: stepWhiteLevels,
                     brightness: interpBrightness,
                     on: true,
                     transitionDurationSeconds: stepDuration,
@@ -929,7 +1792,8 @@ class DeviceControlViewModel: ObservableObject {
                 transitionDurationSeconds: durationSeconds,
                 releaseRealtimeOverride: false,
                 userInitiated: false,
-                preferSegmented: true
+                preferSegmented: true,
+                forceSegmentedOnly: forceSegmentedOnly
             )
             #if DEBUG
             print("✅ Transition applied via native transition for \(device.name): duration=\(durationSeconds)s")
@@ -983,7 +1847,19 @@ class DeviceControlViewModel: ObservableObject {
     private let renameProtectionWindow: TimeInterval = 8.0
     
     // Real-time control state
-    @Published var isRealTimeEnabled: Bool = true
+    @Published var isRealTimeEnabled: Bool = true {
+        didSet {
+            refreshRealTimeConnections()
+        }
+    }
+    private let offlineGracePeriod: TimeInterval = 60.0
+    private let onlineStatusRefreshInterval: TimeInterval = 10.0
+    private var onlineStatusTimer: Timer?
+    private let lastSeenPersistInterval: TimeInterval = 60.0
+    private var lastSeenPersistedAt: [String: Date] = [:]
+    private var hasHandledForegroundActive: Bool = false
+    private var lastImmediateHealthCheckAt: Date?
+    private let immediateHealthCheckMinInterval: TimeInterval = 8.0
 
     private func shouldSendWebSocketUpdate(_ update: WLEDStateUpdate) -> Bool {
         let segCount = update.seg?.count ?? 0
@@ -1017,54 +1893,25 @@ class DeviceControlViewModel: ObservableObject {
     /// Immediately check device status when app becomes active
     @MainActor
     func checkDeviceStatusOnAppActive() async {
+        guard !hasHandledForegroundActive else { return }
+        hasHandledForegroundActive = true
+        if isRealTimeEnabled {
+            refreshRealTimeConnections()
+        }
         guard allowActiveHealthChecks else {
+            #if DEBUG
             print("Skipping device status check (active checks disabled)")
+            #endif
             return
         }
+        #if DEBUG
         print("🔄 App became active - checking device status immediately")
+        #endif
         
-        // Get all persisted devices
         let persistedDevices = await coreDataManager.fetchDevices()
-        
-        // Perform immediate health checks for all devices
-        for device in persistedDevices {
-            performImmediateHealthCheckDetached(for: device)
-        }
-        
-        // Also trigger connection monitor to perform immediate checks
-        await connectionMonitor.performImmediateHealthChecks()
-    }
-    
-    /// Perform immediate health check for a single device off the main actor.
-    private func performImmediateHealthCheckDetached(for device: WLEDDevice) {
-        let apiService = self.apiService
-        Task.detached {
-            do {
-                // Quick HTTP ping to check if device is reachable
-                let _ = try await apiService.getState(for: device)
-                
-                // Device is online - update status immediately
-                await MainActor.run {
-                    if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                        self.devices[index].isOnline = true
-                        self.devices[index].lastSeen = Date()
-                        print("✅ Immediate check: \(device.name) is online")
-                    }
-                    self.clearError()
-                }
-                
-                await DeviceCleanupManager.shared.processQueue(for: device.id)
-                
-            } catch {
-                // Device is offline - update status immediately
-                await MainActor.run {
-                    if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                        self.devices[index].isOnline = false
-                        print("❌ Immediate check: \(device.name) is offline")
-                    }
-                    self.presentError(.deviceOffline(deviceName: device.name))
-                }
-            }
+        let targets = persistedDevices.filter { !webSocketManager.isDeviceConnected($0.id) }
+        if !targets.isEmpty {
+            await performImmediateHealthChecksIfNeeded()
         }
     }
     
@@ -1081,6 +1928,7 @@ class DeviceControlViewModel: ObservableObject {
     
     @MainActor
     private func logMemoryUsage() {
+        #if DEBUG
         var memoryInfo = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
         
@@ -1095,15 +1943,33 @@ class DeviceControlViewModel: ObservableObject {
         
         if kerr == KERN_SUCCESS {
             let memoryUsageMB = Double(memoryInfo.resident_size) / 1024.0 / 1024.0
-            print("Memory usage: \(String(format: "%.2f", memoryUsageMB)) MB")
-            
-            // Warn if memory usage is high (raised threshold to 200MB for iOS apps)
-            if memoryUsageMB > 200 {
-                #if DEBUG
-                print("⚠️ High memory usage detected: \(String(format: "%.2f", memoryUsageMB)) MB")
-                #endif
+            print("Memory usage (resident): \(String(format: "%.2f", memoryUsageMB)) MB")
+            printMemoryFootprint()
+        }
+        #endif
+    }
+
+    @MainActor
+    private func printMemoryFootprint() {
+        #if DEBUG
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / 4
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
+        guard kr == KERN_SUCCESS else { return }
+        let physFootprintMB = Double(info.phys_footprint) / 1024.0 / 1024.0
+        let residentMB = Double(info.resident_size) / 1024.0 / 1024.0
+        let internalMB = Double(info.internal) / 1024.0 / 1024.0
+        let compressedMB = Double(info.compressed) / 1024.0 / 1024.0
+        print("🧠 Footprint - phys=\(String(format: "%.2f", physFootprintMB))MB resident=\(String(format: "%.2f", residentMB))MB internal=\(String(format: "%.2f", internalMB))MB compressed=\(String(format: "%.2f", compressedMB))MB")
+        if physFootprintMB > 150 {
+            print("⚠️ High memory footprint detected: \(String(format: "%.2f", physFootprintMB)) MB")
+            print("🧠 Cache snapshot - devices=\(devices.count), effects=\(effectMetadataBundles.count), presets=\(presetsCache.count), gradients=\(latestGradientStops.count), effectGradients=\(latestEffectGradientStops.count), capabilities=\(deviceCapabilities.count), stateCache=\(deviceStateCache.count)")
+        }
+        #endif
     }
     
     func clearUIOptimisticState(deviceId: String) {
@@ -1120,17 +1986,237 @@ class DeviceControlViewModel: ObservableObject {
         }
         return devices.first { $0.id == deviceId }?.isOn ?? false
     }
+
+    func isRebootWaitActive(for deviceId: String) -> Bool {
+        rebootWaitActiveByDeviceId.contains(deviceId)
+    }
+
+    func rebootWaitRemainingSeconds(for deviceId: String) -> Int {
+        rebootWaitRemainingSecondsByDeviceId[deviceId] ?? 0
+    }
+
+    // MARK: - Device Sync
+
+    func syncProfile(for sourceId: String) -> DeviceSyncProfile {
+        syncProfilesBySource[sourceId] ?? DeviceSyncProfile(sourceDeviceId: sourceId)
+    }
+
+    func isSyncTargetSelected(sourceId: String, targetId: String) -> Bool {
+        syncProfile(for: sourceId).targetDeviceIds.contains(targetId)
+    }
+
+    func syncTargetCount(for sourceId: String) -> Int {
+        syncProfile(for: sourceId).targetDeviceIds.count
+    }
+
+    func syncDispatchMessage(for sourceId: String) -> String? {
+        syncDispatchSummaryBySource[sourceId]?.message
+    }
+
+    func toggleSyncTarget(sourceId: String, targetId: String) {
+        guard sourceId != targetId else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let profile = await deviceSyncManager.toggleTarget(sourceId: sourceId, targetId: targetId)
+            let profiles = await deviceSyncManager.loadProfiles()
+            await MainActor.run {
+                self.syncProfilesBySource = profiles
+                if !profile.isActive {
+                    self.syncDispatchSummaryBySource.removeValue(forKey: sourceId)
+                }
+            }
+        }
+    }
+
+    func clearSyncTargets(sourceId: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await deviceSyncManager.clearTargets(sourceId: sourceId)
+            let profiles = await deviceSyncManager.loadProfiles()
+            await MainActor.run {
+                self.syncProfilesBySource = profiles
+                self.syncDispatchSummaryBySource.removeValue(forKey: sourceId)
+            }
+        }
+    }
+
+    func copyNowFromSource(_ device: WLEDDevice) async {
+        let source = devices.first(where: { $0.id == device.id }) ?? device
+        let segmentId = primarySegmentId(for: source)
+        let effectState = currentEffectState(for: source, segmentId: segmentId)
+        if effectState.isEnabled, effectState.effectId != 0 {
+            let gradientStops = effectGradientStops(for: source.id) ?? gradientStops(for: source.id) ?? [
+                GradientStop(position: 0.0, hexColor: source.currentColor.toHex()),
+                GradientStop(position: 1.0, hexColor: source.currentColor.toHex())
+            ]
+            let gradient = LEDGradient(stops: gradientStops)
+            await propagateIfNeeded(
+                source: source,
+                payload: .effectState(effectId: effectState.effectId, gradient: gradient, segmentId: segmentId),
+                origin: .user
+            )
+        } else {
+            let stops = gradientStops(for: source.id) ?? [
+                GradientStop(position: 0.0, hexColor: source.currentColor.toHex()),
+                GradientStop(position: 1.0, hexColor: source.currentColor.toHex())
+            ]
+            await propagateIfNeeded(
+                source: source,
+                payload: .gradient(
+                    stops: stops,
+                    interpolation: .linear,
+                    segmentId: segmentId,
+                    brightness: source.brightness,
+                    on: source.isOn
+                ),
+                origin: .user
+            )
+        }
+    }
+
+    func propagateIfNeeded(source: WLEDDevice, payload: ColorsSyncPayload, origin: SyncOrigin) async {
+        guard origin == .user else { return }
+        let sourceId = source.id
+        let availableById = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
+        let summary = await deviceSyncManager.dispatch(from: sourceId, availableDevicesById: availableById) { [weak self] target in
+            guard let self else { return .skipped }
+            return await self.applySyncPayload(payload, to: target)
+        }
+        await MainActor.run {
+            self.syncDispatchSummaryBySource[sourceId] = summary
+        }
+    }
+
+    private func applySyncPayload(_ payload: ColorsSyncPayload, to target: WLEDDevice) async -> DeviceSyncManager.DispatchOutcome {
+        guard isDeviceOnline(target) || target.isOnline else {
+            return .skipped
+        }
+
+        switch payload {
+        case .brightness(let value):
+            await updateDeviceBrightness(target, brightness: value, userInitiated: false, origin: .propagated)
+            return .applied
+        case .gradient(let stops, let interpolation, let segmentId, let brightness, let on):
+            let targetSegmentId = min(segmentId, max(0, getSegmentCount(for: target) - 1))
+            await applyGradientStopsAcrossStrip(
+                target,
+                stops: stops,
+                ledCount: totalLEDCount(for: target),
+                segmentId: targetSegmentId,
+                interpolation: interpolation,
+                brightness: brightness,
+                on: on,
+                userInitiated: false,
+                origin: .propagated,
+                preferSegmented: true
+            )
+            return targetSegmentId == segmentId ? .applied : .downgraded
+        case .effectState(let effectId, let gradient, let segmentId):
+            let targetSegmentId = min(segmentId, max(0, getSegmentCount(for: target) - 1))
+            let hasEffect = allEffectOptions(for: target).contains { $0.id == effectId }
+            if hasEffect {
+                await applyColorSafeEffect(
+                    effectId,
+                    with: gradient,
+                    segmentId: targetSegmentId,
+                    device: target,
+                    userInitiated: false,
+                    includeAllEffects: true,
+                    origin: .propagated
+                )
+                return targetSegmentId == segmentId ? .applied : .downgraded
+            }
+
+            await applyGradientStopsAcrossStrip(
+                target,
+                stops: gradient.stops,
+                ledCount: totalLEDCount(for: target),
+                segmentId: targetSegmentId,
+                interpolation: gradient.interpolation,
+                userInitiated: false,
+                origin: .propagated,
+                preferSegmented: true
+            )
+            return .downgraded
+        case .effectParameter(let parameter):
+            let requestedSegmentId: Int
+            switch parameter {
+            case .speed(let segmentId, _),
+                    .intensity(let segmentId, _),
+                    .custom(let segmentId, _, _),
+                    .palette(let segmentId, _),
+                    .segmentBrightness(let segmentId, _),
+                    .option(let segmentId, _, _):
+                requestedSegmentId = segmentId
+            }
+            let mappedSegmentId = min(requestedSegmentId, max(0, getSegmentCount(for: target) - 1))
+            switch parameter {
+            case .speed(_, let value):
+                await updateEffectSpeed(for: target, segmentId: mappedSegmentId, speed: value, origin: .propagated)
+            case .intensity(_, let value):
+                await updateEffectIntensity(for: target, segmentId: mappedSegmentId, intensity: value, origin: .propagated)
+            case .custom(_, let index, let value):
+                await updateEffectCustomParameter(for: target, segmentId: mappedSegmentId, index: index, value: value, origin: .propagated)
+            case .palette(_, let paletteId):
+                if let paletteId {
+                    await updateEffectPalette(for: target, segmentId: mappedSegmentId, paletteId: paletteId, origin: .propagated)
+                } else {
+                    await clearEffectPalette(for: target, segmentId: mappedSegmentId, origin: .propagated)
+                }
+            case .segmentBrightness(_, let value):
+                await updateSegmentBrightness(for: target, segmentId: mappedSegmentId, brightness: value, origin: .propagated)
+            case .option(_, let optionIndex, let value):
+                await updateEffectOption(for: target, segmentId: mappedSegmentId, optionIndex: optionIndex, value: value, origin: .propagated)
+            }
+            return mappedSegmentId == requestedSegmentId ? .applied : .downgraded
+        case .transitionStart(let transition):
+            await startTransition(
+                from: transition.from,
+                aBrightness: transition.aBrightness,
+                to: transition.to,
+                bBrightness: transition.bBrightness,
+                durationSec: transition.durationSec,
+                device: target,
+                startStopTemperatures: transition.startStopTemperatures,
+                startStopWhiteLevels: transition.startStopWhiteLevels,
+                endStopTemperatures: transition.endStopTemperatures,
+                endStopWhiteLevels: transition.endStopWhiteLevels,
+                forceSegmentedOnly: transition.forceSegmentedOnly,
+                origin: .propagated
+            )
+            return .applied
+        case .effectDisable(let segmentId):
+            await disableEffect(for: target, segmentId: segmentId, origin: .propagated)
+            return .applied
+        }
+    }
     
 
     // MARK: - Initialization
     
     private init() {
+        UserDefaults.standard.register(defaults: [
+            "forceCCTSlider": true
+        ])
+        UserDefaults.standard.set(true, forKey: "forceCCTSlider")
+        loadPendingPlaylistRenameQueue()
         setupSubscriptions()
+        preloadPersistedDevicesIfAvailable()
         loadDevicesFromPersistence()
         setupWebSocketSubscriptions()
+        startOnlineStatusRefreshTimer()
+        Task { [weak self] in
+            guard let self else { return }
+            let profiles = await deviceSyncManager.loadProfiles()
+            await MainActor.run {
+                self.syncProfilesBySource = profiles
+            }
+        }
         
         // Start memory monitoring
+        #if DEBUG
         startMemoryMonitoring()
+        #endif
     }
     
     deinit {
@@ -1142,6 +2228,8 @@ class DeviceControlViewModel: ObservableObject {
         
         // Cancel watchdog task
         watchdogTask?.cancel()
+        onlineStatusTimer?.invalidate()
+        onlineStatusTimer = nil
         
         // Note: webSocketManager.disconnectAll() is main actor-isolated
         // WebSocket connections will be cleaned up when the main actor context is deallocated
@@ -1152,8 +2240,14 @@ class DeviceControlViewModel: ObservableObject {
         uiToggleStates.removeAll()
         lastUserInput.removeAll()
         runWatchdogs.removeAll()
+        rebootWaitCountdownTasksByDeviceId.values.forEach { $0.cancel() }
+        rebootWaitCountdownTasksByDeviceId.removeAll()
+        rebootWaitProbeTasksByDeviceId.values.forEach { $0.cancel() }
+        rebootWaitProbeTasksByDeviceId.removeAll()
         
+        #if DEBUG
         print("DeviceControlViewModel deinit - Memory cleaned up")
+        #endif
     }
     
     // MARK: - Subscription Setup
@@ -1173,6 +2267,41 @@ class DeviceControlViewModel: ObservableObject {
         wledService.$isScanning
             .receive(on: DispatchQueue.main)
             .assign(to: \.isScanning, on: self)
+            .store(in: &cancellables)
+
+        // Subscribe to discovery errors
+        wledService.$discoveryErrorMessage
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.discoveryErrorMessage, on: self)
+            .store(in: &cancellables)
+
+        // Subscribe to connection monitor health status updates
+        connectionMonitor.$deviceHealthStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] healthStatus in
+                guard let self else { return }
+                if self.isRealTimeEnabled { return }
+                self.updateDeviceHealthStatus(healthStatus)
+            }
+            .store(in: &cancellables)
+
+        connectionMonitor.$reconnectionStatus
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.reconnectionStatus, on: self)
+            .store(in: &cancellables)
+
+        connectionMonitor.$isNetworkAvailable
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.isNetworkAvailable, on: self)
+            .store(in: &cancellables)
+
+        webSocketManager.$deviceConnectionStatuses
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] statuses in
+                Task { @MainActor in
+                    self?.refreshOnlineStatusesFromWebSocket(statuses)
+                }
+            }
             .store(in: &cancellables)
         
         // Listen for device discovery notifications
@@ -1297,8 +2426,8 @@ class DeviceControlViewModel: ObservableObject {
                 updatedDevice.lastSeen = stateUpdate.timestamp
                 
                 // Update effect state from WebSocket (always safe to update)
-                if let segment = state.segments.first {
-                    let segmentId = segment.id ?? 0
+                if let segment = primarySegment(from: state) {
+                    let segmentId = segment.id ?? primarySegmentId(from: state)
                     var segmentStates = effectStates[stateUpdate.deviceId] ?? [:]
                     let cached = segmentStates[segmentId] ?? .default
                     let fxValue = segment.fx ?? cached.effectId
@@ -1307,6 +2436,12 @@ class DeviceControlViewModel: ObservableObject {
                         speed: segment.sx ?? cached.speed,
                         intensity: segment.ix ?? cached.intensity,
                         paletteId: segment.pal ?? cached.paletteId,
+                        custom1: segment.c1 ?? cached.custom1,
+                        custom2: segment.c2 ?? cached.custom2,
+                        custom3: segment.c3 ?? cached.custom3,
+                        option1: segment.o1 ?? cached.option1,
+                        option2: segment.o2 ?? cached.option2,
+                        option3: segment.o3 ?? cached.option3,
                         isEnabled: fxValue != 0
                     )
                     segmentStates[segmentId] = newEffectState
@@ -1317,13 +2452,25 @@ class DeviceControlViewModel: ObservableObject {
                         os_log("[Effects][WS] Device %{public}@ segment %d: fx=%d sx=%d ix=%d pal=%@", log: OSLog.effects, type: .debug, updatedDevice.name, segmentId, fxValue, newEffectState.speed, newEffectState.intensity, String(describing: newEffectState.paletteId))
                     }
                     #endif
+
+                    if newEffectState.isEnabled,
+                       fxValue != 0,
+                       let effectStops = effectGradientStops(from: segment),
+                       !effectStops.isEmpty {
+                        updateEffectGradient(LEDGradient(stops: effectStops), for: updatedDevice)
+                        if shouldAdoptEffectGradientAsMain(deviceId: stateUpdate.deviceId, effectStops: effectStops) {
+                            latestGradientStops[stateUpdate.deviceId] = effectStops
+                            persistLatestGradient(effectStops, for: stateUpdate.deviceId)
+                            updatedDevice.currentColor = GradientSampler.sampleColor(at: 0.5, stops: effectStops)
+                        }
+                    }
                 }
                 
                 // Update color if available from segments
                 // CRITICAL: Don't overwrite color if device has active CCT temperature OR active effect
                 // OR if gradient was just applied (to prevent WebSocket echo from overwriting gradient)
-                if let segment = state.segments.first {
-                    let segmentId = segment.id ?? 0
+                if let segment = primarySegment(from: state) {
+                    let segmentId = segment.id ?? primarySegmentId(from: state)
                     let effectState = effectStates[stateUpdate.deviceId]?[segmentId]
                     let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
                     let normalized = segment.cctNormalized
@@ -1340,7 +2487,9 @@ class DeviceControlViewModel: ObservableObject {
 
                     // Only update color if effect isn't active AND gradient wasn't just applied
                     if !hasActiveEffect && !gradientJustApplied {
-                        if let normalized {
+                        if let preferred = preferredDisplayColor(for: stateUpdate.deviceId) {
+                            updatedDevice.currentColor = preferred
+                        } else if let normalized {
                             updatedDevice.currentColor = Color.color(fromCCTTemperature: normalized)
                         } else if let color = derivedColor(from: segment) {
                             updatedDevice.currentColor = color
@@ -1376,12 +2525,12 @@ class DeviceControlViewModel: ObservableObject {
                 } else {
                     // Rename appears to have failed or timed out - clear pending and accept info name
                     pendingRenames.removeValue(forKey: deviceId)
-                    if updatedDevice.name != info.name {
+                    if shouldApplyNameUpdate(existingName: updatedDevice.name, candidateName: info.name) {
                         updatedDevice.name = info.name
                         hasSignificantChanges = true
                     }
                 }
-            } else if updatedDevice.name != info.name {
+            } else if shouldApplyNameUpdate(existingName: updatedDevice.name, candidateName: info.name) {
                 updatedDevice.name = info.name
                 hasSignificantChanges = true
             }
@@ -1390,6 +2539,7 @@ class DeviceControlViewModel: ObservableObject {
         // Use batched updates for better performance
         if hasSignificantChanges {
             scheduleDeviceUpdate(updatedDevice)
+            lastSeenPersistedAt[stateUpdate.deviceId] = stateUpdate.timestamp
             
             // Persist the updated state in background
             Task.detached(priority: .background) {
@@ -1399,6 +2549,7 @@ class DeviceControlViewModel: ObservableObject {
             // Just update the last seen timestamp for connection tracking (no UI update needed)
             devices[index].lastSeen = stateUpdate.timestamp
             devices[index].isOnline = true
+            persistLastSeenIfNeeded(for: devices[index], timestamp: stateUpdate.timestamp)
         }
     }
     
@@ -1504,24 +2655,32 @@ class DeviceControlViewModel: ObservableObject {
     
     private func connectWebSocketsForAllDevices() {
         guard isRealTimeEnabled else { return }
+        webSocketManager.resumeConnections()
         
-        // Prioritize devices that are currently online and recently used
-        let onlineDevices = devices.filter { $0.isOnline }
-        let priorities = Dictionary(uniqueKeysWithValues: onlineDevices.enumerated().map { 
-            ($0.element.id, $0.offset) 
-        })
+        let targets = devices.filter { !isPlaceholderDevice($0) }
+        let priorities = targets.enumerated().reduce(into: [String: Int]()) { result, entry in
+            let id = entry.element.id
+            if let existing = result[id] {
+                result[id] = min(existing, entry.offset)
+            } else {
+                result[id] = entry.offset
+            }
+        }
         
         Task {
-            await webSocketManager.connectToDevices(onlineDevices, priorities: priorities)
+            await webSocketManager.connectToDevices(targets, priorities: priorities)
         }
+        refreshOnlineStatusesFromWebSocket(webSocketManager.deviceConnectionStatuses, logTransitions: false)
     }
     
     private func disconnectAllWebSockets() {
-        webSocketManager.disconnectAll()
+        webSocketManager.suspendAllConnections()
     }
     
     private func connectWebSocketIfNeeded(for device: WLEDDevice) {
-        guard isRealTimeEnabled && device.isOnline else { return }
+        guard isRealTimeEnabled else { return }
+        guard !isPlaceholderDevice(device) else { return }
+        guard isIPInCurrentSubnets(device.ipAddress) else { return }
         
         // Check if already connected
         let connectionStatus = webSocketManager.getConnectionStatus(for: device.id)
@@ -1542,65 +2701,105 @@ class DeviceControlViewModel: ObservableObject {
         Task { @MainActor in
             let persistedDevices = await coreDataManager.fetchDevices()
             await MainActor.run {
-                let placeholders = persistedDevices.filter { self.isPlaceholderDevice($0) }
-                self.devices = persistedDevices.filter { !self.isPlaceholderDevice($0) }
+                self.applyPersistedDevices(persistedDevices, replaceExisting: self.devices.isEmpty, source: "async")
+            }
+        }
+    }
 
-                // CRITICAL: Preload persisted gradients for all devices on app start
-                // This ensures gradients are available immediately when power toggle happens
-                for device in self.devices {
-                    if let persisted = loadPersistedGradient(for: device.id), !persisted.isEmpty {
-                        latestGradientStops[device.id] = persisted
-                        #if DEBUG
-                        print("🔵 Preloaded gradient for \(device.name): \(persisted.count) stops")
-                        #endif
-                    }
-                }
+    private func preloadPersistedDevicesIfAvailable() {
+        guard !didPreloadPersistedDevices else { return }
+        let persistedDevices = coreDataManager.fetchDevicesSync()
+        guard !persistedDevices.isEmpty else { return }
+        didPreloadPersistedDevices = true
+        applyPersistedDevices(persistedDevices, replaceExisting: true, source: "sync")
+    }
 
-                for placeholder in placeholders {
-                    Task {
-                        await self.coreDataManager.deleteDevice(id: placeholder.id)
-                    }
-                }
-                
-                // Register persisted devices with connection monitor
-                for device in self.devices {
-                    self.connectionMonitor.registerDevice(device)
-                }
+    private func applyPersistedDevices(_ persistedDevices: [WLEDDevice], replaceExisting: Bool, source: String) {
+        let placeholders = persistedDevices.filter { isPlaceholderDevice($0) }
+        let persisted = persistedDevices.filter { !isPlaceholderDevice($0) }
 
-                for device in self.devices {
-                    Task {
-                        await self.refreshLEDPreferencesIfNeeded(for: device)
-                    }
-                }
-                
-                // Auto-connect real-time WebSocket for online devices if enabled
-                if self.isRealTimeEnabled {
-                    let onlineDevices = self.devices.filter { $0.isOnline }
-                    if !onlineDevices.isEmpty {
-                        // Small delay to allow app to fully initialize
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 1_000_000_000)
-                            self.connectWebSocketsForAllDevices()
-                        }
-                    }
+        var newlyAdded: [WLEDDevice] = []
+
+        if replaceExisting || devices.isEmpty {
+            devices = persisted
+            newlyAdded = persisted
+        } else {
+            let existingIds = Set(devices.map { $0.id })
+            newlyAdded = persisted.filter { !existingIds.contains($0.id) }
+            if !newlyAdded.isEmpty {
+                devices.append(contentsOf: newlyAdded)
+            }
+        }
+
+        if !placeholders.isEmpty {
+            for placeholder in placeholders {
+                Task {
+                    await coreDataManager.deleteDevice(id: placeholder.id)
                 }
             }
+        }
+
+        guard !newlyAdded.isEmpty else { return }
+
+        // Preload persisted gradients so UI doesn't start from black.
+        for device in newlyAdded {
+            if let persistedStops = loadPersistedGradient(for: device.id), !persistedStops.isEmpty {
+                latestGradientStops[device.id] = persistedStops
+                if allowsAppManagedSegments(for: device.id) {
+                    appManagedSegmentDevices.insert(device.id)
+                }
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].currentColor = GradientSampler.sampleColor(at: 0.5, stops: persistedStops)
+                }
+                #if DEBUG
+                print("🔵 Preloaded gradient for \(device.name) (\(source)): \(persistedStops.count) stops")
+                #endif
+            }
+        }
+
+        // Register persisted devices with connection monitor
+        for device in newlyAdded {
+            connectionMonitor.registerDevice(device)
+        }
+
+        for device in newlyAdded {
+            Task {
+                await refreshLEDPreferencesIfNeeded(for: device)
+            }
+        }
+
+        if isRealTimeEnabled {
+            connectWebSocketsForAllDevices()
         }
     }
     
     /// Perform initial device status check when app launches
     private func performInitialDeviceStatusCheck() async {
+        #if DEBUG
         print("🚀 App launched - performing initial device status check")
-        
-        // Quick parallel health checks for all devices
-        for device in devices {
-            performImmediateHealthCheckDetached(for: device)
+        #endif
+        await performImmediateHealthChecksIfNeeded()
+    }
+
+    @MainActor
+    private func performImmediateHealthChecksIfNeeded(force: Bool = false) async {
+        let now = Date()
+        if !force,
+           let last = lastImmediateHealthCheckAt,
+           now.timeIntervalSince(last) < immediateHealthCheckMinInterval {
+            #if DEBUG
+            print("Skipping immediate health checks (recently performed)")
+            #endif
+            return
         }
+        lastImmediateHealthCheckAt = now
+        await connectionMonitor.performImmediateHealthChecks()
     }
     
     private func handleDiscoveredDevices(_ discoveredDevices: [WLEDDevice]) async {
         let realDeviceIPs = Set(discoveredDevices.filter { !isPlaceholderDevice($0) }.map { $0.ipAddress })
-        for discoveredDevice in discoveredDevices {
+        for rawDiscoveredDevice in discoveredDevices {
+            var discoveredDevice = rawDiscoveredDevice
             if isPlaceholderDevice(discoveredDevice), realDeviceIPs.contains(discoveredDevice.ipAddress) {
                 continue
             }
@@ -1611,7 +2810,21 @@ class DeviceControlViewModel: ObservableObject {
 
             if !isPlaceholderDevice(discoveredDevice),
                let placeholderIndex = devices.firstIndex(where: { isPlaceholderDevice($0) && $0.ipAddress == discoveredDevice.ipAddress }) {
-                let placeholderId = devices[placeholderIndex].id
+                let placeholderDevice = devices[placeholderIndex]
+                let placeholderId = placeholderDevice.id
+                migratePlaceholderRuntimeState(
+                    from: placeholderDevice,
+                    toDeviceId: discoveredDevice.id,
+                    discoveredDevice: &discoveredDevice
+                )
+                if activeDeviceId == placeholderId {
+                    activeDeviceId = discoveredDevice.id
+                }
+                if selectedDevices.remove(placeholderId) != nil {
+                    selectedDevices.insert(discoveredDevice.id)
+                }
+                pendingDiscoveryStateRefreshTasks[placeholderId]?.cancel()
+                pendingDiscoveryStateRefreshTasks.removeValue(forKey: placeholderId)
                 devices.remove(at: placeholderIndex)
                 Task {
                     await coreDataManager.deleteDevice(id: placeholderId)
@@ -1622,7 +2835,11 @@ class DeviceControlViewModel: ObservableObject {
             if let existingIndex = devices.firstIndex(where: { $0.id == discoveredDevice.id }) {
                 // Update existing device with any new information
                 var updatedDevice = devices[existingIndex]
-                updatedDevice.name = discoveredDevice.name
+                let previousOnline = updatedDevice.isOnline
+                let previousName = updatedDevice.name
+                if shouldApplyNameUpdate(existingName: updatedDevice.name, candidateName: discoveredDevice.name) {
+                    updatedDevice.name = discoveredDevice.name
+                }
                 updatedDevice.ipAddress = discoveredDevice.ipAddress
                 updatedDevice.productType = discoveredDevice.productType
                 updatedDevice.isOnline = discoveredDevice.isOnline  // CRITICAL: Update online status
@@ -1637,6 +2854,15 @@ class DeviceControlViewModel: ObservableObject {
                     await coreDataManager.saveDevice(updatedDevice)
                 }
                 
+                if previousName != updatedDevice.name {
+                    let source = discoverySource(for: updatedDevice) ?? "Discovery"
+                    appendDiagnostics("Name updated: \(previousName) -> \(updatedDevice.name) (\(source))")
+                }
+                if previousOnline == false && updatedDevice.isOnline {
+                    let source = discoverySource(for: updatedDevice) ?? "Discovery"
+                    appendDiagnostics("Device online via \(source): \(updatedDevice.name)")
+                }
+
                 // Force UI update to reflect the new online status
                 await MainActor.run {
                     objectWillChange.send()
@@ -1649,6 +2875,9 @@ class DeviceControlViewModel: ObservableObject {
                 if !isPlaceholderDevice(newDevice) {
                     await coreDataManager.saveDevice(newDevice)
                 }
+
+                let source = discoverySource(for: newDevice) ?? "Discovery"
+                appendDiagnostics("Discovered device: \(newDevice.name) (\(newDevice.ipAddress)) via \(source)")
                 
                 // Force UI update for new device
                 await MainActor.run {
@@ -1667,15 +2896,154 @@ class DeviceControlViewModel: ObservableObject {
             }
 
             if !isPlaceholderDevice(discoveredDevice) {
-                Task {
-                    await refreshLEDPreferencesIfNeeded(for: discoveredDevice)
+                scheduleDiscoveryStateRefresh(for: discoveredDevice.id)
+            }
+        }
+    }
+
+    @MainActor
+    private func scheduleDiscoveryStateRefresh(for deviceId: String) {
+        pendingDiscoveryStateRefreshTasks[deviceId]?.cancel()
+        pendingDiscoveryStateRefreshTasks[deviceId] = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: self.discoveryStateRefreshDebounceNanos)
+            guard !Task.isCancelled else { return }
+            let target = await MainActor.run { self.devices.first(where: { $0.id == deviceId }) }
+            guard let target else {
+                await MainActor.run {
+                    self.pendingDiscoveryStateRefreshTasks.removeValue(forKey: deviceId)
                 }
+                return
+            }
+            if WLEDWebSocketManager.shared.isDeviceConnected(deviceId) {
+                await MainActor.run {
+                    self.pendingDiscoveryStateRefreshTasks.removeValue(forKey: deviceId)
+                }
+                return
+            }
+            await self.refreshDeviceState(target)
+            await MainActor.run {
+                self.pendingDiscoveryStateRefreshTasks.removeValue(forKey: deviceId)
             }
         }
     }
 
     private func isPlaceholderDevice(_ device: WLEDDevice) -> Bool {
         return device.id.hasPrefix("ip:")
+    }
+
+    private func migratePlaceholderRuntimeState(
+        from placeholderDevice: WLEDDevice,
+        toDeviceId discoveredDeviceId: String,
+        discoveredDevice: inout WLEDDevice
+    ) {
+        let placeholderId = placeholderDevice.id
+
+        if let optimisticState = uiToggleStates[placeholderId] {
+            uiToggleStates[discoveredDeviceId] = optimisticState
+            uiToggleStates.removeValue(forKey: placeholderId)
+        }
+        if let pending = pendingToggles[placeholderId] {
+            pendingToggles[discoveredDeviceId] = pending
+            pendingToggles.removeValue(forKey: placeholderId)
+        }
+        if let timer = toggleTimers[placeholderId] {
+            toggleTimers[discoveredDeviceId] = timer
+            toggleTimers.removeValue(forKey: placeholderId)
+        }
+        if let userInputAt = lastUserInput[placeholderId] {
+            lastUserInput[discoveredDeviceId] = userInputAt
+            lastUserInput.removeValue(forKey: placeholderId)
+        }
+        if let recentWrite = recentControlWriteSuccessAtByDeviceId[placeholderId] {
+            recentControlWriteSuccessAtByDeviceId[discoveredDeviceId] = recentWrite
+            recentControlWriteSuccessAtByDeviceId.removeValue(forKey: placeholderId)
+
+            // Prevent stale discovery state from immediately flipping a just-toggled device back off.
+            if Date().timeIntervalSince(recentWrite) < 3.0 {
+                discoveredDevice.isOn = placeholderDevice.isOn
+                discoveredDevice.brightness = placeholderDevice.brightness
+                discoveredDevice.currentColor = placeholderDevice.currentColor
+            }
+        }
+    }
+
+    private func primarySegmentId(from state: WLEDState?) -> Int {
+        guard let state = state else { return 0 }
+        if let mainId = state.mainSegment,
+           state.segments.contains(where: { ($0.id ?? 0) == mainId }) {
+            return mainId
+        }
+        if let first = state.segments.first {
+            return first.id ?? 0
+        }
+        return 0
+    }
+
+    private func primarySegmentId(for device: WLEDDevice) -> Int {
+        return primarySegmentId(from: device.state)
+    }
+
+    func preferredSegmentId(for device: WLEDDevice) -> Int {
+        return primarySegmentId(from: device.state)
+    }
+
+    private func primarySegment(from state: WLEDState?) -> Segment? {
+        guard let state = state else { return nil }
+        let mainId = primarySegmentId(from: state)
+        if let segment = state.segments.first(where: { ($0.id ?? 0) == mainId }) {
+            return segment
+        }
+        return state.segments.first
+    }
+
+    private func preferredDisplayColor(for deviceId: String) -> Color? {
+        guard UserDefaults.standard.bool(forKey: "advancedUIEnabled") == false else { return nil }
+        guard shouldUseAppManagedSegments(for: deviceId) else { return nil }
+        guard let stops = latestGradientStops[deviceId], !stops.isEmpty else { return nil }
+        return GradientSampler.sampleColor(at: 0.5, stops: stops)
+    }
+
+    private func discoverySource(for device: WLEDDevice) -> String? {
+        return wledService.lastDiscoverySourceByDevice[device.id] ?? wledService.lastDiscoverySourceByIP[device.ipAddress]
+    }
+
+    private func appendDiagnostics(_ message: String) {
+        let entry = DiagnosticsEntry(timestamp: Date(), message: message)
+        diagnosticsLog.append(entry)
+        if diagnosticsLog.count > diagnosticsLogLimit {
+            diagnosticsLog.removeFirst(diagnosticsLog.count - diagnosticsLogLimit)
+        }
+    }
+
+    private func isGenericDeviceName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        let lower = trimmed.lowercased()
+        if lower == "wled" || lower == "wled-ap" || lower == "aesdetic-led" {
+            return true
+        }
+        if lower.hasPrefix("wled-") {
+            let suffix = lower.dropFirst(5)
+            let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+            let isHexOrNumeric = !suffix.isEmpty && suffix.unicodeScalars.allSatisfy { hexSet.contains($0) }
+            if isHexOrNumeric { return true }
+        }
+        return false
+    }
+
+    private func shouldApplyNameUpdate(existingName: String, candidateName: String) -> Bool {
+        let existingTrimmed = existingName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidateTrimmed = candidateName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidateTrimmed.isEmpty else { return false }
+        if existingTrimmed == candidateTrimmed { return false }
+
+        let existingGeneric = isGenericDeviceName(existingTrimmed)
+        let candidateGeneric = isGenericDeviceName(candidateTrimmed)
+
+        if existingGeneric && !candidateGeneric { return true }
+        if !existingGeneric && candidateGeneric { return false }
+        return true
     }
     
     private func updateDeviceHealthStatus(_ healthStatus: [String: Bool]) {
@@ -1685,6 +3053,8 @@ class DeviceControlViewModel: ObservableObject {
                 if devices[index].isOnline != isOnline {
                     devices[index].isOnline = isOnline
                     hasChanges = true
+                    let statusLabel = isOnline ? "online" : "offline"
+                    appendDiagnostics("Health check: \(devices[index].name) is \(statusLabel)")
                 }
             }
         }
@@ -1693,6 +3063,60 @@ class DeviceControlViewModel: ObservableObject {
         if hasChanges {
             DispatchQueue.main.async {
                 self.objectWillChange.send()
+            }
+        }
+    }
+
+    private func refreshOnlineStatusesFromWebSocket(_ statuses: [String: WLEDWebSocketManager.DeviceConnectionStatus], logTransitions: Bool = true) {
+        guard isRealTimeEnabled else { return }
+        let now = Date()
+        var hasChanges = false
+
+        for index in devices.indices {
+            let deviceId = devices[index].id
+            let status = statuses[deviceId]
+            let wsStatus = status?.status
+            let lastSeen = devices[index].lastSeen
+            let withinGrace = now.timeIntervalSince(lastSeen) < offlineGracePeriod
+            let recentControlWrite = recentControlWriteSuccessAtByDeviceId[deviceId]
+                .map { now.timeIntervalSince($0) < controlWriteOnlineGraceInterval } ?? false
+            let recentWSConnect = status?.lastConnected.map { now.timeIntervalSince($0) < offlineGracePeriod } ?? false
+            let transientWSRecoveryWindow = (wsStatus == .connecting || wsStatus == .reconnecting)
+                && (devices[index].isOnline || recentWSConnect || recentControlWrite)
+            let shouldBeOnline = (wsStatus == .connected) || withinGrace || recentControlWrite || transientWSRecoveryWindow
+
+            if devices[index].isOnline != shouldBeOnline {
+                devices[index].isOnline = shouldBeOnline
+                hasChanges = true
+                if logTransitions {
+                    let statusLabel = shouldBeOnline ? "online" : "offline"
+                    appendDiagnostics("WebSocket status: \(devices[index].name) is \(statusLabel)")
+                }
+            }
+        }
+
+        if hasChanges {
+            objectWillChange.send()
+        }
+    }
+
+    private func persistLastSeenIfNeeded(for device: WLEDDevice, timestamp: Date) {
+        let lastPersisted = lastSeenPersistedAt[device.id] ?? .distantPast
+        guard timestamp.timeIntervalSince(lastPersisted) >= lastSeenPersistInterval else { return }
+        lastSeenPersistedAt[device.id] = timestamp
+        var updated = device
+        updated.lastSeen = timestamp
+        Task.detached(priority: .background) {
+            await CoreDataManager.shared.saveDevice(updated)
+        }
+    }
+
+    private func startOnlineStatusRefreshTimer() {
+        onlineStatusTimer?.invalidate()
+        onlineStatusTimer = Timer.scheduledTimer(withTimeInterval: onlineStatusRefreshInterval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                self.refreshOnlineStatusesFromWebSocket(self.webSocketManager.deviceConnectionStatuses)
             }
         }
     }
@@ -1712,10 +3136,58 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
     }
+
+    @MainActor
+    func removeDevice(_ device: WLEDDevice) async {
+        // Disconnect realtime connections
+        webSocketManager.disconnect(from: device.id)
+        connectionMonitor.unregisterDevice(device.id)
+        endRebootWait(for: device.id)
+
+        // Clear in-memory caches
+        pendingToggles.removeValue(forKey: device.id)
+        uiToggleStates.removeValue(forKey: device.id)
+        lastUserInput.removeValue(forKey: device.id)
+        runWatchdogs.removeValue(forKey: device.id)
+        activeRunStatus.removeValue(forKey: device.id)
+        pendingFinalStates.removeValue(forKey: device.id)
+        lastBrightnessBeforeOff.removeValue(forKey: device.id)
+        savedTransitionDefaults.removeValue(forKey: device.id)
+        savedTransitionDefaultRunIds.removeValue(forKey: device.id)
+        temporaryPresetIds.removeValue(forKey: device.id)
+        temporaryPlaylistIds.removeValue(forKey: device.id)
+        playlistRunsByDevice.remove(device.id)
+        lastSeenPersistedAt.removeValue(forKey: device.id)
+        deviceCapabilities.removeValue(forKey: device.id)
+        deviceLedCounts.removeValue(forKey: device.id)
+        effectStates.removeValue(forKey: device.id)
+        segmentCCTFormats.removeValue(forKey: device.id)
+        presetsCache.removeValue(forKey: device.id)
+        presetLoadingStates.removeValue(forKey: device.id)
+        playlistsCache.removeValue(forKey: device.id)
+        playlistLoadingStates.removeValue(forKey: device.id)
+        presetModificationTimes.removeValue(forKey: device.id)
+        latestGradientStops.removeValue(forKey: device.id)
+        latestEffectGradientStops.removeValue(forKey: device.id)
+        latestTransitionDurations.removeValue(forKey: device.id)
+        effectMetadataLastFetched.removeValue(forKey: device.id)
+        lastGradientBeforeEffect.removeValue(forKey: device.id)
+        ledPreferencesLastFetched.removeValue(forKey: device.id)
+        ledStripTypeByDevice.removeValue(forKey: device.id)
+        deviceStateCache.removeValue(forKey: device.id)
+
+        // Remove from UI list
+        devices.removeAll { $0.id == device.id }
+        cachedFilteredDevices = []
+        lastFilterUpdate = .distantPast
+
+        // Delete from persistence
+        await coreDataManager.deleteDevice(id: device.id)
+    }
     
     func toggleDevicePower(_ device: WLEDDevice) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
-        await cancelActiveRun(for: device, force: true)
+        await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
         
         // The UI will have already registered the optimistic state.
         // The `targetState` is what the UI *wants* the device to be.
@@ -1819,9 +3291,10 @@ class DeviceControlViewModel: ObservableObject {
             // Fetch actual state to check for restored effects
             do {
                 let response = try await apiService.getState(for: device)
-                if let segment = response.state.segments.first, let fxValue = segment.fx, fxValue != 0 {
+                if let segment = primarySegment(from: response.state), let fxValue = segment.fx, fxValue != 0 {
                     // WLED restored an effect - disable it
-                    let segmentUpdate = SegmentUpdate(id: segment.id ?? 0, fx: 0, pal: 0, frz: false)
+                    let segmentId = segment.id ?? primarySegmentId(from: response.state)
+                    let segmentUpdate = SegmentUpdate(id: segmentId, fx: 0, pal: 0, frz: false)
                     let effectOffUpdate = WLEDStateUpdate(seg: [segmentUpdate])
                     _ = try? await apiService.updateState(for: updatedDevice, state: effectOffUpdate)
                     
@@ -1883,10 +3356,17 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     
-    func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int, userInitiated: Bool = true) async {
+    func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int, userInitiated: Bool = true, origin: SyncOrigin = .user) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
         if userInitiated {
-            await cancelActiveRun(for: device, force: true)
+            let hasActiveRun = activeRunStatus[device.id] != nil
+                || playlistRunsByDevice.contains(device.id)
+                || temporaryPlaylistIds[device.id] != nil
+                || (devices.first(where: { $0.id == device.id })?.state?.playlistId != nil)
+                || (device.state?.playlistId != nil)
+            if hasActiveRun {
+                await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
+            }
         }
         
         markUserInteraction(device.id)
@@ -1896,6 +3376,10 @@ class DeviceControlViewModel: ObservableObject {
         // When brightness goes from 0% to >0%, we should turn device on
         let actualDevice = await MainActor.run {
             self.devices.first(where: { $0.id == device.id }) ?? device
+        }
+        let expectedPowerState = brightness > 0
+        if actualDevice.brightness == brightness && actualDevice.isOn == expectedPowerState {
+            return
         }
         // CRITICAL: Check both power state AND brightness to detect when device is transitioning from off to on
         // A device can have isOn=false while brightness>0 (remembered brightness), so we must check both
@@ -1922,6 +3406,7 @@ class DeviceControlViewModel: ObservableObject {
                 updatedDevice.brightness = 0
                 return updatedDevice
             }
+            await propagateIfNeeded(source: device, payload: .brightness(value: 0), origin: origin)
             return
         }
         
@@ -1974,25 +3459,32 @@ class DeviceControlViewModel: ObservableObject {
                 // CRITICAL: Check actual WLED state for active effects
                 // WLED might restore effects/presets when brightness comes back from 0%
                 var hasActiveEffect = false
-                if let state = actualState, let segment = state.segments.first {
+                if let state = actualState, let segment = primarySegment(from: state) {
                     let fxValue = segment.fx ?? 0
                     hasActiveEffect = fxValue != 0
                     
                     if hasActiveEffect {
                         // Disable effect before applying gradient
-                        let segmentUpdate = SegmentUpdate(id: segment.id ?? 0, fx: 0, pal: 0, frz: false)
+                        let segmentId = segment.id ?? primarySegmentId(from: state)
+                        let segmentUpdate = SegmentUpdate(id: segmentId, fx: 0, pal: 0, frz: false)
                         let effectOffUpdate = WLEDStateUpdate(seg: [segmentUpdate])
                         _ = try? await apiService.updateState(for: updatedDevice, state: effectOffUpdate)
                         
                         // Update effect state cache
                         await MainActor.run {
                             var segmentStates = self.effectStates[device.id] ?? [:]
-                            let segmentId = segment.id ?? 0
+                            let segmentId = segmentId
                             segmentStates[segmentId] = DeviceEffectState(
                                 effectId: 0,
                                 speed: segment.sx ?? 128,
                                 intensity: segment.ix ?? 128,
                                 paletteId: segment.pal,
+                                custom1: segment.c1,
+                                custom2: segment.c2,
+                                custom3: segment.c3,
+                                option1: segment.o1,
+                                option2: segment.o2,
+                                option3: segment.o3,
                                 isEnabled: false
                             )
                             self.effectStates[device.id] = segmentStates
@@ -2053,8 +3545,10 @@ class DeviceControlViewModel: ObservableObject {
                 updatedDevice.brightness = 0
                 return updatedDevice
             }
+            await propagateIfNeeded(source: device, payload: .brightness(value: 0), origin: origin)
             return
         }
+        var shouldPropagateBrightness = false
         
         // CRITICAL: If we have a gradient, only update brightness (no color resend).
         if hasPersistedGradient, !isEffectEnabled, (gradientStops(for: device.id)?.isEmpty == false) {
@@ -2067,16 +3561,18 @@ class DeviceControlViewModel: ObservableObject {
             if brightness > 0 {
                 self.lastBrightnessBeforeOff[device.id] = brightness
             }
+            shouldPropagateBrightness = true
         } else {
             // No gradient - use simple brightness update
             // CRITICAL: WLED treats brightness 0% as "off" (on: false)
             // Include on state in brightness update to ensure proper state
             let shouldBeOn = brightness > 0
-            let transitionMs = resolvedTransitionMs(for: device, fallbackSeconds: directBrightnessTransitionSeconds)
+            let transitionDeciseconds = resolvedTransitionDeciseconds(for: device, fallbackSeconds: directBrightnessTransitionSeconds)
             let stateUpdate = WLEDStateUpdate(
                 on: shouldBeOn ? true : false,  // CRITICAL: Explicitly set on=false when brightness is 0%
                 bri: brightness,
-                transition: transitionMs
+                transitionDeciseconds: transitionDeciseconds,
+                lor: 0
             )
         
         do {
@@ -2084,9 +3580,7 @@ class DeviceControlViewModel: ObservableObject {
             
             // Send WebSocket update if connected
             if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
-                if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
-                    webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-                }
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
             }
             
             await MainActor.run {
@@ -2111,6 +3605,7 @@ class DeviceControlViewModel: ObservableObject {
             updatedDevice.isOnline = true
             updatedDevice.lastSeen = Date()
             await coreDataManager.saveDevice(updatedDevice)
+            shouldPropagateBrightness = true
             
         } catch {
             let mappedError = mapToWLEDError(error, device: device)
@@ -2119,11 +3614,80 @@ class DeviceControlViewModel: ObservableObject {
                 }
             }
         }
+        if shouldPropagateBrightness {
+            await propagateIfNeeded(source: device, payload: .brightness(value: brightness), origin: origin)
+        }
+    }
+
+    /// Update brightness while an effect is running without disrupting effect state.
+    /// Uses WebSocket when available to avoid HTTP timeouts and skips run cancellation.
+    func updateAnimationBrightness(_ device: WLEDDevice, brightness: Int) async {
+        let clamped = max(1, min(255, brightness))
+        let shouldBeOn = clamped > 0
+        markUserInteraction(device.id)
+        let transitionDeciseconds = resolvedTransitionDeciseconds(for: device, fallbackSeconds: directBrightnessTransitionSeconds)
+        let stateUpdate = WLEDStateUpdate(
+            on: shouldBeOn,
+            bri: clamped,
+            transitionDeciseconds: transitionDeciseconds
+        )
+        
+        let wsConnected = webSocketManager.isDeviceConnected(device.id)
+        if wsConnected {
+            webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].brightness = clamped
+                    devices[index].isOn = shouldBeOn
+                    devices[index].isOnline = true
+                }
+                if clamped > 0 {
+                    self.lastBrightnessBeforeOff[device.id] = clamped
+                }
+                clearError()
+            }
+            var updatedDevice = device
+            updatedDevice.brightness = clamped
+            updatedDevice.isOn = shouldBeOn
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+            return
+        }
+        
+        do {
+            _ = try await apiService.updateState(for: device, state: stateUpdate)
+            if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            }
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[index].brightness = clamped
+                    devices[index].isOn = shouldBeOn
+                    devices[index].isOnline = true
+                }
+                if clamped > 0 {
+                    self.lastBrightnessBeforeOff[device.id] = clamped
+                }
+                clearError()
+            }
+            var updatedDevice = device
+            updatedDevice.brightness = clamped
+            updatedDevice.isOn = shouldBeOn
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            await MainActor.run {
+                self.presentError(mappedError)
+            }
+        }
     }
     
-    func updateDeviceColor(_ device: WLEDDevice, color: Color) async {
+    func updateDeviceColor(_ device: WLEDDevice, color: Color, origin: SyncOrigin = .user) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
-        await cancelActiveRun(for: device, force: true)
+        await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
         markUserInteraction(device.id)
 
         let hex = color.toHex()
@@ -2131,8 +3695,9 @@ class DeviceControlViewModel: ObservableObject {
             GradientStop(position: 0.0, hexColor: hex),
             GradientStop(position: 1.0, hexColor: hex)
         ]
+        let segmentId = primarySegmentId(for: device)
         let ledCount = totalLEDCount(for: device)
-        let transitionDurationSeconds = defaultTransitionMs(for: device) == nil
+        let transitionDurationSeconds = defaultTransitionDeciseconds(for: device) == nil
             ? directColorTransitionSeconds
             : nil
         await applyGradientStopsAcrossStrip(
@@ -2140,9 +3705,11 @@ class DeviceControlViewModel: ObservableObject {
             stops: stops,
             ledCount: ledCount,
             disableActiveEffect: true,
+            segmentId: segmentId,
             on: true,
             transitionDurationSeconds: transitionDurationSeconds,
             userInitiated: true,
+            origin: origin,
             preferSegmented: true
         )
     }
@@ -2152,15 +3719,16 @@ class DeviceControlViewModel: ObservableObject {
     ///   - device: The WLED device
     ///   - temperature: Temperature slider value (0.0-1.0, where 0=warm, 1=cool)
     ///   - withColor: Optional RGB color to set along with CCT
-    func applyCCT(to device: WLEDDevice, temperature: Double, withColor: [Int]? = nil, segmentId: Int = 0) async {
+    func applyCCT(to device: WLEDDevice, temperature: Double, withColor: [Int]? = nil, segmentId: Int? = nil) async {
         markUserInteraction(device.id)
-        guard supportsCCT(for: device, segmentId: segmentId) else { return }
-        let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: segmentId)
+        let targetSegmentId = segmentId ?? primarySegmentId(for: device)
+        guard supportsCCTOutput(for: device, segmentId: targetSegmentId) else { return }
+        let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: targetSegmentId)
         let cct: Int = usesKelvin ? kelvinValue(for: device, normalized: temperature) : Segment.eightBitValue(fromNormalized: temperature)
         
         do {
             if let color = withColor {
-                _ = try await apiService.setColor(for: device, color: color, cct: cct)
+                _ = try await apiService.setColor(for: device, color: color, cct: cct, segmentId: targetSegmentId)
             } else {
                 // CRITICAL: When sending CCT-only, we must send ONLY CCT (no RGB)
                 // However, if the device doesn't support CCT or has it disabled,
@@ -2168,9 +3736,9 @@ class DeviceControlViewModel: ObservableObject {
                 // color that WLED would produce from CCT, but ONLY if CCT fails.
                 // For now, try CCT-only first (correct approach)
                 if usesKelvin {
-                    _ = try await apiService.setCCT(for: device, cctKelvin: cct, segmentId: segmentId)
+                    _ = try await apiService.setCCT(for: device, cctKelvin: cct, segmentId: targetSegmentId)
                 } else {
-                    _ = try await apiService.setCCT(for: device, cct: cct, segmentId: segmentId)
+                    _ = try await apiService.setCCT(for: device, cct: cct, segmentId: targetSegmentId)
                 }
                 
                 // Note: If device doesn't support CCT, WLED will ignore the CCT value
@@ -2184,7 +3752,7 @@ class DeviceControlViewModel: ObservableObject {
                 // WLED uses col if present, even if cct is also present
                 // Only include col if withColor is explicitly provided
                 let segment = SegmentUpdate(
-                    id: segmentId,
+                    id: targetSegmentId,
                     col: nil,  // Explicitly nil - JSON encoder will omit this field
                     cct: cct,
                     fx: 0  // Disable effects to allow CCT to work
@@ -2193,7 +3761,7 @@ class DeviceControlViewModel: ObservableObject {
                 
                 // Debug logging
                 #if DEBUG
-                print("🔵 WebSocket CCT update: segmentId=\(segmentId), cct=\(cct), col=nil")
+                print("🔵 WebSocket CCT update: segmentId=\(segmentId ?? -1), cct=\(cct), col=nil")
                 #endif
                 
                 webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
@@ -2229,7 +3797,7 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func setDevicePower(_ device: WLEDDevice, isOn: Bool) async {
-        await cancelActiveRun(for: device, force: true)
+        await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
         markUserInteraction(device.id)
         
         // Get device state before power change to check if we're turning on
@@ -2309,9 +3877,10 @@ class DeviceControlViewModel: ObservableObject {
             // Fetch actual state to check for restored effects
             do {
                 let response = try await apiService.getState(for: device)
-                if let segment = response.state.segments.first, let fxValue = segment.fx, fxValue != 0 {
+                if let segment = primarySegment(from: response.state), let fxValue = segment.fx, fxValue != 0 {
                     // WLED restored an effect - disable it
-                    let segmentUpdate = SegmentUpdate(id: segment.id ?? 0, fx: 0, pal: 0, frz: false)
+                    let segmentId = segment.id ?? primarySegmentId(from: response.state)
+                    let segmentUpdate = SegmentUpdate(id: segmentId, fx: 0, pal: 0, frz: false)
                     let effectOffUpdate = WLEDStateUpdate(seg: [segmentUpdate])
                     _ = try? await apiService.updateState(for: updatedDevice, state: effectOffUpdate)
                     
@@ -2372,6 +3941,116 @@ class DeviceControlViewModel: ObservableObject {
         let state = WLEDStateUpdate(udpn: udpn)
         _ = try? await apiService.updateState(for: device, state: state)
     }
+
+    func fetchUDPSyncState(for device: WLEDDevice) async -> (send: Bool, recv: Bool, network: Int)? {
+        do {
+            return try await apiService.fetchUDPSyncConfig(for: device)
+        } catch {
+            return nil
+        }
+    }
+
+    func rebootDevice(_ device: WLEDDevice) async {
+        await cancelActiveRun(for: device, force: true)
+        markUserInteraction(device.id)
+        let wasOnlineBeforeReboot = isDeviceOnline(device) || device.isOnline
+
+        do {
+            try await apiService.rebootDevice(device)
+            clearError()
+            beginRebootWait(for: device)
+        } catch {
+            if wasOnlineBeforeReboot && isExpectedRebootDisconnect(error) {
+                clearError()
+                beginRebootWait(for: device)
+            } else {
+                let mappedError = mapToWLEDError(error, device: device)
+                presentError(mappedError)
+            }
+        }
+    }
+
+    private func beginRebootWait(for device: WLEDDevice) {
+        endRebootWait(for: device.id)
+        rebootWaitActiveByDeviceId.insert(device.id)
+        rebootWaitRemainingSecondsByDeviceId[device.id] = rebootWaitMaxSeconds
+
+        let deviceId = device.id
+        let waitSeconds = rebootWaitMaxSeconds
+
+        rebootWaitCountdownTasksByDeviceId[deviceId] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for remaining in stride(from: waitSeconds - 1, through: 0, by: -1) {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled || !self.rebootWaitActiveByDeviceId.contains(deviceId) { return }
+                self.rebootWaitRemainingSecondsByDeviceId[deviceId] = remaining
+            }
+
+            if self.rebootWaitActiveByDeviceId.contains(deviceId) {
+                self.endRebootWait(for: deviceId)
+            }
+        }
+
+        rebootWaitProbeTasksByDeviceId[deviceId] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Avoid reading stale pre-reboot state immediately after issuing reboot.
+            try? await Task.sleep(nanoseconds: self.rebootProbeInitialDelayNanos)
+
+            while self.rebootWaitActiveByDeviceId.contains(deviceId) {
+                if Task.isCancelled { return }
+                do {
+                    await self.apiService.invalidateStateCache(for: deviceId)
+                    _ = try await self.apiService.getState(for: device)
+                    self.endRebootWait(for: deviceId)
+                    return
+                } catch {
+                    // Keep waiting until state is reachable again or countdown expires.
+                }
+                try? await Task.sleep(nanoseconds: self.rebootProbeIntervalNanos)
+            }
+        }
+    }
+
+    private func endRebootWait(for deviceId: String) {
+        rebootWaitCountdownTasksByDeviceId[deviceId]?.cancel()
+        rebootWaitCountdownTasksByDeviceId.removeValue(forKey: deviceId)
+        rebootWaitProbeTasksByDeviceId[deviceId]?.cancel()
+        rebootWaitProbeTasksByDeviceId.removeValue(forKey: deviceId)
+        rebootWaitActiveByDeviceId.remove(deviceId)
+        rebootWaitRemainingSecondsByDeviceId.removeValue(forKey: deviceId)
+    }
+
+    private func isExpectedRebootDisconnect(_ error: Error) -> Bool {
+        if let apiError = error as? WLEDAPIError {
+            switch apiError {
+            case .timeout, .deviceOffline, .deviceUnreachable:
+                return true
+            case .networkError(let nested):
+                if let urlError = nested as? URLError {
+                    switch urlError.code {
+                    case .timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+                        return true
+                    default:
+                        return false
+                    }
+                }
+                return false
+            default:
+                return false
+            }
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
+    }
     
     private func updateDeviceState(_ device: WLEDDevice, update: (WLEDDevice) -> WLEDDevice) async {
         let updatedDevice = update(device)
@@ -2379,7 +4058,7 @@ class DeviceControlViewModel: ObservableObject {
         do {
             // Check if we have a persisted gradient that will be restored
             let hasPersistedGradient = gradientStops(for: device.id)?.isEmpty == false
-            let transitionMs = resolvedTransitionMs(for: updatedDevice, fallbackSeconds: directBrightnessTransitionSeconds)
+            let transitionDeciseconds = resolvedTransitionDeciseconds(for: updatedDevice, fallbackSeconds: directBrightnessTransitionSeconds)
             
             // Create state update based on changes
             // CRITICAL FIX: If we have a persisted gradient, DON'T send col field
@@ -2396,20 +4075,40 @@ class DeviceControlViewModel: ObservableObject {
                     on: updatedDevice.isOn,
                     bri: updatedDevice.brightness,
                     seg: nil,  // Don't send segment color - let gradient restoration handle it
-                    transition: transitionMs
+                    transitionDeciseconds: transitionDeciseconds,
+                    pl: -1,
+                    lor: 0
                 )
             } else {
-                // No persisted gradient - send solid color as before
-                let rgb = updatedDevice.currentColor.toRGBArray()
-                stateUpdate = WLEDStateUpdate(
-                on: updatedDevice.isOn,
-                bri: updatedDevice.brightness,
-                seg: [SegmentUpdate(col: [[rgb[0], rgb[1], rgb[2]]])],
-                transition: transitionMs
-            )
+                let isTurningOn = (!device.isOn || device.brightness == 0) && updatedDevice.isOn && updatedDevice.brightness > 0
+                let shouldAvoidBlackOnPowerOn = isTurningOn && isNearBlack(updatedDevice.currentColor)
+
+                if shouldAvoidBlackOnPowerOn {
+                    // Preserve WLED's remembered color on first power-on when local color is still uninitialized.
+                    stateUpdate = WLEDStateUpdate(
+                        on: updatedDevice.isOn,
+                        bri: updatedDevice.brightness,
+                        seg: nil,
+                        transitionDeciseconds: transitionDeciseconds,
+                        pl: -1,
+                        lor: 0
+                    )
+                } else {
+                    // No persisted gradient - send solid color as before
+                    let rgb = rgbArrayWithOptionalWhite(updatedDevice.currentColor.toRGBArray(), device: device)
+                    stateUpdate = WLEDStateUpdate(
+                        on: updatedDevice.isOn,
+                        bri: updatedDevice.brightness,
+                        seg: [SegmentUpdate(col: [rgb])],
+                        transitionDeciseconds: transitionDeciseconds,
+                        pl: -1,
+                        lor: 0
+                    )
+                }
             }
             
             _ = try await apiService.updateState(for: device, state: stateUpdate)
+            let writeSucceededAt = Date()
             
             // Send WebSocket update if connected (for faster local feedback)
             if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
@@ -2419,17 +4118,25 @@ class DeviceControlViewModel: ObservableObject {
             // Update local device list immediately with optimistic update
             await MainActor.run {
                 if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
-                    self.devices[index] = updatedDevice
+                    var committed = updatedDevice
+                    committed.isOnline = true
+                    committed.lastSeen = writeSucceededAt
+                    self.devices[index] = committed
                     self.devices[index].isOnline = true // Ensure device stays online after successful update
+                    self.devices[index].lastSeen = writeSucceededAt
                     
                     // Sync to widget
                     WidgetDataSync.shared.syncDevice(self.devices[index])
                 }
+                self.noteControlWriteSuccess(deviceId: device.id)
                 self.clearError()
             }
             
             // Persist to Core Data
-            await coreDataManager.saveDevice(updatedDevice)
+            var persistedDevice = updatedDevice
+            persistedDevice.isOnline = true
+            persistedDevice.lastSeen = writeSucceededAt
+            await coreDataManager.saveDevice(persistedDevice)
             
             // DO NOT call refreshDeviceState here - it causes race conditions with user input
             
@@ -2449,6 +4156,12 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
     }
+
+    private func isNearBlack(_ color: Color, threshold: Int = 2) -> Bool {
+        let rgb = color.toRGBArray()
+        guard rgb.count >= 3 else { return true }
+        return rgb[0] <= threshold && rgb[1] <= threshold && rgb[2] <= threshold
+    }
     
     // MARK: - Device Discovery
     
@@ -2458,6 +4171,14 @@ class DeviceControlViewModel: ObservableObject {
 
     func startPassiveDiscovery() {
         wledService.startPassiveDiscovery()
+    }
+
+    func requestLocalNetworkPermission() {
+        LocalNetworkPrompter.shared.trigger()
+    }
+
+    func dismissDiscoveryError() {
+        discoveryErrorMessage = nil
     }
     
     func stopScanning() async {
@@ -2506,9 +4227,15 @@ class DeviceControlViewModel: ObservableObject {
         if !isIPInCurrentSubnets(device.ipAddress) { return }
         do {
             let response = try await apiService.getState(for: device)
+            await handlePresetModificationIfNeeded(response, device: device)
             let ledCount = response.info.leds.count
             if ledCount > 0 {
                 deviceLedCounts[device.id] = ledCount
+            }
+            if let matrix = response.info.leds.matrix {
+                deviceIsMatrixById[device.id] = matrix.w > 0 && matrix.h > 0
+            } else {
+                deviceIsMatrixById[device.id] = false
             }
             
             // Detect and cache capabilities using CapabilityDetector
@@ -2520,6 +4247,8 @@ class DeviceControlViewModel: ObservableObject {
                     self.deviceCapabilities[device.id] = capabilities
                 }
             }
+
+            await refreshLEDPreferencesIfNeeded(for: device)
             
             await fetchEffectMetadataIfNeeded(for: device)
             
@@ -2545,17 +4274,31 @@ class DeviceControlViewModel: ObservableObject {
                     
                     // Only update color if device is NOT under user control AND gradient wasn't just applied
                     if !isUnderControl && !gradientJustApplied {
-                        if let segment = response.state.segments.first {
-                            let segmentId = segment.id ?? 0
+                        if let segment = primarySegment(from: response.state) {
+                            let segmentId = segment.id ?? primarySegmentId(from: response.state)
                             let effectState = self.effectStates[device.id]?[segmentId]
                             let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
+                            if !hasActiveEffect,
+                               let refreshedStops = self.gradientStopsFromStateSegments(response.state),
+                               !refreshedStops.isEmpty {
+                                self.latestGradientStops[device.id] = refreshedStops
+                                self.persistLatestGradient(refreshedStops, for: device.id)
+                            }
                             let normalized = segment.cctNormalized
                             updatedDevice.temperature = normalized
 
                             if let normalized, !hasActiveEffect {
-                                updatedDevice.currentColor = Color.color(fromCCTTemperature: normalized)
+                                if let preferred = self.preferredDisplayColor(for: device.id) {
+                                    updatedDevice.currentColor = preferred
+                                } else {
+                                    updatedDevice.currentColor = Color.color(fromCCTTemperature: normalized)
+                                }
                             } else if let color = derivedColor(from: segment), !hasActiveEffect {
-                                updatedDevice.currentColor = color
+                                if let preferred = self.preferredDisplayColor(for: device.id) {
+                                    updatedDevice.currentColor = preferred
+                                } else {
+                                    updatedDevice.currentColor = color
+                                }
                             }
                         }
                     } else {
@@ -2594,11 +4337,37 @@ class DeviceControlViewModel: ObservableObject {
                         speed: segment.sx ?? cached.speed,
                         intensity: segment.ix ?? cached.intensity,
                         paletteId: segment.pal ?? cached.paletteId,
+                        custom1: segment.c1 ?? cached.custom1,
+                        custom2: segment.c2 ?? cached.custom2,
+                        custom3: segment.c3 ?? cached.custom3,
+                        option1: segment.o1 ?? cached.option1,
+                        option2: segment.o2 ?? cached.option2,
+                        option3: segment.o3 ?? cached.option3,
                         isEnabled: fxValue != 0
                     )
                     segmentStates[segmentIdentifier] = newState
                 }
                 self.effectStates[device.id] = segmentStates
+
+                // If an effect is active, derive a gradient from the current segment colors.
+                // This keeps the UI in sync after app relaunch without overriding device state.
+                if let segment = primarySegment(from: response.state) {
+                    let segmentIdentifier = segment.id ?? primarySegmentId(from: response.state)
+                    if let effectState = segmentStates[segmentIdentifier],
+                       effectState.isEnabled,
+                       effectState.effectId != 0,
+                       let effectStops = effectGradientStops(from: segment),
+                       !effectStops.isEmpty {
+                        self.updateEffectGradient(LEDGradient(stops: effectStops), for: device)
+                        if shouldAdoptEffectGradientAsMain(deviceId: device.id, effectStops: effectStops) {
+                            self.latestGradientStops[device.id] = effectStops
+                            self.persistLatestGradient(effectStops, for: device.id)
+                            if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
+                                self.devices[index].currentColor = GradientSampler.sampleColor(at: 0.5, stops: effectStops)
+                            }
+                        }
+                    }
+                }
             }
             
             // Update persistence
@@ -2609,8 +4378,10 @@ class DeviceControlViewModel: ObservableObject {
             persistDevice.isOnline = true
             persistDevice.lastSeen = Date()
             
-            if let segment = response.state.segments.first {
-                if let color = derivedColor(from: segment) {
+            if let segment = primarySegment(from: response.state) {
+                if let preferred = preferredDisplayColor(for: device.id) {
+                    persistDevice.currentColor = preferred
+                } else if let color = derivedColor(from: segment) {
                     persistDevice.currentColor = color
                 }
                 persistDevice.temperature = segment.cctNormalized
@@ -2630,10 +4401,48 @@ class DeviceControlViewModel: ObservableObject {
 
     // MARK: - Capability Helpers
     func supportsCCT(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        if UserDefaults.standard.bool(forKey: "forceCCTSlider") {
+            return true
+        }
+        if cctKelvinRanges[device.id] != nil {
+            return true
+        }
+        if let stripType = ledStripTypeByDevice[device.id], stripType.usesCCT {
+            return true
+        }
         // Use local cache for synchronous access from MainActor
         if let capabilities = deviceCapabilities[device.id],
            let segmentCap = capabilities.capabilities(for: segmentId) {
             return segmentCap.supportsCCT
+        }
+        if let segment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }),
+           let lc = segment.lc {
+            return (lc & 0b100) != 0
+        }
+        if device.temperature != nil {
+            return true
+        }
+        if let segments = device.state?.segments,
+           segments.contains(where: { $0.cct != nil }) {
+            return true
+        }
+        return false
+    }
+
+    func supportsCCTOutput(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        if cctKelvinRanges[device.id] != nil {
+            return true
+        }
+        if let stripType = ledStripTypeByDevice[device.id], stripType.usesCCT {
+            return true
+        }
+        if let capabilities = deviceCapabilities[device.id],
+           let segmentCap = capabilities.capabilities(for: segmentId) {
+            return segmentCap.supportsCCT
+        }
+        if let segment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }),
+           let lc = segment.lc {
+            return (lc & 0b100) != 0
         }
         if device.temperature != nil {
             return true
@@ -2646,10 +4455,20 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func supportsWhite(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        if let stripType = ledStripTypeByDevice[device.id], stripType.usesWhiteChannel {
+            return true
+        }
+        if cctKelvinRanges[device.id] != nil {
+            return true
+        }
         // Use local cache for synchronous access from MainActor
         if let capabilities = deviceCapabilities[device.id],
            let segmentCap = capabilities.capabilities(for: segmentId) {
             return segmentCap.supportsWhite
+        }
+        if let segment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }),
+           let lc = segment.lc {
+            return (lc & 0b010) != 0
         }
         if let segments = device.state?.segments {
             let hasWhite = segments.contains { segment in
@@ -2664,6 +4483,10 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func supportsRGB(for device: WLEDDevice, segmentId: Int = 0) -> Bool {
+        if let segment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }),
+           let lc = segment.lc {
+            return (lc & 0b001) != 0
+        }
         // Use local cache for synchronous access from MainActor
         guard let capabilities = deviceCapabilities[device.id],
               let segmentCap = capabilities.capabilities(for: segmentId) else {
@@ -2671,12 +4494,44 @@ class DeviceControlViewModel: ObservableObject {
         }
         return segmentCap.supportsRGB
     }
+
+    private func rgbArrayWithOptionalWhite(_ rgb: [Int], device: WLEDDevice, segmentId: Int = 0) -> [Int] {
+        guard rgb.count >= 3 else { return rgb }
+        if supportsWhite(for: device, segmentId: segmentId), rgb.count == 3 {
+            return rgb + [0]
+        }
+        return rgb
+    }
     
     func getSegmentCount(for device: WLEDDevice) -> Int {
-        guard let capabilities = deviceCapabilities[device.id] else {
-            return 1 // Default to single segment
+        if let segments = device.state?.segments, !segments.isEmpty {
+            return segments.count
         }
-        return capabilities.segments.count
+        if let capabilities = deviceCapabilities[device.id], !capabilities.segments.isEmpty {
+            return capabilities.segments.count
+        }
+        return 1 // Default to single segment
+    }
+
+    private func syncSegmentCapabilities(for device: WLEDDevice, segmentCount: Int) {
+        guard segmentCount > 0 else { return }
+        var capabilities = deviceCapabilities[device.id] ?? WLEDCapabilities(deviceId: device.id)
+        let hasCCT = device.temperature != nil
+            || (device.state?.segments.contains { $0.cct != nil } ?? false)
+        let hasWhite = (device.state?.segments.contains { segment in
+            guard let colors = segment.colors else { return false }
+            return colors.contains { $0.count >= 4 }
+        } ?? false) || (ledStripTypeByDevice[device.id]?.usesWhiteChannel ?? true)
+        let template = capabilities.segments[0]
+            ?? SegmentCapabilities(rgb: true, white: hasWhite, cct: hasCCT)
+
+        var updated: [Int: SegmentCapabilities] = [:]
+        for idx in 0..<segmentCount {
+            updated[idx] = capabilities.segments[idx] ?? template
+        }
+        capabilities.segments = updated
+        capabilities.lastUpdated = Date()
+        deviceCapabilities[device.id] = capabilities
     }
     
     func hasMultipleSegments(for device: WLEDDevice) -> Bool {
@@ -2692,14 +4547,155 @@ class DeviceControlViewModel: ObservableObject {
         let lastFetch = effectMetadataLastFetched[device.id] ?? .distantPast
         guard now.timeIntervalSince(lastFetch) > effectMetadataRefreshInterval else { return }
         do {
-            let metadataLines = try await apiService.fetchEffectMetadata(for: device)
+            async let namesTask = apiService.fetchEffectNames(for: device)
+            async let fxTask = apiService.fetchFxData(for: device)
+            let paletteNames = (try? await apiService.fetchPaletteNames(for: device)) ?? []
+            let (effectNames, fxData) = try await (namesTask, fxTask)
             effectMetadataLastFetched[device.id] = now
-            rawEffectMetadata[device.id] = metadataLines
-            if let bundle = EffectMetadataParser.parse(lines: metadataLines) {
-                effectMetadataBundles[device.id] = bundle
-            }
+            rawEffectMetadata[device.id] = fxData
+            let bundle = EffectMetadataParser.parse(effectNames: effectNames, fxData: fxData, palettes: paletteNames)
+            effectMetadataBundles[device.id] = bundle
         } catch {
             // Silently ignore metadata fetch failures to avoid impacting main flow
+        }
+    }
+
+    func loadPalettePreviewsIfNeeded(for device: WLEDDevice, force: Bool = false) async {
+        guard UserDefaults.standard.bool(forKey: "advancedUIEnabled") else { return }
+        guard let bundle = effectMetadata(for: device), !bundle.palettes.isEmpty else { return }
+        let now = Date()
+        let lastFetch = palettePreviewLastFetched[device.id] ?? .distantPast
+        guard force || now.timeIntervalSince(lastFetch) > palettePreviewRefreshInterval else { return }
+        do {
+            var aggregated: [Int: [PalettePreviewEntry]] = [:]
+            var page = 0
+            var maxPage = 0
+            repeat {
+                let response = try await apiService.fetchPalettePreviewPage(for: device, page: page)
+                maxPage = response.maxPage
+                let parsed = parsePalettePreviewEntries(response.palettes)
+                aggregated.merge(parsed) { existing, _ in existing }
+                page += 1
+            } while page <= maxPage
+            await MainActor.run {
+                palettePreviewEntriesByDevice[device.id] = aggregated
+                palettePreviewLastFetched[device.id] = now
+            }
+        } catch {
+            // Silently ignore palette preview failures; UI will fall back to gradient colors.
+        }
+    }
+
+    func palettePreviewStops(for device: WLEDDevice, paletteId: Int, fallbackGradient: LEDGradient) -> [GradientStop] {
+        guard let entries = palettePreviewEntriesByDevice[device.id]?[paletteId],
+              !entries.isEmpty else {
+            return fallbackGradient.stops
+        }
+        return palettePreviewStops(from: entries, fallbackGradient: fallbackGradient)
+    }
+
+    private func parsePalettePreviewEntries(_ palettes: [String: Any]) -> [Int: [PalettePreviewEntry]] {
+        var results: [Int: [PalettePreviewEntry]] = [:]
+        for (key, value) in palettes {
+            guard let paletteId = Int(key),
+                  let entries = parsePalettePreviewEntryList(value),
+                  !entries.isEmpty else { continue }
+            results[paletteId] = entries
+        }
+        return results
+    }
+
+    private func parsePalettePreviewEntryList(_ raw: Any) -> [PalettePreviewEntry]? {
+        guard let array = raw as? [Any] else { return nil }
+        var entries: [PalettePreviewEntry] = []
+        for item in array {
+            if let token = item as? String {
+                let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    entries.append(.placeholder(trimmed))
+                }
+            } else if let list = item as? [Any], list.count >= 4 {
+                let index = decodeInt(list[0])
+                let r = decodeInt(list[1])
+                let g = decodeInt(list[2])
+                let b = decodeInt(list[3])
+                if let index, let r, let g, let b {
+                    entries.append(.color(index: index, r: r, g: g, b: b))
+                }
+            }
+        }
+        return entries.isEmpty ? nil : entries
+    }
+
+    private func palettePreviewStops(from entries: [PalettePreviewEntry], fallbackGradient: LEDGradient) -> [GradientStop] {
+        let fallbackColors = paletteFallbackHexColors(from: fallbackGradient)
+        let hasExplicitIndices = entries.allSatisfy { entry in
+            if case .color = entry { return true }
+            return false
+        }
+        let total = max(entries.count, 1)
+        var stops: [GradientStop] = []
+        for (idx, entry) in entries.enumerated() {
+            let position: Double
+            if hasExplicitIndices, case let .color(index, _, _, _) = entry {
+                position = max(0.0, min(1.0, Double(index) / 255.0))
+            } else {
+                position = total > 1 ? Double(idx) / Double(total - 1) : 0.0
+            }
+            let hex: String
+            switch entry {
+            case let .color(_, r, g, b):
+                hex = rgbHex(r, g, b)
+            case let .placeholder(token):
+                let normalized = token.lowercased()
+                if normalized == "c1" {
+                    hex = fallbackColors[0]
+                } else if normalized == "c2" {
+                    hex = fallbackColors[1]
+                } else if normalized == "c3" {
+                    hex = fallbackColors[2]
+                } else if normalized == "r" {
+                    hex = fallbackColors[idx % fallbackColors.count]
+                } else {
+                    hex = fallbackColors[0]
+                }
+            }
+            stops.append(GradientStop(position: position, hexColor: hex))
+        }
+        if stops.count == 1, let first = stops.first {
+            stops.append(GradientStop(position: 1.0, hexColor: first.hexColor))
+        }
+        return stops.sorted { $0.position < $1.position }
+    }
+
+    private func paletteFallbackHexColors(from gradient: LEDGradient) -> [String] {
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        guard !sortedStops.isEmpty else {
+            return ["FF0000", "00FF00", "0000FF"]
+        }
+        if sortedStops.count == 1 {
+            let hex = sortedStops[0].hexColor
+            return [hex, hex, hex]
+        }
+        let positions: [Double] = [0.0, 0.5, 1.0]
+        return positions.map { GradientSampler.sampleColor(at: $0, stops: sortedStops).toHex() }
+    }
+
+    private func rgbHex(_ r: Int, _ g: Int, _ b: Int) -> String {
+        let clamp: (Int) -> Int = { min(255, max(0, $0)) }
+        return String(format: "%02X%02X%02X", clamp(r), clamp(g), clamp(b))
+    }
+
+    private func decodeInt(_ value: Any?) -> Int? {
+        switch value {
+        case let intValue as Int:
+            return intValue
+        case let doubleValue as Double:
+            return Int(doubleValue)
+        case let stringValue as String:
+            return Int(stringValue)
+        default:
+            return nil
         }
     }
     
@@ -2709,9 +4705,17 @@ class DeviceControlViewModel: ObservableObject {
 
     func colorSafeEffects(for device: WLEDDevice) -> [EffectMetadata] {
         guard let bundle = effectMetadata(for: device) else {
-            return DeviceControlViewModel.fallbackGradientFriendlyEffects
+            return filterMainUIEffects(DeviceControlViewModel.fallbackGradientFriendlyEffects)
         }
+        let isMatrix = deviceIsMatrixById[device.id]
         let filtered = bundle.effects.filter { metadata in
+            if metadata.isTwoDOnly, let isMatrix, !isMatrix {
+                return false
+            }
+            if metadata.paletteIsFixed {
+                // Palette-locked effects don't honor our gradient colors.
+                return false
+            }
             // Allow sound-reactive effects if they're in our approved list (e.g., Music Sync ID 139)
             if metadata.isSoundReactive {
                 return DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
@@ -2720,12 +4724,42 @@ class DeviceControlViewModel: ObservableObject {
             return supportsColors || DeviceControlViewModel.gradientFriendlyEffectIds.contains(metadata.id)
         }
         let list = filtered.isEmpty ? DeviceControlViewModel.fallbackGradientFriendlyEffects : filtered
-        return list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let filteredList = filterMainUIEffects(list)
+        return filteredList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     
     func colorSafeEffectOptions(for device: WLEDDevice) -> [EffectMetadata] {
         let effects = colorSafeEffects(for: device)
         return effects.isEmpty ? DeviceControlViewModel.fallbackGradientFriendlyEffects : effects
+    }
+
+    func allEffectOptions(for device: WLEDDevice) -> [EffectMetadata] {
+        guard let bundle = effectMetadata(for: device) else {
+            return DeviceControlViewModel.fallbackGradientFriendlyEffects
+        }
+        let isMatrix = deviceIsMatrixById[device.id]
+        let filtered = bundle.effects.filter { metadata in
+            if metadata.isTwoDOnly, let isMatrix, !isMatrix {
+                return false
+            }
+            return true
+        }
+        let list = filtered.isEmpty ? DeviceControlViewModel.fallbackGradientFriendlyEffects : filtered
+        return list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private static func normalizeEffectName(_ name: String) -> String {
+        let lowered = name.lowercased()
+        let filtered = lowered.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
+        return String(String.UnicodeScalarView(filtered))
+    }
+
+    private func filterMainUIEffects(_ effects: [EffectMetadata]) -> [EffectMetadata] {
+        effects.filter { metadata in
+            !DeviceControlViewModel.mainUIEffectExclusionsNormalized.contains(
+                DeviceControlViewModel.normalizeEffectName(metadata.name)
+            )
+        }
     }
     
     func applyColorSafeEffect(
@@ -2733,7 +4767,10 @@ class DeviceControlViewModel: ObservableObject {
         with gradient: LEDGradient,
         segmentId: Int = 0,
         device: WLEDDevice,
-        userInitiated: Bool = true
+        userInitiated: Bool = true,
+        preferPaletteIfAvailable: Bool = false,
+        includeAllEffects: Bool = false,
+        origin: SyncOrigin = .user
     ) async {
         if userInitiated {
             await cancelActiveRun(for: device, releaseRealtimeOverride: false, force: true)
@@ -2748,7 +4785,7 @@ class DeviceControlViewModel: ObservableObject {
         // We'll include lor: 0 in the same API call as the effect to prevent flash
         let currentState = currentEffectState(for: device, segmentId: segmentId)
         let isComingFromGradient = !currentState.isEnabled || currentState.effectId == 0
-        let needsRealtimeRelease = isComingFromGradient
+        let needsRealtimeRelease = isComingFromGradient || userInitiated
         
         if lastGradientBeforeEffect[device.id] == nil {
             let baseline = gradientStops(for: device.id) ?? [
@@ -2757,7 +4794,7 @@ class DeviceControlViewModel: ObservableObject {
             ]
             lastGradientBeforeEffect[device.id] = baseline
         }
-        let availableEffects = colorSafeEffectOptions(for: device)
+        let availableEffects = includeAllEffects ? allEffectOptions(for: device) : colorSafeEffectOptions(for: device)
         guard let metadata = availableEffects.first(where: { $0.id == effectId }) else {
             #if DEBUG
             os_log("[Effects] Requested effect %d not found in catalog", effectId)
@@ -2777,6 +4814,9 @@ class DeviceControlViewModel: ObservableObject {
                     #if DEBUG
                     os_log("[Effects] Audio reactive mode already enabled", log: OSLog.effects, type: .debug)
                     #endif
+                    await MainActor.run {
+                        self.audioReactiveEnabledByDevice[device.id] = true
+                    }
                 } else {
                     // Enable audio reactive
                     _ = try await apiService.enableAudioReactive(for: device)
@@ -2790,10 +4830,16 @@ class DeviceControlViewModel: ObservableObject {
                         #if DEBUG
                         os_log("[Effects] Audio reactive mode verified as enabled", log: OSLog.effects, type: .info)
                         #endif
+                        await MainActor.run {
+                            self.audioReactiveEnabledByDevice[device.id] = true
+                        }
                     } else {
                         #if DEBUG
                         os_log("[Effects] WARNING: Audio reactive mode may not be enabled. Check WLED web interface.", log: OSLog.effects, type: .error)
                         #endif
+                        await MainActor.run {
+                            self.audioReactiveEnabledByDevice[device.id] = false
+                        }
                     }
                 }
             } catch {
@@ -2801,6 +4847,9 @@ class DeviceControlViewModel: ObservableObject {
                 os_log("[Effects] Failed to enable/verify audio reactive mode: %{public}@", log: OSLog.effects, type: .error, error.localizedDescription)
                 #endif
                 // Continue anyway - the effect might still work if audio reactive is already enabled
+                await MainActor.run {
+                    self.audioReactiveEnabledByDevice[device.id] = false
+                }
             }
         }
         
@@ -2816,9 +4865,11 @@ class DeviceControlViewModel: ObservableObject {
         #endif
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.effectId = effectId
-        // Don't set palette when we're providing custom colors - let WLED use the colors directly
-        // Only use palette if the effect supports it and we're NOT providing colors
-        state.paletteId = nil  // Omit palette when sending colors
+        let usePalette = preferPaletteIfAvailable && state.paletteId != nil
+        if !usePalette {
+            // Don't set palette when we're providing custom colors - let WLED use the colors directly
+            state.paletteId = nil  // Omit palette when sending colors
+        }
         state.isEnabled = true
         updateEffectGradient(gradient, for: device)
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
@@ -2828,18 +4879,26 @@ class DeviceControlViewModel: ObservableObject {
         let currentDevice = await MainActor.run {
             self.devices.first(where: { $0.id == device.id }) ?? device
         }
-        _ = currentDevice.brightness > 0 ? currentDevice.brightness : 255 // Unused
         
         // CRITICAL: Apply effect with colors, brightness, and realtime release atomically
         // Include lor: 0 in the same call if needed to prevent flash
         let useFullStrip = true
-        await applyEffectState(state, to: currentDevice, segmentId: segmentId, colors: colorArray, turnOn: true, releaseRealtime: needsRealtimeRelease, fullStrip: useFullStrip)
-        logEffectApplication(effectId: effectId, device: device, colors: colorArray)
+        let colorsToSend = usePalette ? nil : colorArray
+        await applyEffectState(state, to: currentDevice, segmentId: segmentId, colors: colorsToSend, turnOn: true, releaseRealtime: needsRealtimeRelease, fullStrip: useFullStrip)
+        if let colorsToSend {
+            logEffectApplication(effectId: effectId, device: device, colors: colorsToSend)
+        }
+        await propagateIfNeeded(
+            source: device,
+            payload: .effectState(effectId: effectId, gradient: gradient, segmentId: segmentId),
+            origin: origin
+        )
     }
     
     /// Public method to load effect metadata (triggers fetch if needed)
     func loadEffectMetadata(for device: WLEDDevice) async {
         await fetchEffectMetadataIfNeeded(for: device)
+        await loadPalettePreviewsIfNeeded(for: device)
     }
     
     func currentEffectState(for device: WLEDDevice, segmentId: Int = 0) -> DeviceEffectState {
@@ -2869,17 +4928,63 @@ class DeviceControlViewModel: ObservableObject {
         UserDefaults.standard.set(enabled, forKey: temperatureStopsCCTKeyPrefix + device.id)
     }
 
+    func isAutoWhiteEnabled(for device: WLEDDevice) -> Bool {
+        if let current = devices.first(where: { $0.id == device.id })?.autoWhiteMode {
+            return current != .none
+        }
+        if let mode = device.autoWhiteMode {
+            return mode != .none
+        }
+        return false
+    }
+
+    @MainActor
     private func refreshLEDPreferencesIfNeeded(for device: WLEDDevice, force: Bool = false) async {
-        guard !isPlaceholderDevice(device), device.isOnline else { return }
+        guard !isPlaceholderDevice(device) else { return }
+        if ledPreferencesFetchInFlight.contains(device.id) {
+            return
+        }
         let now = Date()
         if !force, let lastFetch = ledPreferencesLastFetched[device.id],
            now.timeIntervalSince(lastFetch) < ledPreferencesRefreshInterval {
             return
         }
-        ledPreferencesLastFetched[device.id] = now
+        ledPreferencesFetchInFlight.insert(device.id)
+        defer {
+            ledPreferencesFetchInFlight.remove(device.id)
+        }
 
         do {
             let config = try await apiService.getLEDConfiguration(for: device)
+            let stripType = LEDStripType.fromWLEDType(config.stripType)
+            let colorOrder = LEDColorOrder(rawValue: config.colorOrder)
+            let hasCctRange = (config.cctKelvinMin != nil && config.cctKelvinMax != nil)
+            let usesCCT = (stripType?.usesCCT ?? false) || hasCctRange
+            let usesWhite = (stripType?.usesWhiteChannel ?? false) || usesCCT
+
+            if let stripType {
+                ledStripTypeByDevice[device.id] = stripType
+            } else {
+                ledStripTypeByDevice.removeValue(forKey: device.id)
+            }
+            if let colorOrder {
+                ledColorOrderByDevice[device.id] = colorOrder
+            } else {
+                ledColorOrderByDevice.removeValue(forKey: device.id)
+            }
+
+            let segmentCount = max(1, getSegmentCount(for: device))
+            if usesWhite || usesCCT {
+                var capabilities = deviceCapabilities[device.id] ?? WLEDCapabilities(deviceId: device.id)
+                let template = SegmentCapabilities(rgb: true, white: usesWhite, cct: usesCCT)
+                var updated: [Int: SegmentCapabilities] = [:]
+                for idx in 0..<segmentCount {
+                    updated[idx] = template
+                }
+                capabilities.segments = updated
+                capabilities.lastUpdated = Date()
+                deviceCapabilities[device.id] = capabilities
+            }
             let mode = AutoWhiteMode(rawValue: config.autoWhiteMode) ?? .none
             if let minKelvin = config.cctKelvinMin,
                let maxKelvin = config.cctKelvinMax,
@@ -2888,6 +4993,7 @@ class DeviceControlViewModel: ObservableObject {
             } else {
                 cctKelvinRanges.removeValue(forKey: device.id)
             }
+            ledPreferencesLastFetched[device.id] = now
             await MainActor.run {
                 if let index = devices.firstIndex(where: { $0.id == device.id }) {
                     devices[index].autoWhiteMode = mode
@@ -2901,7 +5007,15 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
+    func refreshLEDPreferences(for device: WLEDDevice) async {
+        await refreshLEDPreferencesIfNeeded(for: device, force: true)
+    }
+
     private func fallbackSeglc(from leds: LedInfo, state: WLEDState) -> [Int]? {
+        let segmentFlags = state.segments.compactMap { $0.lc }
+        if !segmentFlags.isEmpty {
+            return segmentFlags
+        }
         if let lc = leds.lc {
             return [lc]
         }
@@ -2941,13 +5055,13 @@ class DeviceControlViewModel: ObservableObject {
         state.isEnabled = true
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
         let useFullStrip = true
-        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: true, fullStrip: useFullStrip)
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: true, releaseRealtime: true, fullStrip: useFullStrip)
     }
     
     /// Disable effects for a device/segment (set fx: 0)
     /// This allows CCT and solid colors to work properly
     /// Note: Does NOT automatically restore gradient - caller should handle that separately if needed
-    func disableEffect(for device: WLEDDevice, segmentId: Int = 0) async {
+    func disableEffect(for device: WLEDDevice, segmentId: Int = 0, origin: SyncOrigin = .user) async {
         os_log("[Effects] Disabling effect for device %{public}@, segment %d", log: OSLog.effects, type: .debug, device.name, segmentId)
         await cancelActiveTransitionIfNeeded(for: device)
         await colorPipeline.cancelUploads(for: device.id)
@@ -2986,6 +5100,7 @@ class DeviceControlViewModel: ObservableObject {
             brightness: currentBrightness,
             on: currentDevice.isOn,
             userInitiated: false,
+            origin: .propagated,
             preferSegmented: true
         )
         
@@ -2994,36 +5109,230 @@ class DeviceControlViewModel: ObservableObject {
         #if DEBUG
         os_log("[Effects] Disabled effect on %{public}@ and restored main gradient", device.name)
         #endif
+        await propagateIfNeeded(source: device, payload: .effectDisable(segmentId: segmentId), origin: origin)
     }
     
-    func updateEffectSpeed(for device: WLEDDevice, segmentId: Int = 0, speed: Int) async {
+    func updateEffectSpeed(for device: WLEDDevice, segmentId: Int = 0, speed: Int, origin: SyncOrigin = .user) async {
         await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.speed = max(0, min(255, speed))
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
         let useFullStrip = true
-        await applyEffectState(state, to: device, segmentId: segmentId, fullStrip: useFullStrip)
+        await applyEffectState(state, to: device, segmentId: segmentId, releaseRealtime: true, fullStrip: useFullStrip)
+        await propagateIfNeeded(
+            source: device,
+            payload: .effectParameter(.speed(segmentId: segmentId, value: state.speed)),
+            origin: origin
+        )
     }
     
-    func updateEffectIntensity(for device: WLEDDevice, segmentId: Int = 0, intensity: Int) async {
+    func updateEffectIntensity(for device: WLEDDevice, segmentId: Int = 0, intensity: Int, origin: SyncOrigin = .user) async {
         await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.intensity = max(0, min(255, intensity))
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
         let useFullStrip = true
-        await applyEffectState(state, to: device, segmentId: segmentId, fullStrip: useFullStrip)
+        await applyEffectState(state, to: device, segmentId: segmentId, releaseRealtime: true, fullStrip: useFullStrip)
+        await propagateIfNeeded(
+            source: device,
+            payload: .effectParameter(.intensity(segmentId: segmentId, value: state.intensity)),
+            origin: origin
+        )
+    }
+
+    func updateEffectCustomParameter(
+        for device: WLEDDevice,
+        segmentId: Int = 0,
+        index: Int,
+        value: Int,
+        origin: SyncOrigin = .user
+    ) async {
+        await cancelActiveTransitionIfNeeded(for: device)
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        let clamped = max(0, min(255, value))
+        switch index {
+        case 2:
+            state.custom1 = clamped
+        case 3:
+            state.custom2 = clamped
+        case 4:
+            state.custom3 = clamped
+        default:
+            break
+        }
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        let useFullStrip = true
+        await applyEffectState(state, to: device, segmentId: segmentId, releaseRealtime: true, fullStrip: useFullStrip)
+        await propagateIfNeeded(
+            source: device,
+            payload: .effectParameter(.custom(segmentId: segmentId, index: index, value: clamped)),
+            origin: origin
+        )
+    }
+
+    func segmentBrightnessValue(for device: WLEDDevice, segmentId: Int = 0) -> Int {
+        if let segment = device.state?.segments.first(where: { ($0.id ?? 0) == segmentId }) {
+            return segment.bri ?? 255
+        }
+        if let first = device.state?.segments.first {
+            return first.bri ?? 255
+        }
+        return 255
+    }
+
+    func updateSegmentBrightness(for device: WLEDDevice, segmentId: Int = 0, brightness: Int, origin: SyncOrigin = .user) async {
+        let clamped = max(0, min(255, brightness))
+        markUserInteraction(device.id)
+        let segUpdate = SegmentUpdate(id: segmentId, bri: clamped)
+        let stateUpdate = WLEDStateUpdate(seg: [segUpdate])
+
+        let wsConnected = webSocketManager.isDeviceConnected(device.id)
+        if wsConnected {
+            webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }),
+                   let state = devices[index].state {
+                    let updatedSegments = state.segments.enumerated().map { idx, segment in
+                        let segId = segment.id ?? idx
+                        return segId == segmentId
+                            ? segmentWithBrightness(segment, brightness: clamped)
+                            : segment
+                    }
+                    devices[index].state = WLEDState(
+                        brightness: state.brightness,
+                        isOn: state.isOn,
+                        segments: updatedSegments,
+                        transitionDeciseconds: state.transitionDeciseconds,
+                        presetId: state.presetId,
+                        playlistId: state.playlistId,
+                        mainSegment: state.mainSegment
+                    )
+                    devices[index].isOnline = true
+                }
+                clearError()
+            }
+            var updatedDevice = device
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+            await propagateIfNeeded(
+                source: device,
+                payload: .effectParameter(.segmentBrightness(segmentId: segmentId, value: clamped)),
+                origin: origin
+            )
+            return
+        }
+
+        do {
+            _ = try await apiService.updateState(for: device, state: stateUpdate)
+            if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
+                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+            }
+            await MainActor.run {
+                if let index = devices.firstIndex(where: { $0.id == device.id }),
+                   let state = devices[index].state {
+                    let updatedSegments = state.segments.enumerated().map { idx, segment in
+                        let segId = segment.id ?? idx
+                        return segId == segmentId
+                            ? segmentWithBrightness(segment, brightness: clamped)
+                            : segment
+                    }
+                    devices[index].state = WLEDState(
+                        brightness: state.brightness,
+                        isOn: state.isOn,
+                        segments: updatedSegments,
+                        transitionDeciseconds: state.transitionDeciseconds,
+                        presetId: state.presetId,
+                        playlistId: state.playlistId,
+                        mainSegment: state.mainSegment
+                    )
+                    devices[index].isOnline = true
+                }
+                clearError()
+            }
+            var updatedDevice = device
+            updatedDevice.isOnline = true
+            updatedDevice.lastSeen = Date()
+            await coreDataManager.saveDevice(updatedDevice)
+            await propagateIfNeeded(
+                source: device,
+                payload: .effectParameter(.segmentBrightness(segmentId: segmentId, value: clamped)),
+                origin: origin
+            )
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            await MainActor.run {
+                self.presentError(mappedError)
+            }
+        }
+    }
+
+    func clearEffectPalette(for device: WLEDDevice, segmentId: Int = 0, origin: SyncOrigin = .user) async {
+        await cancelActiveTransitionIfNeeded(for: device)
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        state.paletteId = nil
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        let useFullStrip = true
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil, releaseRealtime: true, fullStrip: useFullStrip)
+        await propagateIfNeeded(
+            source: device,
+            payload: .effectParameter(.palette(segmentId: segmentId, paletteId: nil)),
+            origin: origin
+        )
+    }
+
+    func refreshAudioReactiveStatus(for device: WLEDDevice) async {
+        let enabled = (try? await apiService.isAudioReactiveEnabled(for: device)) ?? false
+        await MainActor.run {
+            self.audioReactiveEnabledByDevice[device.id] = enabled
+        }
+    }
+
+    func audioReactiveEnabled(for device: WLEDDevice) -> Bool? {
+        audioReactiveEnabledByDevice[device.id]
     }
     
-    func updateEffectPalette(for device: WLEDDevice, segmentId: Int = 0, paletteId: Int) async {
+    func updateEffectPalette(for device: WLEDDevice, segmentId: Int = 0, paletteId: Int, origin: SyncOrigin = .user) async {
         await cancelActiveTransitionIfNeeded(for: device)
         markUserInteraction(device.id)
         var state = currentEffectState(for: device, segmentId: segmentId)
         state.paletteId = max(0, paletteId)  // Only set palette when explicitly requested (no colors)
         updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
         let useFullStrip = true
-        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil, fullStrip: useFullStrip)
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil, releaseRealtime: true, fullStrip: useFullStrip)
+        await propagateIfNeeded(
+            source: device,
+            payload: .effectParameter(.palette(segmentId: segmentId, paletteId: state.paletteId)),
+            origin: origin
+        )
+    }
+
+    func updateEffectOption(for device: WLEDDevice, segmentId: Int = 0, optionIndex: Int, value: Bool, origin: SyncOrigin = .user) async {
+        await cancelActiveTransitionIfNeeded(for: device)
+        markUserInteraction(device.id)
+        var state = currentEffectState(for: device, segmentId: segmentId)
+        switch optionIndex {
+        case 1:
+            state.option1 = value
+        case 2:
+            state.option2 = value
+        case 3:
+            state.option3 = value
+        default:
+            return
+        }
+        updateEffectStateCache(state, deviceId: device.id, segmentId: segmentId)
+        let useFullStrip = true
+        await applyEffectState(state, to: device, segmentId: segmentId, colors: nil, turnOn: nil, releaseRealtime: true, fullStrip: useFullStrip)
+        await propagateIfNeeded(
+            source: device,
+            payload: .effectParameter(.option(segmentId: segmentId, optionIndex: optionIndex, value: value)),
+            origin: origin
+        )
     }
     
     private func updateEffectStateCache(_ state: DeviceEffectState, deviceId: String, segmentId: Int) {
@@ -3060,8 +5369,8 @@ class DeviceControlViewModel: ObservableObject {
             let responseState: WLEDState
             if fullStrip {
                 let totalLEDs = totalLEDCount(for: currentDevice)
-                let useAppSegments = appManagedSegmentDevices.contains(device.id)
-                    || appManagedSegmentLayouts[device.id] != nil
+                let useAppSegments = shouldUseAppManagedSegments(for: device.id)
+                let manualSegments = usesManualSegmentation(for: device.id)
                 var updates: [SegmentUpdate] = []
                 if useAppSegments {
                     let count = segmentCount(for: totalLEDs)
@@ -3086,6 +5395,35 @@ class DeviceControlViewModel: ObservableObject {
                                 sx: state.speed,
                                 ix: state.intensity,
                                 pal: effectivePalette,
+                                c1: state.custom1,
+                                c2: state.custom2,
+                                c3: state.custom3,
+                                o1: state.option1,
+                                o2: state.option2,
+                                o3: state.option3,
+                                frz: false
+                            )
+                        )
+                    }
+                } else if manualSegments, let segments = currentDevice.state?.segments, !segments.isEmpty {
+                    for (index, segment) in segments.enumerated() {
+                        let resolvedId = segment.id ?? index
+                        updates.append(
+                            SegmentUpdate(
+                                id: resolvedId,
+                                on: turnOn,
+                                col: colors,
+                                cct: nil,
+                                fx: state.effectId,
+                                sx: state.speed,
+                                ix: state.intensity,
+                                pal: effectivePalette,
+                                c1: state.custom1,
+                                c2: state.custom2,
+                                c3: state.custom3,
+                                o1: state.option1,
+                                o2: state.option2,
+                                o3: state.option3,
                                 frz: false
                             )
                         )
@@ -3104,6 +5442,12 @@ class DeviceControlViewModel: ObservableObject {
                             sx: state.speed,
                             ix: state.intensity,
                             pal: effectivePalette,
+                            c1: state.custom1,
+                            c2: state.custom2,
+                            c3: state.custom3,
+                            o1: state.option1,
+                            o2: state.option2,
+                            o3: state.option3,
                             frz: false
                         )
                     )
@@ -3137,6 +5481,12 @@ class DeviceControlViewModel: ObservableObject {
                     speed: state.speed,
                     intensity: state.intensity,
                     palette: state.paletteId,
+                    custom1: state.custom1,
+                    custom2: state.custom2,
+                    custom3: state.custom3,
+                    option1: state.option1,
+                    option2: state.option2,
+                    option3: state.option3,
                     colors: colors,
                     device: device,
                     turnOn: turnOn,
@@ -3206,6 +5556,12 @@ class DeviceControlViewModel: ObservableObject {
                         speed: seg.sx ?? state.speed,
                         intensity: seg.ix ?? state.intensity,
                         paletteId: seg.pal ?? state.paletteId,
+                        custom1: seg.c1 ?? state.custom1,
+                        custom2: seg.c2 ?? state.custom2,
+                        custom3: seg.c3 ?? state.custom3,
+                        option1: seg.o1 ?? state.option1,
+                        option2: seg.o2 ?? state.option2,
+                        option3: seg.o3 ?? state.option3,
                         isEnabled: (seg.fx ?? 0) != 0
                     )
                     segmentStates[segmentId] = confirmedState
@@ -3227,15 +5583,33 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     private func updateDevice(_ deviceId: String, with state: WLEDState) {
+        let isUnderControl = isUnderUserControl(deviceId)
+        let gradientJustApplied: Bool
+        if let gradientTime = gradientApplicationTimes[deviceId] {
+            gradientJustApplied = Date().timeIntervalSince(gradientTime) < gradientProtectionWindow
+        } else {
+            gradientJustApplied = false
+        }
+        let mainSegment = primarySegment(from: state)
+        let hasActiveEffect = ((mainSegment?.fx) ?? 0) != 0
+        if !isUnderControl && !gradientJustApplied && !hasActiveEffect,
+           let refreshedStops = gradientStopsFromStateSegments(state),
+           !refreshedStops.isEmpty {
+            latestGradientStops[deviceId] = refreshedStops
+            persistLatestGradient(refreshedStops, for: deviceId)
+        }
+
         if let index = devices.firstIndex(where: { $0.id == deviceId }) {
             var updatedDevice = devices[index]
             updatedDevice.brightness = state.brightness
             updatedDevice.isOn = state.isOn
             updatedDevice.state = state
             updatedDevice.lastSeen = Date()
-            if let segment = state.segments.first {
+            if let segment = primarySegment(from: state) {
                 updatedDevice.temperature = segment.cctNormalized
-                if let color = derivedColor(from: segment) {
+                if let preferred = preferredDisplayColor(for: deviceId) {
+                    updatedDevice.currentColor = preferred
+                } else if let color = derivedColor(from: segment) {
                     updatedDevice.currentColor = color
                 }
             }
@@ -3247,9 +5621,17 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
     
-    private func stateUpdate(from state: WLEDState) -> WLEDStateUpdate {
+    private func stateUpdate(from state: WLEDState, device: WLEDDevice) -> WLEDStateUpdate {
         let segments = state.segments.map { segment in
-            SegmentUpdate(
+            let segmentId = segment.id ?? 0
+            let colors = segment.colors?.map { rgb in
+                guard rgb.count >= 3 else { return rgb }
+                if supportsWhite(for: device, segmentId: segmentId), rgb.count == 3 {
+                    return rgb + [0]
+                }
+                return rgb
+            }
+            return SegmentUpdate(
                 id: segment.id,
                 start: segment.start,
                 stop: segment.stop,
@@ -3259,23 +5641,34 @@ class DeviceControlViewModel: ObservableObject {
                 ofs: segment.ofs,
                 on: segment.on,
                 bri: segment.bri,
-                col: segment.colors,
+                col: colors,
                 cct: segment.cct,
                 fx: segment.fx,
                 sx: segment.sx,
                 ix: segment.ix,
                 pal: segment.pal,
+                c1: segment.c1,
+                c2: segment.c2,
+                c3: segment.c3,
                 sel: segment.sel,
                 rev: segment.rev,
                 mi: segment.mi,
                 cln: segment.cln,
+                o1: segment.o1,
+                o2: segment.o2,
+                o3: segment.o3,
+                si: segment.si,
+                m12: segment.m12,
+                setId: segment.setId,
+                name: segment.name,
                 frz: segment.frz
             )
         }
         return WLEDStateUpdate(
             on: state.isOn,
             bri: state.brightness,
-            seg: segments
+            seg: segments,
+            mainSegment: state.mainSegment
         )
     }
     
@@ -3336,15 +5729,42 @@ class DeviceControlViewModel: ObservableObject {
     func toggleRealTimeUpdates() {
         isRealTimeEnabled.toggle()
     }
+
+    func setActiveDevice(_ device: WLEDDevice?) {
+        let resolvedDevice: WLEDDevice? = {
+            guard let device else { return nil }
+            if let exact = devices.first(where: { $0.id == device.id }) {
+                return exact
+            }
+            if let canonical = devices.first(where: { $0.ipAddress == device.ipAddress && !isPlaceholderDevice($0) }) {
+                return canonical
+            }
+            return devices.first(where: { $0.ipAddress == device.ipAddress }) ?? device
+        }()
+        let newId = resolvedDevice?.id
+        guard newId != activeDeviceId else { return }
+        activeDeviceId = newId
+        guard isRealTimeEnabled,
+              let target = resolvedDevice,
+              !isPlaceholderDevice(target) else { return }
+        connectWebSocketIfNeeded(for: target)
+    }
+
+    func clearActiveDeviceIfNeeded(_ deviceId: String) {
+        guard activeDeviceId == deviceId else { return }
+        setActiveDevice(nil)
+    }
     
     func connectRealTimeForDevice(_ device: WLEDDevice) {
         // Skip off-subnet devices
         guard isIPInCurrentSubnets(device.ipAddress) else { return }
+        setActiveDevice(device)
         connectWebSocketIfNeeded(for: device)
     }
     
     func disconnectRealTimeForDevice(_ device: WLEDDevice) {
-        disconnectWebSocket(for: device)
+        clearActiveDeviceIfNeeded(device.id)
+        webSocketManager.disconnect(from: device.id)
     }
     
     func refreshRealTimeConnections() {
@@ -3353,6 +5773,20 @@ class DeviceControlViewModel: ObservableObject {
         } else {
             disconnectAllWebSockets()
         }
+    }
+
+    func pauseRealTimeConnectionsIfNeeded() {
+        guard isRealTimeEnabled else { return }
+        hasHandledForegroundActive = false
+        connectionMonitor.pauseBackgroundOperations()
+        webSocketManager.suspendAllConnections()
+    }
+
+    func resumeRealTimeConnectionsIfNeeded() {
+        guard isRealTimeEnabled else { return }
+        connectionMonitor.resumeBackgroundOperations()
+        webSocketManager.resumeConnections()
+        connectWebSocketsForAllDevices()
     }
     
     // MARK: - Prefetching Helpers
@@ -3416,9 +5850,25 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     private func presentError(_ error: WLEDError) {
+        if isBenignCancelledNoise(error) {
+            #if DEBUG
+            print("⚠️ Suppressing benign cancelled error banner: \(error.message)")
+            #endif
+            return
+        }
         if currentError == error { return }
         currentError = error
         errorMessage = error.message
+    }
+
+    private func isBenignCancelledNoise(_ error: WLEDError) -> Bool {
+        switch error {
+        case .apiError(let message):
+            let lowered = message.lowercased()
+            return lowered.contains("cancelled") || lowered.contains("canceled")
+        default:
+            return false
+        }
     }
     
     private func resolvedDeviceName(for device: WLEDDevice?, providedName: String?) -> String? {
@@ -3490,10 +5940,17 @@ class DeviceControlViewModel: ObservableObject {
         return isSolidColor
     }
     
-    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, stopWhiteLevels: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil, transitionDurationSeconds: Double? = nil, forceNoPerCallTransition: Bool = false, releaseRealtimeOverride: Bool = true, userInitiated: Bool = true, preferSegmented: Bool = false) async {
+    func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, stopWhiteLevels: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil, transitionDurationSeconds: Double? = nil, forceNoPerCallTransition: Bool = false, releaseRealtimeOverride: Bool = true, userInitiated: Bool = true, origin: SyncOrigin = .user, preferSegmented: Bool = false, forceSegmentedOnly: Bool = false) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
-        if userInitiated, activeRunStatus[device.id] != nil {
-            await cancelActiveRun(for: device, force: true)
+        if userInitiated {
+            let hasActiveRun = activeRunStatus[device.id] != nil
+                || playlistRunsByDevice.contains(device.id)
+                || temporaryPlaylistIds[device.id] != nil
+                || (devices.first(where: { $0.id == device.id })?.state?.playlistId != nil)
+                || (device.state?.playlistId != nil)
+            if hasActiveRun {
+                await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
+            }
         }
         
         // CRITICAL: Mark user interaction only for user-driven updates
@@ -3502,18 +5959,28 @@ class DeviceControlViewModel: ObservableObject {
         }
         
         let sortedStops = stops.sorted { $0.position < $1.position }
+        let propagationPayload = ColorsSyncPayload.gradient(
+            stops: sortedStops,
+            interpolation: interpolation,
+            segmentId: segmentId,
+            brightness: brightness,
+            on: on
+        )
         latestGradientStops[device.id] = sortedStops
         persistLatestGradient(sortedStops, for: device.id)
-        let allowPerLed = allowPerLedFallback(for: device)
+        let allowPerLed = forceSegmentedOnly ? false : allowPerLedFallback(for: device)
+        let preferSegments = preferSegmented || forceSegmentedOnly
         
         // OPTIMIZATION: Solid color detection (single stop OR all stops have same color)
         // Use segment col field for solid colors (more efficient than per-LED upload)
         // This matches WLED's recommended approach for solid colors
         let firstColorHex = sortedStops.first?.hexColor
         let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == firstColorHex }
+        let appManagedSegments = shouldUseAppManagedSegments(for: device.id)
+        let manualSegments = usesManualSegmentation(for: device.id)
         let willUseSegmented = isSolidColor
-            ? (preferSegmented || appManagedSegmentDevices.contains(device.id))
-            : (preferSegmented || transitionDurationSeconds != nil || !allowPerLed || appManagedSegmentDevices.contains(device.id))
+            ? (preferSegments || appManagedSegments || manualSegments)
+            : (preferSegments || transitionDurationSeconds != nil || !allowPerLed || appManagedSegments || manualSegments)
 
         // Only disable effects ahead of time for per-LED uploads.
         if disableActiveEffect,
@@ -3546,6 +6013,7 @@ class DeviceControlViewModel: ObservableObject {
                 segmentId: segmentId,
                 disableActiveEffect: disableActiveEffect
             )
+            await propagateIfNeeded(source: device, payload: propagationPayload, origin: origin)
             return
         }
 
@@ -3564,6 +6032,7 @@ class DeviceControlViewModel: ObservableObject {
                 segmentId: segmentId,
                 disableActiveEffect: disableActiveEffect
             )
+            await propagateIfNeeded(source: device, payload: propagationPayload, origin: origin)
             return
         }
         
@@ -3586,9 +6055,10 @@ class DeviceControlViewModel: ObservableObject {
             var normalizedTemp: Double? = nil
             var whiteLevel: Int? = nil
             let supportsWhiteValue = supportsWhite(for: device, segmentId: segmentId)
-            let allowManualWhite = supportsWhiteValue && UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+            let allowManualWhite = supportsWhiteValue
+                && UserDefaults.standard.bool(forKey: "advancedUIEnabled")
             let allowCCTTemperatureStops = temperatureStopsUseCCT(for: device)
-            let supportsCCTDevice = supportsCCT(for: device, segmentId: segmentId)
+            let supportsCCTDevice = supportsCCTOutput(for: device, segmentId: segmentId)
             
             // Handle CCT if provided and consistent
             if hasTemperature, allStopsHaveSameTemp, let temp = stopTemperatures?[singleStop.id] {
@@ -3638,8 +6108,7 @@ class DeviceControlViewModel: ObservableObject {
                 let clearState = WLEDStateUpdate(
                     on: on,
                     bri: brightness,
-                    seg: [clearSegment],
-                    transition: nil
+                    seg: [clearSegment]
                 )
                 do {
                     _ = try await apiService.updateState(for: device, state: clearState)
@@ -3657,6 +6126,8 @@ class DeviceControlViewModel: ObservableObject {
                 var colorArray = [rgb[0], rgb[1], rgb[2]]
                 if let whiteLevel {
                     colorArray.append(whiteLevel)
+                } else if supportsWhiteValue {
+                    colorArray.append(0)
                 }
                 segment = SegmentUpdate(
                     id: segmentId,
@@ -3668,16 +6139,17 @@ class DeviceControlViewModel: ObservableObject {
             // This ensures power-on/brightness is applied ALONG WITH color in SAME API call
             // This prevents WLED from showing restored colors before color is applied
             // Include transition time if provided (for solid color transitions)
-            let transitionMs = forceNoPerCallTransition ? nil : clampedTransitionMs(for: transitionDurationSeconds)
+            let transitionDeciseconds = forceNoPerCallTransition ? nil : clampedTransitionDeciseconds(for: transitionDurationSeconds)
             let stateUpdate = WLEDStateUpdate(
                 on: on,  // CRITICAL: Include power state if provided (for power-on operations)
                 bri: brightness,  // Set brightness if provided
                 seg: [segment],
-                transition: transitionMs  // Include transition time for native WLED transition
+                transitionDeciseconds: transitionDeciseconds  // Include transition time for native WLED transition
             )
             
             do {
                 _ = try await apiService.updateState(for: device, state: stateUpdate)
+                let writeSucceededAt = Date()
                 
                 // Send WebSocket update if connected
                 if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
@@ -3713,12 +6185,16 @@ class DeviceControlViewModel: ObservableObject {
                         if let onValue = on {
                             self.devices[index].isOn = onValue
                         }
+                        self.devices[index].isOnline = true
+                        self.devices[index].lastSeen = writeSucceededAt
                     }
+                    self.noteControlWriteSuccess(deviceId: device.id)
                 }
                 
                 #if DEBUG
                 print("✅ [Gradient] Applied single-stop solid color via segment col field (optimized)")
                 #endif
+                await propagateIfNeeded(source: device, payload: propagationPayload, origin: origin)
                 return  // Early return - more efficient than per-LED upload
             } catch {
                 // Fallback to per-LED upload only if allowed
@@ -3739,7 +6215,9 @@ class DeviceControlViewModel: ObservableObject {
         // CRITICAL: Use sortedStops consistently (not unsorted stops) for code consistency and correctness
         // This ensures gradient colors are sampled in the correct order matching temperature collection
         let gradient = LEDGradient(stops: sortedStops, interpolation: interpolation)
-        let resolvedLedCount = appManagedSegmentDevices.contains(device.id) ? totalLEDCount(for: device) : max(1, ledCount)
+        let resolvedLedCount = (shouldUseAppManagedSegments(for: device.id) || usesManualSegmentation(for: device.id))
+            ? totalLEDCount(for: device)
+            : max(1, ledCount)
         let frame = GradientSampler.sample(gradient, ledCount: resolvedLedCount, interpolation: interpolation)
         var intent = ColorIntent(deviceId: device.id, mode: .perLED)
         intent.segmentId = segmentId
@@ -3775,7 +6253,7 @@ class DeviceControlViewModel: ObservableObject {
                     let cct = usesKelvin
                         ? kelvinValue(for: device, normalized: firstTemp)
                         : Segment.eightBitValue(fromNormalized: firstTemp)
-                    if supportsCCT(for: device, segmentId: segmentId) {
+                    if supportsCCTOutput(for: device, segmentId: segmentId) {
                         intent.cct = cct
                     }
                 }
@@ -3783,6 +6261,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         
         await colorPipeline.apply(intent, to: device)
+        let writeSucceededAt = Date()
         
         // Mark gradient application time to prevent WebSocket overwrites
         await MainActor.run {
@@ -3793,8 +6272,12 @@ class DeviceControlViewModel: ObservableObject {
                let firstStop = sortedStops.first {
                 self.devices[index].currentColor = Color(hex: firstStop.hexColor)
                 self.devices[index].temperature = nil
+                self.devices[index].isOnline = true
+                self.devices[index].lastSeen = writeSucceededAt
             }
+            self.noteControlWriteSuccess(deviceId: device.id)
         }
+        await propagateIfNeeded(source: device, payload: propagationPayload, origin: origin)
     }
 
     private func segmentCount(for ledCount: Int) -> Int {
@@ -3839,9 +6322,9 @@ class DeviceControlViewModel: ObservableObject {
     private func segmentColors(for gradient: LEDGradient, count: Int) -> [[Int]] {
         guard count > 0 else { return [] }
         let sortedStops = gradient.stops.sorted { $0.position < $1.position }
-        let denom = Double(count)
+        let denom = Double(max(1, count - 1))
         return (0..<count).map { idx in
-            let t = (Double(idx) + 0.5) / denom
+            let t = count == 1 ? 0.5 : (Double(idx) / denom)
             let color = GradientSampler.sampleColor(at: t, stops: sortedStops, interpolation: gradient.interpolation)
             return color.toRGBArray()
         }
@@ -3857,9 +6340,9 @@ class DeviceControlViewModel: ObservableObject {
         let values = sortedStops.map { stopWhiteLevels[$0.id] ?? 0.0 }
         let hasWhite = values.contains { abs($0) > 0.0001 }
         guard hasWhite else { return nil }
-        let denom = Double(count)
+        let denom = Double(max(1, count - 1))
         return (0..<count).map { idx in
-            let t = (Double(idx) + 0.5) / denom
+            let t = count == 1 ? 0.5 : (Double(idx) / denom)
             let value = interpolateScalar(stops: sortedStops, values: values, t: t, interpolation: gradient.interpolation)
             let clamped = max(0.0, min(1.0, value))
             return Int(round(clamped * 255.0))
@@ -3893,9 +6376,9 @@ class DeviceControlViewModel: ObservableObject {
             return Array(repeating: nil, count: count)
         }
         let sortedStops = gradient.stops.sorted { $0.position < $1.position }
-        let denom = Double(count)
+        let denom = Double(max(1, count - 1))
         return (0..<count).map { idx in
-            let t = (Double(idx) + 0.5) / denom
+            let t = count == 1 ? 0.5 : (Double(idx) / denom)
             guard let (aIndex, bIndex) = boundingStopIndices(for: t, stops: sortedStops) else {
                 return nil
             }
@@ -3975,7 +6458,7 @@ class DeviceControlViewModel: ObservableObject {
         stopTemperatures: [UUID: Double]?
     ) -> Int? {
         guard let temps = stopTemperatures, !temps.isEmpty else { return nil }
-        if supportsCCT(for: device, segmentId: 0) == false {
+        if supportsCCTOutput(for: device, segmentId: 0) == false {
             return nil
         }
         let sortedStops = stops.sorted { $0.position < $1.position }
@@ -4027,6 +6510,252 @@ class DeviceControlViewModel: ObservableObject {
         return nil
     }
 
+    private func segmentWithBrightness(_ segment: Segment, brightness: Int) -> Segment {
+        Segment(
+            id: segment.id,
+            start: segment.start,
+            stop: segment.stop,
+            len: segment.len,
+            grp: segment.grp,
+            spc: segment.spc,
+            ofs: segment.ofs,
+            on: segment.on,
+            bri: brightness,
+            colors: segment.colors,
+            cct: segment.cct,
+            lc: segment.lc,
+            fx: segment.fx,
+            sx: segment.sx,
+            ix: segment.ix,
+            pal: segment.pal,
+            c1: segment.c1,
+            c2: segment.c2,
+            c3: segment.c3,
+            sel: segment.sel,
+            rev: segment.rev,
+            mi: segment.mi,
+            cln: segment.cln,
+            o1: segment.o1,
+            o2: segment.o2,
+            o3: segment.o3,
+            si: segment.si,
+            m12: segment.m12,
+            setId: segment.setId,
+            name: segment.name,
+            frz: segment.frz
+        )
+    }
+
+    private func effectGradientStops(from segment: Segment) -> [GradientStop]? {
+        guard let colors = segment.colors, !colors.isEmpty else { return nil }
+        let rgbColors: [Color] = colors.compactMap { raw in
+            guard raw.count >= 3 else { return nil }
+            return Color.color(fromRGBArray: raw)
+        }
+        guard !rgbColors.isEmpty else { return nil }
+        let limited = Array(rgbColors.prefix(3))
+        let positions: [Double]
+        switch limited.count {
+        case 1:
+            positions = [0.0, 1.0]
+            return [
+                GradientStop(position: positions[0], hexColor: limited[0].toHex()),
+                GradientStop(position: positions[1], hexColor: limited[0].toHex())
+            ]
+        case 2:
+            positions = [0.0, 1.0]
+        default:
+            positions = [0.0, 0.5, 1.0]
+        }
+        return zip(positions, limited).map { position, color in
+            GradientStop(position: position, hexColor: color.toHex())
+        }
+    }
+
+    private func gradientStopsFromStateSegments(_ state: WLEDState) -> [GradientStop]? {
+        let segmentColors: [(start: Int, stop: Int?, hex: String)] = state.segments.compactMap { segment in
+            guard let colors = segment.colors,
+                  let first = colors.first,
+                  first.count >= 3 else {
+                return nil
+            }
+            let colorHex = Color.color(fromRGBArray: first).toHex()
+            return (start: max(0, segment.start ?? 0), stop: segment.stop, hex: colorHex)
+        }
+        guard !segmentColors.isEmpty else { return nil }
+
+        if segmentColors.count == 1, let only = segmentColors.first {
+            return [
+                GradientStop(position: 0.0, hexColor: only.hex),
+                GradientStop(position: 1.0, hexColor: only.hex)
+            ]
+        }
+
+        let sorted = segmentColors.sorted { lhs, rhs in
+            if lhs.start == rhs.start {
+                return (lhs.stop ?? 0) < (rhs.stop ?? 0)
+            }
+            return lhs.start < rhs.start
+        }
+        let maxStop = sorted.compactMap(\.stop).max()
+            ?? state.segments.compactMap(\.stop).max()
+            ?? ((sorted.last?.start ?? 0) + 1)
+        let denominator = max(maxStop - 1, 1)
+
+        var stops: [GradientStop] = []
+        for (index, item) in sorted.enumerated() {
+            let fallbackPosition = sorted.count > 1 ? Double(index) / Double(sorted.count - 1) : 0.0
+            let clamped = min(1.0, max(0.0, Double(item.start) / Double(denominator)))
+            let position = clamped.isFinite ? clamped : fallbackPosition
+            if let last = stops.last, abs(last.position - position) < 0.0001 {
+                stops.removeLast()
+            }
+            stops.append(GradientStop(position: position, hexColor: item.hex))
+        }
+
+        guard !stops.isEmpty else { return nil }
+        if let first = stops.first, first.position > 0.0 {
+            stops.insert(GradientStop(position: 0.0, hexColor: first.hexColor), at: 0)
+        }
+        if let last = stops.last, last.position < 1.0 {
+            stops.append(GradientStop(position: 1.0, hexColor: last.hexColor))
+        }
+        if stops.count == 1, let only = stops.first {
+            return [
+                GradientStop(position: 0.0, hexColor: only.hexColor),
+                GradientStop(position: 1.0, hexColor: only.hexColor)
+            ]
+        }
+        let advancedUI = UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+        let maxDisplayStops = advancedUI ? 10 : 6
+        return compactGradientStopsForDisplay(stops, maxStops: maxDisplayStops)
+    }
+
+    private func compactGradientStopsForDisplay(_ inputStops: [GradientStop], maxStops: Int) -> [GradientStop] {
+        let sorted = inputStops.sorted { $0.position < $1.position }
+        guard !sorted.isEmpty else { return [] }
+
+        if isEffectivelySingleColor(sorted) {
+            return [GradientStop(position: 0.0, hexColor: sorted[0].hexColor)]
+        }
+        guard sorted.count > 2 else { return sorted }
+
+        // Keep anchors and add stops only where there is a true color discontinuity.
+        let deltas: [Double] = zip(sorted, sorted.dropFirst()).map { lhs, rhs in
+            colorDistance(lhs.hexColor, rhs.hexColor)
+        }
+        let medianDelta = median(deltas.filter { $0 > 0.0 }) ?? 0.0
+        // Adaptive threshold: ignores smooth ramps, captures sudden jumps.
+        let shiftThreshold = max(28.0, medianDelta * 2.35)
+
+        var keepIndices: Set<Int> = [0, sorted.count - 1]
+        for idx in 1..<sorted.count {
+            let delta = deltas[idx - 1]
+            if delta >= shiftThreshold {
+                keepIndices.insert(idx - 1)
+                keepIndices.insert(idx)
+            }
+        }
+
+        var kept = keepIndices.sorted().map { sorted[$0] }
+        kept = collapseAdjacentNearDuplicateStops(kept)
+
+        // If nothing was detected as a shift, keep only left/right anchors.
+        if kept.count <= 2 {
+            let first = sorted.first!
+            let last = sorted.last!
+            if areColorsNearEqual(first.hexColor, last.hexColor) {
+                return [GradientStop(position: 0.0, hexColor: first.hexColor)]
+            }
+            return [
+                GradientStop(position: 0.0, hexColor: first.hexColor),
+                GradientStop(position: 1.0, hexColor: last.hexColor)
+            ]
+        }
+
+        if kept.count > maxStops {
+            // Keep strongest discontinuities first (endpoints always retained).
+            let edgeScores: [(idx: Int, score: Double)] = kept.enumerated().compactMap { idx, stop in
+                if idx == 0 || idx == kept.count - 1 { return nil }
+                let prev = kept[idx - 1]
+                let next = kept[idx + 1]
+                let score = max(
+                    colorDistance(prev.hexColor, stop.hexColor),
+                    colorDistance(stop.hexColor, next.hexColor)
+                )
+                return (idx, score)
+            }
+            let slots = max(0, maxStops - 2)
+            let chosenInteriorIndices = Set(edgeScores.sorted { $0.score > $1.score }.prefix(slots).map(\.idx))
+            kept = kept.enumerated().compactMap { idx, stop in
+                if idx == 0 || idx == kept.count - 1 || chosenInteriorIndices.contains(idx) {
+                    return stop
+                }
+                return nil
+            }.sorted { $0.position < $1.position }
+        }
+
+        if let first = kept.first, first.position > 0 {
+            kept.insert(GradientStop(position: 0.0, hexColor: first.hexColor), at: 0)
+        }
+        if let last = kept.last, last.position < 1 {
+            kept.append(GradientStop(position: 1.0, hexColor: last.hexColor))
+        }
+        return kept.sorted { $0.position < $1.position }
+    }
+
+    private func colorDistance(_ lhsHex: String, _ rhsHex: String) -> Double {
+        let lhs = Color(hex: lhsHex).toRGBArray()
+        let rhs = Color(hex: rhsHex).toRGBArray()
+        guard lhs.count >= 3, rhs.count >= 3 else { return 0.0 }
+        let dr = Double(lhs[0] - rhs[0])
+        let dg = Double(lhs[1] - rhs[1])
+        let db = Double(lhs[2] - rhs[2])
+        return sqrt((dr * dr) + (dg * dg) + (db * db))
+    }
+
+    private func areColorsNearEqual(_ lhsHex: String, _ rhsHex: String, threshold: Double = 8.0) -> Bool {
+        colorDistance(lhsHex, rhsHex) <= threshold
+    }
+
+    private func isEffectivelySingleColor(_ stops: [GradientStop], threshold: Double = 8.0) -> Bool {
+        guard let first = stops.first else { return true }
+        return stops.allSatisfy { colorDistance(first.hexColor, $0.hexColor) <= threshold }
+    }
+
+    private func collapseAdjacentNearDuplicateStops(_ stops: [GradientStop], threshold: Double = 8.0) -> [GradientStop] {
+        guard !stops.isEmpty else { return [] }
+        var result: [GradientStop] = [stops[0]]
+        for stop in stops.dropFirst() {
+            if let last = result.last, colorDistance(last.hexColor, stop.hexColor) <= threshold {
+                continue
+            }
+            result.append(stop)
+        }
+        return result
+    }
+
+    private func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count % 2 == 0 {
+            return (sorted[mid - 1] + sorted[mid]) / 2
+        }
+        return sorted[mid]
+    }
+
+    private func shouldAdoptEffectGradientAsMain(deviceId: String, effectStops: [GradientStop]) -> Bool {
+        if let existing = latestGradientStops[deviceId], !existing.isEmpty {
+            let unique = Set(existing.map { $0.hexColor.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased() })
+            if unique.count == 1, let only = unique.first, only == "000000" {
+                return true
+            }
+            return false
+        }
+        return true
+    }
+
     private func applySegmentedGradient(
         _ device: WLEDDevice,
         gradient: LEDGradient,
@@ -4040,28 +6769,120 @@ class DeviceControlViewModel: ObservableObject {
         segmentId: Int,
         disableActiveEffect: Bool
     ) async {
-        appManagedSegmentDevices.insert(device.id)
+        let manualSegments = usesManualSegmentation(for: device.id)
+        if !manualSegments {
+            appManagedSegmentDevices.insert(device.id)
+        }
 
         let totalLEDs = totalLEDCount(for: device)
         guard totalLEDs > 0 else { return }
-        let count = segmentCount(for: totalLEDs)
+        await waitForPresetWriteIfNeeded(deviceId: device.id)
+        let manualSegmentsOrdered: [Segment] = {
+            guard manualSegments else { return [] }
+            let segments = device.state?.segments ?? []
+            guard !segments.isEmpty else { return [] }
+            return segments.sorted { (lhs, rhs) in
+                (lhs.start ?? 0) < (rhs.start ?? 0)
+            }
+        }()
+        let manualSegmentIds: [Int] = {
+            guard manualSegments else { return [] }
+            guard !manualSegmentsOrdered.isEmpty else { return [] }
+            return manualSegmentsOrdered.enumerated().map { index, segment in
+                segment.id ?? index
+            }
+        }()
+        let count: Int
+        if manualSegments {
+            count = manualSegmentIds.isEmpty ? 1 : manualSegmentIds.count
+        } else {
+            count = segmentCount(for: totalLEDs)
+        }
         let stops = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
         let layout = stops.map { SegmentBounds(start: $0.start, stop: $0.stop) }
         let existingLayout = appManagedSegmentLayouts[device.id]
         let deviceSegments = device.state?.segments ?? []
         let layoutMatches = segmentsMatchLayout(deviceSegments, layout: layout, segmentCount: count)
-        let includeLayout = existingLayout == nil || existingLayout != layout || !layoutMatches
-        let colors = segmentColors(for: gradient, count: count)
+        let includeLayout = !manualSegments && (existingLayout == nil || existingLayout != layout || !layoutMatches)
+        let colors: [[Int]]
+        if manualSegments, !manualSegmentsOrdered.isEmpty {
+            let total = Double(max(1, totalLEDs))
+            colors = manualSegmentsOrdered.map { segment in
+                let start = Double(segment.start ?? 0)
+                let stop = Double(segment.stop ?? segment.start ?? 0)
+                let midpoint = max(0, min(total, (start + stop) / 2.0))
+                let t = max(0.0, min(1.0, midpoint / total))
+                let color = GradientSampler.sampleColor(
+                    at: t,
+                    stops: gradient.stops.sorted { $0.position < $1.position },
+                    interpolation: gradient.interpolation
+                )
+                return color.toRGBArray()
+            }
+        } else {
+            colors = segmentColors(for: gradient, count: count)
+        }
         let allowCCTTemperatureStops = temperatureStopsUseCCT(for: device)
-        let supportsCCTDevice = supportsCCT(for: device, segmentId: 0)
+        let supportsCCTDevice = supportsCCTOutput(for: device, segmentId: 0)
         let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: 0)
+        let manualSegmentPositions: [Double]? = {
+            guard manualSegments, !manualSegmentsOrdered.isEmpty else { return nil }
+            let total = Double(max(1, totalLEDs))
+            return manualSegmentsOrdered.map { segment in
+                let start = Double(segment.start ?? 0)
+                let stop = Double(segment.stop ?? segment.start ?? 0)
+                let midpoint = max(0, min(total, (start + stop) / 2.0))
+                return max(0.0, min(1.0, midpoint / total))
+            }
+        }()
+        let manualSegmentTemperatures: [Double?]? = {
+            guard let positions = manualSegmentPositions,
+                  let stopTemperatures,
+                  !stopTemperatures.isEmpty else { return nil }
+            let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+            return positions.map { t in
+                guard let (aIndex, bIndex) = boundingStopIndices(for: t, stops: sortedStops) else {
+                    return nil
+                }
+                let aStop = sortedStops[aIndex]
+                let bStop = sortedStops[bIndex]
+                guard let aTemp = stopTemperatures[aStop.id],
+                      let bTemp = stopTemperatures[bStop.id] else {
+                    return nil
+                }
+                if aIndex == bIndex {
+                    return aTemp
+                }
+                let span = max(0.000001, bStop.position - aStop.position)
+                let rawLocalT = (t - aStop.position) / span
+                let easedLocalT = applyInterpolation(rawLocalT, mode: gradient.interpolation)
+                return aTemp + (bTemp - aTemp) * easedLocalT
+            }
+        }()
         let segmentTemperatures = (allowCCTTemperatureStops && supportsCCTDevice)
-            ? segmentTemperatures(for: gradient, count: count, stopTemperatures: stopTemperatures)
+            ? (manualSegments ? (manualSegmentTemperatures ?? segmentTemperatures(for: gradient, count: count, stopTemperatures: stopTemperatures))
+                              : segmentTemperatures(for: gradient, count: count, stopTemperatures: stopTemperatures))
             : nil
         let supportsWhiteValue = supportsWhite(for: device, segmentId: 0)
-        let allowManualWhite = supportsWhiteValue && UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+        let allowManualWhite = supportsWhiteValue
+            && UserDefaults.standard.bool(forKey: "advancedUIEnabled")
+        let manualSegmentWhiteLevels: [Int]? = {
+            guard let positions = manualSegmentPositions,
+                  let stopWhiteLevels,
+                  !stopWhiteLevels.isEmpty else { return nil }
+            let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+            let values = sortedStops.map { stopWhiteLevels[$0.id] ?? 0.0 }
+            let hasWhite = values.contains { abs($0) > 0.0001 }
+            guard hasWhite else { return nil }
+            return positions.map { t in
+                let value = interpolateScalar(stops: sortedStops, values: values, t: t, interpolation: gradient.interpolation)
+                let clamped = max(0.0, min(1.0, value))
+                return Int(round(clamped * 255.0))
+            }
+        }()
         let manualWhiteLevels = allowManualWhite
-            ? segmentWhiteLevels(for: gradient, count: count, stopWhiteLevels: stopWhiteLevels)
+            ? (manualSegments ? (manualSegmentWhiteLevels ?? segmentWhiteLevels(for: gradient, count: count, stopWhiteLevels: stopWhiteLevels))
+                              : segmentWhiteLevels(for: gradient, count: count, stopWhiteLevels: stopWhiteLevels))
             : nil
         let sortedStops = gradient.stops.sorted { $0.position < $1.position }
         let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == sortedStops.first?.hexColor }
@@ -4094,10 +6915,15 @@ class DeviceControlViewModel: ObservableObject {
         var updates: [SegmentUpdate] = []
         updates.reserveCapacity(stops.count)
         for (idx, range) in stops.enumerated() {
+            let resolvedSegmentId = manualSegmentIds.isEmpty ? idx : manualSegmentIds[idx]
             let rgb = colors[idx]
-            var col: [[Int]]? = [[rgb[0], rgb[1], rgb[2]]]
-            var cctValue: Int? = nil
+            var base = [rgb[0], rgb[1], rgb[2]]
             let whiteValue = manualWhiteLevels?[idx] ?? effectiveWhite
+            if supportsWhiteValue, whiteValue == nil {
+                base.append(0)
+            }
+            var col: [[Int]]? = [base]
+            var cctValue: Int? = nil
             if let temp = segmentTemperatures?[idx],
                allowCCTTemperatureStops,
                supportsCCTDevice,
@@ -4111,7 +6937,7 @@ class DeviceControlViewModel: ObservableObject {
             }
             updates.append(
                 SegmentUpdate(
-                    id: idx,
+                    id: resolvedSegmentId,
                     start: includeLayout ? range.start : nil,
                     stop: includeLayout ? range.stop : nil,
                     on: on,
@@ -4123,6 +6949,17 @@ class DeviceControlViewModel: ObservableObject {
             )
         }
 
+        let segmentTemperatureById: [Int: Double] = {
+            guard let segmentTemperatures else { return [:] }
+            var mapping: [Int: Double] = [:]
+            for (idx, maybeTemp) in segmentTemperatures.enumerated() {
+                guard let temp = maybeTemp else { continue }
+                let resolvedSegmentId = manualSegmentIds.isEmpty ? idx : manualSegmentIds[idx]
+                mapping[resolvedSegmentId] = temp
+            }
+            return mapping
+        }()
+
         let cctOnlySegments = updates.filter { $0.cct != nil && $0.col == nil }
         if !cctOnlySegments.isEmpty {
             var clearUpdates: [SegmentUpdate] = []
@@ -4130,10 +6967,7 @@ class DeviceControlViewModel: ObservableObject {
             for segment in cctOnlySegments {
                 let derivedRGB: [Int]
                 if let id = segment.id,
-                   let temps = segmentTemperatures,
-                   id >= 0,
-                   id < temps.count,
-                   let temp = temps[id] {
+                   let temp = segmentTemperatureById[id] {
                     derivedRGB = rgbArrayForTemperature(temp)
                 } else {
                     derivedRGB = [0, 0, 0]
@@ -4154,19 +6988,21 @@ class DeviceControlViewModel: ObservableObject {
             let clearState = WLEDStateUpdate(
                 on: on,
                 bri: brightness,
-                seg: clearUpdates,
-                transition: nil
+                seg: clearUpdates
             )
-            do {
-                _ = try await apiService.updateState(for: device, state: clearState)
-            } catch {
+            let cleared = await updateStateWithRetry(
+                device,
+                stateUpdate: clearState,
+                context: "clear RGB before CCT"
+            )
+            if !cleared {
                 #if DEBUG
-                print("⚠️ Failed to clear RGB before CCT update for device \(device.name): \(error)")
+                print("⚠️ Failed to clear RGB before CCT update for device \(device.name)")
                 #endif
             }
         }
 
-        if let existingSegments = device.state?.segments, !existingSegments.isEmpty {
+        if includeLayout, let existingSegments = device.state?.segments, !existingSegments.isEmpty {
             let managedIds = Set(0..<count)
             for (index, segment) in existingSegments.enumerated() {
                 let existingId = segment.id ?? index
@@ -4193,80 +7029,101 @@ class DeviceControlViewModel: ObservableObject {
                     speed: existing.speed,
                     intensity: existing.intensity,
                     paletteId: nil,
+                    custom1: existing.custom1,
+                    custom2: existing.custom2,
+                    custom3: existing.custom3,
+                    option1: existing.option1,
+                    option2: existing.option2,
+                    option3: existing.option3,
                     isEnabled: false
                 )
             }
             effectStates[device.id] = segmentStates
         }
 
-        let transitionMs = forceNoPerCallTransition ? nil : clampedTransitionMs(for: transitionDurationSeconds)
-        let shouldReleaseRealtime = releaseRealtimeOverride && transitionDurationSeconds != nil && !forceNoPerCallTransition
+        let transitionDeciseconds = forceNoPerCallTransition ? nil : clampedTransitionDeciseconds(for: transitionDurationSeconds)
+        let shouldReleaseRealtime = releaseRealtimeOverride && !forceNoPerCallTransition
         let stateUpdate = WLEDStateUpdate(
             on: on,
             bri: brightness,
             seg: updates,
-            transition: transitionMs,
+            transitionDeciseconds: transitionDeciseconds,
             lor: shouldReleaseRealtime ? 0 : nil
         )
 
-        do {
-            _ = try await apiService.updateState(for: device, state: stateUpdate)
-            if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
-                webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
-            }
-            await MainActor.run {
-                gradientApplicationTimes[device.id] = Date()
+        let updated = await updateStateWithRetry(
+            device,
+            stateUpdate: stateUpdate,
+            context: "segmented gradient update"
+        )
+        guard updated else {
+            #if DEBUG
+            print("⚠️ Failed segmented gradient update for device \(device.name)")
+            #endif
+            return
+        }
+        if isRealTimeEnabled, shouldSendWebSocketUpdate(stateUpdate) {
+            webSocketManager.sendStateUpdate(stateUpdate, to: device.id)
+        }
+        let writeSucceededAt = Date()
+        await MainActor.run {
+            gradientApplicationTimes[device.id] = Date()
+            if !manualSegments {
                 appManagedSegmentLayouts[device.id] = layout
-                let segmentStates: [Segment] = stops.enumerated().map { idx, range in
-                    let length = max(0, range.stop - range.start)
-                    return Segment(
-                        id: idx,
-                        start: range.start,
-                        stop: range.stop,
-                        len: length,
-                        grp: nil,
-                        spc: nil,
-                        ofs: nil,
-                        on: on,
-                        bri: nil,
-                        colors: nil,
-                        cct: nil,
-                        fx: effectReset,
-                        sx: nil,
-                        ix: nil,
-                        pal: nil,
-                        sel: nil,
-                        rev: nil,
-                        mi: nil,
-                        cln: nil,
-                        frz: nil
+            }
+            if let index = devices.firstIndex(where: { $0.id == device.id }),
+               let firstRGB = colors.first {
+                let firstTemp = segmentTemperatures?.first ?? effectiveTemp
+                let firstWhite = allowManualWhite ? (manualWhiteLevels?.first ?? effectiveWhite) : nil
+                let firstUsesCCT = allowCCTTemperatureStops &&
+                    supportsCCTDevice &&
+                    segmentTemperatures?.first != nil &&
+                    firstWhite == nil
+                if firstUsesCCT, let temp = firstTemp {
+                    devices[index].currentColor = Color.color(fromCCTTemperature: temp)
+                } else if useWhite, let whiteValue = firstWhite {
+                    devices[index].currentColor = Color.color(fromRGBArray: firstRGB, white: whiteValue)
+                } else {
+                    devices[index].currentColor = Color(
+                        red: Double(firstRGB[0]) / 255.0,
+                        green: Double(firstRGB[1]) / 255.0,
+                        blue: Double(firstRGB[2]) / 255.0
                     )
                 }
-                if let index = devices.firstIndex(where: { $0.id == device.id }),
-                   let firstRGB = colors.first {
-                    let firstTemp = segmentTemperatures?.first ?? effectiveTemp
-                    let firstWhite = allowManualWhite ? (manualWhiteLevels?.first ?? effectiveWhite) : nil
-                    let firstUsesCCT = allowCCTTemperatureStops &&
-                        supportsCCTDevice &&
-                        segmentTemperatures?.first != nil &&
-                        firstWhite == nil
-                    if firstUsesCCT, let temp = firstTemp {
-                        devices[index].currentColor = Color.color(fromCCTTemperature: temp)
-                    } else if useWhite, let whiteValue = firstWhite {
-                        devices[index].currentColor = Color.color(fromRGBArray: firstRGB, white: whiteValue)
-                    } else {
-                        devices[index].currentColor = Color(
-                            red: Double(firstRGB[0]) / 255.0,
-                            green: Double(firstRGB[1]) / 255.0,
-                            blue: Double(firstRGB[2]) / 255.0
+                devices[index].temperature = firstTemp
+                if let bri = brightness {
+                    devices[index].brightness = bri
+                }
+                if let onValue = on {
+                    devices[index].isOn = onValue
+                }
+                devices[index].isOnline = true
+                devices[index].lastSeen = writeSucceededAt
+                if !manualSegments {
+                    let segmentStates: [Segment] = stops.enumerated().map { idx, range in
+                        let length = max(0, range.stop - range.start)
+                        return Segment(
+                            id: idx,
+                            start: range.start,
+                            stop: range.stop,
+                            len: length,
+                            grp: nil,
+                            spc: nil,
+                            ofs: nil,
+                            on: on,
+                            bri: nil,
+                            colors: nil,
+                            cct: nil,
+                            fx: effectReset,
+                            sx: nil,
+                            ix: nil,
+                            pal: nil,
+                            sel: nil,
+                            rev: nil,
+                            mi: nil,
+                            cln: nil,
+                            frz: nil
                         )
-                    }
-                    devices[index].temperature = firstTemp
-                    if let bri = brightness {
-                        devices[index].brightness = bri
-                    }
-                    if let onValue = on {
-                        devices[index].isOn = onValue
                     }
                     if let state = devices[index].state {
                         devices[index].state = WLEDState(
@@ -4275,7 +7132,8 @@ class DeviceControlViewModel: ObservableObject {
                             segments: segmentStates,
                             transitionDeciseconds: state.transitionDeciseconds,
                             presetId: state.presetId,
-                            playlistId: state.playlistId
+                            playlistId: state.playlistId,
+                            mainSegment: state.mainSegment
                         )
                     } else {
                         devices[index].state = WLEDState(
@@ -4284,16 +7142,14 @@ class DeviceControlViewModel: ObservableObject {
                             segments: segmentStates,
                             transitionDeciseconds: nil,
                             presetId: nil,
-                            playlistId: nil
+                            playlistId: nil,
+                            mainSegment: nil
                         )
                     }
+                    syncSegmentCapabilities(for: devices[index], segmentCount: segmentStates.count)
                 }
-                deviceLedCounts[device.id] = totalLEDs
             }
-        } catch {
-            #if DEBUG
-            print("⚠️ Failed segmented gradient update for device \(device.name): \(error)")
-            #endif
+            deviceLedCounts[device.id] = totalLEDs
         }
     }
 
@@ -4303,7 +7159,8 @@ class DeviceControlViewModel: ObservableObject {
         brightness: Int,
         on: Bool,
         temperature: Double?,
-        whiteLevel: Double?
+        whiteLevel: Double?,
+        includeSegmentBounds: Bool = true
     ) -> WLEDStateUpdate {
         let totalLEDs = totalLEDCount(for: device)
         let count = segmentCount(for: totalLEDs)
@@ -4312,7 +7169,7 @@ class DeviceControlViewModel: ObservableObject {
         let sortedStops = gradient.stops.sorted { $0.position < $1.position }
         let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == sortedStops.first?.hexColor }
         let allowCCTTemperatureStops = temperatureStopsUseCCT(for: device)
-        let supportsCCTDevice = supportsCCT(for: device, segmentId: 0)
+        let supportsCCTDevice = supportsCCTOutput(for: device, segmentId: 0)
         let usesKelvin = segmentUsesKelvinCCT(for: device, segmentId: 0)
         let cctValue: Int? = (isSolidColor && allowCCTTemperatureStops && supportsCCTDevice)
             ? temperature.map { temp in
@@ -4326,23 +7183,48 @@ class DeviceControlViewModel: ObservableObject {
 
         var updates: [SegmentUpdate] = []
         for (idx, range) in stops.enumerated() {
+            let baseSegment = device.state?.segments.first(where: { $0.id == idx })
+                ?? (device.state?.segments.indices.contains(idx) == true ? device.state?.segments[idx] : nil)
             let rgb = colors[idx]
-            var col: [[Int]]? = [[rgb[0], rgb[1], rgb[2]]]
+            let col: [[Int]]?
             if useCCTOnly {
                 col = nil
             } else if let whiteValue {
                 col = [[rgb[0], rgb[1], rgb[2], whiteValue]]
+            } else {
+                col = [[rgb[0], rgb[1], rgb[2], 0]]
             }
             updates.append(
                 SegmentUpdate(
                     id: idx,
-                    start: range.start,
-                    stop: range.stop,
+                    start: includeSegmentBounds ? range.start : nil,
+                    stop: includeSegmentBounds ? range.stop : nil,
+                    grp: baseSegment?.grp ?? 1,
+                    spc: baseSegment?.spc ?? 0,
+                    ofs: baseSegment?.ofs ?? 0,
                     on: on,
+                    bri: baseSegment?.bri ?? 255,
                     col: col,
-                    cct: useCCTOnly ? cctValue : nil,
+                    cct: useCCTOnly ? cctValue : (baseSegment?.cct ?? 127),
                     fx: 0,
-                    pal: 0
+                    sx: baseSegment?.sx ?? 128,
+                    ix: baseSegment?.ix ?? 128,
+                    pal: 0,
+                    c1: baseSegment?.c1 ?? 128,
+                    c2: baseSegment?.c2 ?? 128,
+                    c3: baseSegment?.c3 ?? 16,
+                    sel: baseSegment?.sel ?? true,
+                    rev: baseSegment?.rev ?? false,
+                    mi: baseSegment?.mi ?? false,
+                    cln: baseSegment?.cln,
+                    o1: baseSegment?.o1 ?? false,
+                    o2: baseSegment?.o2 ?? false,
+                    o3: baseSegment?.o3 ?? false,
+                    si: baseSegment?.si ?? 0,
+                    m12: baseSegment?.m12 ?? 0,
+                    setId: baseSegment?.setId ?? 0,
+                    name: baseSegment?.name ?? "",
+                    frz: baseSegment?.frz ?? false
                 )
             )
         }
@@ -4350,14 +7232,34 @@ class DeviceControlViewModel: ObservableObject {
         return WLEDStateUpdate(
             on: on,
             bri: brightness,
-            seg: updates
+            seg: updates,
+            mainSegment: device.state?.mainSegment
         )
     }
 
-    private func availableIds(from maxId: Int, excluding used: Set<Int>, count: Int) -> [Int]? {
+    func presetStateForGradient(
+        device: WLEDDevice,
+        gradient: LEDGradient,
+        brightness: Int,
+        temperature: Double?,
+        whiteLevel: Double?,
+        includeSegmentBounds: Bool = true
+    ) -> WLEDStateUpdate {
+        segmentedPresetState(
+            device: device,
+            gradient: gradient,
+            brightness: brightness,
+            on: true,
+            temperature: temperature,
+            whiteLevel: whiteLevel,
+            includeSegmentBounds: includeSegmentBounds
+        )
+    }
+
+    private func availableIds(from maxId: Int, through minId: Int = 1, excluding used: Set<Int>, count: Int) -> [Int]? {
         guard count > 0 else { return [] }
         var results: [Int] = []
-        for id in stride(from: maxId, through: 1, by: -1) {
+        for id in stride(from: maxId, through: minId, by: -1) {
             guard !used.contains(id) else { continue }
             results.append(id)
             if results.count == count {
@@ -4367,8 +7269,35 @@ class DeviceControlViewModel: ObservableObject {
         return results.count == count ? results : nil
     }
 
-    private func availablePlaylistId(excluding used: Set<Int>) -> Int? {
-        for id in stride(from: 250, through: 1, by: -1) {
+    private func availableContiguousIds(
+        range: ClosedRange<Int>,
+        excluding used: Set<Int>,
+        count: Int
+    ) -> [Int]? {
+        guard count > 0 else { return [] }
+        var runStart: Int?
+        var runLength = 0
+        for id in range {
+            if used.contains(id) {
+                runStart = nil
+                runLength = 0
+                continue
+            }
+            if runStart == nil {
+                runStart = id
+                runLength = 1
+            } else {
+                runLength += 1
+            }
+            if let runStart, runLength == count {
+                return Array(runStart...(runStart + count - 1))
+            }
+        }
+        return nil
+    }
+
+    private func availablePlaylistId(excluding used: Set<Int>, range: ClosedRange<Int> = 1...250) -> Int? {
+        for id in stride(from: range.upperBound, through: range.lowerBound, by: -1) {
             if !used.contains(id) {
                 return id
             }
@@ -4376,9 +7305,47 @@ class DeviceControlViewModel: ObservableObject {
         return nil
     }
 
-    private func savePresetWithRetry(_ request: WLEDPresetSaveRequest, device: WLEDDevice) async throws {
+    private func availableFrontmostPlaylistId(excluding used: Set<Int>, range: ClosedRange<Int>) -> Int? {
+        for id in range where !used.contains(id) {
+            return id
+        }
+        return nil
+    }
+
+    private func hasRecentPresetStoreTransportFailure(deviceId: String, within seconds: TimeInterval = 12.0) -> Bool {
+        guard let eventAt = lastPresetStoreHealthEventByDeviceId[deviceId],
+              Date().timeIntervalSince(eventAt) <= seconds else {
+            return false
+        }
+        let message = (lastPresetStoreHealthMessageByDeviceId[deviceId] ?? "").lowercased()
+        return message.contains("timed out")
+            || message.contains("timeout")
+            || message.contains("network")
+            || message.contains("503")
+            || message.contains("service unavailable")
+    }
+
+    private func shouldFailFastTemporaryPlaylistBuild(device: WLEDDevice) async -> Bool {
+        if isPresetStoreWritePaused(for: device.id) {
+            return true
+        }
+        if hasRecentPresetStoreTransportFailure(deviceId: device.id) {
+            return true
+        }
+        if await apiService.isStateWriteBackoffActive(deviceId: device.id) {
+            return true
+        }
+        return false
+    }
+
+    private func savePresetWithRetry(
+        _ request: WLEDPresetSaveRequest,
+        device: WLEDDevice,
+        retryAttempts: Int = 3
+    ) async throws {
         var lastError: Error?
-        for attempt in 1...presetSaveRetryAttempts {
+        let attempts = max(1, retryAttempts)
+        for attempt in 1...attempts {
             do {
                 try await apiService.savePreset(request, to: device)
                 let delay = presetSaveDelayNanos * UInt64(attempt)
@@ -4386,7 +7353,7 @@ class DeviceControlViewModel: ObservableObject {
                 return
             } catch {
                 lastError = error
-                if attempt < presetSaveRetryAttempts {
+                if attempt < attempts {
                     let delay = presetSaveDelayNanos * UInt64(attempt)
                     try? await Task.sleep(nanoseconds: delay)
                 }
@@ -4411,9 +7378,14 @@ class DeviceControlViewModel: ObservableObject {
         return false
     }
 
-    private func savePlaylistWithRetry(_ request: WLEDPlaylistSaveRequest, device: WLEDDevice) async throws {
+    private func savePlaylistWithRetry(
+        _ request: WLEDPlaylistSaveRequest,
+        device: WLEDDevice,
+        retryAttempts: Int = 3
+    ) async throws {
         var lastError: Error?
-        for attempt in 1...playlistSaveRetryAttempts {
+        let attempts = max(1, retryAttempts)
+        for attempt in 1...attempts {
             do {
                 _ = try await apiService.savePlaylist(request, to: device)
                 let delay = playlistSaveDelayNanos * UInt64(attempt)
@@ -4421,7 +7393,7 @@ class DeviceControlViewModel: ObservableObject {
                 return
             } catch {
                 lastError = error
-                if attempt < playlistSaveRetryAttempts {
+                if attempt < attempts {
                     let delay = playlistSaveDelayNanos * UInt64(attempt)
                     try? await Task.sleep(nanoseconds: delay)
                 }
@@ -4447,6 +7419,11 @@ class DeviceControlViewModel: ObservableObject {
     struct TransitionPlaylistResult {
         let playlistId: Int
         let stepPresetIds: [Int]
+        let effectiveDurationSeconds: Double
+        let stepProfile: TransitionStepProfile
+        let playlistDurations: [Int]
+        let playlistTransitions: [Int]
+        let temporaryLeaseId: UUID?
     }
 
     func createTransitionPlaylist(
@@ -4460,44 +7437,145 @@ class DeviceControlViewModel: ObservableObject {
         label: String? = nil,
         existingPlaylistId: Int? = nil,
         existingStepPresetIds: [Int]? = nil,
+        runId: UUID? = nil,
+        debugOperationId: String? = nil,
         startTemperature: Double? = nil,
         endTemperature: Double? = nil,
         startWhiteLevel: Double? = nil,
         endWhiteLevel: Double? = nil
     ) async -> TransitionPlaylistResult? {
+        if !persist, !enableTemporaryPresetStoreBackedTransitions {
+            #if DEBUG
+            print("transition.playlist_build.skipped_temporary_disabled device=\(device.id)")
+            #endif
+            return nil
+        }
         let autoStepPrefix = persist ? "Automation Step " : "Auto Step "
         let autoTransitionPrefix = persist ? "Automation Transition " : "Auto Transition "
         #if DEBUG
         let storageMode = persist ? "persistent" : "temporary"
-        print("🔎 Playlist build for \(device.name): mode=2-preset, storage=\(storageMode), playlist=psave, duration=\(String(format: "%.1f", durationSeconds))s")
+        let effectiveOperationId = debugOperationId
+            ?? runId.map { "run-\($0.uuidString.prefix(8))" }
+            ?? self.debugOperationId(prefix: persist ? "playlist-persist" : "playlist-temp")
+        let operationContext = debugOperationContext(effectiveOperationId)
+        print("🔎 Playlist build for \(device.name): mode=2-preset, storage=\(storageMode), playlist=psave, duration=\(String(format: "%.1f", durationSeconds))s\(operationContext)")
         #endif
+        var temporaryLeaseId: UUID?
+        if !persist, await shouldFailFastTemporaryPlaylistBuild(device: device) {
+            #if DEBUG
+            print("⚠️ Playlist creation skipped for \(device.name): recent timeout/backoff window active.")
+            #endif
+            return nil
+        }
+
+        switch await waitForHeavyOpQuiescence(deviceId: device.id, timeout: 15.0) {
+        case .ready:
+            break
+        case .timedOut(let reason):
+            #if DEBUG
+            print("⚠️ Playlist creation deferred/aborted for \(device.name): heavy-op quiescence timeout (\(reason))")
+            #endif
+            return nil
+        }
 
         var existingPresets: [WLEDPreset]
-        do {
-            existingPresets = try await apiService.fetchPresets(for: device)
-        } catch {
-            let apiError = error as? WLEDAPIError
-            if !persist,
-               case .httpError(let statusCode) = apiError,
-               statusCode == 501 {
-                #if DEBUG
-                print("⚠️ Playlist creation warning: preset list unavailable for \(device.name); using empty preset set for auto IDs.")
-                #endif
-                existingPresets = []
-            } else {
+        if persist {
+            do {
+                existingPresets = try await apiService.fetchPresets(for: device)
+            } catch {
                 #if DEBUG
                 print("⚠️ Playlist creation failed: unable to fetch presets for \(device.name): \(error.localizedDescription)")
                 #endif
                 return nil
             }
+        } else {
+            // Temporary transition IDs are isolated in reserved range; avoid blocking on
+            // preset catalog reads when the device is under load.
+            existingPresets = presetsCache[device.id] ?? []
+            #if DEBUG
+            if existingPresets.isEmpty {
+                print("transition.playlist_build.temp_skip_catalog_read device=\(device.id)")
+            } else {
+                print("transition.playlist_build.temp_using_cached_catalog device=\(device.id) count=\(existingPresets.count)")
+            }
+            #endif
+        }
+        if isCorruptedPresetPayload(existingPresets) {
+            #if DEBUG
+            print("⚠️ Playlist creation failed: presets.json appears corrupted for \(device.name).")
+            #endif
+            return nil
         }
         updatePresetSlotStatus(for: device, presets: existingPresets)
-        var usedPresetIds = Set(existingPresets.map { $0.id })
-        let stepPlan = playlistStepPlan(for: durationSeconds)
-        let stepCount = stepPlan.steps
+        var usedPresetIds = Set(existingPresets.map { $0.id }.filter { (1...250).contains($0) })
+        let context: TransitionGenerationContext = persist ? .persistentAutomation : .temporaryLive
+        let stepProfile = planTransitionPlaylist(
+            durationSec: durationSeconds,
+            startGradient: from,
+            endGradient: to,
+            startBrightness: startBrightness,
+            endBrightness: endBrightness,
+            context: context,
+            device: device
+        )
+        if persist, !stepProfile.fitsBudget {
+            #if DEBUG
+            let budgetText = stepProfile.perAutomationBudget.map(String.init) ?? "n/a"
+            let maxDuration = stepProfile.maxDurationSecondsAtCurrentQuality ?? 0
+            print("⚠️ Playlist creation blocked by 5-automation budget for \(device.name): required=\(stepProfile.slotsRequired) budget=\(budgetText) quality=\(stepProfile.qualityLabel.rawValue) maxDuration=\(String(format: "%.1f", maxDuration))s")
+            #endif
+            return nil
+        }
+
+        let timingUnit = playlistTimingUnit(for: device)
+        let seamMode = persist ? "stored-start" : "preapplied-start"
+        let baseTs = transitionKeyframeTs(stepCount: stepProfile.steps, context: context)
+        let brightnessFallback = lastBrightnessBeforeOff[device.id] ?? device.state?.brightness ?? 128
+        let rawKeyframes = baseTs.map { t in
+            let interpolatedBrightness = Int(round(Double(startBrightness) * (1.0 - t) + Double(endBrightness) * t))
+            return TransitionKeyframe(
+                t: t,
+                stops: interpolateStops(from: from, to: to, t: t),
+                brightness: interpolatedBrightness > 0 ? interpolatedBrightness : max(1, brightnessFallback),
+                temperature: interpolateOptional(startTemperature, endTemperature, t: t),
+                whiteLevel: interpolateOptional(startWhiteLevel, endWhiteLevel, t: t)
+            )
+        }
+        let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSeconds))
+        let requestedDeciseconds = clampedDuration > 0 ? max(1, Int(round(clampedDuration * 10.0))) : 0
+        let minStepCountForTiming = requestedDeciseconds > 0
+            ? max(1, Int(ceil(Double(requestedDeciseconds) / Double(maxWLEDPlaylistTransitionDeciseconds))))
+            : 1
+        let keyframes = cullNearDuplicateKeyframes(rawKeyframes, minimumCount: minStepCountForTiming)
+        let stepCount = keyframes.count
+        let stepPlan = playlistStepPlan(
+            for: durationSeconds,
+            timingUnit: timingUnit,
+            fixedSteps: stepCount,
+            generatedTimingMode: .boundaryCompensated(padDeciseconds: 3)
+        )
+        #if DEBUG
+        let budgetText = stepProfile.perAutomationBudget.map(String.init) ?? "n/a"
+        print("🔎 Playlist planner for \(device.name): context=\(context.rawValue) seam=\(seamMode) legSec=\(String(format: "%.1f", stepProfile.legSeconds)) quality=\(stepProfile.qualityLabel.rawValue) slots=\(stepProfile.slotsRequired) budget=\(budgetText) fits=\(stepProfile.fitsBudget)")
+        print("🔎 Playlist keyframes for \(device.name): preCull=\(rawKeyframes.count) postCull=\(keyframes.count)")
+        #endif
+
         let playlistSlotCount = 1
-        let requiredSlots = stepCount + playlistSlotCount
-        if !hasPresetCapacity(for: device, requiredSlots: requiredSlots, presets: existingPresets) {
+        let persistentAllowedUpper = max(1, temporaryTransitionReservedPresetLower - 1)
+        let persistentAllowedRange = 1...persistentAllowedUpper
+        let persistentRangeContains: (Int) -> Bool = { persistentAllowedRange.contains($0) }
+
+        let existingStepIds = (existingStepPresetIds ?? []).filter { (1...250).contains($0) }
+        let canReuseStepPresets = existingStepIds.count == stepCount
+            && Set(existingStepIds).isSubset(of: usedPresetIds)
+            && (!persist || existingStepIds.allSatisfy(persistentRangeContains))
+        let canReusePlaylistId = existingPlaylistId.map {
+            (1...250).contains($0)
+                && usedPresetIds.contains($0)
+                && (!persist || persistentRangeContains($0))
+        } ?? false
+        let requiredSlots = (canReuseStepPresets ? 0 : stepCount) + (canReusePlaylistId ? 0 : playlistSlotCount)
+        if persist && !hasPresetCapacity(for: device, requiredSlots: requiredSlots, presets: existingPresets) {
             #if DEBUG
             let remaining = max(0, maxWLEDPresetSlots - existingPresets.count)
             print("⚠️ Playlist creation blocked: remaining=\(remaining), reserve=\(presetSlotReserve), required=\(requiredSlots) for \(device.name).")
@@ -4505,39 +7583,33 @@ class DeviceControlViewModel: ObservableObject {
             return nil
         }
         var reusableStepPresetIds: [Int] = []
-        if let existingStepPresetIds, existingStepPresetIds.count == stepCount {
-            reusableStepPresetIds = existingStepPresetIds
+        if canReuseStepPresets {
+            reusableStepPresetIds = existingStepIds
             reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
         }
         var usedPlaylistIds = usedPresetIds
         var resolvedPlaylistId: Int? = nil
-        if let existingPlaylistId, usedPlaylistIds.contains(existingPlaylistId) {
+        if let existingPlaylistId, canReusePlaylistId {
             resolvedPlaylistId = existingPlaylistId
             usedPlaylistIds.remove(existingPlaylistId)
         }
         if resolvedPlaylistId == nil {
-            var selectedId = availablePlaylistId(excluding: usedPlaylistIds)
-            if selectedId == nil && !persist {
-                let autoTransitionIds = existingPresets
-                    .filter { $0.name.hasPrefix(autoTransitionPrefix) }
-                    .map { $0.id }
-                if !autoTransitionIds.isEmpty {
-                    #if DEBUG
-                    print("🧹 Cleaning \(autoTransitionIds.count) auto transition presets to free slots for \(device.name).")
-                    #endif
-                    for presetId in autoTransitionIds {
-                        _ = try? await apiService.deletePreset(id: presetId, device: device)
-                    }
-                    existingPresets = (try? await apiService.fetchPresets(for: device)) ?? []
-                    usedPresetIds = Set(existingPresets.map { $0.id })
-                    reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
-                    usedPlaylistIds = usedPresetIds
-                    selectedId = availablePlaylistId(excluding: usedPlaylistIds)
-                }
-            }
+            let playlistRange = persist
+                ? persistentAllowedRange
+                : (temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper)
+            let selectedId = persist
+                ? availableFrontmostPlaylistId(excluding: usedPlaylistIds, range: playlistRange)
+                : availablePlaylistId(excluding: usedPlaylistIds, range: playlistRange)
             guard let resolvedId = selectedId else {
                 #if DEBUG
-                print("⚠️ Playlist creation failed: no available playlist IDs for \(device.name).")
+                if persist {
+                    print("⚠️ Playlist creation failed: no available playlist IDs for \(device.name).")
+                } else {
+                    let reservedFree = (temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper)
+                        .filter { !usedPlaylistIds.contains($0) }
+                        .count
+                    print("⚠️ Temporary transition blocked for \(device.name): no playlist ID in reserved range \(temporaryTransitionReservedPresetLower)-\(temporaryTransitionReservedPresetUpper), free=\(reservedFree)")
+                }
                 #endif
                 return nil
             }
@@ -4550,30 +7622,30 @@ class DeviceControlViewModel: ObservableObject {
         let needsStepIds = reusableStepPresetIds.count != stepCount
         var allocatedPresetIds: [Int]? = nil
         if needsStepIds {
-            allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: stepCount)
-            if allocatedPresetIds == nil && !persist {
-                let autoPresetIds = existingPresets.filter {
-                    $0.name.hasPrefix(autoStepPrefix)
-                }
-                    .map { $0.id }
-                if !autoPresetIds.isEmpty {
-                    #if DEBUG
-                    print("🧹 Cleaning \(autoPresetIds.count) auto presets to free slots for \(device.name).")
-                    #endif
-                    for presetId in autoPresetIds {
-                        _ = try? await apiService.deletePreset(id: presetId, device: device)
-                    }
-                    let refreshedPresets = (try? await apiService.fetchPresets(for: device)) ?? []
-                    usedPresetIds = Set(refreshedPresets.map { $0.id })
-                    reusableStepPresetIds.forEach { usedPresetIds.remove($0) }
-                    allocatedPresetIds = availableIds(from: 250, excluding: usedPresetIds, count: stepCount)
-                }
-            }
+            allocatedPresetIds = persist
+                ? availableContiguousIds(
+                    range: persistentAllowedRange,
+                    excluding: usedPresetIds,
+                    count: stepCount
+                )
+                : availableIds(
+                    from: temporaryTransitionReservedPresetUpper,
+                    through: temporaryTransitionReservedPresetLower,
+                    excluding: usedPresetIds,
+                    count: stepCount
+                )
         }
 
         if needsStepIds, allocatedPresetIds == nil {
             #if DEBUG
-            print("⚠️ Playlist creation failed: insufficient preset slots (\(stepCount) needed) for \(device.name).")
+            if persist {
+                print("⚠️ Playlist creation failed: insufficient contiguous preset slots (\(stepCount) needed) in persistent range for \(device.name).")
+            } else {
+                let reservedUsed = usedPresetIds.filter { (temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper).contains($0) }
+                let reservedFree = (temporaryTransitionReservedPresetUpper - temporaryTransitionReservedPresetLower + 1) - reservedUsed.count
+                let slotsRequired = stepCount + (resolvedPlaylistId == nil ? 1 : 0)
+                print("⚠️ Temporary transition blocked for \(device.name): needs \(slotsRequired) reserved slots in \(temporaryTransitionReservedPresetLower)-\(temporaryTransitionReservedPresetUpper), only \(max(0, reservedFree)) available")
+            }
             #endif
             return nil
         }
@@ -4582,6 +7654,9 @@ class DeviceControlViewModel: ObservableObject {
         if needsStepIds, let allocatedPresetIds {
             stepPresetIds = Array(allocatedPresetIds.prefix(stepCount))
         }
+        stepPresetIds = stepPresetIds.sorted()
+        let presetSaveAttempts = persist ? presetSaveRetryAttempts : 1
+        let playlistSaveAttempts = persist ? playlistSaveRetryAttempts : 1
 
         guard let playlistId = resolvedPlaylistId, stepPresetIds.count == stepCount else {
             #if DEBUG
@@ -4590,66 +7665,185 @@ class DeviceControlViewModel: ObservableObject {
             return nil
         }
 
+        #if DEBUG
+        print("transition.playlist_build.ids device=\(device.id)\(operationContext) persist=\(persist) playlist=\(playlistId) stepIds=\(stepPresetIds)")
+        #endif
+
+        if !persist {
+            let lease = await TemporaryTransitionCleanupService.shared.registerLease(
+                deviceId: device.id,
+                runId: runId,
+                playlistId: playlistId,
+                stepPresetIds: []
+            )
+            temporaryLeaseId = lease.leaseId
+            #if DEBUG
+            print("🔎 Temporary cleanup lease for \(device.name): leaseId=\(lease.leaseId.uuidString) playlistId=\(playlistId)\(operationContext)")
+            #endif
+        }
+
+        await MainActor.run {
+            _ = presetWriteInProgress.insert(device.id)
+        }
+        defer {
+            Task { @MainActor in
+                presetWriteInProgress.remove(device.id)
+            }
+        }
+
         let shouldCleanupStepPresets = needsStepIds
         func cleanupAllocatedStepPresets() async {
             guard shouldCleanupStepPresets, !stepPresetIds.isEmpty else { return }
-            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: stepPresetIds)
+            await DeviceCleanupManager.shared.requestDelete(
+                type: .preset,
+                device: device,
+                ids: stepPresetIds,
+                source: persist ? .automation : .temporaryTransition,
+                leaseId: temporaryLeaseId,
+                verificationRequired: !persist
+            )
+        }
+
+        func cleanupFailedTemporaryOrAllocated() async {
+            if let temporaryLeaseId {
+                await TemporaryTransitionCleanupService.shared.markCreationFailed(
+                    leaseId: temporaryLeaseId,
+                    device: device
+                )
+            } else {
+                await cleanupAllocatedStepPresets()
+            }
         }
 
         let stepPresetCount = stepPresetIds.count
-        let stepDenom = Double(max(1, stepPresetCount - 1))
-        if stepPlan.effectiveDurationSeconds < durationSeconds {
+        if stepPlan.clampedDurationSeconds < durationSeconds {
             #if DEBUG
-            print("⚠️ Playlist duration capped for \(device.name): requested=\(String(format: "%.1f", durationSeconds))s, effective=\(String(format: "%.1f", stepPlan.effectiveDurationSeconds))s")
+            print("⚠️ Playlist duration capped for \(device.name): requested=\(String(format: "%.1f", durationSeconds))s, clamped=\(String(format: "%.1f", stepPlan.clampedDurationSeconds))s")
             #endif
         }
         #if DEBUG
         let stepTransitionSeconds = Double(stepPlan.transitionDeciseconds) / 10.0
-        print("🔎 Playlist step plan for \(device.name): steps=\(stepPresetCount), step=\(String(format: "%.2f", stepTransitionSeconds))s")
+        let stepDurationSeconds = Double(stepPlan.durationDeciseconds) / 10.0
+        print("🔎 Playlist step plan for \(device.name): steps=\(stepPresetCount), mode=\(stepPlan.timingModeLabel), boundaryPadDs=\(stepPlan.generatedTransitionPadDeciseconds), durStep=\(String(format: "%.2f", stepDurationSeconds))s (\(stepPlan.durationDeciseconds)ds) transitionStep=\(String(format: "%.2f", stepTransitionSeconds))s (\(stepPlan.transitionDeciseconds)ds)")
+        print("🔎 Transition A->B for \(device.name): start=\(debugGradientSummary(from)) end=\(debugGradientSummary(to))")
+        print("🔎 Playlist timing source for \(device.name): source=playlist.transition[] preset.transition_ignored_if_playlist_active=true tt_present=false")
+        print("🔎 Playlist timing for \(device.name): requested=\(String(format: "%.1f", durationSeconds))s dur=\(debugArraySummary(stepPlan.durations)) transition=\(debugArraySummary(stepPlan.transitions)) total=\(String(format: "%.1f", stepPlan.effectiveDurationSeconds))s totalTransition=\(String(format: "%.1f", stepPlan.totalTransitionSeconds))s")
+        if stepPlan.durations.count > 1 {
+            var cumulative = 0
+            let boundaries = stepPlan.durations.dropLast().map { duration -> Double in
+                cumulative += duration
+                return Double(cumulative) / 10.0
+            }
+            let boundarySummary = boundaries.map { String(format: "%.1f", $0) }.joined(separator: ", ")
+            print("🔎 Playlist expected boundaries for \(device.name): \(boundarySummary)")
+        }
         #endif
+        #if DEBUG
+        let debugIndices: Set<Int> = [0, stepPresetCount / 2, max(0, stepPresetCount - 1)]
+        #endif
+        func shouldAbortTemporaryCreation() async -> Bool {
+            guard !persist, let runId else { return false }
+            return await MainActor.run {
+                if let active = activeRunStatus[device.id] {
+                    return active.id != runId
+                }
+                return true
+            }
+        }
         for (idx, presetId) in stepPresetIds.enumerated() {
-            let t = Double(idx) / stepDenom
-            let stops = interpolateStops(from: from, to: to, t: t)
-            let brightness = Int(round(Double(startBrightness) * (1.0 - t) + Double(endBrightness) * t))
-            let tempValue = interpolateOptional(startTemperature, endTemperature, t: t)
-            let whiteValue = interpolateOptional(startWhiteLevel, endWhiteLevel, t: t)
+            if await shouldAbortTemporaryCreation() {
+                if temporaryLeaseId != nil {
+                    await TemporaryTransitionCleanupService.shared.requestCleanup(
+                        device: device,
+                        endReason: .cancelledByUser,
+                        runId: runId,
+                        playlistIdHint: playlistId,
+                        stepPresetIdsHint: Array(stepPresetIds.prefix(idx))
+                    )
+                    await refreshTransitionCleanupPendingCount(for: device.id)
+                }
+                return nil
+            }
+            if !persist, await shouldFailFastTemporaryPlaylistBuild(device: device) {
+                #if DEBUG
+                print("⚠️ Playlist creation aborted for \(device.name): device entered timeout/backoff window mid-build.")
+                #endif
+                await cleanupFailedTemporaryOrAllocated()
+                return nil
+            }
+            let keyframe = keyframes[idx]
+            let t = keyframe.t
+            let stops = keyframe.stops
+            let presetBrightness = keyframe.brightness
+            let tempValue = keyframe.temperature
+            let whiteValue = keyframe.whiteLevel
+            #if DEBUG
+            if debugIndices.contains(idx) {
+                let firstHex = stops.first?.hexColor ?? "none"
+                let lastHex = stops.last?.hexColor ?? firstHex
+                let tempText = tempValue.map { String(format: "%.2f", $0) } ?? "nil"
+                let whiteText = whiteValue.map { String(format: "%.2f", $0) } ?? "nil"
+                print("🔎 Step \(idx + 1)/\(stepPresetCount) presetId=\(presetId) t=\(String(format: "%.2f", t)) bri=\(presetBrightness) temp=\(tempText) white=\(whiteText) first=\(firstHex) last=\(lastHex)")
+            }
+            #endif
             let state = segmentedPresetState(
                 device: device,
                 gradient: LEDGradient(stops: stops, interpolation: to.interpolation),
-                brightness: brightness,
+                brightness: presetBrightness,
                 on: true,
                 temperature: tempValue,
-                whiteLevel: whiteValue
+                whiteLevel: whiteValue,
+                includeSegmentBounds: true
             )
             let request = WLEDPresetSaveRequest(
                 id: presetId,
-                name: "Auto Step \(presetId)",
-                quickLoad: false,
+                name: "\(autoStepPrefix)\(presetId)",
+                quickLoad: nil,
                 state: state,
-                saveOnly: true
+                saveOnly: true,
+                includeBrightness: true,
+                saveSegmentBounds: true,
+                selectedSegmentsOnly: false,
+                transitionDeciseconds: device.state?.transitionDeciseconds ?? 7
             )
             do {
-                try await savePresetWithRetry(request, device: device)
+                try await savePresetWithRetry(
+                    request,
+                    device: device,
+                    retryAttempts: presetSaveAttempts
+                )
+                if let temporaryLeaseId {
+                    _ = await TemporaryTransitionCleanupService.shared.updateAllocatingLease(
+                        leaseId: temporaryLeaseId,
+                        appendStepPresetId: presetId
+                    )
+                }
             } catch {
                 #if DEBUG
                 print("⚠️ Playlist creation failed: preset save error for \(device.name): \(error.localizedDescription)")
+                #endif
+                await cleanupFailedTemporaryOrAllocated()
+                return nil
+            }
+            // Give WLED time to flush presets.json between writes.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        // Allow WLED to finalize the presets file before saving the playlist.
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        // Verify presets exist before building playlist for persistent saves.
+        if persist {
+            let presetsVerified = await verifyPresetIds(stepPresetIds, device: device)
+            if !presetsVerified {
+                #if DEBUG
+                print("⚠️ Playlist creation warning: missing presets after save for \(device.name): \(stepPresetIds)")
                 #endif
                 await cleanupAllocatedStepPresets()
                 return nil
             }
         }
-        // Verify presets exist before building playlist.
-        if !(await verifyPresetIds(stepPresetIds, device: device)) {
-            #if DEBUG
-            print("⚠️ Playlist creation failed: missing presets after save for \(device.name): \(stepPresetIds)")
-            #endif
-            await cleanupAllocatedStepPresets()
-            return nil
-        }
 
         let durations = stepPlan.durations
         let transitions = stepPlan.transitions
-        let endPresetId = stepPresetIds.last
         let playlistName = label?.isEmpty == false ? label! : "\(autoTransitionPrefix)\(playlistId)"
         let playlistRequest = WLEDPlaylistSaveRequest(
             id: playlistId,
@@ -4658,30 +7852,61 @@ class DeviceControlViewModel: ObservableObject {
             dur: durations,
             transition: transitions,
             repeat: 1,
-            endPresetId: endPresetId
+            endPresetId: 0,
+            shuffle: 0
         )
+        #if DEBUG
+        print("🔎 Playlist payload for \(device.name): id=\(playlistId) ps=\(stepPresetIds) dur=\(debugArraySummary(durations)) transition=\(debugArraySummary(transitions)) repeat=1 end=0 r=0")
+        #endif
+
+        if await shouldAbortTemporaryCreation() {
+            if temporaryLeaseId != nil {
+                await TemporaryTransitionCleanupService.shared.requestCleanup(
+                    device: device,
+                    endReason: .cancelledByUser,
+                    runId: runId,
+                    playlistIdHint: playlistId,
+                    stepPresetIdsHint: stepPresetIds
+                )
+                await refreshTransitionCleanupPendingCount(for: device.id)
+            }
+            return nil
+        }
 
         do {
-            try await savePlaylistWithRetry(playlistRequest, device: device)
-            #if DEBUG
-            if let playlists = try? await apiService.fetchPlaylists(for: device),
-               let saved = playlists.first(where: { $0.id == playlistId }) {
-                print("🔎 Playlist saved for \(device.name): id=\(saved.id), ps=\(saved.presets.count), dur=\(saved.duration.count), transition=\(saved.transition.count)")
+            try await savePlaylistWithRetry(
+                playlistRequest,
+                device: device,
+                retryAttempts: playlistSaveAttempts
+            )
+            if let temporaryLeaseId {
+                _ = await TemporaryTransitionCleanupService.shared.markReady(
+                    leaseId: temporaryLeaseId,
+                    playlistId: playlistId,
+                    stepPresetIds: stepPresetIds
+                )
             }
-            #endif
-            if !(await verifyPlaylistId(playlistId, device: device)) {
+            if persist {
                 #if DEBUG
-                print("⚠️ Playlist still missing after verification for \(device.name).")
+                if let playlists = try? await apiService.fetchPlaylists(for: device),
+                   let saved = playlists.first(where: { $0.id == playlistId }) {
+                    print("🔎 Playlist saved for \(device.name): id=\(saved.id), ps=\(saved.presets.count), dur=\(saved.duration.count), transition=\(saved.transition.count)")
+                }
                 #endif
-                playlistUnsupportedDevices.insert(device.id)
-                await cleanupAllocatedStepPresets()
-                return nil
+                if !(await verifyPlaylistId(playlistId, device: device)) {
+                    #if DEBUG
+                    print("⚠️ Playlist still missing after verification for \(device.name).")
+                    #endif
+                    playlistUnsupportedDevices.insert(device.id)
+                    await cleanupFailedTemporaryOrAllocated()
+                    return nil
+                }
             }
         } catch {
             #if DEBUG
             print("⚠️ Playlist creation failed: playlist save error for \(device.name): \(error.localizedDescription)")
             #endif
-            await cleanupAllocatedStepPresets()
+            await cleanupFailedTemporaryOrAllocated()
             return nil
         }
 
@@ -4691,10 +7916,29 @@ class DeviceControlViewModel: ObservableObject {
                 temporaryPresetIds[device.id] = stepPresetIds
             }
         }
-        return TransitionPlaylistResult(playlistId: playlistId, stepPresetIds: stepPresetIds)
+        #if DEBUG
+        print("transition.playlist_build.success device=\(device.id)\(operationContext) playlist=\(playlistId) steps=\(stepPresetIds.count) persist=\(persist)")
+        #endif
+        return TransitionPlaylistResult(
+            playlistId: playlistId,
+            stepPresetIds: stepPresetIds,
+            effectiveDurationSeconds: stepPlan.effectiveDurationSeconds,
+            stepProfile: stepProfile,
+            playlistDurations: durations,
+            playlistTransitions: transitions,
+            temporaryLeaseId: temporaryLeaseId
+        )
     }
 
-    func saveTransitionPresetToDevice(_ preset: TransitionPreset, device: WLEDDevice) async -> TransitionPlaylistResult? {
+    func saveTransitionPresetToDevice(
+        _ preset: TransitionPreset,
+        device: WLEDDevice,
+        debugOperationId: String? = nil
+    ) async -> TransitionPlaylistResult? {
+        #if DEBUG
+        let operationContext = debugOperationContext(debugOperationId)
+        print("transition_preset.save.path=createTransitionPlaylist_persist device=\(device.id)\(operationContext)")
+        #endif
         let result = await createTransitionPlaylist(
             device: device,
             from: preset.gradientA,
@@ -4706,6 +7950,7 @@ class DeviceControlViewModel: ObservableObject {
             label: preset.name,
             existingPlaylistId: preset.wledPlaylistId,
             existingStepPresetIds: preset.wledStepPresetIds,
+            debugOperationId: debugOperationId,
             startTemperature: preset.temperatureA,
             endTemperature: preset.temperatureB,
             startWhiteLevel: preset.whiteLevelA,
@@ -4714,15 +7959,576 @@ class DeviceControlViewModel: ObservableObject {
 
         guard let result else { return nil }
 
+        #if DEBUG
+        print("transition_preset.save.synced device=\(device.id)\(operationContext) playlist=\(result.playlistId) stepIds=\(result.stepPresetIds)")
+        #endif
+
         if let existingPlaylistId = preset.wledPlaylistId, existingPlaylistId != result.playlistId {
             await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [existingPlaylistId])
         }
-        if let existingStepPresetIds = preset.wledStepPresetIds,
-           Set(existingStepPresetIds) != Set(result.stepPresetIds) {
-            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: existingStepPresetIds)
+        if let existingStepPresetIds = preset.wledStepPresetIds {
+            let staleStepIds = Set(existingStepPresetIds).subtracting(Set(result.stepPresetIds))
+            if !staleStepIds.isEmpty {
+                await DeviceCleanupManager.shared.requestDelete(
+                    type: .preset,
+                    device: device,
+                    ids: Array(staleStepIds).sorted()
+                )
+            }
         }
 
         return result
+    }
+
+    func saveTransitionPresetWithActiveRunHandling(
+        device: WLEDDevice,
+        presetInputSnapshot: TransitionPreset
+    ) async -> TransitionPresetSaveOutcome? {
+        let snappedPreset = presetInputSnapshot
+        let deviceId = device.id
+        #if DEBUG
+        let operationId = debugOperationId(prefix: "preset-save")
+        let operationContext = debugOperationContext(operationId)
+        #else
+        let operationId: String? = nil
+        #endif
+        await refreshTransitionCleanupPendingCount(for: deviceId)
+        let initialAvailability = await MainActor.run { transitionPresetSaveAvailability(for: deviceId) }
+        if initialAvailability == .blockedLoading {
+            #if DEBUG
+            print("preset_save.blocked device=\(deviceId)\(operationContext) reason=\(initialAvailability.rawValue)")
+            #endif
+            return .suppressedBusy
+        }
+        let activeStatus = await MainActor.run { activeRunStatus[deviceId] }
+
+        let hasActiveRun = activeStatus != nil
+        #if DEBUG
+        let activeKind = activeStatus.map { String(describing: $0.kind) } ?? "none"
+        print("preset_save.begin device=\(deviceId)\(operationContext) availability=\(initialAvailability.rawValue) activeRun=\(hasActiveRun) activeKind=\(activeKind)")
+        #endif
+        if hasActiveRun {
+            #if DEBUG
+            print("preset_save.active_transition_detected device=\(deviceId)\(operationContext)")
+            print("preset_save.cancel_before_save device=\(deviceId)\(operationContext)")
+            #endif
+            await cancelActiveRun(for: device, force: true, endReason: .cancelledByPresetSave)
+        }
+
+        await refreshTransitionCleanupPendingCount(for: deviceId)
+        if enableTemporaryPresetStoreBackedTransitions {
+            await TemporaryTransitionCleanupService.shared.deferInteractiveConflictingCleanup(
+                for: deviceId,
+                until: Date().addingTimeInterval(4.0)
+            )
+        }
+        let quiescence = await waitForHeavyOpQuiescence(deviceId: deviceId, timeout: 15.0)
+        switch quiescence {
+        case .ready:
+            break
+        case .timedOut(let reason):
+            let deferred = enqueueDeferredPresetStoreSyncItem(
+                deviceId: deviceId,
+                kind: .transitionPresetSave,
+                transitionPresetSnapshot: snappedPreset,
+                error: "Deferred after quiescence timeout: \(reason)"
+            )
+            #if DEBUG
+            print("preset_save.deferred_race_busy device=\(deviceId)\(operationContext) item=\(deferred.id.uuidString)")
+            #endif
+            return .deferred(deferred)
+        }
+
+        if isPresetStoreWritePaused(for: deviceId) {
+            let deferred = enqueueDeferredPresetStoreSyncItem(
+                deviceId: deviceId,
+                kind: .transitionPresetSave,
+                transitionPresetSnapshot: snappedPreset,
+                error: "Deferred: preset store writes paused due to degraded device storage"
+            )
+            #if DEBUG
+            print("preset_save.deferred device=\(deviceId)\(operationContext) item=\(deferred.id.uuidString)")
+            #endif
+            return .deferred(deferred)
+        }
+
+        #if DEBUG
+        print("preset_save.start_after_cancel device=\(deviceId)\(operationContext)")
+        #endif
+        if let result = await saveTransitionPresetToDevice(
+            snappedPreset,
+            device: device,
+            debugOperationId: operationId
+        ) {
+            markPresetStoreHealthyWriteSuccess(deviceId: deviceId)
+            #if DEBUG
+            print("preset_save.completed device=\(deviceId)\(operationContext) playlist=\(result.playlistId)")
+            #endif
+            return .saved(result)
+        }
+
+        await refreshTransitionCleanupPendingCount(for: deviceId)
+        if let busyClassification = classifyTransitionPresetSaveBusyFailure(deviceId: deviceId) {
+            let deferred = enqueueDeferredPresetStoreSyncItem(
+                deviceId: deviceId,
+                kind: .transitionPresetSave,
+                transitionPresetSnapshot: snappedPreset,
+                error: "Deferred after busy preset save failure: \(busyClassification)"
+            )
+            #if DEBUG
+            print("preset_save.suppressed_busy device=\(deviceId)\(operationContext) classification=\(busyClassification)")
+            print("preset_save.deferred_race_busy device=\(deviceId)\(operationContext) item=\(deferred.id.uuidString)")
+            #endif
+            return .deferred(deferred)
+        }
+
+        recordPresetStoreFailure(
+            deviceId: deviceId,
+            message: "Transition preset save failed"
+        )
+        #if DEBUG
+        print("preset_save.failed device=\(deviceId)\(operationContext)")
+        #endif
+        return .suppressedBusy
+    }
+
+    func waitForTransitionApplyQuiescence(
+        deviceId: String,
+        timeout: TimeInterval = 15.0
+    ) async -> HeavyOpQuiescenceResult {
+        await waitForHeavyOpQuiescence(deviceId: deviceId, timeout: timeout)
+    }
+
+    func validateStoredTransitionPresetPlaylist(
+        _ preset: TransitionPreset,
+        device: WLEDDevice
+    ) async -> StoredTransitionPlaylistValidation {
+        guard let playlistId = preset.wledPlaylistId else {
+            return .missingPlaylistId
+        }
+        if transitionPresetUsesReservedTempIds(preset) {
+            return .legacyTempRangeIds
+        }
+
+        let playlists: [WLEDPlaylist]
+        do {
+            playlists = try await apiService.fetchPlaylists(for: device)
+        } catch {
+            return .unknownReadFailure
+        }
+
+        guard let playlist = playlists.first(where: { $0.id == playlistId }) else {
+            return .missingPlaylistRecord
+        }
+        if playlist.presets.contains(where: { (temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper).contains($0) }) {
+            return .legacyTempRangeIds
+        }
+
+        let expectedStepIds = preset.wledStepPresetIds?.isEmpty == false
+            ? (preset.wledStepPresetIds ?? [])
+            : playlist.presets
+
+        guard !expectedStepIds.isEmpty else { return .valid }
+
+        do {
+            let presets = try await apiService.fetchPresets(for: device)
+            let existingPresetIds = Set(presets.map(\.id))
+            let missing = expectedStepIds.filter { !existingPresetIds.contains($0) }
+            return missing.isEmpty ? .valid : .missingStepPresets(missing)
+        } catch {
+            return .unknownReadFailure
+        }
+    }
+
+    func applyTransitionPreset(
+        _ preset: TransitionPreset,
+        to device: WLEDDevice
+    ) async -> TransitionPresetApplyOutcome {
+        await applyTransitionPreset(preset, to: device, queueOnSuppressedBusy: true)
+    }
+
+    private func applyTransitionPreset(
+        _ preset: TransitionPreset,
+        to device: WLEDDevice,
+        queueOnSuppressedBusy: Bool
+    ) async -> TransitionPresetApplyOutcome {
+        let deviceId = device.id
+        #if DEBUG
+        let operationId = debugOperationId(prefix: "preset-apply")
+        let operationContext = debugOperationContext(operationId)
+        #else
+        let operationId: String? = nil
+        #endif
+        var clearQueuedOnExit = queueOnSuppressedBusy
+        defer {
+            if clearQueuedOnExit {
+                clearQueuedTransitionPresetApply(deviceId: deviceId)
+            }
+        }
+        #if DEBUG
+        print("transition_preset.apply.begin device=\(deviceId)\(operationContext) preset=\(preset.id.uuidString) sync=\(preset.wledSyncState.rawValue) playlist=\(preset.wledPlaylistId.map(String.init) ?? "nil")")
+        #endif
+
+        var replayPreset = preset
+        var syncState = replayPreset.wledSyncState
+        let shouldUseStoredPlaylist = replayPreset.wledPlaylistId != nil
+            || syncState == .pendingSync
+            || syncState == .syncFailed
+            || syncState == .needsMigration
+
+        // Fast path: for synced presets with a valid stored playlist, replay immediately.
+        // This matches WLED's direct playlist start semantics and avoids unnecessary pre-cancel lag.
+        if syncState == .synced,
+           let playlistId = replayPreset.wledPlaylistId,
+           !transitionPresetUsesReservedTempIds(replayPreset) {
+            #if DEBUG
+            print("transition_preset.apply.fast_replay_attempt device=\(deviceId)\(operationContext) playlistId=\(playlistId)")
+            #endif
+            let fastApplied = await startPlaylist(
+                device: device,
+                playlistId: playlistId,
+                runTitle: preset.name,
+                expectedDurationSeconds: preset.durationSec,
+                transitionDeciseconds: nil,
+                runKind: .transition,
+                assumeStarted: false,
+                strictValidation: true,
+                preferWebSocketFirst: true
+            )
+            if fastApplied {
+                await markTransitionPresetSynced(replayPreset)
+                #if DEBUG
+                print("transition_preset.apply.fast_replay_started device=\(deviceId)\(operationContext) playlistId=\(playlistId)")
+                #endif
+                return .startedStoredPlaylist(playlistId: playlistId)
+            }
+            #if DEBUG
+            print("transition_preset.apply.fast_replay_failed device=\(deviceId)\(operationContext) playlistId=\(playlistId)")
+            #endif
+        }
+
+        let activeStatus = await MainActor.run { activeRunStatus[deviceId] }
+        if let activeStatus, activeStatus.kind == .transition || activeStatus.kind == .automation {
+            await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
+        } else {
+            await cancelActiveTransitionIfNeeded(for: device)
+        }
+        await refreshTransitionCleanupPendingCount(for: deviceId)
+        if enableTemporaryPresetStoreBackedTransitions {
+            await TemporaryTransitionCleanupService.shared.deferInteractiveConflictingCleanup(
+                for: deviceId,
+                until: Date().addingTimeInterval(4.0)
+            )
+        }
+
+        #if DEBUG
+        print("transition_preset.apply.wait_quiescence.begin device=\(deviceId)\(operationContext)")
+        #endif
+        switch await waitForTransitionApplyQuiescence(deviceId: deviceId, timeout: 15.0) {
+        case .ready:
+            #if DEBUG
+            print("transition_preset.apply.wait_quiescence.ready device=\(deviceId)\(operationContext)")
+            #endif
+            break
+        case .timedOut(let reason):
+            #if DEBUG
+            print("transition_preset.apply.wait_quiescence.timeout device=\(deviceId)\(operationContext) reason=\(reason)")
+            print("transition_preset.apply.suppressed_busy device=\(deviceId)\(operationContext)")
+            #endif
+            if queueOnSuppressedBusy {
+                clearQueuedOnExit = false
+                queueTransitionPresetApply(presetId: preset.id, deviceId: deviceId)
+            }
+            return .suppressedBusy
+        }
+
+        if shouldUseStoredPlaylist {
+            if syncState == .pendingSync || syncState == .syncFailed {
+                if let promoted = await promotePendingTransitionPresetForReplay(
+                    replayPreset,
+                    device: device,
+                    debugOperationId: operationId
+                ) {
+                    replayPreset.wledPlaylistId = promoted.playlistId
+                    replayPreset.wledStepPresetIds = promoted.stepPresetIds
+                    replayPreset.wledSyncState = .synced
+                    replayPreset.lastWLEDSyncError = nil
+                    replayPreset.lastWLEDSyncAt = Date()
+                    syncState = .synced
+                } else {
+                    return await rebuildTransitionPreset(preset, device: device, outcomeForPendingSync: true)
+                }
+            }
+
+            if syncState == .needsMigration || transitionPresetUsesReservedTempIds(replayPreset) {
+                await markTransitionPresetNeedsMigration(replayPreset)
+                return await rebuildTransitionPreset(preset, device: device, reason: .legacyTempRangeIds)
+            }
+
+            guard let playlistId = replayPreset.wledPlaylistId else {
+                return await rebuildTransitionPreset(preset, device: device, reason: .missingWLEDPlaylistId)
+            }
+
+            #if DEBUG
+            print("transition_preset.apply.replay_attempt device=\(deviceId)\(operationContext) playlistId=\(playlistId)")
+            #endif
+            let applied = await startPlaylist(
+                device: device,
+                playlistId: playlistId,
+                runTitle: preset.name,
+                expectedDurationSeconds: preset.durationSec,
+                transitionDeciseconds: nil,
+                runKind: .transition,
+                strictValidation: true,
+                preferWebSocketFirst: true
+            )
+            if applied {
+                await markTransitionPresetSynced(replayPreset)
+                #if DEBUG
+                print("transition_preset.apply.replay_started device=\(deviceId)\(operationContext) playlistId=\(playlistId)")
+                #endif
+                return .startedStoredPlaylist(playlistId: playlistId)
+            }
+
+            let validation = await validateStoredTransitionPresetPlaylist(replayPreset, device: device)
+            switch validation {
+            case .legacyTempRangeIds:
+                await markTransitionPresetNeedsMigration(replayPreset)
+                #if DEBUG
+                print("transition_preset.apply.legacy_temp_range_ids playlistId=\(playlistId)")
+                #endif
+                return await rebuildTransitionPreset(preset, device: device, reason: .legacyTempRangeIds)
+            case .missingStepPresets(let ids):
+                await markTransitionPresetSyncFailure(replayPreset, error: "Missing step presets: \(ids)")
+                #if DEBUG
+                print("transition_preset.apply.validation missingSteps=\(ids)")
+                #endif
+                return await rebuildTransitionPreset(preset, device: device, reason: .playlistInvalidOrMissingSteps)
+            case .missingPlaylistRecord:
+                await markTransitionPresetSyncFailure(replayPreset, error: "Missing playlist record")
+                return await rebuildTransitionPreset(preset, device: device, reason: .playlistStartFailed)
+            case .missingPlaylistId:
+                return await rebuildTransitionPreset(preset, device: device, reason: .missingWLEDPlaylistId)
+            case .unknownReadFailure:
+                return await rebuildTransitionPreset(preset, device: device, reason: .playlistStartFailed)
+            case .valid:
+                return await rebuildTransitionPreset(preset, device: device, reason: .playlistStartFailed)
+            }
+        }
+
+        if syncState == .synced && replayPreset.wledPlaylistId == nil {
+            return await rebuildTransitionPreset(preset, device: device, reason: .missingWLEDPlaylistId)
+        }
+        return await rebuildTransitionPreset(preset, device: device, reason: .shortDurationDirectApply)
+    }
+
+    private func promotePendingTransitionPresetForReplay(
+        _ preset: TransitionPreset,
+        device: WLEDDevice,
+        debugOperationId: String? = nil
+    ) async -> TransitionPlaylistResult? {
+        if isPresetStoreWritePaused(for: device.id) {
+            #if DEBUG
+            let operationContext = debugOperationContext(debugOperationId)
+            print("transition_preset.apply.promote_skipped_paused device=\(device.id)\(operationContext)")
+            #endif
+            return nil
+        }
+        #if DEBUG
+        let operationContext = debugOperationContext(debugOperationId)
+        print("transition_preset.apply.promote_attempt device=\(device.id)\(operationContext) preset=\(preset.id.uuidString)")
+        #endif
+        guard let result = await saveTransitionPresetToDevice(
+            preset,
+            device: device,
+            debugOperationId: debugOperationId
+        ) else {
+            #if DEBUG
+            print("transition_preset.apply.promote_failed device=\(device.id)\(operationContext) preset=\(preset.id.uuidString)")
+            #endif
+            return nil
+        }
+        markPresetStoreHealthyWriteSuccess(deviceId: device.id)
+        await updateTransitionPresetSyncMetadata(preset.id) { stored in
+            stored.wledPlaylistId = result.playlistId
+            stored.wledStepPresetIds = result.stepPresetIds
+            stored.wledSyncState = .synced
+            stored.lastWLEDSyncError = nil
+            stored.lastWLEDSyncAt = Date()
+        }
+        #if DEBUG
+        print("transition_preset.apply.promoted device=\(device.id)\(operationContext) playlist=\(result.playlistId) stepIds=\(result.stepPresetIds)")
+        #endif
+        return result
+    }
+
+    private func queueTransitionPresetApply(presetId: UUID, deviceId: String) {
+        queuedTransitionPresetApplyByDeviceId[deviceId] = presetId
+        queuedTransitionPresetApplyTasksByDeviceId[deviceId]?.cancel()
+        queuedTransitionPresetApplyTasksByDeviceId[deviceId] = Task { [weak self] in
+            guard let self else { return }
+            await self.runQueuedTransitionPresetApply(deviceId: deviceId, presetId: presetId)
+        }
+        #if DEBUG
+        print("transition_preset.apply.queued device=\(deviceId) preset=\(presetId.uuidString)")
+        #endif
+    }
+
+    private func clearQueuedTransitionPresetApply(deviceId: String, presetId: UUID? = nil) {
+        if let current = queuedTransitionPresetApplyByDeviceId[deviceId] {
+            if let presetId, current != presetId { return }
+            queuedTransitionPresetApplyByDeviceId.removeValue(forKey: deviceId)
+        }
+        queuedTransitionPresetApplyTasksByDeviceId[deviceId]?.cancel()
+        queuedTransitionPresetApplyTasksByDeviceId.removeValue(forKey: deviceId)
+    }
+
+    private func runQueuedTransitionPresetApply(deviceId: String, presetId: UUID) async {
+        defer {
+            if queuedTransitionPresetApplyByDeviceId[deviceId] == presetId {
+                queuedTransitionPresetApplyTasksByDeviceId.removeValue(forKey: deviceId)
+            }
+        }
+
+        // Short settle to avoid fighting the just-triggered busy window.
+        try? await Task.sleep(nanoseconds: 750_000_000)
+
+        for _ in 0..<8 {
+            if Task.isCancelled { return }
+            if queuedTransitionPresetApplyByDeviceId[deviceId] != presetId { return }
+
+            let quiescence = await waitForTransitionApplyQuiescence(deviceId: deviceId, timeout: 4.0)
+            guard case .ready = quiescence else {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+
+            guard let device = devices.first(where: { $0.id == deviceId }),
+                  let preset = PresetsStore.shared.transitionPreset(id: presetId) else {
+                clearQueuedTransitionPresetApply(deviceId: deviceId, presetId: presetId)
+                return
+            }
+
+            let outcome = await applyTransitionPreset(preset, to: device, queueOnSuppressedBusy: false)
+            switch outcome {
+            case .startedStoredPlaylist, .rebuiltTransition, .deferredSyncThenRebuilt, .aborted:
+                clearQueuedTransitionPresetApply(deviceId: deviceId, presetId: presetId)
+                #if DEBUG
+                print("transition_preset.apply.queued_completed device=\(deviceId) preset=\(presetId.uuidString)")
+                #endif
+                return
+            case .suppressedBusy:
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+        }
+
+        // Keep queued marker so user intent is still visible; task can be retriggered by a later tap.
+        #if DEBUG
+        if queuedTransitionPresetApplyByDeviceId[deviceId] == presetId {
+            print("transition_preset.apply.queued_timeout device=\(deviceId) preset=\(presetId.uuidString)")
+        }
+        #endif
+    }
+
+    private func rebuildTransitionPreset(
+        _ preset: TransitionPreset,
+        device: WLEDDevice,
+        reason: TransitionPresetFallbackReason? = nil,
+        outcomeForPendingSync: Bool = false
+    ) async -> TransitionPresetApplyOutcome {
+        let fallbackReason = reason ?? .pendingSync
+        #if DEBUG
+        print("transition_preset.apply.fallback device=\(device.id) reason=\(fallbackReason.rawValue)")
+        #endif
+        let startTemps = preset.temperatureA.map { temp in
+            Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, temp) })
+        }
+        let startWhites = preset.whiteLevelA.map { white in
+            Dictionary(uniqueKeysWithValues: preset.gradientA.stops.map { ($0.id, white) })
+        }
+        let endTemps = preset.temperatureB.map { temp in
+            Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, temp) })
+        }
+        let endWhites = preset.whiteLevelB.map { white in
+            Dictionary(uniqueKeysWithValues: preset.gradientB.stops.map { ($0.id, white) })
+        }
+        await startTransition(
+            from: preset.gradientA,
+            aBrightness: preset.brightnessA,
+            to: preset.gradientB,
+            bBrightness: preset.brightnessB,
+            durationSec: preset.durationSec,
+            device: device,
+            startStopTemperatures: startTemps,
+            startStopWhiteLevels: startWhites,
+            endStopTemperatures: endTemps,
+            endStopWhiteLevels: endWhites
+        )
+        if fallbackReason == .legacyTempRangeIds || fallbackReason == .playlistInvalidOrMissingSteps {
+            await markTransitionPresetPendingSync(
+                preset,
+                error: "WLED playlist replay invalid; rebuilt locally and pending re-sync"
+            )
+        }
+        #if DEBUG
+        print("transition_preset.apply.rebuilt device=\(device.id)")
+        #endif
+        return outcomeForPendingSync ? .deferredSyncThenRebuilt : .rebuiltTransition(reason: fallbackReason)
+    }
+
+    private func transitionPresetUsesReservedTempIds(_ preset: TransitionPreset) -> Bool {
+        if let playlistId = preset.wledPlaylistId,
+           (temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper).contains(playlistId) {
+            return true
+        }
+        if let stepIds = preset.wledStepPresetIds,
+           stepIds.contains(where: { (temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper).contains($0) }) {
+            return true
+        }
+        return false
+    }
+
+    private func markTransitionPresetSynced(_ preset: TransitionPreset) async {
+        await updateTransitionPresetSyncMetadata(preset.id) { stored in
+            stored.wledSyncState = .synced
+            stored.lastWLEDSyncError = nil
+            stored.lastWLEDSyncAt = Date()
+        }
+    }
+
+    private func markTransitionPresetNeedsMigration(_ preset: TransitionPreset) async {
+        await updateTransitionPresetSyncMetadata(preset.id) { stored in
+            stored.wledSyncState = .needsMigration
+            stored.lastWLEDSyncError = "Uses temporary reserved WLED IDs"
+        }
+    }
+
+    private func markTransitionPresetPendingSync(_ preset: TransitionPreset, error: String) async {
+        await updateTransitionPresetSyncMetadata(preset.id) { stored in
+            stored.wledSyncState = .pendingSync
+            stored.lastWLEDSyncError = error
+        }
+    }
+
+    private func markTransitionPresetSyncFailure(_ preset: TransitionPreset, error: String) async {
+        await updateTransitionPresetSyncMetadata(preset.id) { stored in
+            if stored.wledSyncState != .needsMigration {
+                stored.wledSyncState = .syncFailed
+            }
+            stored.lastWLEDSyncError = error
+        }
+    }
+
+    private func updateTransitionPresetSyncMetadata(
+        _ presetId: UUID,
+        mutate: @escaping (inout TransitionPreset) -> Void
+    ) async {
+        await MainActor.run {
+            guard var stored = PresetsStore.shared.transitionPreset(id: presetId) else { return }
+            mutate(&stored)
+            PresetsStore.shared.updateTransitionPreset(stored)
+        }
     }
 
     func startPlaylist(
@@ -4730,8 +8536,19 @@ class DeviceControlViewModel: ObservableObject {
         playlistId: Int,
         runTitle: String? = nil,
         expectedDurationSeconds: Double? = nil,
-        runKind: ActiveRunStatus.RunKind = .transition
+        transitionDeciseconds: Int? = nil,
+        runKind: ActiveRunStatus.RunKind = .transition,
+        runAutomationId: UUID? = nil,
+        assumeStarted: Bool = false,
+        strictValidation: Bool = false,
+        preferWebSocketFirst: Bool = true,
+        debugExpectedStepPresetIds: [Int]? = nil,
+        debugExpectedBoundarySeconds: [Double]? = nil
     ) async -> Bool {
+        let runId = (runTitle != nil || expectedDurationSeconds != nil) ? UUID() : nil
+        func markPlaylistStarted() {
+            playlistRunsByDevice.insert(device.id)
+        }
         func recordRunIfNeeded() {
             guard runTitle != nil || expectedDurationSeconds != nil else { return }
             let startDate = Date()
@@ -4739,11 +8556,11 @@ class DeviceControlViewModel: ObservableObject {
             let expectedEnd = (expectedDurationSeconds ?? 0) > 0
                 ? startDate.addingTimeInterval(expectedDurationSeconds ?? 0)
                 : nil
-            let runId = UUID()
             activeRunStatus[device.id] = ActiveRunStatus(
-                id: runId,
+                id: runId ?? UUID(),
                 deviceId: device.id,
                 kind: runKind,
+                automationId: runAutomationId,
                 title: title,
                 startDate: startDate,
                 progress: 0.0,
@@ -4758,36 +8575,150 @@ class DeviceControlViewModel: ObservableObject {
             startWatchdogTaskIfNeeded()
         }
 
-        do {
-            let state = try await apiService.applyPlaylist(playlistId, to: device, releaseRealtime: true)
-            #if DEBUG
-            print("✅ Playlist started for \(device.name): playlistId=\(playlistId)")
-            print("🔎 Playlist state for \(device.name): pl=\(state.playlistId.map(String.init) ?? "nil"), ps=\(state.presetId.map(String.init) ?? "nil"), tt=\(state.transitionDeciseconds.map(String.init) ?? "nil")")
-            #endif
-            let immediateMatch = state.playlistId == playlistId || state.presetId == playlistId
-            if immediateMatch {
-                recordRunIfNeeded()
-                return true
-            }
-
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if let fetched = try? await apiService.getState(for: device) {
-                let fetchedState = fetched.state
+        if preferWebSocketFirst, webSocketManager.isDeviceConnected(device.id) {
+            let wsState = WLEDStateUpdate(
+                on: true,
+                transitionDeciseconds: transitionDeciseconds,
+                ps: playlistId,
+                lor: 0
+            )
+            let wsDispatched = await webSocketManager.sendStateUpdateAwaitingDispatch(
+                wsState,
+                to: device.id,
+                timeout: 0.35
+            )
+            if wsDispatched {
                 #if DEBUG
-                print("🔎 Playlist fetched state for \(device.name): pl=\(fetchedState.playlistId.map(String.init) ?? "nil"), ps=\(fetchedState.presetId.map(String.init) ?? "nil"), tt=\(fetchedState.transitionDeciseconds.map(String.init) ?? "nil")")
+                print("✅ Playlist WS dispatch for \(device.name): playlistId=\(playlistId)")
+                debugPlaylistStateProbe(
+                    device: device,
+                    playlistId: playlistId,
+                    expectedStepPresetIds: debugExpectedStepPresetIds,
+                    expectedBoundarySeconds: debugExpectedBoundarySeconds
+                )
                 #endif
-                if fetchedState.playlistId == playlistId || fetchedState.presetId == playlistId {
+                if assumeStarted || !strictValidation {
+                    markPlaylistStarted()
                     recordRunIfNeeded()
                     return true
                 }
             } else {
                 #if DEBUG
-                print("⚠️ Failed to fetch state after playlist start for \(device.name)")
+                print("⚠️ Playlist WS dispatch failed for \(device.name): playlistId=\(playlistId), falling back to HTTP")
                 #endif
             }
+        }
+
+        do {
+            let state = try await apiService.applyPlaylist(
+                playlistId,
+                to: device,
+                releaseRealtime: true,
+                transitionDeciseconds: transitionDeciseconds
+            )
+            #if DEBUG
+            print("✅ Playlist started for \(device.name): playlistId=\(playlistId)")
+            print("🔎 Playlist state for \(device.name): pl=\(state.playlistId.map(String.init) ?? "nil"), ps=\(state.presetId.map(String.init) ?? "nil"), tt=\(state.transitionDeciseconds.map(String.init) ?? "nil")")
+            debugPlaylistStateProbe(
+                device: device,
+                playlistId: playlistId,
+                expectedStepPresetIds: debugExpectedStepPresetIds,
+                expectedBoundarySeconds: debugExpectedBoundarySeconds
+            )
+            #endif
+            if assumeStarted {
+                markPlaylistStarted()
+                recordRunIfNeeded()
+                return true
+            }
+            let playlistStepIds: Set<Int>?
+            do {
+                let playlists = try await apiService.fetchPlaylists(for: device)
+                playlistStepIds = playlists
+                    .first(where: { $0.id == playlistId })
+                    .map { Set($0.presets) }
+            } catch {
+                playlistStepIds = nil
+            }
+
+            var observedPlaylistIds: Set<Int> = []
+            var observedPresetIds: Set<Int> = []
+            var observedStateFetch = false
+
+            func trackObserved(_ candidate: WLEDState) {
+                if let observedPlaylist = candidate.playlistId, observedPlaylist >= 0 {
+                    observedPlaylistIds.insert(observedPlaylist)
+                }
+                if let observedPreset = candidate.presetId, observedPreset >= 0 {
+                    observedPresetIds.insert(observedPreset)
+                }
+            }
+
+            func isConfirmedPlaylistStart(_ candidate: WLEDState) -> Bool {
+                if candidate.playlistId == playlistId || candidate.presetId == playlistId {
+                    return true
+                }
+                if let playlistStepIds,
+                   let presetId = candidate.presetId,
+                   playlistStepIds.contains(presetId) {
+                    return true
+                }
+                return false
+            }
+
+            trackObserved(state)
+            if isConfirmedPlaylistStart(state) {
+                markPlaylistStarted()
+                recordRunIfNeeded()
+                return true
+            }
+            if playlistStepIds == nil, !strictValidation {
+                markPlaylistStarted()
+                recordRunIfNeeded()
+                return true
+            }
+
+            let verificationAttempts = strictValidation ? 6 : 1
+            for attempt in 0..<verificationAttempts {
+                let sleepNs: UInt64 = (attempt == 0) ? 500_000_000 : 350_000_000
+                try? await Task.sleep(nanoseconds: sleepNs)
+                if let fetched = try? await apiService.getState(for: device) {
+                    observedStateFetch = true
+                    let fetchedState = fetched.state
+                    trackObserved(fetchedState)
+                    #if DEBUG
+                    print("🔎 Playlist fetched state for \(device.name): pl=\(fetchedState.playlistId.map(String.init) ?? "nil"), ps=\(fetchedState.presetId.map(String.init) ?? "nil"), tt=\(fetchedState.transitionDeciseconds.map(String.init) ?? "nil")")
+                    #endif
+                    if isConfirmedPlaylistStart(fetchedState) {
+                        markPlaylistStarted()
+                        recordRunIfNeeded()
+                        return true
+                    }
+                }
+            }
+
+            if strictValidation, playlistStepIds == nil {
+                let observedAnyActiveSelection = observedPlaylistIds.contains(where: { $0 > 0 })
+                    || observedPresetIds.contains(where: { $0 > 0 })
+                if observedStateFetch && observedAnyActiveSelection {
+                    #if DEBUG
+                    print("⚠️ Playlist strict validation degraded for \(device.name): metadata unavailable, observed active playlist/preset IDs \(Array(observedPlaylistIds).sorted())/\(Array(observedPresetIds).sorted())")
+                    #endif
+                    markPlaylistStarted()
+                    recordRunIfNeeded()
+                    return true
+                }
+            }
+
+            #if DEBUG
+            if strictValidation, playlistStepIds == nil {
+                print("⚠️ Strict playlist validation could not confirm start for \(device.name): playlist metadata unavailable")
+            }
+            #endif
 
             return false
         } catch {
+            playlistRunsByDevice.remove(device.id)
             #if DEBUG
             print("⚠️ Failed to start playlist \(playlistId) for \(device.name): \(error.localizedDescription)")
             #endif
@@ -4795,19 +8726,157 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
-    func cleanupTransitionPlaylist(device: WLEDDevice) async {
+    private func cumulativePlaylistBoundarySeconds(durations: [Int]) -> [Double] {
+        guard durations.count > 1 else { return [] }
+        var cumulative = 0
+        return durations.dropLast().map { duration in
+            cumulative += max(0, duration)
+            return Double(cumulative) / 10.0
+        }
+    }
+
+    #if DEBUG
+    private func debugPlaylistStateProbe(
+        device: WLEDDevice,
+        playlistId: Int,
+        expectedStepPresetIds: [Int]? = nil,
+        expectedBoundarySeconds: [Double]? = nil
+    ) {
+        var probeDelays: [UInt64] = [1_000_000_000, 3_000_000_000, 8_000_000_000]
+        if let expectedBoundarySeconds, !expectedBoundarySeconds.isEmpty {
+            let boundaryProbes = expectedBoundarySeconds
+                .prefix(6)
+                .flatMap { boundary in
+                    [
+                        max(0.5, boundary - 1.0),
+                        boundary,
+                        boundary + 1.0
+                    ]
+                }
+                .map { UInt64(($0 * 1_000_000_000).rounded()) }
+            probeDelays.append(contentsOf: boundaryProbes)
+            probeDelays = Array(Set(probeDelays)).sorted()
+        }
+        let stepIndexByPreset: [Int: Int] = Dictionary(
+            uniqueKeysWithValues: (expectedStepPresetIds ?? []).enumerated().map { ($0.element, $0.offset) }
+        )
+        var expectedStepStartByPreset: [Int: Double] = [:]
+        if let expectedStepPresetIds, !expectedStepPresetIds.isEmpty {
+            var starts = Array(repeating: 0.0, count: expectedStepPresetIds.count)
+            if let expectedBoundarySeconds {
+                for idx in 1..<expectedStepPresetIds.count {
+                    starts[idx] = idx - 1 < expectedBoundarySeconds.count ? expectedBoundarySeconds[idx - 1] : starts[idx - 1]
+                }
+            }
+            expectedStepStartByPreset = Dictionary(uniqueKeysWithValues: zip(expectedStepPresetIds, starts))
+        }
+        Task { [device] in
+            var firstSeenAtByPreset: [Int: Double] = [:]
+            var divergenceCount = 0
+            let expectedPresetIdSet = Set(expectedStepPresetIds ?? [])
+            for delay in probeDelays {
+                try? await Task.sleep(nanoseconds: delay)
+                let seconds = Double(delay) / 1_000_000_000
+                if let fetched = try? await apiService.getState(for: device) {
+                    let state = fetched.state
+                    let observedPlaylistId = state.playlistId
+                    let observedPresetId = state.presetId
+                    let matchesExpected = observedPlaylistId == playlistId
+                        || (observedPresetId != nil && expectedPresetIdSet.contains(observedPresetId!))
+                    if !expectedPresetIdSet.isEmpty {
+                        if matchesExpected {
+                            divergenceCount = 0
+                        } else {
+                            divergenceCount += 1
+                            if divergenceCount >= 2 {
+                                await clearStaleTransitionRunIfProbeDiverged(
+                                    deviceId: device.id,
+                                    expectedPlaylistId: playlistId,
+                                    observedPlaylistId: observedPlaylistId,
+                                    observedPresetId: observedPresetId
+                                )
+                            }
+                        }
+                    }
+                    if let presetId = state.presetId,
+                       stepIndexByPreset[presetId] != nil {
+                        let isFirstSeen = firstSeenAtByPreset[presetId] == nil
+                        if isFirstSeen {
+                            firstSeenAtByPreset[presetId] = seconds
+                        }
+                        let idx = stepIndexByPreset[presetId] ?? -1
+                        let expectedStart = expectedStepStartByPreset[presetId]
+                        let driftText: String
+                        if isFirstSeen, let expectedStart {
+                            let drift = seconds - expectedStart
+                            driftText = " stepIdx=\(idx + 1) expectedStart=\(String(format: "%.1f", expectedStart))s firstSeenDrift≈\(String(format: "%+.1f", drift))s"
+                        } else {
+                            driftText = " stepIdx=\(idx + 1)"
+                        }
+                        print("🔎 Playlist probe for \(device.name): t=\(String(format: "%.1f", seconds))s pl=\(state.playlistId.map(String.init) ?? "nil"), ps=\(presetId), tt=\(state.transitionDeciseconds.map(String.init) ?? "nil")\(driftText)")
+                    } else {
+                        print("🔎 Playlist probe for \(device.name): t=\(String(format: "%.1f", seconds))s pl=\(state.playlistId.map(String.init) ?? "nil"), ps=\(state.presetId.map(String.init) ?? "nil"), tt=\(state.transitionDeciseconds.map(String.init) ?? "nil")")
+                    }
+                } else {
+                    print("⚠️ Playlist probe failed for \(device.name) at t=\(String(format: "%.1f", seconds))s")
+                }
+            }
+        }
+    }
+    #endif
+
+    private func clearStaleTransitionRunIfProbeDiverged(
+        deviceId: String,
+        expectedPlaylistId: Int,
+        observedPlaylistId: Int?,
+        observedPresetId: Int?
+    ) async {
+        await MainActor.run {
+            guard let run = activeRunStatus[deviceId], run.kind == .transition || run.kind == .automation else {
+                return
+            }
+            activeRunStatus.removeValue(forKey: deviceId)
+            runWatchdogs.removeValue(forKey: deviceId)
+            #if DEBUG
+            print("transition.probe_diverged device=\(deviceId) expectedPlaylist=\(expectedPlaylistId) observedPl=\(observedPlaylistId.map(String.init) ?? "nil") observedPs=\(observedPresetId.map(String.init) ?? "nil")")
+            print("transition.ui_status_cleared_external_interrupt device=\(deviceId)")
+            #endif
+        }
+    }
+
+    func cleanupTransitionPlaylist(
+        device: WLEDDevice,
+        queueFallback: Bool = true,
+        endReason: TemporaryTransitionEndReason
+    ) async {
+        if !enableTemporaryPresetStoreBackedTransitions {
+            temporaryPlaylistIds.removeValue(forKey: device.id)
+            temporaryPresetIds.removeValue(forKey: device.id)
+            playlistRunsByDevice.remove(device.id)
+            return
+        }
         let playlistId = temporaryPlaylistIds[device.id]
         let presetIds = temporaryPresetIds[device.id] ?? []
         guard playlistId != nil || !presetIds.isEmpty else { return }
-
-        if let playlistId {
-            await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [playlistId])
+        await MainActor.run {
+            _ = transitionCleanupInProgress.insert(device.id)
         }
-        if !presetIds.isEmpty {
-            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: presetIds)
+        defer {
+            Task { @MainActor in
+                transitionCleanupInProgress.remove(device.id)
+            }
         }
+        await TemporaryTransitionCleanupService.shared.requestCleanup(
+            device: device,
+            endReason: endReason,
+            runId: activeRunStatus[device.id]?.id,
+            playlistIdHint: playlistId,
+            stepPresetIdsHint: presetIds
+        )
+        await refreshTransitionCleanupPendingCount(for: device.id)
         temporaryPlaylistIds.removeValue(forKey: device.id)
         temporaryPresetIds.removeValue(forKey: device.id)
+        playlistRunsByDevice.remove(device.id)
     }
 
     private func interpolateStops(from: LEDGradient, to: LEDGradient, t: Double) -> [GradientStop] {
@@ -4827,11 +8896,503 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
+    private func sampledStopScalarValues(
+        targetPositions: [Double],
+        from stops: [GradientStop],
+        valuesById: [UUID: Double]?,
+        interpolation: GradientInterpolation
+    ) -> [Double]? {
+        guard !targetPositions.isEmpty, let valuesById, !valuesById.isEmpty else { return nil }
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        guard !sortedStops.isEmpty else { return nil }
+        guard let firstStop = sortedStops.first, let firstValue = valuesById[firstStop.id] else {
+            return nil
+        }
+        var resolvedValues: [Double] = []
+        resolvedValues.reserveCapacity(sortedStops.count)
+        var lastKnownValue = firstValue
+        for stop in sortedStops {
+            if let value = valuesById[stop.id] {
+                lastKnownValue = value
+            }
+            resolvedValues.append(lastKnownValue)
+        }
+        return targetPositions.map { position in
+            interpolateScalar(
+                stops: sortedStops,
+                values: resolvedValues,
+                t: position,
+                interpolation: interpolation
+            )
+        }
+    }
+
+    private func interpolatedStopScalarMap(
+        stepStops: [GradientStop],
+        startStops: [GradientStop],
+        startValuesById: [UUID: Double]?,
+        startInterpolation: GradientInterpolation,
+        endStops: [GradientStop],
+        endValuesById: [UUID: Double]?,
+        endInterpolation: GradientInterpolation,
+        t: Double
+    ) -> [UUID: Double]? {
+        guard !stepStops.isEmpty else { return nil }
+        let positions = stepStops.map(\.position)
+        let startSamples = sampledStopScalarValues(
+            targetPositions: positions,
+            from: startStops,
+            valuesById: startValuesById,
+            interpolation: startInterpolation
+        )
+        let endSamples = sampledStopScalarValues(
+            targetPositions: positions,
+            from: endStops,
+            valuesById: endValuesById,
+            interpolation: endInterpolation
+        )
+        guard startSamples != nil || endSamples != nil else { return nil }
+        let fromSamples = startSamples ?? endSamples!
+        let toSamples = endSamples ?? startSamples!
+        var result: [UUID: Double] = [:]
+        for (index, stop) in stepStops.enumerated() {
+            let value = fromSamples[index] + (toSamples[index] - fromSamples[index]) * t
+            result[stop.id] = value
+        }
+        return result
+    }
+
     private func interpolateOptional(_ start: Double?, _ end: Double?, t: Double) -> Double? {
         if let start, let end {
             return start + (end - start) * t
         }
         return start ?? end
+    }
+
+    private func isPresetDecodeError(_ error: WLEDAPIError?) -> Bool {
+        guard let error else { return false }
+        switch error {
+        case .decodingError, .invalidResponse:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isCorruptedPresetPayload(_ presets: [WLEDPreset]) -> Bool {
+        if presets.isEmpty { return false }
+        if presets.count == 1, let only = presets.first {
+            return only.id == 0 && only.segment == nil && only.name == "Preset 0"
+        }
+        return false
+    }
+
+    private func shouldRetryBusyError(_ error: Error) -> Bool {
+        guard let apiError = error as? WLEDAPIError else { return false }
+        switch apiError {
+        case .httpError(let statusCode) where statusCode == 503:
+            return true
+        case .deviceBusy:
+            return true
+        case .timeout, .deviceOffline, .deviceUnreachable:
+            return true
+        case .networkError(let underlying as URLError):
+            switch underlying.code {
+            case .cancelled:
+                return false
+            case .timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet:
+                return true
+            default:
+                return false
+            }
+        case .networkError:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func updateStateWithRetry(
+        _ device: WLEDDevice,
+        stateUpdate: WLEDStateUpdate,
+        context: String,
+        maxAttempts: Int = 3
+    ) async -> Bool {
+        var delaySeconds: Double = 0.15
+        for attempt in 1...maxAttempts {
+            do {
+                _ = try await apiService.updateState(for: device, state: stateUpdate)
+                return true
+            } catch {
+                let canRetry = shouldRetryBusyError(error)
+                #if DEBUG
+                print("⚠️ \(context) attempt \(attempt) failed for \(device.name): \(error.localizedDescription)")
+                #endif
+                if canRetry && attempt < maxAttempts {
+                    let nanos = UInt64(delaySeconds * 1_000_000_000.0)
+                    try? await Task.sleep(nanoseconds: nanos)
+                    delaySeconds = min(delaySeconds * 1.6, 0.8)
+                    continue
+                }
+                return false
+            }
+        }
+        return false
+    }
+
+    private func waitForPresetWriteIfNeeded(deviceId: String) async {
+        let deadline = Date().addingTimeInterval(2.0)
+        while presetWriteInProgress.contains(deviceId), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    func isTransitionCleanupInProgress(for deviceId: String) -> Bool {
+        transitionCleanupInProgress.contains(deviceId)
+    }
+
+    func transitionDraftSession(for deviceId: String) -> TransitionDraftSession? {
+        transitionDraftSessionsByDeviceId[deviceId]
+    }
+
+    func setTransitionDraftSession(_ session: TransitionDraftSession?, for deviceId: String) {
+        if let session {
+            transitionDraftSessionsByDeviceId[deviceId] = session
+        } else {
+            transitionDraftSessionsByDeviceId.removeValue(forKey: deviceId)
+        }
+    }
+
+    func updateTransitionDraftSaveUIState(
+        deviceId: String,
+        isSavingPreset: Bool,
+        showSaveSuccess: Bool
+    ) {
+        guard var session = transitionDraftSessionsByDeviceId[deviceId] else { return }
+        session.isSavingPreset = isSavingPreset
+        session.showSaveSuccess = showSaveSuccess
+        session.updatedAt = Date()
+        transitionDraftSessionsByDeviceId[deviceId] = session
+    }
+
+    func isTransitionPresetSaveBlocked(for deviceId: String) -> Bool {
+        transitionPresetSaveAvailability(for: deviceId) != .ready
+    }
+
+    func isTransitionPresetButtonDisabled(for deviceId: String) -> Bool {
+        if let status = activeRunStatus[deviceId], status.kind == .transition, status.title == "Loading..." {
+            return true
+        }
+        return false
+    }
+
+    func shouldAllowInteractivePresetSaveTap(for deviceId: String) -> Bool {
+        !isTransitionPresetButtonDisabled(for: deviceId)
+    }
+
+    func transitionPresetSaveBlockReasonDebug(for deviceId: String) -> String? {
+        let availability = transitionPresetSaveAvailability(for: deviceId)
+        return availability == .ready ? nil : availability.rawValue
+    }
+
+    func transitionPresetSaveAvailability(for deviceId: String) -> TransitionPresetSaveAvailability {
+        if let status = activeRunStatus[deviceId], status.kind == .transition, status.title == "Loading..." {
+            return .blockedLoading
+        }
+        if enableTemporaryPresetStoreBackedTransitions {
+            if transitionCleanupInProgress.contains(deviceId) {
+                return .blockedCleanupInProgress
+            }
+            if (transitionCleanupPendingCountByDeviceId[deviceId] ?? 0) > 0 {
+                return .blockedCleanupPending
+            }
+        }
+        if presetWriteInProgress.contains(deviceId) {
+            return .blockedPresetWriteInProgress
+        }
+        if isPresetStoreWritePauseActive(for: deviceId) {
+            return .blockedPresetStorePaused
+        }
+        return .ready
+    }
+
+    func refreshTransitionCleanupPendingCount(for deviceId: String) async {
+        if !enableTemporaryPresetStoreBackedTransitions {
+            await MainActor.run {
+                transitionCleanupPendingCountByDeviceId[deviceId] = 0
+                transitionCleanupBacklogCountByDeviceId[deviceId] = 0
+            }
+            return
+        }
+        let counts = await TemporaryTransitionCleanupService.shared.cleanupCounts(for: deviceId)
+        await MainActor.run {
+            transitionCleanupPendingCountByDeviceId[deviceId] = counts.blocking
+            transitionCleanupBacklogCountByDeviceId[deviceId] = counts.backlog
+        }
+    }
+
+    private func waitForPresetStoreIdleWithTimeout(deviceId: String, timeout: TimeInterval) async -> Bool {
+        let timeoutNs = UInt64(max(0.1, timeout) * 1_000_000_000.0)
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask { [apiService] in
+                await apiService.waitForPresetStoreIdle(deviceId: deviceId)
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNs)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+    }
+
+    func waitForHeavyOpQuiescence(
+        deviceId: String,
+        timeout: TimeInterval = 15.0
+    ) async -> HeavyOpQuiescenceResult {
+        let start = Date()
+        let deadline = start.addingTimeInterval(timeout)
+        var pollCount = 0
+        var lastReason = "unknown"
+        #if DEBUG
+        print("preset_save.wait_quiescence.begin device=\(deviceId)")
+        #endif
+        while Date() < deadline {
+            if pollCount == 0 || pollCount % 3 == 0 {
+                await refreshTransitionCleanupPendingCount(for: deviceId)
+            }
+            pollCount += 1
+
+            if enableTemporaryPresetStoreBackedTransitions {
+                if transitionCleanupInProgress.contains(deviceId) {
+                    lastReason = "cleanup_in_progress_timeout"
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    continue
+                }
+
+                if (transitionCleanupPendingCountByDeviceId[deviceId] ?? 0) > 0 {
+                    lastReason = "cleanup_pending_timeout"
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    continue
+                }
+            }
+
+            if presetWriteInProgress.contains(deviceId) {
+                lastReason = "preset_write_timeout"
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                continue
+            }
+
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 {
+                break
+            }
+            let idleReady = await waitForPresetStoreIdleWithTimeout(deviceId: deviceId, timeout: min(remaining, 2.0))
+            if !idleReady {
+                lastReason = "preset_store_idle_timeout"
+                continue
+            }
+
+            // Final settle before beginning the next heavy operation.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await refreshTransitionCleanupPendingCount(for: deviceId)
+            if enableTemporaryPresetStoreBackedTransitions {
+                if transitionCleanupInProgress.contains(deviceId) {
+                    lastReason = "cleanup_in_progress_timeout"
+                    continue
+                }
+                if (transitionCleanupPendingCountByDeviceId[deviceId] ?? 0) > 0 {
+                    lastReason = "cleanup_pending_timeout"
+                    continue
+                }
+            }
+            if presetWriteInProgress.contains(deviceId) {
+                lastReason = "preset_write_timeout"
+                continue
+            }
+
+            #if DEBUG
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000.0)
+            print("preset_save.wait_quiescence.ready device=\(deviceId) ms=\(elapsedMs)")
+            #endif
+            return .ready
+        }
+
+        #if DEBUG
+        print("preset_save.wait_quiescence.timeout device=\(deviceId) reason=\(lastReason)")
+        #endif
+        return .timedOut(reason: lastReason)
+    }
+
+    private func waitForTransitionCleanupIfNeeded(deviceId: String) async {
+        if !enableTemporaryPresetStoreBackedTransitions {
+            await refreshTransitionCleanupPendingCount(for: deviceId)
+            return
+        }
+        let deadline = Date().addingTimeInterval(8)
+        while transitionCleanupInProgress.contains(deviceId), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        await refreshTransitionCleanupPendingCount(for: deviceId)
+    }
+
+    func notePresetStoreDegradedReadable(deviceId: String, message: String) {
+        let now = Date()
+        let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
+        if previous != .unsafeWritesPaused {
+            presetStoreHealthByDeviceId[deviceId] = .degradedReadable
+        }
+        lastPresetStoreHealthEventByDeviceId[deviceId] = now
+        lastPresetStoreHealthMessageByDeviceId[deviceId] = message
+        #if DEBUG
+        if previous != presetStoreHealthByDeviceId[deviceId] {
+            print("preset_store.health.changed device=\(deviceId) state=degradedReadable")
+        }
+        #endif
+    }
+
+    func notePresetStoreHealthyReadSuccess(deviceId: String) {
+        guard !isPresetStoreWritePauseActive(for: deviceId) else { return }
+        let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
+        if previous != .healthy {
+            presetStoreHealthByDeviceId[deviceId] = .healthy
+            lastPresetStoreHealthEventByDeviceId[deviceId] = Date()
+            lastPresetStoreHealthMessageByDeviceId[deviceId] = "healthy-read"
+            presetStoreFailureEventsByDeviceId[deviceId] = []
+            #if DEBUG
+            print("preset_store.health.recovered_to_healthy device=\(deviceId)")
+            #endif
+        }
+    }
+
+    private func recordPresetStoreFailure(deviceId: String, message: String) {
+        let now = Date()
+        let windowStart = now.addingTimeInterval(-600)
+        var events = presetStoreFailureEventsByDeviceId[deviceId] ?? []
+        events.append(now)
+        events = events.filter { $0 >= windowStart }
+        presetStoreFailureEventsByDeviceId[deviceId] = events
+        lastPresetStoreHealthEventByDeviceId[deviceId] = now
+        lastPresetStoreHealthMessageByDeviceId[deviceId] = message
+
+        if events.count >= 3 {
+            let pauseUntil = now.addingTimeInterval(120)
+            presetStoreWritePauseUntilByDeviceId[deviceId] = pauseUntil
+            let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
+            presetStoreHealthByDeviceId[deviceId] = .unsafeWritesPaused
+            #if DEBUG
+            if previous != .unsafeWritesPaused {
+                print("preset_store.health.unsafe_writes_paused device=\(deviceId) until=\(pauseUntil)")
+            }
+            #endif
+        } else {
+            let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
+            if previous == .healthy {
+                presetStoreHealthByDeviceId[deviceId] = .degradedReadable
+            }
+            #if DEBUG
+            if previous != presetStoreHealthByDeviceId[deviceId] {
+                print("preset_store.health.degraded_readable device=\(deviceId)")
+            }
+            #endif
+        }
+    }
+
+    private func markPresetStoreHealthyWriteSuccess(deviceId: String) {
+        presetStoreFailureEventsByDeviceId[deviceId] = []
+        presetStoreWritePauseUntilByDeviceId.removeValue(forKey: deviceId)
+        let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
+        presetStoreHealthByDeviceId[deviceId] = .healthy
+        lastPresetStoreHealthEventByDeviceId[deviceId] = Date()
+        lastPresetStoreHealthMessageByDeviceId[deviceId] = "healthy"
+        #if DEBUG
+        if previous != .healthy {
+            print("preset_store.health.recovered_to_healthy device=\(deviceId)")
+        }
+        #endif
+    }
+
+    private func isPresetStoreWritePaused(for deviceId: String) -> Bool {
+        if let pauseUntil = presetStoreWritePauseUntilByDeviceId[deviceId] {
+            if Date() < pauseUntil {
+                return true
+            }
+            presetStoreWritePauseUntilByDeviceId.removeValue(forKey: deviceId)
+            if presetStoreHealthByDeviceId[deviceId] == .unsafeWritesPaused {
+                presetStoreHealthByDeviceId[deviceId] = .degradedReadable
+            }
+        }
+        return false
+    }
+
+    private func isPresetStoreWritePauseActive(for deviceId: String) -> Bool {
+        guard let pauseUntil = presetStoreWritePauseUntilByDeviceId[deviceId] else { return false }
+        return Date() < pauseUntil
+    }
+
+    private func noteControlWriteSuccess(deviceId: String) {
+        let now = Date()
+        recentControlWriteSuccessAtByDeviceId[deviceId] = now
+        if let index = devices.firstIndex(where: { $0.id == deviceId }) {
+            devices[index].isOnline = true
+            devices[index].lastSeen = now
+        }
+    }
+
+    func isPowerTogglePending(for deviceId: String) -> Bool {
+        pendingToggles[deviceId] != nil
+    }
+
+    func awaitPowerToggleSettlement(for device: WLEDDevice, targetState: Bool, timeout: TimeInterval = 2.5) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !isPowerTogglePending(for: device.id), getCurrentPowerState(for: device.id) == targetState {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+
+        await refreshDeviceState(device)
+        return getCurrentPowerState(for: device.id) == targetState
+    }
+
+    private func classifyTransitionPresetSaveBusyFailure(deviceId: String) -> String? {
+        if isPresetStoreWritePaused(for: deviceId) {
+            return "paused"
+        }
+        let availability = transitionPresetSaveAvailability(for: deviceId)
+        if availability != .ready {
+            return availability.rawValue
+        }
+        let message = (lastPresetStoreHealthMessageByDeviceId[deviceId] ?? "").lowercased()
+        if message.contains("503") || message.contains("service unavailable") {
+            return "503"
+        }
+        if message.contains("timed out") || message.contains("timeout") {
+            return "timeout"
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func enqueueDeferredPresetStoreSyncItem(
+        deviceId: String,
+        kind: PendingPresetStoreSyncItem.Kind,
+        transitionPresetSnapshot: TransitionPreset? = nil,
+        error: String?
+    ) -> PendingPresetStoreSyncItem {
+        var item = PendingPresetStoreSyncItem(
+            deviceId: deviceId,
+            kind: kind,
+            transitionPresetSnapshot: transitionPresetSnapshot
+        )
+        item.lastError = error
+        var items = pendingPresetStoreSyncItemsByDeviceId[deviceId] ?? []
+        items.append(item)
+        pendingPresetStoreSyncItemsByDeviceId[deviceId] = items
+        return item
     }
 
     func startSmoothABStreaming(_ device: WLEDDevice, from: LEDGradient, to: LEDGradient, durationSec: Double, fps: Int = 60, aBrightness: Int? = nil, bBrightness: Int? = nil) async {
@@ -4952,16 +9513,35 @@ class DeviceControlViewModel: ObservableObject {
     
     /// Cancel any active run (transition/automation) for a device
     /// This is called automatically on manual user input, or can be called manually via UI
-    func cancelActiveRun(for device: WLEDDevice, releaseRealtimeOverride: Bool = true, force: Bool = false) async {
+    func cancelActiveRun(
+        for device: WLEDDevice,
+        releaseRealtimeOverride: Bool = true,
+        force: Bool = false,
+        endReason: TemporaryTransitionEndReason = .cancelledByUser
+    ) async {
+        let activeRun = await MainActor.run {
+            activeRunStatus[device.id]
+        }
         if !force,
            let lockUntil = transitionCancelLockUntil[device.id],
            Date() < lockUntil,
-           let run = activeRunStatus[device.id],
+           let run = activeRun,
            run.kind == .transition {
             #if DEBUG
             print("⏳ Skipping cancel for \(device.name) (transition lock active)")
             #endif
             return
+        }
+        if endReason == .cancelledByManualInput {
+            if enableTemporaryPresetStoreBackedTransitions {
+                await TemporaryTransitionCleanupService.shared.deferInteractiveConflictingCleanup(
+                    for: device.id,
+                    until: Date().addingTimeInterval(4.0)
+                )
+            }
+            // Lock only after we decide to perform this cancel so the first
+            // manual cancel is not skipped.
+            lockTransitionCancel(for: device.id, seconds: 1.2)
         }
         let runId = await MainActor.run {
             activeRunStatus[device.id]?.id
@@ -4974,15 +9554,16 @@ class DeviceControlViewModel: ObservableObject {
         // If native transition is active, send immediate state update to stop it
         if let nativeInfo = nativeTransitionInfo {
             // Send immediate override with transition: 0 to jump to target state
+            let rgb = rgbArrayWithOptionalWhite(nativeInfo.targetColorRGB, device: device)
             let segment = SegmentUpdate(
                 id: 0,
-                col: [[nativeInfo.targetColorRGB[0], nativeInfo.targetColorRGB[1], nativeInfo.targetColorRGB[2]]]
+                col: [rgb]
             )
             let immediateState = WLEDStateUpdate(
                 on: true,
                 bri: nativeInfo.targetBrightness,
                 seg: [segment],
-                transition: 0  // No transition - jump immediately to target
+                transitionDeciseconds: 0  // No transition - jump immediately to target
             )
             
             do {
@@ -4999,6 +9580,65 @@ class DeviceControlViewModel: ObservableObject {
         
         // Cancel transition runner and uploads
         await cancelActiveTransitionIfNeeded(for: device)
+
+        // Clear run UI immediately so cancel feels responsive while cleanup continues.
+        await MainActor.run {
+            activeRunStatus.removeValue(forKey: device.id)
+            runWatchdogs.removeValue(forKey: device.id)
+            transitionCancelLockUntil.removeValue(forKey: device.id)
+            pendingFinalStates.removeValue(forKey: device.id)
+        }
+
+        let shouldStopPlaylist = await MainActor.run {
+            let cachedDevicePlaylistId = devices.first(where: { $0.id == device.id })?.state?.playlistId
+            let providedDevicePlaylistId = device.state?.playlistId
+            return playlistRunsByDevice.contains(device.id)
+                || cachedDevicePlaylistId != nil
+                || providedDevicePlaylistId != nil
+                || activeRunStatus[device.id] != nil
+        }
+        if shouldStopPlaylist {
+            if await stopPlaylistViaWebSocketIfConnected(device) {
+                playlistRunsByDevice.remove(device.id)
+                #if DEBUG
+                print("🛑 Explicitly stopped active playlist for \(device.name) during cancel")
+                #endif
+            } else {
+                do {
+                    let state = try await apiService.stopPlaylist(on: device)
+                    updateDevice(device.id, with: state)
+                    playlistRunsByDevice.remove(device.id)
+                    #if DEBUG
+                    print("🛑 Explicitly stopped active playlist for \(device.name) during cancel")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("⚠️ Failed to stop playlist during cancel for \(device.name): \(error.localizedDescription)")
+                    #endif
+                }
+            }
+        }
+
+        let temporaryCleanupHints = await MainActor.run { () -> (Int?, [Int]) in
+            (temporaryPlaylistIds[device.id], temporaryPresetIds[device.id] ?? [])
+        }
+        if enableTemporaryPresetStoreBackedTransitions,
+           (temporaryCleanupHints.0 != nil || !temporaryCleanupHints.1.isEmpty) {
+            await MainActor.run { () -> Void in
+                transitionCleanupInProgress.insert(device.id)
+            }
+            await TemporaryTransitionCleanupService.shared.requestCleanup(
+                device: device,
+                endReason: endReason,
+                runId: runId,
+                playlistIdHint: temporaryCleanupHints.0,
+                stepPresetIdsHint: temporaryCleanupHints.1
+            )
+            await refreshTransitionCleanupPendingCount(for: device.id)
+            await MainActor.run { () -> Void in
+                transitionCleanupInProgress.remove(device.id)
+            }
+        }
         
         // Release real-time override if needed
         if releaseRealtimeOverride {
@@ -5007,10 +9647,9 @@ class DeviceControlViewModel: ObservableObject {
         
         // Clear active run status
         await MainActor.run {
-            activeRunStatus.removeValue(forKey: device.id)
-            // Clear watchdog
-            runWatchdogs.removeValue(forKey: device.id)
-            transitionCancelLockUntil.removeValue(forKey: device.id)
+            playlistRunsByDevice.remove(device.id)
+            temporaryPlaylistIds.removeValue(forKey: device.id)
+            temporaryPresetIds.removeValue(forKey: device.id)
         }
         await restoreTransitionDefaultIfNeeded(for: device, runId: runId)
         
@@ -5053,6 +9692,10 @@ class DeviceControlViewModel: ObservableObject {
                 // Skip .effect runs (not currently tracked with progress)
                 continue
             }
+
+            if runStatus.title == "Loading..." {
+                continue
+            }
             
             // State-based progress for native/device-side transitions.
             if let expectedEnd = runStatus.expectedEnd {
@@ -5067,6 +9710,31 @@ class DeviceControlViewModel: ObservableObject {
                     }
                 }
                 if now >= expectedEnd, runStatus.id == activeRunStatus[deviceId]?.id {
+                    if let finalState = pendingFinalStates[deviceId],
+                       finalState.runId == runStatus.id,
+                       let device = devices.first(where: { $0.id == deviceId }) {
+                        await applyGradientStopsAcrossStrip(
+                            device,
+                            stops: finalState.gradient.stops,
+                            ledCount: totalLEDCount(for: device),
+                            stopTemperatures: finalState.stopTemperatures,
+                            stopWhiteLevels: finalState.stopWhiteLevels,
+                            disableActiveEffect: true,
+                            segmentId: finalState.segmentId,
+                            interpolation: finalState.gradient.interpolation,
+                            brightness: finalState.brightness,
+                            on: true,
+                            forceNoPerCallTransition: true,
+                            releaseRealtimeOverride: false,
+                            userInitiated: false,
+                            preferSegmented: true,
+                            forceSegmentedOnly: finalState.forceSegmentedOnly
+                        )
+                        pendingFinalStates.removeValue(forKey: deviceId)
+                    }
+                    if let device = devices.first(where: { $0.id == deviceId }) {
+                        await restoreTransitionDefaultIfNeeded(for: device, runId: runStatus.id)
+                    }
                     #if DEBUG
                     if runStatus.nativeTransition != nil {
                         print("✅ Watchdog: Native transition completed for device \(deviceId)")
@@ -5093,7 +9761,7 @@ class DeviceControlViewModel: ObservableObject {
                 
                 // Find the device and cancel the run
                 if let device = devices.first(where: { $0.id == deviceId }) {
-                    await cancelActiveRun(for: device)
+                    await cancelActiveRun(for: device, endReason: .cancelledByWatchdog)
                 } else {
                     // Device not found - just clean up
                     await MainActor.run {
@@ -5167,25 +9835,40 @@ class DeviceControlViewModel: ObservableObject {
         startStopTemperatures: [UUID: Double]? = nil,
         startStopWhiteLevels: [UUID: Double]? = nil,
         endStopTemperatures: [UUID: Double]? = nil,
-        endStopWhiteLevels: [UUID: Double]? = nil
+        endStopWhiteLevels: [UUID: Double]? = nil,
+        forceSegmentedOnly: Bool = false,
+        origin: SyncOrigin = .user
     ) async {
+        await waitForTransitionCleanupIfNeeded(deviceId: device.id)
         await cancelActiveTransitionIfNeeded(for: device)
         setTransitionDuration(durationSec, for: device.id)
-        Task { @MainActor [weak self] in
-            await self?.runAutomationTransition(
-                for: device,
-                startGradient: from,
-                startBrightness: aBrightness,
-                endGradient: to,
-                endBrightness: bBrightness,
-                durationSeconds: durationSec,
-                startStopTemperatures: startStopTemperatures,
-                startStopWhiteLevels: startStopWhiteLevels,
-                endStopTemperatures: endStopTemperatures,
-                endStopWhiteLevels: endStopWhiteLevels,
-                segmentId: 0
-            )
-        }
+        await runAutomationTransition(
+            for: device,
+            startGradient: from,
+            startBrightness: aBrightness,
+            endGradient: to,
+            endBrightness: bBrightness,
+            durationSeconds: durationSec,
+            startStopTemperatures: startStopTemperatures,
+            startStopWhiteLevels: startStopWhiteLevels,
+            endStopTemperatures: endStopTemperatures,
+            endStopWhiteLevels: endStopWhiteLevels,
+            segmentId: 0,
+            forceSegmentedOnly: forceSegmentedOnly
+        )
+        let payload = TransitionSyncPayload(
+            from: from,
+            aBrightness: aBrightness,
+            to: to,
+            bBrightness: bBrightness,
+            durationSec: durationSec,
+            startStopTemperatures: startStopTemperatures,
+            startStopWhiteLevels: startStopWhiteLevels,
+            endStopTemperatures: endStopTemperatures,
+            endStopWhiteLevels: endStopWhiteLevels,
+            forceSegmentedOnly: forceSegmentedOnly
+        )
+        await propagateIfNeeded(source: device, payload: .transitionStart(payload), origin: origin)
     }
     
     func stopTransitionAndRevertToA(device: WLEDDevice) async {
@@ -5228,18 +9911,75 @@ class DeviceControlViewModel: ObservableObject {
         ScenesStore.shared.add(scene)
     }
 
+    func captureSceneSnapshot(for device: WLEDDevice, name: String) -> Scene {
+        let effectState = currentEffectState(for: device, segmentId: 0)
+        let isEffectEnabled = effectState.isEnabled && effectState.effectId != 0
+        let baseHex = device.currentColor.toHex()
+        let fallbackStops = [
+            GradientStop(position: 0.0, hexColor: baseHex),
+            GradientStop(position: 1.0, hexColor: baseHex)
+        ]
+        let stops: [GradientStop] = {
+            if isEffectEnabled, let effectStops = effectGradientStops(for: device.id), !effectStops.isEmpty {
+                return effectStops
+            }
+            if let gradientStops = gradientStops(for: device.id), !gradientStops.isEmpty {
+                return gradientStops
+            }
+            return fallbackStops
+        }()
+        let presetId = (device.state?.presetId ?? 0) > 0 ? device.state?.presetId : nil
+        let playlistId = (device.state?.playlistId ?? 0) > 0 ? device.state?.playlistId : nil
+        let resolvedPresetName = presetId.flatMap { presetName(for: $0, device: device) }
+        let resolvedPlaylistName = playlistId.flatMap { playlistName(for: $0, device: device) }
+
+        return Scene(
+            name: name,
+            deviceId: device.id,
+            brightness: device.brightness,
+            primaryStops: stops,
+            transitionEnabled: false,
+            secondaryStops: nil,
+            durationSec: nil,
+            aBrightness: nil,
+            bBrightness: nil,
+            effectsEnabled: isEffectEnabled,
+            effectId: isEffectEnabled ? effectState.effectId : nil,
+            paletteId: isEffectEnabled ? effectState.paletteId : nil,
+            speed: isEffectEnabled ? effectState.speed : nil,
+            intensity: isEffectEnabled ? effectState.intensity : nil,
+            presetId: presetId,
+            presetName: resolvedPresetName,
+            playlistId: playlistId,
+            playlistName: resolvedPlaylistName
+        )
+    }
+
     func applyScene(_ scene: Scene, to device: WLEDDevice, userInitiated: Bool = true) async {
         // 1) Cancel any running streams
         await cancelStreaming(for: device)
 
-        // 2) Brightness first (bri-only)
+        // 2) Playlists and presets take priority
+        if let playlistId = scene.playlistId, playlistId > 0 {
+            markUserInteraction(device.id)
+            let title = scene.playlistName ?? scene.name
+            _ = await startPlaylist(device: device, playlistId: playlistId, runTitle: title, runKind: .applying)
+            return
+        }
+        if let presetId = scene.presetId, presetId > 0 {
+            _ = await applyPresetId(presetId, to: device)
+            return
+        }
+
+        // 3) Brightness first (bri-only)
         await updateDeviceBrightness(device, brightness: scene.brightness, userInitiated: userInitiated)
 
-        // 3) Effects
+        // 4) Effects
         if scene.effectsEnabled {
             // If base colors are available, set them via segment update first
             if let baseA = scene.primaryStops.first?.color.toRGBArray() {
-                let seg = SegmentUpdate(id: 0, col: [[baseA[0], baseA[1], baseA[2]]])
+                let rgb = rgbArrayWithOptionalWhite(baseA, device: device)
+                let seg = SegmentUpdate(id: 0, col: [rgb])
                 let st = WLEDStateUpdate(seg: [seg])
                 _ = try? await apiService.updateState(for: device, state: st)
             }
@@ -5256,7 +9996,7 @@ class DeviceControlViewModel: ObservableObject {
             return
         }
 
-        // 4) Transition vs static
+        // 5) Transition vs static
         if scene.transitionEnabled, let secondary = scene.secondaryStops, let dur = scene.durationSec {
             let gA = LEDGradient(stops: scene.primaryStops, interpolation: .linear)
             let gB = LEDGradient(stops: secondary, interpolation: .linear)
@@ -5278,9 +10018,17 @@ class DeviceControlViewModel: ObservableObject {
     func presets(for device: WLEDDevice) -> [WLEDPreset] {
         presetsCache[device.id] ?? []
     }
+
+    func playlists(for device: WLEDDevice) -> [WLEDPlaylist] {
+        playlistsCache[device.id] ?? []
+    }
     
     func isLoadingPresets(for device: WLEDDevice) -> Bool {
         presetLoadingStates[device.id] ?? false
+    }
+
+    func isLoadingPlaylists(for device: WLEDDevice) -> Bool {
+        playlistLoadingStates[device.id] ?? false
     }
     
     func nextPresetId(for device: WLEDDevice) -> Int {
@@ -5298,32 +10046,464 @@ class DeviceControlViewModel: ObservableObject {
         do {
             let presets = try await apiService.fetchPresets(for: device)
             presetsCache[device.id] = presets
+            recordPresetNameMap(for: device.id, presets: presets)
             updatePresetSlotStatus(for: device, presets: presets)
             clearError()
         } catch {
+            // If presets.json is unreadable, don't block save; keep local cache.
             let mappedError = mapToWLEDError(error, device: device)
             presentError(mappedError)
         }
         presetLoadingStates[device.id] = false
     }
+
+    func loadPlaylists(for device: WLEDDevice, force: Bool = false) async {
+        if playlistsCache[device.id] != nil && !force {
+            if hasPendingPlaylistRename(for: device.id) {
+                let didMutate = await retryPendingPlaylistRenames(for: device)
+                if didMutate, let refreshed = try? await apiService.fetchPlaylists(for: device) {
+                    playlistsCache[device.id] = refreshed
+                    recordPlaylistNameMap(for: device.id, playlists: refreshed)
+                }
+            }
+            return
+        }
+        playlistLoadingStates[device.id] = true
+        do {
+            var playlists = try await apiService.fetchPlaylists(for: device)
+            recordPlaylistNameMap(for: device.id, playlists: playlists)
+            if hasPendingPlaylistRename(for: device.id) {
+                let didMutate = await retryPendingPlaylistRenames(for: device)
+                if didMutate, let refreshed = try? await apiService.fetchPlaylists(for: device) {
+                    playlists = refreshed
+                    recordPlaylistNameMap(for: device.id, playlists: playlists)
+                }
+            }
+            playlistsCache[device.id] = playlists
+            clearError()
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+        }
+        playlistLoadingStates[device.id] = false
+    }
     
     func refreshPresets(for device: WLEDDevice) async {
         await loadPresets(for: device, force: true)
     }
+
+    func refreshPlaylists(for device: WLEDDevice) async {
+        await loadPlaylists(for: device, force: true)
+    }
+
+    func refreshPresetsIfModified(for device: WLEDDevice) async {
+        do {
+            let response = try await apiService.getState(for: device)
+            await handlePresetModificationIfNeeded(response, device: device)
+        } catch {
+            // Ignore modification check failures
+        }
+    }
+
+    private func handlePresetModificationIfNeeded(_ response: WLEDResponse, device: WLEDDevice) async {
+        guard let pmt = response.info.fs?.presetLastModification else { return }
+        let previous = presetModificationTimes[device.id]
+        if previous != pmt {
+            presetModificationTimes[device.id] = pmt
+            await loadPresets(for: device, force: true)
+            await loadPlaylists(for: device, force: true)
+        }
+    }
+
+    private func recordPresetNameMap(for deviceId: String, presets: [WLEDPreset]) {
+        let map = Dictionary(uniqueKeysWithValues: presets.map { ($0.id, $0.name) })
+        presetNameMapsByDevice[deviceId] = map
+        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else { return }
+        var updated = devices[index]
+        updated.presetNamesById = map
+        devices[index] = updated
+        deviceStateCache[deviceId] = (updated, Date())
+        Task.detached(priority: .background) {
+            await CoreDataManager.shared.saveDevice(updated)
+        }
+    }
+
+    private func recordPlaylistNameMap(for deviceId: String, playlists: [WLEDPlaylist]) {
+        let map = Dictionary(uniqueKeysWithValues: playlists.map { ($0.id, $0.name) })
+        playlistNameMapsByDevice[deviceId] = map
+        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else { return }
+        var updated = devices[index]
+        updated.playlistNamesById = map
+        devices[index] = updated
+        deviceStateCache[deviceId] = (updated, Date())
+        Task.detached(priority: .background) {
+            await CoreDataManager.shared.saveDevice(updated)
+        }
+    }
+
+    private func hasPendingPlaylistRename(for deviceId: String) -> Bool {
+        pendingPlaylistRenames.contains(where: { $0.deviceId == deviceId })
+    }
+
+    private func loadPendingPlaylistRenameQueue() {
+        guard let data = UserDefaults.standard.data(forKey: pendingPlaylistRenameQueueKey) else {
+            pendingPlaylistRenames = []
+            pendingPlaylistRenameIdsByDevice = [:]
+            return
+        }
+        if let queue = try? JSONDecoder().decode([PendingPlaylistRename].self, from: data) {
+            pendingPlaylistRenames = queue
+        } else {
+            pendingPlaylistRenames = []
+        }
+        rebuildPendingPlaylistRenameIndex()
+    }
+
+    private func savePendingPlaylistRenameQueue() {
+        if let data = try? JSONEncoder().encode(pendingPlaylistRenames) {
+            UserDefaults.standard.set(data, forKey: pendingPlaylistRenameQueueKey)
+        }
+    }
+
+    private func rebuildPendingPlaylistRenameIndex() {
+        var index: [String: Set<Int>] = [:]
+        for entry in pendingPlaylistRenames {
+            index[entry.deviceId, default: []].insert(entry.playlistId)
+        }
+        pendingPlaylistRenameIdsByDevice = index
+    }
+
+    private func enqueuePendingPlaylistRename(deviceId: String, playlistId: Int, desiredName: String) {
+        let trimmed = desiredName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let index = pendingPlaylistRenames.firstIndex(where: {
+            $0.deviceId == deviceId && $0.playlistId == playlistId
+        }) {
+            pendingPlaylistRenames[index].desiredName = trimmed
+            pendingPlaylistRenames[index].lastAttemptAt = Date()
+        } else {
+            pendingPlaylistRenames.append(
+                PendingPlaylistRename(
+                    deviceId: deviceId,
+                    playlistId: playlistId,
+                    desiredName: trimmed,
+                    retries: 0,
+                    lastAttemptAt: Date()
+                )
+            )
+        }
+        savePendingPlaylistRenameQueue()
+        rebuildPendingPlaylistRenameIndex()
+    }
+
+    private func clearPendingPlaylistRename(deviceId: String, playlistId: Int) {
+        let originalCount = pendingPlaylistRenames.count
+        pendingPlaylistRenames.removeAll {
+            $0.deviceId == deviceId && $0.playlistId == playlistId
+        }
+        guard pendingPlaylistRenames.count != originalCount else { return }
+        savePendingPlaylistRenameQueue()
+        rebuildPendingPlaylistRenameIndex()
+    }
+
+    private func shouldDeferPlaylistRename(for deviceId: String) -> Bool {
+        if playlistRunsByDevice.contains(deviceId) {
+            return true
+        }
+        guard let run = activeRunStatus[deviceId] else {
+            return false
+        }
+        switch run.kind {
+        case .transition, .automation, .effect:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func applyLocalPlaylistRename(deviceId: String, playlistId: Int, desiredName: String) {
+        guard var playlists = playlistsCache[deviceId],
+              let index = playlists.firstIndex(where: { $0.id == playlistId }) else {
+            return
+        }
+        let current = playlists[index]
+        playlists[index] = WLEDPlaylist(
+            id: current.id,
+            name: desiredName,
+            presets: current.presets,
+            duration: current.duration,
+            transition: current.transition,
+            repeat: current.repeat,
+            endPresetId: current.endPresetId,
+            shuffle: current.shuffle
+        )
+        playlistsCache[deviceId] = playlists
+        recordPlaylistNameMap(for: deviceId, playlists: playlists)
+    }
+
+    private func retryPendingPlaylistRenames(for device: WLEDDevice) async -> Bool {
+        let pending = pendingPlaylistRenames.filter { $0.deviceId == device.id }
+        guard !pending.isEmpty else { return false }
+        var didMutateRemoteState = false
+        for entry in pending {
+            do {
+                try await apiService.renamePlaylistRecord(id: entry.playlistId, name: entry.desiredName, device: device)
+                clearPendingPlaylistRename(deviceId: device.id, playlistId: entry.playlistId)
+                didMutateRemoteState = true
+            } catch {
+                guard let index = pendingPlaylistRenames.firstIndex(where: { $0.id == entry.id }) else { continue }
+                pendingPlaylistRenames[index].retries += 1
+                pendingPlaylistRenames[index].lastAttemptAt = Date()
+                if pendingPlaylistRenames[index].retries >= pendingPlaylistRenameRetryLimit {
+                    pendingPlaylistRenames.remove(at: index)
+                }
+            }
+        }
+        savePendingPlaylistRenameQueue()
+        rebuildPendingPlaylistRenameIndex()
+        return didMutateRemoteState
+    }
     
-    func applyPreset(_ preset: WLEDPreset, to device: WLEDDevice, transition: Int? = nil) async {
+    @discardableResult
+    func applyPresetId(
+        _ presetId: Int,
+        to device: WLEDDevice,
+        transitionDeciseconds: Int? = nil,
+        preferWebSocketFirst: Bool = true,
+        markInteraction: Bool = true
+    ) async -> Bool {
+        if markInteraction {
+            markUserInteraction(device.id)
+        }
+        if preferWebSocketFirst, webSocketManager.isDeviceConnected(device.id) {
+            let wsState = WLEDStateUpdate(
+                on: true,
+                transitionDeciseconds: transitionDeciseconds,
+                ps: presetId,
+                lor: 0
+            )
+            let wsDispatched = await webSocketManager.sendStateUpdateAwaitingDispatch(
+                wsState,
+                to: device.id,
+                timeout: 0.35
+            )
+            if wsDispatched {
+                #if DEBUG
+                print("✅ Preset WS dispatch for \(device.name): presetId=\(presetId)")
+                #endif
+                clearError()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    guard let self,
+                          let refreshed = self.devices.first(where: { $0.id == device.id }) else { return }
+                    await self.refreshDeviceState(refreshed)
+                }
+                return true
+            }
+            #if DEBUG
+            print("⚠️ Preset WS dispatch failed for \(device.name): presetId=\(presetId), falling back to HTTP")
+            #endif
+        }
+        do {
+            let state = try await apiService.applyPreset(presetId, to: device, transitionDeciseconds: transitionDeciseconds)
+            updateDevice(device.id, with: state)
+            clearError()
+            return true
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+            return false
+        }
+    }
+
+    func applyPreset(_ preset: WLEDPreset, to device: WLEDDevice, transitionDeciseconds: Int? = nil) async {
+        _ = await applyPresetId(
+            preset.id,
+            to: device,
+            transitionDeciseconds: transitionDeciseconds,
+            preferWebSocketFirst: true,
+            markInteraction: true
+        )
+    }
+
+    private func stopPlaylistViaWebSocketIfConnected(_ device: WLEDDevice) async -> Bool {
+        guard webSocketManager.isDeviceConnected(device.id) else {
+            return false
+        }
+        let wsState = WLEDStateUpdate(pl: -1, lor: 0)
+        let wsDispatched = await webSocketManager.sendStateUpdateAwaitingDispatch(
+            wsState,
+            to: device.id,
+            timeout: 0.35
+        )
+        if wsDispatched {
+            #if DEBUG
+            print("✅ Playlist WS stop dispatch for \(device.name)")
+            #endif
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard let self,
+                      let refreshed = self.devices.first(where: { $0.id == device.id }) else { return }
+                await self.refreshDeviceState(refreshed)
+            }
+        } else {
+            #if DEBUG
+            print("⚠️ Playlist WS stop dispatch failed for \(device.name), falling back to HTTP")
+            #endif
+        }
+        return wsDispatched
+    }
+
+    func deletePlaylist(_ playlist: WLEDPlaylist, for device: WLEDDevice) async {
         markUserInteraction(device.id)
         do {
-            let state = try await apiService.applyPreset(preset.id, to: device, transition: transition)
-            updateDevice(device.id, with: state)
+            _ = try await apiService.deletePlaylist(id: playlist.id, device: device)
+            clearPendingPlaylistRename(deviceId: device.id, playlistId: playlist.id)
+            await refreshPlaylists(for: device)
+            await refreshPresets(for: device)
             clearError()
         } catch {
             let mappedError = mapToWLEDError(error, device: device)
             presentError(mappedError)
         }
     }
+
+    func renamePresetRecord(_ presetId: Int, to name: String, for device: WLEDDevice) async -> Bool {
+        markUserInteraction(device.id)
+        do {
+            try await apiService.renamePresetRecord(id: presetId, name: name, device: device)
+            await refreshPresets(for: device)
+            clearError()
+            return true
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+            return false
+        }
+    }
+
+    func renamePlaylistRecord(_ playlistId: Int, to name: String, for device: WLEDDevice) async -> Bool {
+        markUserInteraction(device.id)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if shouldDeferPlaylistRename(for: device.id) {
+            enqueuePendingPlaylistRename(deviceId: device.id, playlistId: playlistId, desiredName: trimmed)
+            applyLocalPlaylistRename(deviceId: device.id, playlistId: playlistId, desiredName: trimmed)
+            #if DEBUG
+            print("playlist.rename.deferred_active_run device=\(device.id) playlistId=\(playlistId)")
+            #endif
+            clearError()
+            return true
+        }
+        do {
+            try await apiService.renamePlaylistRecord(id: playlistId, name: trimmed, device: device)
+            clearPendingPlaylistRename(deviceId: device.id, playlistId: playlistId)
+            await refreshPlaylists(for: device)
+            await refreshPresets(for: device)
+            clearError()
+            return true
+        } catch {
+            enqueuePendingPlaylistRename(deviceId: device.id, playlistId: playlistId, desiredName: trimmed)
+            applyLocalPlaylistRename(deviceId: device.id, playlistId: playlistId, desiredName: trimmed)
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+            return false
+        }
+    }
+
+    func stopPlaylist(for device: WLEDDevice) async -> Bool {
+        markUserInteraction(device.id)
+        if await stopPlaylistViaWebSocketIfConnected(device) {
+            playlistRunsByDevice.remove(device.id)
+            clearError()
+            return true
+        }
+        do {
+            let state = try await apiService.stopPlaylist(on: device)
+            updateDevice(device.id, with: state)
+            playlistRunsByDevice.remove(device.id)
+            clearError()
+            return true
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+            return false
+        }
+    }
+
+    func savePlaylistRecord(_ request: WLEDPlaylistSaveRequest, for device: WLEDDevice) async -> Bool {
+        markUserInteraction(device.id)
+        do {
+            _ = try await apiService.savePlaylist(request, to: device)
+            await refreshPlaylists(for: device)
+            await refreshPresets(for: device)
+            clearError()
+            return true
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+            return false
+        }
+    }
+
+    func testPlaylistRecord(_ request: WLEDPlaylistSaveRequest, for device: WLEDDevice) async -> Bool {
+        markUserInteraction(device.id)
+        do {
+            let state = try await apiService.testPlaylist(request, on: device)
+            updateDevice(device.id, with: state)
+            clearError()
+            return true
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+            return false
+        }
+    }
+
+    func duplicatePlaylist(_ playlist: WLEDPlaylist, for device: WLEDDevice, name: String? = nil) async -> Bool {
+        guard let nextId = nextPlaylistId(for: device) else {
+            presentError(.apiError(message: "No available playlist IDs. Free up a preset/playlist slot first."))
+            return false
+        }
+        let duplicateName = (name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? name!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "\(playlist.name) Copy"
+        let request = WLEDPlaylistSaveRequest(
+            id: nextId,
+            name: duplicateName,
+            ps: playlist.presets,
+            dur: playlist.duration,
+            transition: playlist.transition,
+            repeat: playlist.repeat,
+            endPresetId: playlist.endPresetId,
+            shuffle: playlist.shuffle
+        )
+        return await savePlaylistRecord(request, for: device)
+    }
+
+    func nextPlaylistId(for device: WLEDDevice) -> Int? {
+        let usedIds = Set(presets(for: device).map(\.id))
+        for id in 1...maxWLEDPresetSlots where !usedIds.contains(id) {
+            return id
+        }
+        return nil
+    }
+
+    func playlistName(for playlistId: Int, device: WLEDDevice) -> String? {
+        playlistNameMapsByDevice[device.id]?[playlistId]
+            ?? device.playlistNamesById?[playlistId]
+    }
+
+    func presetName(for presetId: Int, device: WLEDDevice) -> String? {
+        presetNameMapsByDevice[device.id]?[presetId]
+            ?? device.presetNamesById?[presetId]
+    }
+
+    func isPlaylistRenamePending(_ playlistId: Int, for device: WLEDDevice) -> Bool {
+        pendingPlaylistRenameIdsByDevice[device.id]?.contains(playlistId) ?? false
+    }
     
-    func savePreset(name: String, quickLoad: Bool, for device: WLEDDevice, presetId: Int? = nil) async {
+    func savePreset(name: String, quickLoadTag: String? = nil, for device: WLEDDevice, presetId: Int? = nil) async {
         markUserInteraction(device.id)
         presetLoadingStates[device.id] = true
         do {
@@ -5337,11 +10517,27 @@ class DeviceControlViewModel: ObservableObject {
                 return
             }
             let response = try await apiService.getState(for: device)
-            let stateUpdate = stateUpdate(from: response.state)
-            let request = WLEDPresetSaveRequest(id: targetId, name: name, quickLoad: quickLoad, state: stateUpdate)
+            await handlePresetModificationIfNeeded(response, device: device)
+            let stateUpdate = stateUpdate(from: response.state, device: device)
+            let sanitizedQuickLoad = quickLoadTag?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let quickLoadValue = sanitizedQuickLoad?.isEmpty == false
+                ? String(sanitizedQuickLoad!.prefix(8))
+                : nil
+            let request = WLEDPresetSaveRequest(
+                id: targetId,
+                name: name,
+                quickLoad: quickLoadValue,
+                state: stateUpdate,
+                includeBrightness: true,
+                saveSegmentBounds: true,
+                selectedSegmentsOnly: false,
+                transitionDeciseconds: response.state.transitionDeciseconds ?? 7
+            )
             try await apiService.savePreset(request, to: device)
             let presets = try await apiService.fetchPresets(for: device)
             presetsCache[device.id] = presets
+            recordPresetNameMap(for: device.id, presets: presets)
             updatePresetSlotStatus(for: device, presets: presets)
             clearError()
         } catch {
@@ -5361,21 +10557,51 @@ class DeviceControlViewModel: ObservableObject {
         }
         return nil
     }
+
+    func effectMultiStopGradientStops(for deviceId: String) -> [GradientStop]? {
+        if let stops = latestMultiStopEffectGradients[deviceId], !stops.isEmpty {
+            return stops
+        }
+        if let persisted = loadPersistedMultiStopEffectGradient(for: deviceId), !persisted.isEmpty {
+            latestMultiStopEffectGradients[deviceId] = persisted
+            return persisted
+        }
+        return nil
+    }
     
     func updateEffectGradient(_ gradient: LEDGradient, for device: WLEDDevice) {
         let stops = gradient.stops.sorted { $0.position < $1.position }
         latestEffectGradientStops[device.id] = stops
         persistEffectGradient(stops, for: device.id)
+        if isMultiStopGradient(stops) {
+            latestMultiStopEffectGradients[device.id] = stops
+            persistMultiStopEffectGradient(stops, for: device.id)
+        }
     }
     
     private func persistEffectGradient(_ stops: [GradientStop], for deviceId: String) {
         guard let data = try? JSONEncoder().encode(stops) else { return }
         UserDefaults.standard.set(data, forKey: effectGradientDefaultsPrefix + deviceId)
     }
+
+    private func persistMultiStopEffectGradient(_ stops: [GradientStop], for deviceId: String) {
+        guard let data = try? JSONEncoder().encode(stops) else { return }
+        UserDefaults.standard.set(data, forKey: effectGradientMultiDefaultsPrefix + deviceId)
+    }
     
     private func loadPersistedEffectGradient(for deviceId: String) -> [GradientStop]? {
         guard let data = UserDefaults.standard.data(forKey: effectGradientDefaultsPrefix + deviceId) else { return nil }
         return try? JSONDecoder().decode([GradientStop].self, from: data)
+    }
+
+    private func loadPersistedMultiStopEffectGradient(for deviceId: String) -> [GradientStop]? {
+        guard let data = UserDefaults.standard.data(forKey: effectGradientMultiDefaultsPrefix + deviceId) else { return nil }
+        return try? JSONDecoder().decode([GradientStop].self, from: data)
+    }
+
+    private func isMultiStopGradient(_ stops: [GradientStop]) -> Bool {
+        let unique = Set(stops.map { $0.hexColor.uppercased() })
+        return unique.count > 1
     }
     
     private func logEffectApplication(effectId: Int, device: WLEDDevice, colors: [[Int]]) {
@@ -5482,7 +10708,22 @@ extension DeviceControlViewModel {
     }
 
     func requiredPresetSlotsForTransition(durationSeconds: Double, device: WLEDDevice) -> Int {
-        let stepPlan = playlistStepPlan(for: durationSeconds)
-        return stepPlan.steps + 1
+        let start = LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "FFFFFF")
+        ])
+        let end = LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ])
+        return planTransitionPlaylist(
+            durationSec: durationSeconds,
+            startGradient: start,
+            endGradient: end,
+            startBrightness: 128,
+            endBrightness: 128,
+            context: .persistentAutomation,
+            device: device
+        ).slotsRequired
     }
 }

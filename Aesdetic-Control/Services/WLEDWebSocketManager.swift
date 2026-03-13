@@ -29,10 +29,16 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     private var lastPingTimes: [String: Date] = [:]
     private var lastParseErrors: [String: Date] = [:]  // Track last parse error time per device
     private var lastReceiveErrors: [String: Date] = [:]
+    private var connectionStartTimes: [String: Date] = [:]
+    private var connectionTimeoutTimers: [String: Timer] = [:]
+    private var lastOutgoingStateByDevice: [String: (payload: Data, timestamp: Date)] = [:]
+    private let outgoingStateMinInterval: TimeInterval = 0.12
+    private let outgoingStateIdenticalCooldown: TimeInterval = 0.90
     
     // Connection pool management
     private let maxConcurrentConnections = 20
     private var connectionPriorities: [String: Int] = [:]
+    private var isSuspended: Bool = false
     
     // MARK: - State Publishers
     private let deviceStateSubject = PassthroughSubject<WLEDDeviceStateUpdate, Never>()
@@ -82,8 +88,8 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         // Use separate URLSession for WebSocket connections to avoid conflicts with HTTP API
         // This prevents WebSocket reconnects from being starved by HTTP connection limits
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 8
-        config.timeoutIntervalForResource = 20
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = false
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.allowsConstrainedNetworkAccess = true
@@ -182,6 +188,10 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     
     /// Connect to a WLED device's WebSocket endpoint
     func connect(to device: WLEDDevice, priority: Int = 0) {
+        guard !isSuspended else { return }
+        if webSocketTasks[device.id] != nil {
+            return
+        }
         // Skip devices not on current subnet to avoid energy/timeouts
         if !isIPInCurrentSubnets(device.ipAddress) {
             logger.info("Skipping WebSocket connect for off-subnet device: \(device.id) @ \(device.ipAddress)")
@@ -224,17 +234,15 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             status.lastError = nil
         }
         
-        let webSocketTask = urlSession.webSocketTask(with: url)
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        let webSocketTask = urlSession.webSocketTask(with: request)
         webSocketTasks[device.id] = webSocketTask
+        connectionStartTimes[device.id] = Date()
+        scheduleConnectionTimeout(for: device.id)
         
         setupWebSocketListeners(for: device.id, task: webSocketTask)
         webSocketTask.resume()
-        
-        // Start health monitoring
-        startHealthMonitoring(for: device.id)
-        
-        // Request initial state
-        requestFullState(for: device.id)
         
         updateConnectionMetrics()
         // Start scheduler if this is the first active connection
@@ -249,6 +257,9 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         webSocketTasks.removeValue(forKey: deviceId)
         reconnectAttempts.removeValue(forKey: deviceId)
         connectionPriorities.removeValue(forKey: deviceId)
+        connectionStartTimes.removeValue(forKey: deviceId)
+        connectionTimeoutTimers[deviceId]?.invalidate()
+        connectionTimeoutTimers.removeValue(forKey: deviceId)
         
         // Cancel timers
         reconnectTimers[deviceId]?.invalidate()
@@ -281,6 +292,26 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         // Stop scheduler when no connections remain
         schedulerTask?.cancel()
         schedulerTask = nil
+    }
+
+    func isDeviceConnected(_ deviceId: String) -> Bool {
+        guard let status = deviceConnectionStatuses[deviceId]?.status else {
+            return false
+        }
+        return status == .connected
+    }
+
+    /// Suspend all WebSocket activity (no reconnect attempts).
+    func suspendAllConnections() {
+        guard !isSuspended else { return }
+        isSuspended = true
+        disconnectAll()
+    }
+
+    /// Resume WebSocket activity (reconnect allowed).
+    func resumeConnections() {
+        guard isSuspended else { return }
+        isSuspended = false
     }
     
     /// Disconnect devices with low priority to make room for new connections
@@ -316,43 +347,72 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     
     /// Send a state update to a device via WebSocket
     func sendStateUpdate(_ update: WLEDStateUpdate, to deviceId: String) {
-        let segCount = update.seg?.count ?? 0
-        if segCount > 6 {
-            #if DEBUG
-            print("🔵 WebSocket skipped for \(deviceId): segCount=\(segCount)")
-            #endif
+        guard let prepared = prepareOutgoingStateMessage(update, to: deviceId) else {
             return
         }
-        guard let webSocketTask = webSocketTasks[deviceId] else {
-            logger.warning("No WebSocket connection for device: \(deviceId)")
-            return
-        }
-        
-        do {
-            let jsonData = try JSONEncoder().encode(update)
-            
-            // Debug logging to see what's actually being sent
-            if let jsonString = String(data: jsonData, encoding: .utf8) {
-                #if DEBUG
-                print("🔵 WebSocket sending to \(deviceId): \(jsonString)")
-                if let seg = update.seg?.first {
-                    print("🔵 Segment: id=\(seg.id ?? -1), col=\(seg.col?.description ?? "nil"), cct=\(seg.cct ?? -1), fx=\(seg.fx ?? -1)")
-                }
-                #endif
+        #if DEBUG
+        if let jsonString = prepared.debugJSONString {
+            print("🔵 WebSocket sending to \(deviceId): \(jsonString)")
+            if let seg = update.seg?.first {
+                print("🔵 Segment: id=\(seg.id ?? -1), col=\(seg.col?.description ?? "nil"), cct=\(seg.cct ?? -1), fx=\(seg.fx ?? -1)")
             }
-            
-            let message = URLSessionWebSocketTask.Message.data(jsonData)
-            
-            webSocketTask.send(message) { [weak self] error in
-                if let error = error {
-                    Task { @MainActor [weak self] in
+        }
+        #endif
+        prepared.task.send(prepared.message) { [weak self] error in
+            if let error = error {
+                Task { @MainActor [weak self] in
+                    self?.logger.error("Failed to send WebSocket message: \(error.localizedDescription)")
+                    self?.handleWebSocketError(.sendFailed(error), for: deviceId)
+                }
+            }
+        }
+    }
+
+    /// Send a state update and report whether dispatch to the socket succeeded.
+    /// This confirms local send dispatch, not device-side application.
+    func sendStateUpdateAwaitingDispatch(
+        _ update: WLEDStateUpdate,
+        to deviceId: String,
+        timeout: TimeInterval = 0.35
+    ) async -> Bool {
+        guard let prepared = prepareOutgoingStateMessage(update, to: deviceId) else {
+            return false
+        }
+        #if DEBUG
+        if let jsonString = prepared.debugJSONString {
+            print("🔵 WebSocket sending to \(deviceId): \(jsonString)")
+            if let seg = update.seg?.first {
+                print("🔵 Segment: id=\(seg.id ?? -1), col=\(seg.col?.description ?? "nil"), cct=\(seg.cct ?? -1), fx=\(seg.fx ?? -1)")
+            }
+        }
+        #endif
+
+        return await withCheckedContinuation { continuation in
+            var resolved = false
+            func finish(_ value: Bool) {
+                guard !resolved else { return }
+                resolved = true
+                continuation.resume(returning: value)
+            }
+
+            prepared.task.send(prepared.message) { [weak self] error in
+                Task { @MainActor [weak self] in
+                    if let error = error {
                         self?.logger.error("Failed to send WebSocket message: \(error.localizedDescription)")
                         self?.handleWebSocketError(.sendFailed(error), for: deviceId)
+                        finish(false)
+                    } else {
+                        finish(true)
                     }
                 }
             }
-        } catch {
-            logger.error("Failed to encode state update: \(error.localizedDescription)")
+
+            Task { @MainActor in
+                if timeout > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                }
+                finish(false)
+            }
         }
     }
     
@@ -422,6 +482,61 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             }
         }
     }
+
+    private typealias OutgoingStateMessage = (
+        task: URLSessionWebSocketTask,
+        message: URLSessionWebSocketTask.Message,
+        debugJSONString: String?
+    )
+
+    private func isCommandExemptFromOutgoingRateLimits(_ update: WLEDStateUpdate) -> Bool {
+        // Preset/playlist/reboot commands should be dispatched immediately.
+        update.ps != nil || update.pl != nil || update.rb == true
+    }
+
+    private func prepareOutgoingStateMessage(_ update: WLEDStateUpdate, to deviceId: String) -> OutgoingStateMessage? {
+        let segCount = update.seg?.count ?? 0
+        if segCount > 6 {
+            #if DEBUG
+            print("🔵 WebSocket skipped for \(deviceId): segCount=\(segCount)")
+            #endif
+            return nil
+        }
+        guard let webSocketTask = webSocketTasks[deviceId] else {
+            logger.warning("No WebSocket connection for device: \(deviceId)")
+            return nil
+        }
+
+        do {
+            let jsonData = try JSONEncoder().encode(update)
+            let now = Date()
+            let exempt = isCommandExemptFromOutgoingRateLimits(update)
+            if !exempt, let last = lastOutgoingStateByDevice[deviceId] {
+                let elapsed = now.timeIntervalSince(last.timestamp)
+                if elapsed < outgoingStateMinInterval {
+                    #if DEBUG
+                    print("🔵 WebSocket throttled for \(deviceId): elapsed=\(String(format: "%.3f", elapsed))s")
+                    #endif
+                    return nil
+                }
+                if last.payload == jsonData && elapsed < outgoingStateIdenticalCooldown {
+                    #if DEBUG
+                    print("🔵 WebSocket dedup skipped for \(deviceId)")
+                    #endif
+                    return nil
+                }
+            }
+            lastOutgoingStateByDevice[deviceId] = (jsonData, now)
+            return (
+                task: webSocketTask,
+                message: .data(jsonData),
+                debugJSONString: String(data: jsonData, encoding: .utf8)
+            )
+        } catch {
+            logger.error("Failed to encode state update: \(error.localizedDescription)")
+            return nil
+        }
+    }
     
     private func startHealthMonitoring(for deviceId: String) {
         // No-op: unified scheduler handles health checks
@@ -468,13 +583,6 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     
     private func setupWebSocketListeners(for deviceId: String, task: URLSessionWebSocketTask) {
         receiveMessage(for: deviceId, task: task)
-        
-        // Update status to connected once setup is complete
-        updateDeviceConnectionStatus(deviceId: deviceId) { status in
-            status.status = .connected
-            status.lastConnected = Date()
-            status.isHealthy = true
-        }
     }
     
     private func receiveMessage(for deviceId: String, task: URLSessionWebSocketTask) {
@@ -483,6 +591,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             case .success(let message):
                 guard let self = self else { return }
                 Task { @MainActor in
+                    self.markConnectedIfNeeded(deviceId: deviceId)
                     self.handleReceivedMessage(message, from: deviceId)
                     self.updateDeviceConnectionStatus(deviceId: deviceId) { status in
                         status.isHealthy = true
@@ -520,6 +629,33 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             }
         }
     }
+
+    private func scheduleConnectionTimeout(for deviceId: String) {
+        connectionTimeoutTimers[deviceId]?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self else { return }
+                guard let status = self.deviceConnectionStatuses[deviceId]?.status, status == .connecting else { return }
+                self.logger.warning("WebSocket connect timeout for device: \(deviceId)")
+                self.handleWebSocketError(.connectionLost(URLError(.timedOut)), for: deviceId)
+            }
+        }
+        connectionTimeoutTimers[deviceId] = timer
+    }
+
+    private func markConnectedIfNeeded(deviceId: String) {
+        if deviceConnectionStatuses[deviceId]?.status != .connected {
+            updateDeviceConnectionStatus(deviceId: deviceId) { status in
+                status.status = .connected
+                status.lastConnected = Date()
+                status.isHealthy = true
+            }
+            connectionTimeoutTimers[deviceId]?.invalidate()
+            connectionTimeoutTimers.removeValue(forKey: deviceId)
+            // Request initial state after confirmed connection
+            requestFullState(for: deviceId)
+        }
+    }
     
     private func handleReceivedMessage(_ message: URLSessionWebSocketTask.Message, from deviceId: String) {
         switch message {
@@ -528,7 +664,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
         case .string(let text):
             // Handle "pong" response to "ping" (health check) - don't try to parse as JSON
             if text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "pong" {
-                // Silently handle pong - it's just a health check response
+                publishHeartbeat(for: deviceId)
                 return
             }
             
@@ -538,7 +674,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             logger.warning("Received unknown WebSocket message type from device: \(deviceId)")
         }
     }
-    
+
     private func parseStateUpdate(from data: Data, deviceId: String) {
         // Parse on background thread to avoid blocking main thread
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -547,7 +683,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             // Check if this is a "pong" message before trying to parse as JSON
             if let text = String(data: data, encoding: .utf8),
                text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "pong" {
-                // Silently handle pong - it's just a health check response
+                publishHeartbeat(for: deviceId)
                 return
             }
 
@@ -586,6 +722,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
                 if let text = String(data: data, encoding: .utf8),
                    text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "pong" {
                     // Silently handle pong - don't log as error
+                    publishHeartbeat(for: deviceId)
                     return
                 }
                 
@@ -617,6 +754,14 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
             }
         }
     }
+
+    private nonisolated func publishHeartbeat(for deviceId: String) {
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            let heartbeat = WLEDDeviceStateUpdate(deviceId: deviceId, state: nil, info: nil, timestamp: Date())
+            self.deviceStateSubject.send(heartbeat)
+        }
+    }
     
     private func requestFullState(for deviceId: String) {
         // Send request for full JSON state object
@@ -637,6 +782,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     }
     
     private func handleWebSocketError(_ error: WLEDWebSocketError, for deviceId: String) {
+        guard !isSuspended else { return }
         updateDeviceConnectionStatus(deviceId: deviceId) { status in
             status.lastError = error
             status.isHealthy = false
@@ -649,6 +795,7 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     }
     
     private func attemptReconnection(for deviceId: String) {
+        guard !isSuspended else { return }
         let currentAttempts = reconnectAttempts[deviceId, default: 0]
         
         guard currentAttempts < maxReconnectAttempts else {

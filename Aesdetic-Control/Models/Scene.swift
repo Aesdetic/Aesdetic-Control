@@ -24,6 +24,12 @@ struct Scene: Identifiable, Codable, Equatable {
     var speed: Int? = nil
     var intensity: Int? = nil
 
+    // Presets & Playlists
+    var presetId: Int? = nil
+    var presetName: String? = nil
+    var playlistId: Int? = nil
+    var playlistName: String? = nil
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -40,7 +46,11 @@ struct Scene: Identifiable, Codable, Equatable {
         effectId: Int? = nil,
         paletteId: Int? = nil,
         speed: Int? = nil,
-        intensity: Int? = nil
+        intensity: Int? = nil,
+        presetId: Int? = nil,
+        presetName: String? = nil,
+        playlistId: Int? = nil,
+        playlistName: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -58,7 +68,9 @@ struct Scene: Identifiable, Codable, Equatable {
         self.paletteId = paletteId
         self.speed = speed
         self.intensity = intensity
+        self.presetId = presetId
+        self.presetName = presetName
+        self.playlistId = playlistId
+        self.playlistName = playlistName
     }
 }
-
-

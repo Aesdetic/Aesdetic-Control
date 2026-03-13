@@ -11,7 +11,6 @@ struct ContentView: View {
     // Use the shared ViewModels to ensure proper state management
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     @State private var selectedTab: DockTab = .dashboard
-    
     var body: some View {
         TabView(selection: $selectedTab) {
             DashboardView()
@@ -31,29 +30,29 @@ struct ContentView: View {
                 .tabItem {
                     Label("Automation", systemImage: "clock.arrow.2.circlepath")
                 }
-            
+
             WellnessView()
                 .tag(DockTab.wellness)
                 .tabItem {
                     Label("Wellness", systemImage: "heart.text.square")
                 }
         }
+        .background(Color.clear)
         .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             DockBar(selectedTab: $selectedTab)
                 .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 30)
+                .padding(.top, 4)
         }
-        .background(TabBarHider())
         .onAppear {
             // Passive discovery at launch (UDP/mDNS only)
             deviceViewModel.startPassiveDiscovery()
         }
-        .preferredColorScheme(.dark) // Ensure dark theme consistency
     }
 }
 
-#Preview {
-    ContentView()
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
 }

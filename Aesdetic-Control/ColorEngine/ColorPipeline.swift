@@ -34,15 +34,21 @@ actor ColorPipeline {
                     pendingBri[device.id] = bri
                     return
                 } else {
-                    // Pass transition time in milliseconds directly - WLEDStateUpdate will convert to deciseconds
-                    _ = try? await api.setBrightness(for: device, brightness: bri, transition: intent.transitionMs)
+                    // Pass transition time in deciseconds (WLED tt)
+                    _ = try? await api.setBrightness(for: device, brightness: bri, transitionDeciseconds: intent.transitionDeciseconds)
                     return
                 }
             }
             if let rgb = intent.solidRGB {
                 // Pass CCT, white level, and transition if provided
-                // Transition is passed in milliseconds, API converts to deciseconds
-                _ = try? await api.setColor(for: device, color: rgb, cct: intent.cct, white: intent.whiteLevel, transition: intent.transitionMs)
+                _ = try? await api.setColor(
+                    for: device,
+                    color: rgb,
+                    cct: intent.cct,
+                    white: intent.whiteLevel,
+                    transitionDeciseconds: intent.transitionDeciseconds,
+                    segmentId: intent.segmentId
+                )
             }
         case .perLED:
             if let frame = intent.perLEDHex {
@@ -91,4 +97,3 @@ actor ColorPipeline {
         pendingBri.removeValue(forKey: deviceId)
     }
 }
-

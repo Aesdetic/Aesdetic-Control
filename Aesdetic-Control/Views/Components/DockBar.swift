@@ -47,7 +47,7 @@ enum DockTab: String, CaseIterable, Identifiable {
         case .automation:
             return "Shows automation routines and schedules."
         case .wellness:
-            return "Shows wellness tools and insights."
+            return "Shows wellness check-ins and daily entries."
         }
     }
 }

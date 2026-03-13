@@ -356,8 +356,10 @@ struct AutomationEffectEditor: View {
             supportsCCT: supportsCCT,
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
-            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device)
+                && viewModel.supportsCCTOutput(for: device, segmentId: 0),
             allowManualWhite: advancedUIEnabled,
+            autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
             cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, _ in
                 guard let idx = gradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }

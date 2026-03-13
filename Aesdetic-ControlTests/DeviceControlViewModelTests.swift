@@ -30,13 +30,32 @@ struct DeviceControlViewModelTests {
             state: nil
         )
     }
+
+    func waitForCondition(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        pollNanoseconds: UInt64 = 20_000_000,
+        _ condition: @escaping () -> Bool
+    ) async -> Bool {
+        let start = DispatchTime.now().uptimeNanoseconds
+        while DispatchTime.now().uptimeNanoseconds - start < timeoutNanoseconds {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: pollNanoseconds)
+        }
+        return condition()
+    }
     
     // MARK: - Capability Caching Tests
     
     @Test("Capabilities are cached after device refresh")
     func testCapabilityCaching() async throws {
         let viewModel = DeviceControlViewModel.shared
-        let device = createTestDevice(id: "cache-test-device")
+        let device = createTestDevice(id: "cache-test-device-\(UUID().uuidString)")
+        let forceCCTKey = "forceCCTSlider"
+        let previousForceCCT = UserDefaults.standard.bool(forKey: forceCCTKey)
+        UserDefaults.standard.set(false, forKey: forceCCTKey)
+        defer { UserDefaults.standard.set(previousForceCCT, forKey: forceCCTKey) }
         
         // Initially, capabilities should not be cached
         let supportsCCTBefore = viewModel.supportsCCT(for: device, segmentId: 0)
@@ -289,14 +308,14 @@ struct DeviceControlViewModelTests {
     @Test("currentEffectState returns default when not cached")
     func testCurrentEffectStateDefault() {
         let viewModel = DeviceControlViewModel.shared
-        let device = createTestDevice(id: "effect-state-test")
+        let device = createTestDevice(id: "effect-state-test-\(UUID().uuidString)")
         
         let state = viewModel.currentEffectState(for: device, segmentId: 0)
         
         #expect(state.effectId == 0, "Default effect ID should be 0")
         #expect(state.speed == 128, "Default speed should be 128")
         #expect(state.intensity == 128, "Default intensity should be 128")
-        #expect(state.paletteId == 0, "Default palette ID should be 0")
+        #expect(state.paletteId == nil, "Default palette ID should be nil")
     }
     
     @Test("effectMetadata returns nil when not cached")
@@ -339,5 +358,337 @@ struct DeviceControlViewModelTests {
         // Should return same value (even if false, cache lookup should be consistent)
         #expect(supportsCCT1 == supportsCCT2, "Cached capabilities should return consistent values")
     }
-}
 
+    // MARK: - Sync V2 Tests
+
+    @Test("Selecting first sync target enables effective auto-sync")
+    func testSelectingFirstSyncTargetEnablesAutoSync() async {
+        let viewModel = DeviceControlViewModel.shared
+        let sourceId = "sync-source-\(UUID().uuidString)"
+        let targetId = "sync-target-\(UUID().uuidString)"
+
+        viewModel.clearSyncTargets(sourceId: sourceId)
+        _ = await waitForCondition {
+            viewModel.syncTargetCount(for: sourceId) == 0
+        }
+
+        viewModel.toggleSyncTarget(sourceId: sourceId, targetId: targetId)
+        let didSelect = await waitForCondition {
+            viewModel.syncTargetCount(for: sourceId) == 1
+        }
+
+        #expect(didSelect == true)
+        #expect(viewModel.isSyncTargetSelected(sourceId: sourceId, targetId: targetId) == true)
+        #expect(viewModel.syncProfile(for: sourceId).isActive == true)
+
+        viewModel.clearSyncTargets(sourceId: sourceId)
+    }
+
+    @Test("Removing last sync target disables effective auto-sync")
+    func testRemovingLastSyncTargetDisablesAutoSync() async {
+        let viewModel = DeviceControlViewModel.shared
+        let sourceId = "sync-source-\(UUID().uuidString)"
+        let targetId = "sync-target-\(UUID().uuidString)"
+
+        viewModel.toggleSyncTarget(sourceId: sourceId, targetId: targetId)
+        _ = await waitForCondition {
+            viewModel.syncTargetCount(for: sourceId) == 1
+        }
+
+        viewModel.toggleSyncTarget(sourceId: sourceId, targetId: targetId)
+        let didClear = await waitForCondition {
+            viewModel.syncTargetCount(for: sourceId) == 0
+        }
+
+        #expect(didClear == true)
+        #expect(viewModel.syncProfile(for: sourceId).isActive == false)
+    }
+
+    @Test("origin propagated never re-propagates")
+    func testPropagatedOriginNeverRepropagates() async {
+        let viewModel = DeviceControlViewModel.shared
+        let sourceId = "sync-source-\(UUID().uuidString)"
+        let source = createTestDevice(id: sourceId)
+
+        await viewModel.propagateIfNeeded(
+            source: source,
+            payload: .brightness(value: 200),
+            origin: .propagated
+        )
+
+        #expect(viewModel.syncDispatchMessage(for: sourceId) == nil)
+        #expect(viewModel.syncDispatchSummaryBySource[sourceId] == nil)
+    }
+
+    @Test("clearSyncTargets stops sync immediately")
+    func testClearSyncTargetsStopsSyncImmediately() async {
+        let viewModel = DeviceControlViewModel.shared
+        let sourceId = "sync-source-\(UUID().uuidString)"
+        let targetA = "sync-target-a-\(UUID().uuidString)"
+        let targetB = "sync-target-b-\(UUID().uuidString)"
+
+        viewModel.toggleSyncTarget(sourceId: sourceId, targetId: targetA)
+        viewModel.toggleSyncTarget(sourceId: sourceId, targetId: targetB)
+        _ = await waitForCondition {
+            viewModel.syncTargetCount(for: sourceId) == 2
+        }
+
+        viewModel.clearSyncTargets(sourceId: sourceId)
+        let didClear = await waitForCondition {
+            viewModel.syncTargetCount(for: sourceId) == 0
+        }
+
+        #expect(didClear == true)
+        #expect(viewModel.syncProfile(for: sourceId).isActive == false)
+    }
+
+    @Test("playlist step plan keeps transition less than or equal to duration")
+    func testPlaylistStepPlanTransitionNotExceedDuration() {
+        let viewModel = DeviceControlViewModel.shared
+        let plan = viewModel.debugPlaylistStepPlanForTests(durationSeconds: 240)
+
+        #expect(plan.steps > 0)
+        #expect(plan.durations.count == plan.steps)
+        #expect(plan.transitions.count == plan.steps)
+        #expect(plan.durations.allSatisfy { $0 > 0 })
+        #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+            transition == duration
+        })
+    }
+
+    @Test("playlist step plan effective duration tracks requested duration")
+    func testPlaylistStepPlanEffectiveDuration() {
+        let viewModel = DeviceControlViewModel.shared
+        let requested = 240.0
+        let plan = viewModel.debugPlaylistStepPlanForTests(durationSeconds: requested)
+        let delta = abs(plan.effectiveDurationSeconds - requested)
+
+        #expect(delta <= 0.5, "Effective duration should stay within 0.5s of request")
+    }
+
+    @Test("generated playlist timing compensation applies boundary pad")
+    func testGeneratedPlaylistTimingCompensationAppliesPad() {
+        let viewModel = DeviceControlViewModel.shared
+        let plan = viewModel.debugPlaylistStepPlanForTests(
+            durationSeconds: 240,
+            generatedTimingMode: .boundaryCompensated(padDeciseconds: 3)
+        )
+
+        #expect(plan.padDeciseconds == 3)
+        #expect(plan.timingModeLabel.contains("boundary-compensated"))
+        #expect(plan.durations.count == plan.transitions.count)
+        #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+            if duration >= 4 {
+                return transition == duration - 3
+            }
+            return transition >= 1 && transition <= duration
+        })
+        #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+            duration == 0 || transition < duration
+        })
+    }
+
+    @Test("generated playlist compensation keeps effective runtime unchanged")
+    func testGeneratedPlaylistTimingCompensationKeepsRuntime() {
+        let viewModel = DeviceControlViewModel.shared
+        let requested = 240.0
+        let fullBlend = viewModel.debugPlaylistStepPlanForTests(durationSeconds: requested)
+        let compensated = viewModel.debugPlaylistStepPlanForTests(
+            durationSeconds: requested,
+            generatedTimingMode: .boundaryCompensated(padDeciseconds: 3)
+        )
+
+        #expect(fullBlend.durations == compensated.durations)
+        #expect(abs(fullBlend.effectiveDurationSeconds - compensated.effectiveDurationSeconds) < 0.0001)
+        #expect(abs(compensated.effectiveDurationSeconds - requested) <= 0.5)
+    }
+
+    @Test("generated playlist compensation clamps short duration transitions")
+    func testGeneratedPlaylistTimingCompensationShortClamp() {
+        let viewModel = DeviceControlViewModel.shared
+        for seconds in [0.1, 0.2, 0.3] {
+            let plan = viewModel.debugPlaylistStepPlanForTests(
+                durationSeconds: seconds,
+                generatedTimingMode: .boundaryCompensated(padDeciseconds: 3)
+            )
+            #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+                guard duration > 0 else { return transition == 0 }
+                return transition >= 1 && transition <= duration
+            })
+        }
+    }
+
+    @Test("persistent transition allocation uses frontmost contiguous permanent IDs")
+    func testPersistentTransitionAllocationFrontmostContiguousIds() {
+        let viewModel = DeviceControlViewModel.shared
+        let used: Set<Int> = [1, 2, 5, 6, 7, 170, 171, 250]
+        let allocation = viewModel.debugPersistentTransitionIdAllocationForTests(
+            usedIds: used,
+            stepCount: 3
+        )
+
+        #expect(allocation.playlistId == 3)
+        #expect(allocation.stepPresetIds == [8, 9, 10])
+    }
+
+    @Test("persistent transition allocation excludes temporary reserved band")
+    func testPersistentTransitionAllocationExcludesTempReservedBand() {
+        let viewModel = DeviceControlViewModel.shared
+        let allocation = viewModel.debugPersistentTransitionIdAllocationForTests(
+            usedIds: [],
+            stepCount: 5
+        )
+
+        if let playlistId = allocation.playlistId {
+            #expect((1...169).contains(playlistId))
+            #expect(!(170...250).contains(playlistId))
+        } else {
+            Issue.record("Expected playlist ID allocation in persistent range")
+        }
+        if let stepPresetIds = allocation.stepPresetIds {
+            #expect(stepPresetIds.count == 5)
+            #expect(stepPresetIds == stepPresetIds.sorted())
+            #expect(stepPresetIds.allSatisfy { (1...169).contains($0) })
+            #expect(stepPresetIds.allSatisfy { !(170...250).contains($0) })
+        } else {
+            Issue.record("Expected step preset ID allocation in persistent range")
+        }
+    }
+
+    @Test("persistent transition allocation fails when no contiguous block exists")
+    func testPersistentTransitionAllocationRequiresContiguousBlock() {
+        let viewModel = DeviceControlViewModel.shared
+        // Leave odd IDs free only; no contiguous run of length 2 in 1...169.
+        let used = Set((1...169).filter { $0 % 2 == 0 })
+        let allocation = viewModel.debugPersistentTransitionIdAllocationForTests(
+            usedIds: used,
+            stepCount: 2
+        )
+
+        #expect(allocation.playlistId == 1)
+        #expect(allocation.stepPresetIds == nil)
+    }
+
+    @Test("transition duration picker clamps and formats mm:ss bounds")
+    func testTransitionDurationPickerClamping() {
+        #expect(TransitionDurationPicker.clampedTotalSeconds(0) == 0)
+        #expect(TransitionDurationPicker.clampedTotalSeconds(1) == 1)
+        #expect(TransitionDurationPicker.clampedTotalSeconds(59) == 59)
+        #expect(TransitionDurationPicker.clampedTotalSeconds(60) == 60)
+        #expect(TransitionDurationPicker.clampedTotalSeconds(3599) == 3599)
+        #expect(TransitionDurationPicker.clampedTotalSeconds(3600) == 3600)
+        #expect(TransitionDurationPicker.clampedTotalSeconds(4000) == 3600)
+
+        let c59 = TransitionDurationPicker.components(from: 59)
+        #expect(c59.minutes == 0)
+        #expect(c59.seconds == 59)
+        let c60 = TransitionDurationPicker.components(from: 60)
+        #expect(c60.minutes == 1)
+        #expect(c60.seconds == 0)
+        let c3599 = TransitionDurationPicker.components(from: 3599)
+        #expect(c3599.minutes == 59)
+        #expect(c3599.seconds == 59)
+        let c3600 = TransitionDurationPicker.components(from: 3600)
+        #expect(c3600.minutes == 60)
+        #expect(c3600.seconds == 0)
+
+        #expect(TransitionDurationPicker.totalSeconds(minutes: 60, seconds: 59) == 3600)
+        #expect(TransitionDurationPicker.clockString(seconds: 1) == "0:01")
+        #expect(TransitionDurationPicker.clockString(seconds: 3599) == "59:59")
+        #expect(TransitionDurationPicker.clockString(seconds: 3600) == "60:00")
+        #expect(TransitionDurationPicker.recommendedMaxSeconds == 2100)
+        #expect(TransitionDurationPicker.exceedsRecommendedMax(2100) == false)
+        #expect(TransitionDurationPicker.exceedsRecommendedMax(2101) == true)
+    }
+
+    @Test("transition keyframe sampling uses seam-safe modes")
+    func testTransitionSamplingModes() {
+        let viewModel = DeviceControlViewModel.shared
+        let temporary = viewModel.debugTransitionKeyframeTsForTests(stepCount: 5, context: .temporaryLive)
+        let persistent = viewModel.debugTransitionKeyframeTsForTests(stepCount: 5, context: .persistentAutomation)
+
+        #expect(abs((temporary.first ?? 0) - 0.2) < 0.0001)
+        #expect(abs((temporary.last ?? 0) - 1.0) < 0.0001)
+        #expect(temporary.allSatisfy { $0 > 0.0 })
+
+        #expect(abs((persistent.first ?? 1) - 0.0) < 0.0001)
+        #expect(abs((persistent.last ?? 0) - 1.0) < 0.0001)
+    }
+
+    @Test("near-duplicate transition keyframes are culled")
+    func testTransitionKeyframeCulling() {
+        let viewModel = DeviceControlViewModel.shared
+        let gradient = LEDGradient(stops: [
+            GradientStop(position: 0, hexColor: "FFFFFF"),
+            GradientStop(position: 1, hexColor: "FFFFFF")
+        ])
+        let counts = viewModel.debugCulledKeyframeCountForTests(
+            stepCount: 8,
+            context: .persistentAutomation,
+            minimumCount: 3,
+            from: gradient,
+            to: gradient,
+            startBrightness: 128,
+            endBrightness: 128
+        )
+        #expect(counts.before == 8)
+        #expect(counts.after == 3)
+    }
+
+    @Test("automation planner coarsens by budget and blocks when still over")
+    func testAutomationTransitionPlannerBudgeting() {
+        let viewModel = DeviceControlViewModel.shared
+        let device = createTestDevice(id: "budget-test")
+        let start = LEDGradient(stops: [
+            GradientStop(position: 0, hexColor: "0000FF"),
+            GradientStop(position: 1, hexColor: "FFFFFF")
+        ])
+        let end = LEDGradient(stops: [
+            GradientStop(position: 0, hexColor: "FFA000"),
+            GradientStop(position: 1, hexColor: "101010")
+        ])
+
+        let used0 = viewModel.debugTransitionPlanForTests(
+            durationSeconds: 1800,
+            startGradient: start,
+            endGradient: end,
+            startBrightness: 64,
+            endBrightness: 255,
+            context: .persistentAutomation,
+            usedPresetCount: 0,
+            device: device
+        )
+        #expect(used0.fitsBudget == true)
+        #expect(used0.legSeconds == 45)
+        #expect(used0.perAutomationBudget == 46)
+
+        let used80 = viewModel.debugTransitionPlanForTests(
+            durationSeconds: 1800,
+            startGradient: start,
+            endGradient: end,
+            startBrightness: 64,
+            endBrightness: 255,
+            context: .persistentAutomation,
+            usedPresetCount: 80,
+            device: device
+        )
+        #expect(used80.fitsBudget == true)
+        #expect(used80.legSeconds == 65)
+        #expect(used80.perAutomationBudget == 30)
+        #expect(used80.slotsRequired == 30)
+
+        let used140 = viewModel.debugTransitionPlanForTests(
+            durationSeconds: 1800,
+            startGradient: start,
+            endGradient: end,
+            startBrightness: 64,
+            endBrightness: 255,
+            context: .persistentAutomation,
+            usedPresetCount: 140,
+            device: device
+        )
+        #expect(used140.fitsBudget == false)
+        #expect(used140.legSeconds == 65)
+        #expect(used140.perAutomationBudget == 18)
+    }
+}

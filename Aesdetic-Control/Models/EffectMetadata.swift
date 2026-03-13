@@ -18,14 +18,44 @@ struct EffectMetadataBundle {
 // MARK: - EffectMetadata
 
 /// Metadata describing a single WLED effect (a.k.a. mode).
+enum EffectDimension: String, Hashable {
+    case zeroD
+    case oneD
+    case twoD
+}
+
 struct EffectMetadata: Identifiable {
     let id: Int
     let name: String
     let description: String?
     let parameters: [EffectParameter]
     let supportsPalette: Bool
+    let paletteIsFixed: Bool
     let isSoundReactive: Bool
     let colorSlotCount: Int
+    let dimensions: Set<EffectDimension>
+
+    init(
+        id: Int,
+        name: String,
+        description: String?,
+        parameters: [EffectParameter],
+        supportsPalette: Bool,
+        paletteIsFixed: Bool = false,
+        isSoundReactive: Bool,
+        colorSlotCount: Int,
+        dimensions: Set<EffectDimension> = [.oneD]
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.supportsPalette = supportsPalette
+        self.paletteIsFixed = paletteIsFixed
+        self.isSoundReactive = isSoundReactive
+        self.colorSlotCount = colorSlotCount
+        self.dimensions = dimensions
+    }
 
     /// Convenience flag indicating whether the effect exposes a speed parameter.
     var supportsSpeed: Bool {
@@ -35,6 +65,10 @@ struct EffectMetadata: Identifiable {
     /// Convenience flag indicating whether the effect exposes an intensity parameter.
     var supportsIntensity: Bool {
         parameters.contains { $0.kind == .intensity || ($0.kind == .genericSlider && $0.index == 1) }
+    }
+
+    var isTwoDOnly: Bool {
+        dimensions == [.twoD]
     }
 }
 
@@ -47,6 +81,7 @@ struct EffectParameter: Identifiable {
         case palette
         case color
         case genericSlider
+        case toggle
     }
     let id = UUID()
     let index: Int
@@ -67,6 +102,20 @@ struct PaletteMetadata: Identifiable {
 // MARK: - EffectMetadataParser
 
 enum EffectMetadataParser {
+    /// Parses WLED effect names + fxdata strings into a metadata bundle.
+    static func parse(effectNames: [String], fxData: [String], palettes: [String] = []) -> EffectMetadataBundle {
+        let effects: [EffectMetadata] = effectNames.enumerated().map { index, name in
+            let fxString = index < fxData.count ? fxData[index] : ""
+            return parseEffect(name: name, id: index, fxString: fxString)
+        }
+
+        let paletteEntries = palettes.enumerated().map { index, entry in
+            PaletteMetadata(id: index, name: entry, isDynamic: false, description: nil)
+        }
+
+        return EffectMetadataBundle(effects: effects, palettes: paletteEntries)
+    }
+
     /// Parses the raw string lines returned from `/json/fxdata` into strongly-typed metadata.
     /// - Parameter lines: The raw response split into lines.
     /// - Returns: Parsed metadata bundle if decoding succeeds, otherwise `nil`.
@@ -92,6 +141,113 @@ enum EffectMetadataParser {
         return EffectMetadataBundle(effects: effects, palettes: palettes)
     }
 
+    private static func parseEffect(name: String, id: Int, fxString: String) -> EffectMetadata {
+        let trimmedFx = fxString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let controlDefined = !trimmedFx.isEmpty
+        let parts = fxString.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+        let sliderPart = parts.count > 0 ? parts[0] : ""
+        let colorPart = parts.count > 1 ? parts[1] : ""
+        let palettePart = parts.count > 2 ? parts[2] : ""
+        let flagsPart = parts.count > 3 ? parts[3] : ""
+
+        let parameters: [EffectParameter] = {
+            if controlDefined && sliderPart.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return []
+            }
+            var params = buildSliderParameters(from: sliderPart)
+            let tokens = sliderPart.split(separator: ",", omittingEmptySubsequences: false).map { String($0) }
+            if controlDefined, tokens.count > 5 {
+                for idx in 0..<3 {
+                    let tokenIndex = 5 + idx
+                    guard tokenIndex < tokens.count else { continue }
+                    let raw = tokens[tokenIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !raw.isEmpty else { continue }
+                    let label = raw == "!" ? "Option \(idx + 1)" : raw
+                    params.append(EffectParameter(index: tokenIndex, label: label, kind: .toggle))
+                }
+            }
+            return params
+        }()
+        var colorSlotCount = parseColorSlotCount(from: colorPart, controlDefined: controlDefined)
+        let paletteToken = palettePart.trimmingCharacters(in: .whitespacesAndNewlines)
+        let paletteFirstToken = paletteToken
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .first
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        let paletteHasToken = !paletteFirstToken.isEmpty
+        let paletteIsFixed = paletteHasToken && Int(paletteFirstToken) != nil
+        let supportsPalette = !controlDefined || (paletteHasToken && !paletteIsFixed)
+        if colorPart.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, supportsPalette {
+            // Palette-only effects should not be treated as gradient-capable.
+            colorSlotCount = 0
+        }
+        let isSoundReactive = flagsPart.contains("v") || flagsPart.contains("f")
+        let dimensions = parseDimensions(from: flagsPart)
+
+        return EffectMetadata(
+            id: id,
+            name: name,
+            description: nil,
+            parameters: parameters,
+            supportsPalette: supportsPalette,
+            paletteIsFixed: paletteIsFixed,
+            isSoundReactive: isSoundReactive,
+            colorSlotCount: colorSlotCount,
+            dimensions: dimensions
+        )
+    }
+
+    private static func buildSliderParameters(from sliderPart: String) -> [EffectParameter] {
+        let tokens = sliderPart.split(separator: ",", omittingEmptySubsequences: false).map { token -> String in
+            let trimmed = token.trimmingCharacters(in: .whitespaces)
+            return trimmed == "!" ? "" : trimmed
+        }
+        if tokens.isEmpty || tokens.allSatisfy({ $0.isEmpty }) {
+            return [
+                EffectParameter(index: 0, label: "Effect speed", kind: .speed),
+                EffectParameter(index: 1, label: "Effect intensity", kind: .intensity)
+            ]
+        }
+
+        var parameters: [EffectParameter] = []
+        for (idx, token) in tokens.enumerated() {
+            let label = token.trimmingCharacters(in: .whitespaces)
+            if idx == 0 {
+                parameters.append(EffectParameter(index: idx, label: label.isEmpty ? "Effect speed" : label, kind: .speed))
+            } else if idx == 1 {
+                parameters.append(EffectParameter(index: idx, label: label.isEmpty ? "Effect intensity" : label, kind: .intensity))
+            } else {
+                let customLabel = label.isEmpty ? "Custom \(idx - 1)" : label
+                parameters.append(EffectParameter(index: idx, label: customLabel, kind: .genericSlider))
+            }
+        }
+        return parameters
+    }
+
+    private static func parseColorSlotCount(from colorPart: String, controlDefined: Bool) -> Int {
+        let tokens = colorPart.split(separator: ",", omittingEmptySubsequences: false)
+        let usable = tokens.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let count = usable.count
+        if !controlDefined {
+            return 3
+        }
+        if count == 0 {
+            return 0
+        }
+        return max(1, min(3, count))
+    }
+
+    private static func parseDimensions(from flags: String) -> Set<EffectDimension> {
+        var dimensions: Set<EffectDimension> = []
+        if flags.contains("0") { dimensions.insert(.zeroD) }
+        if flags.contains("1") { dimensions.insert(.oneD) }
+        if flags.contains("2") { dimensions.insert(.twoD) }
+        if dimensions.isEmpty {
+            dimensions.insert(.oneD)
+        }
+        return dimensions
+    }
+
     // MARK: - Private helpers
 
     private static func parseEffect(entry: Any, index: Int) -> EffectMetadata {
@@ -99,8 +255,10 @@ enum EffectMetadataParser {
         var description: String?
         var parameters: [EffectParameter] = []
         var supportsPalette = true
+        var paletteIsFixed = false
         var isSoundReactive = false
         var colorSlotCount = 0
+        let dimensions: Set<EffectDimension> = [.oneD]
 
         if let dict = entry as? [String: Any] {
             if let dictName = dict["name"] as? String { name = dictName }
@@ -113,6 +271,9 @@ enum EffectMetadataParser {
             // Palette support flags
             if let paletteFlag = dict["palette"] as? Bool ?? dict["usesPalette"] as? Bool ?? dict["pal"] as? Bool {
                 supportsPalette = paletteFlag
+            }
+            if let fixed = dict["paletteFixed"] as? Bool ?? dict["palFixed"] as? Bool {
+                paletteIsFixed = fixed
             }
 
             if let soundFlag = dict["soundReactive"] as? Bool ?? dict["sound"] as? Bool {
@@ -165,8 +326,10 @@ enum EffectMetadataParser {
             description: description,
             parameters: parameters,
             supportsPalette: supportsPalette,
+            paletteIsFixed: paletteIsFixed,
             isSoundReactive: isSoundReactive,
-            colorSlotCount: colorSlotCount
+            colorSlotCount: colorSlotCount,
+            dimensions: dimensions
         )
     }
 
@@ -235,7 +398,3 @@ private extension String {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
-
-
-
-

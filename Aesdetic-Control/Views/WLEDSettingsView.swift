@@ -169,23 +169,6 @@ fileprivate struct UDPTogglesRow: View {
     }
 }
 
-fileprivate struct UDPNetworkRow: View {
-    @Binding var network: Int
-    let device: WLEDDevice
-
-    var body: some View {
-        HStack {
-            Text("Network")
-                .foregroundColor(.white)
-            Spacer()
-            Stepper("\(network)", value: $network, in: 0...255, step: 1, onEditingChanged: { _ in
-                Task { _ = try? await WLEDAPIService.shared.setUDPSync(for: device, send: nil, recv: nil, network: network) }
-            })
-            .labelsHidden()
-        }
-    }
-}
-
 struct WLEDSettingsView: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
@@ -197,7 +180,6 @@ struct WLEDSettingsView: View {
     @State private var segStop: Int = 60
     @State private var udpSend: Bool = false
     @State private var udpRecv: Bool = false
-    @State private var udpNetwork: Int = 0
     @State private var info: Info?
     @State private var isLoading: Bool = false
     // Night Light mirrors (WLEDStateUpdate.nl)
@@ -209,6 +191,12 @@ struct WLEDSettingsView: View {
     @State private var currentName: String
     @State private var editingName: String
     @State private var temperatureStopsUseCCT: Bool = false
+    @State private var macroButtonPress: Int = 0
+    @State private var macroButtonLongPress: Int = 0
+    @State private var macroButtonDoublePress: Int = 0
+    @State private var macroAlexaOn: Int = 0
+    @State private var macroAlexaOff: Int = 0
+    @State private var macroNightLight: Int = 0
 
     init(device: WLEDDevice) {
         self.device = device
@@ -224,6 +212,7 @@ struct WLEDSettingsView: View {
                 syncSection
                 ledSection
                 nightLightSection
+                macroTriggersSection
                 realtimeSection
                 actionsSection
             }
@@ -381,7 +370,6 @@ struct WLEDSettingsView: View {
                 .foregroundColor(.white)
             UDPTogglesRow(udpSend: $udpSend, udpRecv: $udpRecv, device: device)
                 .environmentObject(viewModel)
-            UDPNetworkRow(network: $udpNetwork, device: device)
         }
         .padding(16)
         .background(Color.white.opacity(0.08))
@@ -525,6 +513,56 @@ struct WLEDSettingsView: View {
         }
     }
 
+    private var macroTriggersSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Macro Triggers (WLED)")
+                .font(.headline.weight(.semibold))
+                .foregroundColor(.white)
+            Text("0 disables. Set preset/playlist IDs for native WLED triggers.")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+            Text("Button fields map to the controller's physical button. Voice fields map to WLED Alexa hooks (not Siri). Night Light End runs when night light completes.")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.62))
+
+            IntStepperRow(title: "Button Press", value: $macroButtonPress, range: 0...250, onEnd: commitMacroBindings)
+            IntStepperRow(title: "Button Long Press", value: $macroButtonLongPress, range: 0...250, onEnd: commitMacroBindings)
+            IntStepperRow(title: "Button Double Press", value: $macroButtonDoublePress, range: 0...250, onEnd: commitMacroBindings)
+            IntStepperRow(title: "Voice On (Alexa)", value: $macroAlexaOn, range: 0...250, onEnd: commitMacroBindings)
+            IntStepperRow(title: "Voice Off (Alexa)", value: $macroAlexaOff, range: 0...250, onEnd: commitMacroBindings)
+            IntStepperRow(title: "Night Light End", value: $macroNightLight, range: 0...250, onEnd: commitMacroBindings)
+
+            Button("Apply Macro Triggers") { commitMacroBindings() }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .background(Color.white)
+                .cornerRadius(10)
+                .sensorySuccess(trigger: UUID())
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.08))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.15)))
+        .cornerRadius(12)
+    }
+
+    private func commitMacroBindings() {
+        Task {
+            try? await WLEDAPIService.shared.updateMacroBindings(
+                WLEDMacroBindingsUpdate(
+                    buttonPressMacro: macroButtonPress,
+                    buttonLongPressMacro: macroButtonLongPress,
+                    buttonDoublePressMacro: macroButtonDoublePress,
+                    alexaOnMacro: macroAlexaOn,
+                    alexaOffMacro: macroAlexaOff,
+                    nightLightMacro: macroNightLight
+                ),
+                for: device
+            )
+        }
+    }
+
     private var actionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Device Actions")
@@ -608,6 +646,17 @@ struct WLEDSettingsView: View {
                         editingName = newName
                     }
                 }
+            }
+        } catch { }
+        do {
+            let macros = try await WLEDAPIService.shared.fetchMacroBindings(for: device)
+            await MainActor.run {
+                macroButtonPress = macros.buttonPressMacro
+                macroButtonLongPress = macros.buttonLongPressMacro
+                macroButtonDoublePress = macros.buttonDoublePressMacro
+                macroAlexaOn = macros.alexaOnMacro
+                macroAlexaOff = macros.alexaOffMacro
+                macroNightLight = macros.nightLightMacro
             }
         } catch { }
     }

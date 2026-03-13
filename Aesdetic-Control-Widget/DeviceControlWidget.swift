@@ -53,7 +53,7 @@ struct DeviceControlProvider: TimelineProvider {
     
     private func createEntry() -> DeviceWidgetEntry {
         // Load device data from shared UserDefaults
-        if let deviceData = UserDefaults(suiteName: "group.com.aesdetic.control")?.data(forKey: "widgetDevice"),
+        if let deviceData = loadSharedDeviceData(),
            let device = try? JSONDecoder().decode(WidgetDevice.self, from: deviceData) {
             return DeviceWidgetEntry(
                 date: Date(),
@@ -72,6 +72,15 @@ struct DeviceControlProvider: TimelineProvider {
             isOn: false,
             isOnline: false
         )
+    }
+
+    private func loadSharedDeviceData() -> Data? {
+        let groupId = "group.com.aesdetic.control"
+        guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupId) else {
+            return nil
+        }
+        let fileURL = containerURL.appendingPathComponent("widgetDevice.json")
+        return try? Data(contentsOf: fileURL)
     }
 }
 

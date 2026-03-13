@@ -8,13 +8,15 @@ struct SolarOffsetArcSlider: View {
     var disableClipping: Bool = false
     var useExternalGradient: Bool = false
     
-    private let range: ClosedRange<Double> = -120...120
+    private let range: ClosedRange<Double> = Double(SolarTrigger.minOnDeviceOffsetMinutes)...Double(SolarTrigger.maxOnDeviceOffsetMinutes)
     
     @State private var sunriseTime: Date?
     @State private var sunsetTime: Date?
     @State private var nextEventTime: Date?
     @State private var coordinate: CLLocationCoordinate2D?
+    @State private var solarTimeZone: TimeZone = .current
     @State private var coordinateSignature: String = ""
+    @State private var locationUnavailable: Bool = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -232,6 +234,9 @@ struct SolarOffsetArcSlider: View {
         .onChange(of: coordinateSignature) { _, _ in
             refreshSolarTimes()
         }
+        .onChange(of: device.id) { _, _ in
+            loadCoordinate()
+        }
     }
     
     // MARK: - Gradient Background
@@ -296,7 +301,7 @@ struct SolarOffsetArcSlider: View {
     // MARK: - Helper Properties
     
     private var offsetDescription: String {
-        let minutes = Int(offsetMinutes)
+        let minutes = SolarTrigger.clampOnDeviceOffset(Int(offsetMinutes.rounded()))
         if minutes == 0 {
             return "At \(eventType.eventName.lowercased())"
         } else if minutes > 0 {
@@ -307,15 +312,15 @@ struct SolarOffsetArcSlider: View {
     }
     
     private var estimatedTime: String {
-        "Calculating..."
+        locationUnavailable ? "Location unavailable" : "Calculating..."
     }
     
     private var estimatedSunriseTime: String {
-        "6:00 AM"
+        locationUnavailable ? "--:--" : "6:00 AM"
     }
     
     private var estimatedSunsetTime: String {
-        "6:00 PM"
+        locationUnavailable ? "--:--" : "6:00 PM"
     }
     
     // MARK: - Arc Drawing
@@ -391,17 +396,34 @@ struct SolarOffsetArcSlider: View {
     private func loadCoordinate() {
         Task {
             let store = AutomationStore.shared
+            #if DEBUG
             print("📍 SolarOffsetArcSlider: Loading coordinate...")
+            #endif
             
-            // Try to get user's actual location, fallback to San Francisco
-            let userCoordinate = await store.currentCoordinate() ?? CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
-            print("✅ Using location: \(userCoordinate.latitude), \(userCoordinate.longitude)")
-            
-            await MainActor.run {
-                self.coordinate = userCoordinate
-                self.coordinateSignature = "\(userCoordinate.latitude),\(userCoordinate.longitude)"
-                // Calculate times after setting coordinate (on MainActor)
-                calculateSolarTimes()
+            // Prefer WLED-configured if.ntp location/timezone, then fall back to iOS location.
+            if let reference = await store.currentSolarReference(for: device) {
+                #if DEBUG
+                print("✅ Using location: \(reference.coordinate.latitude), \(reference.coordinate.longitude) tz=\(reference.timeZone.identifier)")
+                #endif
+                
+                await MainActor.run {
+                    self.coordinate = reference.coordinate
+                    self.solarTimeZone = reference.timeZone
+                    self.coordinateSignature = "\(reference.coordinate.latitude),\(reference.coordinate.longitude),\(reference.timeZone.identifier)"
+                    self.locationUnavailable = false
+                    // Calculate times after setting coordinate (on MainActor)
+                    calculateSolarTimes()
+                }
+            } else {
+                await MainActor.run {
+                    self.coordinate = nil
+                    self.solarTimeZone = .current
+                    self.coordinateSignature = ""
+                    self.locationUnavailable = true
+                    self.sunriseTime = nil
+                    self.sunsetTime = nil
+                    self.nextEventTime = nil
+                }
             }
         }
     }
@@ -413,40 +435,53 @@ struct SolarOffsetArcSlider: View {
     
     private func calculateSolarTimes() {
         guard let currentCoordinate = coordinate else {
+            #if DEBUG
             print("⚠️ SolarOffsetArcSlider: No coordinate available")
+            #endif
             return
         }
         
         let store = AutomationStore.shared
         let baseDate = Date()
         
+        #if DEBUG
         print("🌅 Calculating solar times for \(eventType.eventName) at \(currentCoordinate.latitude), \(currentCoordinate.longitude)")
+        #endif
         
         // ALWAYS calculate BOTH sunrise and sunset times (so they're available for display)
         sunriseTime = store.resolveSolarTriggerDate(
             event: .sunrise,
             coordinate: currentCoordinate,
             date: baseDate,
-            offsetMinutes: 0
+            offsetMinutes: 0,
+            timeZone: solarTimeZone
         )
+        #if DEBUG
         print("🌅 Sunrise time: \(sunriseTime?.formatted(date: .omitted, time: .shortened) ?? "nil")")
+        #endif
         
         sunsetTime = store.resolveSolarTriggerDate(
             event: .sunset,
             coordinate: currentCoordinate,
             date: baseDate,
-            offsetMinutes: 0
+            offsetMinutes: 0,
+            timeZone: solarTimeZone
         )
+        #if DEBUG
         print("🌇 Sunset time: \(sunsetTime?.formatted(date: .omitted, time: .shortened) ?? "nil")")
+        #endif
         
         // Calculate next event time based on current eventType and offset
         nextEventTime = store.resolveSolarTriggerDate(
             event: eventType,
             coordinate: currentCoordinate,
             date: baseDate,
-            offsetMinutes: Int(offsetMinutes)
+            offsetMinutes: SolarTrigger.clampOnDeviceOffset(Int(offsetMinutes.rounded())),
+            timeZone: solarTimeZone
         )
+        #if DEBUG
         print("⏰ Next event time (\(eventType.eventName)): \(nextEventTime?.formatted(date: .omitted, time: .shortened) ?? "nil")")
+        #endif
     }
     
     private func calculateNextEventTime() {
@@ -457,7 +492,8 @@ struct SolarOffsetArcSlider: View {
             event: eventType,
             coordinate: currentCoordinate,
             date: Date(),
-            offsetMinutes: Int(offsetMinutes)
+            offsetMinutes: SolarTrigger.clampOnDeviceOffset(Int(offsetMinutes.rounded())),
+            timeZone: solarTimeZone
         )
     }
 }
@@ -508,24 +544,3 @@ extension SolarEvent {
         }
     }
 }
-
-// MARK: - AutomationStore Extension
-
-extension AutomationStore {
-    func resolveSolarTriggerDate(
-        event: SolarEvent,
-        coordinate: CLLocationCoordinate2D,
-        date: Date,
-        offsetMinutes: Int
-    ) async -> Date? {
-        let timeZone = TimeZone.current
-        return SunriseSunsetCalculator.nextEventDate(
-            event: event,
-            coordinate: coordinate,
-            referenceDate: date,
-            offsetMinutes: offsetMinutes,
-            timeZone: timeZone
-        )
-    }
-}
-

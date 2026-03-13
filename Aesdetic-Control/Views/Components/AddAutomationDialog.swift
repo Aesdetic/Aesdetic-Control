@@ -26,6 +26,7 @@ struct AddAutomationDialog: View {
     
     @Environment(\.dismiss) var dismiss
     @ObservedObject private var presetsStore = PresetsStore.shared
+    @ObservedObject private var automationStore = AutomationStore.shared
     let device: WLEDDevice
     let scenes: [Scene]
     let effectOptions: [EffectMetadata]
@@ -40,9 +41,17 @@ struct AddAutomationDialog: View {
     @State private var activeDevice: WLEDDevice
     @State private var triggerSelection: TriggerSelection = .time
     @State private var selectedTime: Date = Date()
-    @State private var selectedWeekdays: [Bool] = Array(repeating: false, count: 7)
+    @State private var selectedWeekdays: [Bool] = WeekdayMask.allDaysSunFirst
     @State private var draggingSelects: Bool? = nil  // Tracks swipe mode: true = selecting, false = deselecting
     @State private var solarOffsetMinutes: Double = 0
+    @State private var useDateWindow: Bool = false
+    @State private var startMonth: Int = 1
+    @State private var startDay: Int = 1
+    @State private var endMonth: Int = 12
+    @State private var endDay: Int = 31
+    @State private var isValidatingOnDeviceSchedule: Bool = false
+    @State private var onDeviceScheduleValidationMessage: String?
+    @State private var onDeviceScheduleValidationIsWarning: Bool = false
     
     @State private var actionSelection: ActionSelection = .color
     @State private var selectedEffectId: Int?
@@ -112,8 +121,13 @@ struct AddAutomationDialog: View {
         var initialDeviceIds = Set([initialActiveDevice.id])
         var initialTriggerSelection: TriggerSelection = .time
         var initialTime = Date()
-        var initialWeekdays = Array(repeating: false, count: 7)
+        var initialWeekdays = WeekdayMask.allDaysSunFirst
         var initialSolarOffset: Double = 0
+        var initialUseDateWindow = false
+        var initialStartMonth = 1
+        var initialStartDay = 1
+        var initialEndMonth = 12
+        var initialEndDay = 31
         var initialActionSelection: ActionSelection = .color
         var initialEffectId: Int? = effectOptions.first?.id
         var initialEffectBrightness = Double(device.brightness)
@@ -163,10 +177,12 @@ struct AddAutomationDialog: View {
                 }
             case .sunrise(let solar):
                 initialTriggerSelection = .sunrise
-                initialSolarOffset = Self.minutes(from: solar.offset)
+                initialSolarOffset = Double(SolarTrigger.clampOnDeviceOffset(Int(Self.minutes(from: solar.offset).rounded())))
+                initialWeekdays = WeekdayMask.normalizeSunFirst(solar.weekdays)
             case .sunset(let solar):
                 initialTriggerSelection = .sunset
-                initialSolarOffset = Self.minutes(from: solar.offset)
+                initialSolarOffset = Double(SolarTrigger.clampOnDeviceOffset(Int(Self.minutes(from: solar.offset).rounded())))
+                initialWeekdays = WeekdayMask.normalizeSunFirst(solar.weekdays)
             }
             switch editing.action {
             case .scene(let payload):
@@ -227,6 +243,16 @@ struct AddAutomationDialog: View {
                 initialLockedAction = editing.action
             }
             initialMetadata = editing.metadata
+            if let sm = editing.metadata.onDeviceStartMonth,
+               let sd = editing.metadata.onDeviceStartDay,
+               let em = editing.metadata.onDeviceEndMonth,
+               let ed = editing.metadata.onDeviceEndDay {
+                initialUseDateWindow = true
+                initialStartMonth = min(12, max(1, sm))
+                initialStartDay = min(31, max(1, sd))
+                initialEndMonth = min(12, max(1, em))
+                initialEndDay = min(31, max(1, ed))
+            }
         } else if let prefill = templatePrefill {
             initialName = prefill.name ?? initialName
             if let ids = prefill.targetDeviceIds, !ids.isEmpty {
@@ -244,10 +270,10 @@ struct AddAutomationDialog: View {
                 }
             case .sunrise(let offset):
                 initialTriggerSelection = .sunrise
-                initialSolarOffset = Double(offset)
+                initialSolarOffset = Double(SolarTrigger.clampOnDeviceOffset(offset))
             case .sunset(let offset):
                 initialTriggerSelection = .sunset
-                initialSolarOffset = Double(offset)
+                initialSolarOffset = Double(SolarTrigger.clampOnDeviceOffset(offset))
             }
             
             switch prefill.action {
@@ -261,7 +287,7 @@ struct AddAutomationDialog: View {
                 initialActionSelection = .transition
                 initialTemplateTransition = payload
                 if let durationSeconds {
-                    initialTransitionDuration = max(60, durationSeconds)
+                    initialTransitionDuration = min(3600, max(0, durationSeconds))
                 }
                 if let endBrightness {
                     initialGradientBrightness = Double(endBrightness)
@@ -301,6 +327,11 @@ struct AddAutomationDialog: View {
         _selectedTime = State(initialValue: initialTime)
         _selectedWeekdays = State(initialValue: initialWeekdays)
         _solarOffsetMinutes = State(initialValue: initialSolarOffset)
+        _useDateWindow = State(initialValue: initialUseDateWindow)
+        _startMonth = State(initialValue: initialStartMonth)
+        _startDay = State(initialValue: initialStartDay)
+        _endMonth = State(initialValue: initialEndMonth)
+        _endDay = State(initialValue: initialEndDay)
         _actionSelection = State(initialValue: initialActionSelection)
         _enableColorFade = State(initialValue: initialEnableColorFade)
         _gradientDuration = State(initialValue: initialGradientDuration)
@@ -359,82 +390,181 @@ struct AddAutomationDialog: View {
     
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    automationDetailsSection
-                    automationSettingsSection
-                    repeatScheduleSection
-                    automationActionSection
-                    deviceSyncSection
-                    
-                    Button(action: saveAndDismiss) {
-                        Text(primaryButtonTitle)
-                            .font(.headline)
-                            .padding(.vertical, 14)
-                            .frame(maxWidth: .infinity)
-                            .background(canSave ? Color.white : Color.white.opacity(0.2))
-                            .foregroundColor(canSave ? .black : .white.opacity(0.6))
-                            .cornerRadius(16)
-                    }
-                    .disabled(!canSave)
-                    if let message = presetCapacityMessage {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundColor(presetCapacitySatisfied ? .white.opacity(0.7) : .orange)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(20)
-                .background(Color.black.opacity(0.95))
-            }
-            .background(Color.black.ignoresSafeArea())
-            .scrollIndicators(.hidden)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        if isEditingName {
-                            TextField("Automation name", text: $automationName)
-                                .textFieldStyle(.plain)
-                                .foregroundColor(.white)
-                                .font(.headline.weight(.semibold))
-                                .focused($isNameFieldFocused)
-                                .onSubmit {
-                                    isEditingName = false
-                                    isNameFieldFocused = false
-                                }
-                                .frame(minWidth: 200)
-                        } else {
-                            Text(automationName.isEmpty ? (isEditing ? "Edit Automation" : "Add Automation") : automationName)
-                                .font(.headline.weight(.semibold))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                        }
-                        
-                        Button {
-                            handleNameEditToggle()
-                        } label: {
-                            Image(systemName: isEditingName ? "checkmark" : "pencil")
-                                .foregroundColor(.white.opacity(0.7))
-                                .font(.subheadline.weight(.medium))
-                        }
-                    }
-                }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
+            dialogContent
+        }
+    }
+
+    private var dialogContent: some View {
+        ZStack {
+            modalBackground
+            contentScrollView
+        }
+        .background(Color.clear)
+        .scrollIndicators(.hidden)
+        .navigationBarTitleDisplayMode(.inline)
+        .presentationBackground(.ultraThinMaterial)
+        .toolbar { dialogToolbar }
+        .task {
+            await loadPresetSlots()
+        }
+        .onChange(of: selectedDeviceIds) { _, _ in
+            clearOnDeviceScheduleValidationMessage()
+            normalizeTriggerSelectionIfNeeded()
+            Task { await loadPresetSlots() }
+        }
+        .onChange(of: activeDevice.id) { _, _ in
+            clearOnDeviceScheduleValidationMessage()
+            normalizeTriggerSelectionIfNeeded()
+            Task { await loadPresetSlots() }
+        }
+        .onChange(of: validationInputsKey) { _, _ in
+            clearOnDeviceScheduleValidationMessage()
+        }
+        .onChange(of: allowPartialFailure) { _, _ in
+            Task { await loadPresetSlots() }
+        }
+        .onAppear {
+            normalizeTriggerSelectionIfNeeded()
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var dialogToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            HStack(spacing: 8) {
+                if isEditingName {
+                    TextField("Automation name", text: $automationName)
+                        .textFieldStyle(.plain)
                         .foregroundColor(.white)
+                        .font(.headline.weight(.semibold))
+                        .focused($isNameFieldFocused)
+                        .onSubmit {
+                            isEditingName = false
+                            isNameFieldFocused = false
+                        }
+                        .frame(minWidth: 200)
+                } else {
+                    Text(automationName.isEmpty ? (isEditing ? "Edit Automation" : "Add Automation") : automationName)
+                        .font(.headline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
                 }
-            }
-            .task {
-                await loadPresetSlots()
-            }
-            .onChange(of: selectedDeviceIds) { _, _ in
-                Task { await loadPresetSlots() }
-            }
-            .onChange(of: activeDevice.id) { _, _ in
-                Task { await loadPresetSlots() }
+
+                Button {
+                    handleNameEditToggle()
+                } label: {
+                    Image(systemName: isEditingName ? "checkmark" : "pencil")
+                        .foregroundColor(.white.opacity(0.7))
+                        .font(.subheadline.weight(.medium))
+                }
             }
         }
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button("Cancel") { dismiss() }
+                .foregroundColor(.white)
+        }
+    }
+
+    private var contentScrollView: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                automationDetailsSection
+                automationSettingsSection
+                repeatScheduleSection
+                automationActionSection
+                deviceSyncSection
+                saveSection
+            }
+            .padding(20)
+            .background(Color.clear)
+        }
+    }
+
+    private var validationInputsKey: String {
+        let selectedMinute = Int(selectedTime.timeIntervalSinceReferenceDate / 60.0)
+        let weekdays = selectedWeekdays.map { $0 ? "1" : "0" }.joined()
+        return [
+            triggerSelection.rawValue,
+            String(selectedMinute),
+            weekdays,
+            String(Int(solarOffsetMinutes.rounded())),
+            useDateWindow ? "1" : "0",
+            String(startMonth),
+            String(startDay),
+            String(endMonth),
+            String(endDay),
+            actionSelection.rawValue,
+            selectedEffectId.map(String.init) ?? "nil",
+            automationName
+        ].joined(separator: "|")
+    }
+
+    private var saveSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: saveAndDismiss) {
+                Text(isValidatingOnDeviceSchedule ? "Validating..." : primaryButtonTitle)
+                    .font(.headline)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity)
+                    .background((canSave && !isValidatingOnDeviceSchedule) ? Color.white : Color.white.opacity(0.2))
+                    .foregroundColor((canSave && !isValidatingOnDeviceSchedule) ? .black : .white.opacity(0.6))
+                    .cornerRadius(16)
+            }
+            .disabled(!canSave || isValidatingOnDeviceSchedule)
+
+            if let message = onDeviceScheduleValidationMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundColor(onDeviceScheduleValidationIsWarning ? .yellow : .orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let message = dateWindowValidationMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let message = presetCapacityMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundColor(presetCapacitySatisfied ? .white.opacity(0.7) : .orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let message = transitionDurationRecommendationMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var modalBackground: some View {
+        LiquidGlassOverlay(
+            blurOpacity: 0.65,
+            highlightOpacity: 0.18,
+            verticalTopOpacity: 0.08,
+            verticalBottomOpacity: 0.08,
+            vignetteOpacity: 0.12,
+            centerSheenOpacity: 0.06
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 0)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.01),
+                            Color.black.opacity(0.01),
+                            Color.white.opacity(0.015),
+                            Color.black.opacity(0.005)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .allowsHitTesting(false)
+        )
+        .ignoresSafeArea()
     }
     
     // MARK: - Sections
@@ -576,6 +706,8 @@ struct AddAutomationDialog: View {
                 .foregroundColor(.white.opacity(0.7))
             
             triggerSelectionCard
+            solarParityHint
+            dateWindowSection
         }
     }
     
@@ -584,6 +716,85 @@ struct AddAutomationDialog: View {
             triggerSelectionContent(geometry: geometry)
         }
         .frame(height: 240)
+    }
+
+    @ViewBuilder
+    private var solarParityHint: some View {
+        if triggerSelection == .sunrise || triggerSelection == .sunset {
+            Text("WLED solar parity: Sunrise uses timer slot 8, Sunset uses slot 9. Offset range is -59...+59 minutes and uses device timezone/location.")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+        }
+    }
+
+    private var dateWindowSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Limit To Date Range (WLED timer start/end)", isOn: $useDateWindow)
+                .tint(.white)
+                .foregroundColor(.white)
+            if useDateWindow {
+                HStack(spacing: 12) {
+                    dateWindowStepper(title: "Start Mon", value: $startMonth, range: 1...12)
+                    dateWindowStepper(title: "Start Day", value: $startDay, range: 1...31)
+                }
+                HStack(spacing: 12) {
+                    dateWindowStepper(title: "End Mon", value: $endMonth, range: 1...12)
+                    dateWindowStepper(title: "End Day", value: $endDay, range: 1...31)
+                }
+                Text("When enabled, WLED will only run this timer between the selected start/end dates each year.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+                if let validationMessage = dateWindowValidationMessage {
+                    Text(validationMessage)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+    }
+
+    private func dateWindowStepper(
+        title: String,
+        value: Binding<Int>,
+        range: ClosedRange<Int>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(.white.opacity(0.72))
+            HStack(spacing: 10) {
+                Button {
+                    value.wrappedValue = max(range.lowerBound, value.wrappedValue - 1)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
+
+                Text("\(value.wrappedValue)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white)
+                    .frame(minWidth: 24)
+
+                Button {
+                    value.wrappedValue = min(range.upperBound, value.wrappedValue + 1)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.06))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
     }
     
     // MARK: - Repeat Schedule Section
@@ -753,7 +964,7 @@ struct AddAutomationDialog: View {
         let scrollOffset: CGFloat = {
             guard triggerSelection != .time else { return 0 }
             let gradientHeight = cardHeight * 6  // Reduced for better performance
-            let range: ClosedRange<Double> = -120...120
+            let range: ClosedRange<Double> = Double(SolarTrigger.minOnDeviceOffsetMinutes)...Double(SolarTrigger.maxOnDeviceOffsetMinutes)
             let normalized = max(0, min(1, (solarOffsetMinutes - range.lowerBound) / (range.upperBound - range.lowerBound)))
             let scrollableHeight = gradientHeight - cardHeight
             return normalized * scrollableHeight
@@ -772,24 +983,28 @@ struct AddAutomationDialog: View {
                 ForEach([TriggerSelection.sunrise, .sunset, .time], id: \.self) { option in
                     let isActive = triggerSelection == option
                     let isTimeOfDay = option == .time
+                    let isAvailable = isTriggerOptionAvailable(option)
                     
                     Button {
+                        guard isAvailable else { return }
                         withAnimation(.easeInOut(duration: 0.25)) {
                             triggerSelection = option
                         }
                     } label: {
                         Text(option == .time ? "Time of Day" : option.rawValue)
                             .font(.footnote.weight(.semibold))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(.white.opacity(isAvailable ? 0.9 : 0.45))
                             .frame(maxWidth: .infinity, minHeight: 34)
                             .padding(.horizontal, 12)
                             .background(tabButtonBackground(isActive: isActive))
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .shadow(color: Color.black.opacity(isActive ? 0.15 : 0.08), radius: isActive ? 6 : 3, x: 0, y: isActive ? 3 : 2)
+                            .opacity(isAvailable ? 1.0 : 0.7)
                     }
                     .frame(minWidth: isTimeOfDay ? 120 : 90, maxWidth: .infinity)
                     .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .buttonStyle(.plain)
+                    .disabled(!isAvailable)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -1068,7 +1283,9 @@ struct AddAutomationDialog: View {
             startTemperature: $transitionStartTemperature,
             startWhiteLevel: $transitionStartWhiteLevel,
             endTemperature: $transitionEndTemperature,
-            endWhiteLevel: $transitionEndWhiteLevel
+            endWhiteLevel: $transitionEndWhiteLevel,
+            transitionProfile: transitionProfileForActiveDevice,
+            automationGuaranteeCount: 5
         )
     }
     
@@ -1077,7 +1294,13 @@ struct AddAutomationDialog: View {
     private var canSave: Bool {
         guard !automationName.trimmed().isEmpty else { return false }
         guard !selectedDeviceIds.isEmpty else { return false }
-        if triggerSelection == .time && !selectedWeekdays.contains(true) {
+        if !selectedWeekdays.contains(true) {
+            return false
+        }
+        if !isDateWindowValid {
+            return false
+        }
+        if !timerSlotCapacitySatisfied {
             return false
         }
         if actionSelection == .effect {
@@ -1099,20 +1322,103 @@ struct AddAutomationDialog: View {
         return targets.isEmpty ? [activeDevice] : targets
     }
 
+    private struct TransitionPlanningInput {
+        let startGradient: LEDGradient
+        let endGradient: LEDGradient
+        let startBrightness: Int
+        let endBrightness: Int
+        let durationSeconds: Double
+    }
+
+    private var transitionPlanningInput: TransitionPlanningInput? {
+        if let lockedAction {
+            guard case .transition(let payload) = lockedAction else { return nil }
+            return TransitionPlanningInput(
+                startGradient: payload.startGradient,
+                endGradient: payload.endGradient,
+                startBrightness: payload.startBrightness,
+                endBrightness: payload.endBrightness,
+                durationSeconds: payload.durationSeconds
+            )
+        }
+
+        guard actionSelection == .transition else { return nil }
+        if let preset = selectedTransitionPreset {
+            return TransitionPlanningInput(
+                startGradient: preset.gradientA,
+                endGradient: preset.gradientB,
+                startBrightness: preset.brightnessA,
+                endBrightness: preset.brightnessB,
+                durationSeconds: preset.durationSec
+            )
+        }
+
+        let startGradient = transitionStartGradient ?? LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFFFFF")
+        ])
+        let endGradient = transitionEndGradient ?? LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ])
+        return TransitionPlanningInput(
+            startGradient: startGradient,
+            endGradient: endGradient,
+            startBrightness: Int(transitionStartBrightness),
+            endBrightness: Int(transitionEndBrightness),
+            durationSeconds: customTransitionDuration
+        )
+    }
+
+    private var transitionProfilesByDevice: [(device: WLEDDevice, profile: TransitionStepProfile)] {
+        guard let input = transitionPlanningInput else { return [] }
+        return targetDevicesForCapacity.map { target in
+            let profile = viewModel.planTransitionPlaylist(
+                durationSec: input.durationSeconds,
+                startGradient: input.startGradient,
+                endGradient: input.endGradient,
+                startBrightness: input.startBrightness,
+                endBrightness: input.endBrightness,
+                context: .persistentAutomation,
+                device: target,
+                automationGuaranteeCount: 5
+            )
+            return (target, profile)
+        }
+    }
+
+    private var transitionProfileForActiveDevice: TransitionStepProfile? {
+        if let profile = transitionProfilesByDevice.first(where: { $0.device.id == activeDevice.id })?.profile {
+            return profile
+        }
+        return transitionProfilesByDevice.first?.profile
+    }
+
+    private var transitionBudgetSatisfied: Bool {
+        guard transitionPlanningInput != nil else { return true }
+        return !transitionProfilesByDevice.isEmpty
+            && transitionProfilesByDevice.allSatisfy { $0.profile.fitsBudget }
+    }
+
     private var requiredPresetSlots: Int {
+        if let lockedAction {
+            switch lockedAction {
+            case .preset, .playlist:
+                return 0
+            case .transition:
+                return transitionProfilesByDevice.map(\.profile.slotsRequired).max() ?? 0
+            case .gradient, .effect, .directState, .scene:
+                return 1
+            }
+        }
+
         switch actionSelection {
         case .transition:
-            return viewModel.requiredPresetSlotsForTransition(
-                durationSeconds: customTransitionDuration,
-                device: activeDevice
-            )
-        case .color where enableColorFade && gradientDuration > maxWLEDNativeTransitionSeconds:
-            return viewModel.requiredPresetSlotsForTransition(
-                durationSeconds: gradientDuration,
-                device: activeDevice
-            )
-        default:
-            return 0
+            return transitionProfilesByDevice.map(\.profile.slotsRequired).max() ?? 0
+        case .color:
+            return 1
+        case .effect:
+            return 1
         }
     }
 
@@ -1126,14 +1432,38 @@ struct AddAutomationDialog: View {
 
     private var presetCapacitySatisfied: Bool {
         guard requiredPresetSlots > 0 else { return true }
+        if transitionPlanningInput != nil {
+            return transitionBudgetSatisfied
+        }
         return targetDevicesForCapacity.allSatisfy { device in
             guard let status = viewModel.presetSlotAvailability(for: device) else { return false }
             return status.available >= requiredPresetSlots
         }
     }
 
+    private var transitionBudgetContext: (device: WLEDDevice, profile: TransitionStepProfile)? {
+        transitionProfilesByDevice.min { lhs, rhs in
+            let leftMargin = (lhs.profile.perAutomationBudget ?? Int.max) - lhs.profile.slotsRequired
+            let rightMargin = (rhs.profile.perAutomationBudget ?? Int.max) - rhs.profile.slotsRequired
+            return leftMargin < rightMargin
+        }
+    }
+
     private var presetCapacityMessage: String? {
         guard requiredPresetSlots > 0 else { return nil }
+        if let context = transitionBudgetContext {
+            let profile = context.profile
+            let quality = profile.qualityLabel.displayName
+            let budget = profile.perAutomationBudget ?? 0
+            if !profile.fitsBudget {
+                let maxDuration = TransitionDurationPicker.clockString(seconds: profile.maxDurationSecondsAtCurrentQuality ?? 0)
+                return "Transition needs \(profile.slotsRequired) slots on \(context.device.name), but \(budget) are budgeted per automation (5-automation guarantee). Max at current quality is about \(maxDuration)."
+            }
+            let adjusted = profile.wasCoarsened
+                ? " Adjusted from \(Int(profile.baseLegSeconds))s to \(Int(profile.legSeconds))s legs for budget fit."
+                : ""
+            return "Transition estimate on \(context.device.name): \(profile.slotsRequired) slots at \(quality) quality (\(Int(profile.legSeconds))s legs). Budget: \(budget) slots/automation.\(adjusted)"
+        }
         guard let context = presetCapacityContext else {
             return "Checking preset storage..."
         }
@@ -1143,14 +1473,125 @@ struct AddAutomationDialog: View {
         }
         return "Preset slots on \(context.device.name): \(status.remaining) remaining (\(status.reserve) reserved). This automation needs \(requiredPresetSlots)."
     }
+
+    private var transitionDurationForGuidance: Double? {
+        transitionPlanningInput?.durationSeconds
+    }
+
+    private var transitionDurationRecommendationMessage: String? {
+        guard let duration = transitionDurationForGuidance else { return nil }
+        guard TransitionDurationPicker.exceedsRecommendedMax(duration) else { return nil }
+        let recommended = TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))
+        return "Selected transition is above the recommended \(recommended). Keeping transitions at or below this helps preserve reliability and preset headroom across multiple automations."
+    }
+
+    private var selectedTriggerKindForCapacity: AutomationStore.OnDeviceTriggerKind {
+        switch triggerSelection {
+        case .time:
+            return .specificTime
+        case .sunrise:
+            return .sunrise
+        case .sunset:
+            return .sunset
+        }
+    }
+
+    private var timerSlotCapacityValidation: AutomationStore.OnDeviceScheduleValidation {
+        let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
+        return automationStore.validateLocalTimerCapacity(
+            triggerKind: selectedTriggerKindForCapacity,
+            targetDeviceIds: targetIds,
+            excludingAutomationId: editingAutomation?.id
+        )
+    }
+
+    private var timerSlotCapacitySatisfied: Bool {
+        timerSlotCapacityValidation.isValid
+    }
+
+    private var timerSlotCapacityMessage: String? {
+        timerSlotCapacityValidation.message
+    }
+
+    private func triggerKind(for selection: TriggerSelection) -> AutomationStore.OnDeviceTriggerKind {
+        switch selection {
+        case .time:
+            return .specificTime
+        case .sunrise:
+            return .sunrise
+        case .sunset:
+            return .sunset
+        }
+    }
+
+    private func isTriggerOptionAvailable(_ selection: TriggerSelection) -> Bool {
+        let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
+        let validation = automationStore.validateLocalTimerCapacity(
+            triggerKind: triggerKind(for: selection),
+            targetDeviceIds: targetIds,
+            excludingAutomationId: editingAutomation?.id
+        )
+        return validation.isValid
+    }
+
+    private func normalizeTriggerSelectionIfNeeded() {
+        guard !isTriggerOptionAvailable(triggerSelection) else { return }
+        if isTriggerOptionAvailable(.time) {
+            triggerSelection = .time
+            return
+        }
+        if isTriggerOptionAvailable(.sunrise) {
+            triggerSelection = .sunrise
+            return
+        }
+        if isTriggerOptionAvailable(.sunset) {
+            triggerSelection = .sunset
+        }
+    }
+
+    private var isDateWindowValid: Bool {
+        dateWindowValidationMessage == nil
+    }
+
+    private var dateWindowValidationMessage: String? {
+        guard useDateWindow else { return nil }
+        guard isValidCalendarDay(month: startMonth, day: startDay) else {
+            return "Invalid start date for selected month."
+        }
+        guard isValidCalendarDay(month: endMonth, day: endDay) else {
+            return "Invalid end date for selected month."
+        }
+        return nil
+    }
+
+    private func isValidCalendarDay(month: Int, day: Int) -> Bool {
+        guard (1...12).contains(month), (1...31).contains(day) else { return false }
+        let maxDayByMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        return day <= maxDayByMonth[month - 1]
+    }
     
     // MARK: - Actions
     
     private func saveAndDismiss() {
-        guard canSave else { return }
+        guard canSave, !isValidatingOnDeviceSchedule else { return }
         guard let automation = buildAutomation() else { return }
-        onSave(automation)
-        dismiss()
+        onDeviceScheduleValidationMessage = nil
+        onDeviceScheduleValidationIsWarning = false
+        isValidatingOnDeviceSchedule = true
+
+        Task { @MainActor in
+            let validation = await AutomationStore.shared.validateOnDeviceSchedule(for: automation)
+            isValidatingOnDeviceSchedule = false
+
+            guard validation.isValid else {
+                onDeviceScheduleValidationMessage = validation.message ?? "No available on-device timer slots for this schedule."
+                onDeviceScheduleValidationIsWarning = validation.isWarning
+                return
+            }
+
+            onSave(automation)
+            dismiss()
+        }
     }
 
     private func loadPresetSlots() async {
@@ -1163,11 +1604,48 @@ struct AddAutomationDialog: View {
         guard let trigger = buildTrigger() else { return nil }
         guard let action = buildAction() else { return nil }
         
-        // Preserve existing metadata and only update colorPreviewHex
+        // Preserve existing metadata and only update action-coupled sync fields as needed.
         var metadata = editingAutomation?.metadata ?? templateMetadata ?? AutomationMetadata()
         metadata.colorPreviewHex = previewHex(for: action)
-        let freshMetadata = metadata
+        metadata.runOnDevice = true
+        if useDateWindow {
+            metadata.onDeviceStartMonth = startMonth
+            metadata.onDeviceStartDay = startDay
+            metadata.onDeviceEndMonth = endMonth
+            metadata.onDeviceEndDay = endDay
+        } else {
+            metadata.onDeviceStartMonth = nil
+            metadata.onDeviceStartDay = nil
+            metadata.onDeviceEndMonth = nil
+            metadata.onDeviceEndDay = nil
+        }
         let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
+        if let existing = editingAutomation,
+           existing.action.macroAssetKind != action.macroAssetKind {
+            let impactedIds = Array(Set(existing.targets.deviceIds).union(targetIds))
+            metadata.clearWLEDMacroMetadata(for: impactedIds, preserveTimerSlots: true)
+        }
+
+        metadata.wledPlaylistIdsByDevice = metadata.wledPlaylistIdsByDevice?.filter { targetIds.contains($0.key) }
+        metadata.wledPresetIdsByDevice = metadata.wledPresetIdsByDevice?.filter { targetIds.contains($0.key) }
+        metadata.wledTimerSlotsByDevice = metadata.wledTimerSlotsByDevice?.filter { targetIds.contains($0.key) }
+        metadata.wledManagedPlaylistSignatureByDevice = metadata.wledManagedPlaylistSignatureByDevice?.filter { targetIds.contains($0.key) }
+        metadata.wledManagedPresetSignatureByDevice = metadata.wledManagedPresetSignatureByDevice?.filter { targetIds.contains($0.key) }
+
+        var syncMap = metadata.wledSyncStateByDevice ?? [:]
+        var errorMap = metadata.wledLastSyncErrorByDevice ?? [:]
+        var syncedAtMap = metadata.wledLastSyncAtByDevice ?? [:]
+        for deviceId in targetIds where syncMap[deviceId] == nil {
+            syncMap[deviceId] = .unknown
+        }
+        syncMap = syncMap.filter { targetIds.contains($0.key) }
+        errorMap = errorMap.filter { targetIds.contains($0.key) }
+        syncedAtMap = syncedAtMap.filter { targetIds.contains($0.key) }
+        metadata.wledSyncStateByDevice = syncMap.isEmpty ? nil : syncMap
+        metadata.wledLastSyncErrorByDevice = errorMap.isEmpty ? nil : errorMap
+        metadata.wledLastSyncAtByDevice = syncedAtMap.isEmpty ? nil : syncedAtMap
+        metadata.normalizeWLEDScalarFallbacks(for: targetIds)
+        let freshMetadata = metadata
         
         // Preserve the original automation's ID and timestamps when editing
         if let existing = editingAutomation {
@@ -1190,8 +1668,16 @@ struct AddAutomationDialog: View {
             metadata: freshMetadata // Use fresh metadata for new automations
         )
     }
-    
+
+    private func clearOnDeviceScheduleValidationMessage() {
+        onDeviceScheduleValidationMessage = nil
+        onDeviceScheduleValidationIsWarning = false
+    }
+
     private func buildTrigger() -> AutomationTrigger? {
+        let normalizedWeekdays = WeekdayMask.normalizeSunFirst(selectedWeekdays)
+        guard normalizedWeekdays.contains(true) else { return nil }
+
         switch triggerSelection {
         case .time:
             let formatter = DateFormatter()
@@ -1199,14 +1685,15 @@ struct AddAutomationDialog: View {
             return .specificTime(
                 TimeTrigger(
                     time: formatter.string(from: selectedTime),
-                    weekdays: selectedWeekdays,
+                    weekdays: normalizedWeekdays,
                     timezoneIdentifier: TimeZone.current.identifier
                 )
             )
         case .sunrise, .sunset:
-            let offset = SolarTrigger.EventOffset.minutes(Int(solarOffsetMinutes))
+            let clampedOffset = SolarTrigger.clampOnDeviceOffset(Int(solarOffsetMinutes.rounded()))
+            let offset = SolarTrigger.EventOffset.minutes(clampedOffset)
             // Always use device location for sunrise/sunset triggers
-            let trigger = SolarTrigger(offset: offset, location: .followDevice)
+            let trigger = SolarTrigger(offset: offset, location: .followDevice, weekdays: normalizedWeekdays)
             return triggerSelection == .sunrise ? .sunrise(trigger) : .sunset(trigger)
         }
     }

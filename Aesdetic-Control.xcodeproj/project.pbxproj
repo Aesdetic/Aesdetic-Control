@@ -85,11 +85,21 @@
 			);
 			target = 9446596D2EB762BA00E01EEF /* Aesdetic-Control-WidgetExtension */;
 		};
+		94A1B2012F3C000100F0E904 /* Exceptions for "Aesdetic-Control" folder in "Aesdetic-Control" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AppInfo.plist,
+			);
+			target = 9444645B2E0D2D0100F0E904 /* Aesdetic-Control */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9444645E2E0D2D0100F0E904 /* Aesdetic-Control */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				94A1B2012F3C000100F0E904 /* Exceptions for "Aesdetic-Control" folder in "Aesdetic-Control" target */,
+			);
 			path = "Aesdetic-Control";
 			sourceTree = "<group>";
 		};
@@ -557,12 +567,15 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 986FL957WY;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Aesdetic-Control/AppInfo.plist";
 				INFOPLIST_KEY_NSBonjourServices = "_wled._tcp _http._tcp";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Aesdetic Control can add time-blocked wellness tasks to your calendar.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Aesdetic Control can read sleep data to suggest your wake time.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs local network access to discover and connect to WLED devices on your network.";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "Aesdetic Control can create reminders for your wellness tasks.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -590,12 +603,15 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 986FL957WY;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Aesdetic-Control/AppInfo.plist";
 				INFOPLIST_KEY_NSBonjourServices = "_wled._tcp _http._tcp";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "Aesdetic Control can add time-blocked wellness tasks to your calendar.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Aesdetic Control can read sleep data to suggest your wake time.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app needs local network access to discover and connect to WLED devices on your network.";
+				INFOPLIST_KEY_NSRemindersUsageDescription = "Aesdetic Control can create reminders for your wellness tasks.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (

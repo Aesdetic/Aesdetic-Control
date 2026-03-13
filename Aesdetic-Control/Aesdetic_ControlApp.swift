@@ -34,14 +34,13 @@ struct Aesdetic_ControlApp: App {
                     // This forces iOS to initialize presentation controllers
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                        // Trigger the active scene phase handler to warm up UI system
-                        await deviceControlViewModel.checkDeviceStatusOnAppActive()
+                        #if DEBUG
                         print("✅ Warmed up presentation system")
+                        #endif
                     }
                     
                     // Prompt Local Network access immediately
-                    // Trigger local network permission prompt
-                    // LocalNetworkPrompter.shared.trigger()
+                    LocalNetworkPrompter.shared.trigger()
                     
                     // Listen for widget intents
                     setupWidgetNotificationListeners()
@@ -56,15 +55,22 @@ struct Aesdetic_ControlApp: App {
                     }
                 }
                 .onChange(of: scenePhase) { _, newPhase in
-                    if newPhase == .active {
+                    switch newPhase {
+                    case .active:
                         // When app becomes active, ensure permission prompt (if still pending)
-                        // Trigger local network permission prompt
-                    // LocalNetworkPrompter.shared.trigger()
+                        LocalNetworkPrompter.shared.trigger()
                         
                         // Immediately check device status when returning to app
                         Task { @MainActor in
                             await deviceControlViewModel.checkDeviceStatusOnAppActive()
+                            deviceControlViewModel.resumeRealTimeConnectionsIfNeeded()
                         }
+                    case .background:
+                        deviceControlViewModel.pauseRealTimeConnectionsIfNeeded()
+                    case .inactive:
+                        break
+                    @unknown default:
+                        break
                     }
                 }
         }
@@ -91,12 +97,18 @@ struct Aesdetic_ControlApp: App {
         UINavigationBar.appearance().standardAppearance = navAppearance
         UINavigationBar.appearance().compactAppearance = navAppearance
         UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
+
+        // Ensure scroll views don't paint an opaque background
+        UIScrollView.appearance().backgroundColor = .clear
+        UITableView.appearance().backgroundColor = .clear
+        UICollectionView.appearance().backgroundColor = .clear
         
-        // Set window background to black for dark theme consistency
+        // Keep the window background transparent so AppBackground shows through
         DispatchQueue.main.async {
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                let window = windowScene.windows.first {
-                window.backgroundColor = UIColor.black
+                window.backgroundColor = UIColor.clear
+                window.isOpaque = false
             }
         }
     }

@@ -2,6 +2,30 @@ import Foundation
 import CoreData
 import SwiftUI
 
+private func encodeNameMap(_ map: [Int: String]?) -> String? {
+    guard let map, !map.isEmpty else { return nil }
+    let stringKeyed = Dictionary(uniqueKeysWithValues: map.map { (String($0.key), $0.value) })
+    guard let data = try? JSONEncoder().encode(stringKeyed),
+          let json = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+    return json
+}
+
+private func decodeNameMap(_ json: String?) -> [Int: String]? {
+    guard let json, !json.isEmpty, let data = json.data(using: .utf8) else { return nil }
+    guard let stringKeyed = try? JSONDecoder().decode([String: String].self, from: data) else {
+        return nil
+    }
+    var map: [Int: String] = [:]
+    map.reserveCapacity(stringKeyed.count)
+    for (key, value) in stringKeyed {
+        guard let id = Int(key) else { continue }
+        map[id] = value
+    }
+    return map.isEmpty ? nil : map
+}
+
 // MARK: - WLEDDeviceEntity
 @objc(WLEDDeviceEntity)
 public class WLEDDeviceEntity: NSManagedObject {
@@ -24,6 +48,8 @@ extension WLEDDeviceEntity {
     @NSManaged public var productType: String
     @NSManaged public var location: String
     @NSManaged public var lastSeen: Date
+    @NSManaged public var presetNamesJSON: String?
+    @NSManaged public var playlistNamesJSON: String?
     @NSManaged public var state: WLEDStateEntity?
     
     // MARK: - Core Data Helper Methods
@@ -40,7 +66,9 @@ extension WLEDDeviceEntity {
                 return entity
             }
         } catch {
-            print("Error finding device entity: \\(error)")
+            #if DEBUG
+            print("Error finding device entity: \(error)")
+            #endif
         }
         
         // Create new entity
@@ -65,6 +93,8 @@ extension WLEDDeviceEntity {
         self.location = device.location.rawValue
         
         self.lastSeen = device.lastSeen
+        self.presetNamesJSON = encodeNameMap(device.presetNamesById)
+        self.playlistNamesJSON = encodeNameMap(device.playlistNamesById)
         
         // Handle state update
         let stateEntity = self.state ?? WLEDStateEntity(context: self.managedObjectContext!)
@@ -86,7 +116,16 @@ extension WLEDDeviceEntity {
     }
     
     var currentColor: Color {
-        get { Color(hex: currentColorHex) }
+        get {
+            let normalized = currentColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalized.isEmpty {
+                return WLEDDevice.wledBootDefaultColor
+            }
+            if normalized.uppercased() == "000000", state == nil {
+                return WLEDDevice.wledBootDefaultColor
+            }
+            return Color(hex: normalized)
+        }
         set { currentColorHex = newValue.toHex() }
     }
     
@@ -188,6 +227,224 @@ extension WLEDSegmentEntity {
     }
 }
 
+// MARK: - WellnessEntryEntity
+@objc(WellnessEntryEntity)
+public class WellnessEntryEntity: NSManagedObject {
+    
+}
+
+extension WellnessEntryEntity {
+    @nonobjc public class func fetchRequest() -> NSFetchRequest<WellnessEntryEntity> {
+        return NSFetchRequest<WellnessEntryEntity>(entityName: "WellnessEntryEntity")
+    }
+
+    @NSManaged public var date: Date
+    @NSManaged public var updatedAt: Date
+    @NSManaged public var sleepQuality: Int16
+    @NSManaged public var sleepTime: Date?
+    @NSManaged public var wokeOnTime: Bool
+    @NSManaged public var sunriseLampUsed: Bool
+    @NSManaged public var sunriseHelped: String
+    @NSManaged public var identityIntentionText: String
+    @NSManaged public var intentionText: String
+    @NSManaged public var smallestNextStepText: String
+    @NSManaged public var mainTaskText: String
+    @NSManaged public var mainTaskDurationMinutes: Int32
+    @NSManaged public var mainTaskReminderId: String?
+    @NSManaged public var mainTaskEventId: String?
+    @NSManaged public var secondaryTaskOneText: String
+    @NSManaged public var secondaryTaskOneDurationMinutes: Int32
+    @NSManaged public var secondaryTaskOneReminderId: String?
+    @NSManaged public var secondaryTaskOneEventId: String?
+    @NSManaged public var secondaryTaskTwoText: String
+    @NSManaged public var secondaryTaskTwoDurationMinutes: Int32
+    @NSManaged public var secondaryTaskTwoReminderId: String?
+    @NSManaged public var secondaryTaskTwoEventId: String?
+    @NSManaged public var mainTaskDone: Bool
+    @NSManaged public var secondaryTaskOneDone: Bool
+    @NSManaged public var secondaryTaskTwoDone: Bool
+    @NSManaged public var brainDumpText: String
+    @NSManaged public var sleepNotesText: String
+    @NSManaged public var wakeTime: Date?
+    @NSManaged public var middayBlockerText: String
+    @NSManaged public var dayRecapText: String
+    @NSManaged public var productivityRating: Int16
+    @NSManaged public var dayMoodRating: Int16
+    @NSManaged public var adjustTomorrowText: String
+    @NSManaged public var tomorrowTaskOneText: String
+    @NSManaged public var tomorrowTaskOneDurationMinutes: Int32
+    @NSManaged public var tomorrowTaskOneReminderId: String?
+    @NSManaged public var tomorrowTaskOneEventId: String?
+    @NSManaged public var tomorrowTaskTwoText: String
+    @NSManaged public var tomorrowTaskTwoDurationMinutes: Int32
+    @NSManaged public var tomorrowTaskTwoReminderId: String?
+    @NSManaged public var tomorrowTaskTwoEventId: String?
+    @NSManaged public var tomorrowTaskThreeText: String
+    @NSManaged public var tomorrowTaskThreeDurationMinutes: Int32
+    @NSManaged public var tomorrowTaskThreeReminderId: String?
+    @NSManaged public var tomorrowTaskThreeEventId: String?
+    @NSManaged public var isLocked: Bool
+
+    static func findOrCreate(for date: Date, in context: NSManagedObjectContext) -> WellnessEntryEntity {
+        let request: NSFetchRequest<WellnessEntryEntity> = WellnessEntryEntity.fetchRequest()
+        request.predicate = NSPredicate(format: "date == %@", date as NSDate)
+        request.fetchLimit = 1
+
+        if let existing = try? context.fetch(request).first {
+            return existing
+        }
+
+        let entity = WellnessEntryEntity(context: context)
+        entity.date = date
+        entity.updatedAt = Date()
+        entity.sleepQuality = 0
+        entity.sleepTime = nil
+        entity.wokeOnTime = false
+        entity.sunriseLampUsed = false
+        entity.sunriseHelped = SunriseHelped.unsure.rawValue
+        entity.identityIntentionText = ""
+        entity.intentionText = ""
+        entity.smallestNextStepText = ""
+        entity.mainTaskText = ""
+        entity.mainTaskDurationMinutes = 0
+        entity.mainTaskReminderId = nil
+        entity.mainTaskEventId = nil
+        entity.secondaryTaskOneText = ""
+        entity.secondaryTaskOneDurationMinutes = 0
+        entity.secondaryTaskOneReminderId = nil
+        entity.secondaryTaskOneEventId = nil
+        entity.secondaryTaskTwoText = ""
+        entity.secondaryTaskTwoDurationMinutes = 0
+        entity.secondaryTaskTwoReminderId = nil
+        entity.secondaryTaskTwoEventId = nil
+        entity.mainTaskDone = false
+        entity.secondaryTaskOneDone = false
+        entity.secondaryTaskTwoDone = false
+        entity.brainDumpText = ""
+        entity.sleepNotesText = ""
+        entity.wakeTime = nil
+        entity.middayBlockerText = ""
+        entity.dayRecapText = ""
+        entity.productivityRating = 0
+        entity.dayMoodRating = 0
+        entity.adjustTomorrowText = ""
+        entity.tomorrowTaskOneText = ""
+        entity.tomorrowTaskOneDurationMinutes = 0
+        entity.tomorrowTaskOneReminderId = nil
+        entity.tomorrowTaskOneEventId = nil
+        entity.tomorrowTaskTwoText = ""
+        entity.tomorrowTaskTwoDurationMinutes = 0
+        entity.tomorrowTaskTwoReminderId = nil
+        entity.tomorrowTaskTwoEventId = nil
+        entity.tomorrowTaskThreeText = ""
+        entity.tomorrowTaskThreeDurationMinutes = 0
+        entity.tomorrowTaskThreeReminderId = nil
+        entity.tomorrowTaskThreeEventId = nil
+        entity.isLocked = false
+        return entity
+    }
+
+    func update(from entry: WellnessEntrySnapshot) {
+        date = entry.date
+        updatedAt = entry.updatedAt
+        sleepQuality = Int16(entry.sleepQuality)
+        sleepTime = entry.sleepTime
+        wokeOnTime = entry.wokeOnTime
+        sunriseLampUsed = entry.sunriseLampUsed
+        sunriseHelped = entry.sunriseHelped.rawValue
+        identityIntentionText = entry.identityIntentionText
+        intentionText = entry.intentionText
+        smallestNextStepText = entry.smallestNextStepText
+        mainTaskText = entry.mainTaskText
+        mainTaskDurationMinutes = Int32(entry.mainTaskDurationMinutes)
+        mainTaskReminderId = entry.mainTaskReminderId
+        mainTaskEventId = entry.mainTaskEventId
+        secondaryTaskOneText = entry.secondaryTaskOneText
+        secondaryTaskOneDurationMinutes = Int32(entry.secondaryTaskOneDurationMinutes)
+        secondaryTaskOneReminderId = entry.secondaryTaskOneReminderId
+        secondaryTaskOneEventId = entry.secondaryTaskOneEventId
+        secondaryTaskTwoText = entry.secondaryTaskTwoText
+        secondaryTaskTwoDurationMinutes = Int32(entry.secondaryTaskTwoDurationMinutes)
+        secondaryTaskTwoReminderId = entry.secondaryTaskTwoReminderId
+        secondaryTaskTwoEventId = entry.secondaryTaskTwoEventId
+        mainTaskDone = entry.mainTaskDone
+        secondaryTaskOneDone = entry.secondaryTaskOneDone
+        secondaryTaskTwoDone = entry.secondaryTaskTwoDone
+        brainDumpText = entry.brainDumpText
+        sleepNotesText = entry.sleepNotesText
+        wakeTime = entry.wakeTime
+        middayBlockerText = entry.middayBlockerText
+        dayRecapText = entry.dayRecapText
+        productivityRating = Int16(entry.productivityRating)
+        dayMoodRating = Int16(entry.dayMoodRating)
+        adjustTomorrowText = entry.adjustTomorrowText
+        tomorrowTaskOneText = entry.tomorrowTaskOneText
+        tomorrowTaskOneDurationMinutes = Int32(entry.tomorrowTaskOneDurationMinutes)
+        tomorrowTaskOneReminderId = entry.tomorrowTaskOneReminderId
+        tomorrowTaskOneEventId = entry.tomorrowTaskOneEventId
+        tomorrowTaskTwoText = entry.tomorrowTaskTwoText
+        tomorrowTaskTwoDurationMinutes = Int32(entry.tomorrowTaskTwoDurationMinutes)
+        tomorrowTaskTwoReminderId = entry.tomorrowTaskTwoReminderId
+        tomorrowTaskTwoEventId = entry.tomorrowTaskTwoEventId
+        tomorrowTaskThreeText = entry.tomorrowTaskThreeText
+        tomorrowTaskThreeDurationMinutes = Int32(entry.tomorrowTaskThreeDurationMinutes)
+        tomorrowTaskThreeReminderId = entry.tomorrowTaskThreeReminderId
+        tomorrowTaskThreeEventId = entry.tomorrowTaskThreeEventId
+        isLocked = entry.isLocked
+    }
+
+    func toSnapshot() -> WellnessEntrySnapshot {
+        WellnessEntrySnapshot(
+            date: date,
+            sleepQuality: Int(sleepQuality),
+            sleepTime: sleepTime,
+            wokeOnTime: wokeOnTime,
+            sunriseLampUsed: sunriseLampUsed,
+            sunriseHelped: SunriseHelped(rawValue: sunriseHelped) ?? .yes,
+            identityIntentionText: identityIntentionText,
+            intentionText: intentionText,
+            smallestNextStepText: smallestNextStepText,
+            mainTaskText: mainTaskText,
+            mainTaskDurationMinutes: Int(mainTaskDurationMinutes),
+            mainTaskReminderId: mainTaskReminderId,
+            mainTaskEventId: mainTaskEventId,
+            secondaryTaskOneText: secondaryTaskOneText,
+            secondaryTaskOneDurationMinutes: Int(secondaryTaskOneDurationMinutes),
+            secondaryTaskOneReminderId: secondaryTaskOneReminderId,
+            secondaryTaskOneEventId: secondaryTaskOneEventId,
+            secondaryTaskTwoText: secondaryTaskTwoText,
+            secondaryTaskTwoDurationMinutes: Int(secondaryTaskTwoDurationMinutes),
+            secondaryTaskTwoReminderId: secondaryTaskTwoReminderId,
+            secondaryTaskTwoEventId: secondaryTaskTwoEventId,
+            mainTaskDone: mainTaskDone,
+            secondaryTaskOneDone: secondaryTaskOneDone,
+            secondaryTaskTwoDone: secondaryTaskTwoDone,
+            brainDumpText: brainDumpText,
+            sleepNotesText: sleepNotesText,
+            wakeTime: wakeTime,
+            middayBlockerText: middayBlockerText,
+            dayRecapText: dayRecapText,
+            productivityRating: Int(productivityRating),
+            dayMoodRating: Int(dayMoodRating),
+            adjustTomorrowText: adjustTomorrowText,
+            tomorrowTaskOneText: tomorrowTaskOneText,
+            tomorrowTaskOneDurationMinutes: Int(tomorrowTaskOneDurationMinutes),
+            tomorrowTaskOneReminderId: tomorrowTaskOneReminderId,
+            tomorrowTaskOneEventId: tomorrowTaskOneEventId,
+            tomorrowTaskTwoText: tomorrowTaskTwoText,
+            tomorrowTaskTwoDurationMinutes: Int(tomorrowTaskTwoDurationMinutes),
+            tomorrowTaskTwoReminderId: tomorrowTaskTwoReminderId,
+            tomorrowTaskTwoEventId: tomorrowTaskTwoEventId,
+            tomorrowTaskThreeText: tomorrowTaskThreeText,
+            tomorrowTaskThreeDurationMinutes: Int(tomorrowTaskThreeDurationMinutes),
+            tomorrowTaskThreeReminderId: tomorrowTaskThreeReminderId,
+            tomorrowTaskThreeEventId: tomorrowTaskThreeEventId,
+            isLocked: isLocked,
+            updatedAt: updatedAt
+        )
+    }
+}
+
 // MARK: - Core Data Relationships
 extension WLEDStateEntity {
     
@@ -207,12 +464,22 @@ extension WLEDStateEntity {
 // MARK: - Conversion Extensions
 extension WLEDDevice {
     init?(from entity: WLEDDeviceEntity) {
+        let storedHex = entity.currentColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackHex = WLEDDevice.wledBootDefaultHex
+        let resolvedHex: String
+        if storedHex.isEmpty {
+            resolvedHex = fallbackHex
+        } else if storedHex.uppercased() == "000000" && entity.state == nil {
+            resolvedHex = fallbackHex
+        } else {
+            resolvedHex = storedHex
+        }
         self.id = entity.id
         self.name = entity.name
         self.ipAddress = entity.ipAddress
         self.isOnline = entity.isOnline
         self.brightness = Int(entity.brightness)
-        self.currentColor = Color(hex: entity.currentColorHex)
+        self.currentColor = Color(hex: resolvedHex)
         if entity.autoWhiteMode >= 0 {
             self.autoWhiteMode = AutoWhiteMode(rawValue: Int(entity.autoWhiteMode))
         } else {
@@ -222,6 +489,8 @@ extension WLEDDevice {
         self.location = DeviceLocation(rawValue: entity.location)
         self.lastSeen = entity.lastSeen
         self.state = entity.state?.toWLEDState()
+        self.presetNamesById = decodeNameMap(entity.presetNamesJSON)
+        self.playlistNamesById = decodeNameMap(entity.playlistNamesJSON)
     }
 }
 
@@ -235,7 +504,8 @@ extension WLEDStateEntity {
             segments: segments,
             transitionDeciseconds: self.transitionDecisecondsInt,
             presetId: nil,
-            playlistId: nil
+            playlistId: nil,
+            mainSegment: nil
         )
     }
     

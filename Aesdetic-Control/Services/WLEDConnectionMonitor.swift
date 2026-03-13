@@ -55,12 +55,18 @@ class WLEDConnectionMonitor: ObservableObject {
     private var monitorQueue = DispatchQueue(label: "WLEDConnectionMonitor.networkQueue")
     private var healthCheckTimer: Timer?
     private var quickCheckTimer: Timer?
+    private var monitoringPaused: Bool = false
     
     // Reconnection tracking
     private var reconnectionAttempts: [String: Int] = [:]
     private var reconnectionTasks: [String: Task<Void, Never>] = [:]
     private var lastReconnectionAttempt: [String: Date] = [:]
     private var connectionHistory: [String: [ConnectionAttempt]] = [:]
+    private var gammaColorEnforcedDevices: Set<String> = []
+    private var hasCompletedPostConnectRecovery: Set<String> = []
+    private var lastPostConnectRecoveryAt: [String: Date] = [:]
+    private let postConnectRecoveryMinInterval: TimeInterval = 30.0
+    private var postConnectRecoveryTasks: [String: Task<Void, Never>] = [:]
     
     private init() {
         self.apiService = WLEDAPIService.shared
@@ -82,6 +88,10 @@ class WLEDConnectionMonitor: ObservableObject {
             task.cancel()
         }
         reconnectionTasks.removeAll()
+        for task in postConnectRecoveryTasks.values {
+            task.cancel()
+        }
+        postConnectRecoveryTasks.removeAll()
     }
     
     // MARK: - Network Path Monitoring
@@ -140,11 +150,17 @@ class WLEDConnectionMonitor: ObservableObject {
             task.cancel()
         }
         reconnectionTasks.removeAll()
+        for task in postConnectRecoveryTasks.values {
+            task.cancel()
+        }
+        postConnectRecoveryTasks.removeAll()
+        hasCompletedPostConnectRecovery.removeAll()
     }
     
     // MARK: - Device Registration
     
     func registerDevice(_ device: WLEDDevice) {
+        guard !registeredDevices.contains(device.id) else { return }
         registeredDevices.insert(device.id)
         deviceHealthStatus[device.id] = device.isOnline
         consecutiveFailures[device.id] = 0
@@ -168,6 +184,11 @@ class WLEDConnectionMonitor: ObservableObject {
         reconnectionStatus.removeValue(forKey: deviceId)
         lastReconnectionAttempt.removeValue(forKey: deviceId)
         connectionHistory.removeValue(forKey: deviceId)
+        gammaColorEnforcedDevices.remove(deviceId)
+        hasCompletedPostConnectRecovery.remove(deviceId)
+        lastPostConnectRecoveryAt.removeValue(forKey: deviceId)
+        postConnectRecoveryTasks[deviceId]?.cancel()
+        postConnectRecoveryTasks.removeValue(forKey: deviceId)
         
         // Cancel any active reconnection task
         reconnectionTasks[deviceId]?.cancel()
@@ -185,6 +206,10 @@ class WLEDConnectionMonitor: ObservableObject {
         // Cancel any active reconnection task
         reconnectionTasks[deviceId]?.cancel()
         reconnectionTasks.removeValue(forKey: deviceId)
+        hasCompletedPostConnectRecovery.remove(deviceId)
+        lastPostConnectRecoveryAt.removeValue(forKey: deviceId)
+        postConnectRecoveryTasks[deviceId]?.cancel()
+        postConnectRecoveryTasks.removeValue(forKey: deviceId)
         
         logger.info("Reset reconnection state for device: \(deviceId)")
     }
@@ -207,6 +232,8 @@ class WLEDConnectionMonitor: ObservableObject {
     // MARK: - Health Check System
     
     private func startHealthChecks() {
+        guard !monitoringPaused else { return }
+        guard healthCheckTimer == nil && quickCheckTimer == nil else { return }
         // Regular health checks every 30 seconds
         healthCheckTimer = Timer.scheduledTimer(withTimeInterval: healthCheckInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -219,6 +246,31 @@ class WLEDConnectionMonitor: ObservableObject {
             Task { @MainActor in
                 await self?.performQuickChecks()
             }
+        }
+    }
+
+    // MARK: - App Lifecycle Hooks
+    
+    func pauseBackgroundOperations() {
+        guard !monitoringPaused else { return }
+        monitoringPaused = true
+        healthCheckTimer?.invalidate()
+        quickCheckTimer?.invalidate()
+        healthCheckTimer = nil
+        quickCheckTimer = nil
+        
+        for task in reconnectionTasks.values {
+            task.cancel()
+        }
+        reconnectionTasks.removeAll()
+    }
+    
+    func resumeBackgroundOperations() {
+        guard monitoringPaused else { return }
+        monitoringPaused = false
+        startHealthChecks()
+        Task { @MainActor in
+            await performImmediateHealthChecks()
         }
     }
     
@@ -234,10 +286,12 @@ class WLEDConnectionMonitor: ObservableObject {
         let devicesToCheck = allDevices.filter { device in
             let attempts = reconnectionAttempts[device.id, default: 0]
             return attempts < reconnectionStrategy.maxRetries
+        }.filter { device in
+            !WLEDWebSocketManager.shared.isDeviceConnected(device.id)
         }
         
         if devicesToCheck.count < allDevices.count {
-            logger.debug("Skipping health checks for \(allDevices.count - devicesToCheck.count) devices that exceeded max retries")
+            logger.debug("Skipping health checks for \(allDevices.count - devicesToCheck.count) devices that exceeded max retries or are connected via realtime")
         }
         
         logger.debug("Performing health checks for \(devicesToCheck.count) devices")
@@ -260,6 +314,8 @@ class WLEDConnectionMonitor: ObservableObject {
             
             // Only check devices that have failures but haven't exceeded max retries
             return failures > 0 && failures < 3 && attempts < reconnectionStrategy.maxRetries
+        }.filter { device in
+            !WLEDWebSocketManager.shared.isDeviceConnected(device.id)
         }
         
         if !problemDevices.isEmpty {
@@ -276,12 +332,31 @@ class WLEDConnectionMonitor: ObservableObject {
     }
     
     private func checkDeviceHealth(_ device: WLEDDevice) async {
+        if WLEDWebSocketManager.shared.isDeviceConnected(device.id) {
+            markOnlineFromRealtime(device)
+            return
+        }
         do {
             let response = try await apiService.getState(for: device)
             handleHealthCheckSuccess(device, response: response)
         } catch {
             await handleHealthCheckFailure(device, error: error)
         }
+    }
+
+    @MainActor
+    private func markOnlineFromRealtime(_ device: WLEDDevice) {
+        consecutiveFailures[device.id] = 0
+        reconnectionAttempts[device.id] = 0
+        let wasOffline = deviceHealthStatus[device.id] == false
+        deviceHealthStatus[device.id] = true
+        if wasOffline {
+            reconnectionStatus[device.id] = "Online (Realtime)"
+            Task {
+                await updateDeviceInCoreData(device, isOnline: true, response: nil)
+            }
+        }
+        recordConnectionAttempt(deviceId: device.id, success: true, error: nil)
     }
     
     @MainActor
@@ -309,13 +384,95 @@ class WLEDConnectionMonitor: ObservableObject {
             await updateDeviceInCoreData(device, isOnline: true, response: response)
         }
         
-        Task {
-            await DeviceCleanupManager.shared.processQueue(for: device.id)
+        let now = Date()
+        let recoveryDueByCadence = lastPostConnectRecoveryAt[device.id].map {
+            now.timeIntervalSince($0) >= postConnectRecoveryMinInterval
+        } ?? true
+        let shouldRunPostConnectRecovery = (wasOffline || !hasCompletedPostConnectRecovery.contains(device.id)) && recoveryDueByCadence
+        if shouldRunPostConnectRecovery {
+            schedulePostConnectRecovery(for: device, now: now)
         }
+
+        let shouldEnforceGamma = wasOffline || !gammaColorEnforcedDevices.contains(device.id)
+        if shouldEnforceGamma {
+            gammaColorEnforcedDevices.insert(device.id)
+            Task {
+                do {
+                    _ = try await apiService.ensureColorGammaCorrectionEnabled(for: device)
+                } catch {
+                    logger.error("Failed to enforce color gamma correction for \(device.name): \(error.localizedDescription)")
+                    await MainActor.run {
+                        _ = self.gammaColorEnforcedDevices.remove(device.id)
+                    }
+                }
+            }
+        }
+
+        // Resync on-device timers only when connectivity transitions from offline -> online.
+        // Running this on every health-check success can spam /json/cfg writes.
+        if wasOffline {
+            Task { @MainActor in
+                // Process queued timer/preset cleanup before importing timers so deleted
+                // on-device automations do not get re-imported during transient reconnect.
+                await DeviceCleanupManager.shared.processQueue(for: device.id)
+                await AutomationStore.shared.resyncOnDeviceSchedules(for: device)
+                await AutomationStore.shared.importOnDeviceAutomations(for: device)
+            }
+        }
+    }
+
+    private func schedulePostConnectRecovery(for device: WLEDDevice, now: Date) {
+        postConnectRecoveryTasks[device.id]?.cancel()
+        hasCompletedPostConnectRecovery.insert(device.id)
+        lastPostConnectRecoveryAt[device.id] = now
+        postConnectRecoveryTasks[device.id] = Task { [weak self] in
+            guard let self else { return }
+            let completed = await self.runPostConnectRecovery(for: device)
+            await MainActor.run {
+                self.postConnectRecoveryTasks.removeValue(forKey: device.id)
+                if !completed {
+                    self.hasCompletedPostConnectRecovery.remove(device.id)
+                }
+            }
+        }
+    }
+
+    private func runPostConnectRecovery(for device: WLEDDevice) async -> Bool {
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        if Task.isCancelled { return false }
+        if await apiService.isPresetStoreMutationInFlight(deviceId: device.id) {
+            logger.debug("Skipping post-connect recovery for \(device.name): preset-store mutation active")
+            return false
+        }
+        let viewModel = DeviceControlViewModel.shared
+        let hasActiveRun = viewModel.activeRunStatus[device.id] != nil
+        let presetWriteInProgress = viewModel.presetWriteInProgress.contains(device.id)
+        if hasActiveRun || presetWriteInProgress {
+            logger.debug("Skipping post-connect recovery for \(device.name): heavy transition op active")
+            return false
+        }
+        await DeviceCleanupManager.shared.processQueue(for: device.id)
+        if Task.isCancelled { return false }
+        if await apiService.isPresetStoreMutationInFlight(deviceId: device.id) {
+            return false
+        }
+        if TemporaryTransitionCleanupService.isEnabled {
+            await TemporaryTransitionCleanupService.shared.resumePending(for: device)
+            if Task.isCancelled { return false }
+            if await apiService.isPresetStoreMutationInFlight(deviceId: device.id) {
+                return false
+            }
+            await TemporaryTransitionCleanupService.shared.scanAndCleanOrphans(for: device)
+        }
+        return !Task.isCancelled
     }
     
     @MainActor
     private func handleHealthCheckFailure(_ device: WLEDDevice, error: Error) async {
+        if await shouldIgnoreTimeoutFailure(device: device, error: error) {
+            logger.debug("Ignoring transient timeout for \(device.name) due to recent activity")
+            return
+        }
         let currentFailures = consecutiveFailures[device.id, default: 0] + 1
         consecutiveFailures[device.id] = currentFailures
         
@@ -331,6 +488,9 @@ class WLEDConnectionMonitor: ObservableObject {
             
             if wasOnline {
                 logger.info("Device went offline: \(device.name) (\(device.id)) - initiating reconnection")
+                postConnectRecoveryTasks[device.id]?.cancel()
+                postConnectRecoveryTasks.removeValue(forKey: device.id)
+                hasCompletedPostConnectRecovery.remove(device.id)
                 await initiateReconnection(device)
             }
             
@@ -341,6 +501,22 @@ class WLEDConnectionMonitor: ObservableObject {
         } else {
             reconnectionStatus[device.id] = "Connection issues detected (\(currentFailures)/3)"
         }
+    }
+
+    @MainActor
+    private func shouldIgnoreTimeoutFailure(device: WLEDDevice, error: Error) async -> Bool {
+        guard let apiError = error as? WLEDAPIError else {
+            return false
+        }
+        switch apiError {
+        case .timeout:
+            break
+        default:
+            return false
+        }
+        let recentActivityCutoff = Date().addingTimeInterval(-15)
+        let lastSuccessDate = await apiService.lastSuccessfulRequestDate(for: device.id)
+        return lastSuccessDate.map { $0 >= recentActivityCutoff } ?? false
     }
     
     // MARK: - Intelligent Reconnection Logic

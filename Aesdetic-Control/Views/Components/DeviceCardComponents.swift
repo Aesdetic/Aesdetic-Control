@@ -21,6 +21,7 @@ struct PerformanceConfig {
 
 struct EnhancedDeviceCard: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.colorScheme) private var colorScheme
     let device: WLEDDevice
     let viewModel: DeviceControlViewModel
     let onTap: () -> Void
@@ -61,7 +62,15 @@ struct EnhancedDeviceCard: View {
     private var deviceStatus: (isOnline: Bool, isOn: Bool) {
         (device.isOnline, currentPowerState)
     }
+
+    private var activeRunStatus: ActiveRunStatus? {
+        viewModel.activeRunStatus[device.id]
+    }
     
+    private let cardHeight: CGFloat = 193
+    private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
+    private var glassText: GlassTextStyle { GlassTheme.text(for: colorScheme) }
+
     var body: some View {
         ZStack {
             // Product image as background element, aligned bottom-right
@@ -91,15 +100,16 @@ struct EnhancedDeviceCard: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 193) // Increased by 5% (184 * 1.05)
+        .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(cardFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(borderStroke, lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+            GlassCardBackground(
+                cornerRadius: 16,
+                fill: cardFill,
+                outerStroke: borderStrokeOuter,
+                innerStroke: borderStrokeInner,
+                keyShadow: cardShadowKey,
+                ambientShadow: cardShadowAmbient
+            )
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(Rectangle())
@@ -167,11 +177,15 @@ struct EnhancedDeviceCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.name)
                     .font(.headline.weight(.semibold))
-                    .foregroundColor(.primary)
+                    .foregroundColor(glassText.pagePrimaryText)
                 
                 Text(device.ipAddress)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(glassText.pageSecondaryText)
+
+                if let run = activeRunStatus {
+                    runStatusChip(run)
+                }
             }
             
             Spacer()
@@ -187,6 +201,43 @@ struct EnhancedDeviceCard: View {
                     .fontWeight(.medium)
                     .foregroundColor(device.isOnline ? .green : .red)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func runStatusChip(_ run: ActiveRunStatus) -> some View {
+        Text(runStatusText(run))
+            .font(.caption2)
+            .foregroundColor(.white.opacity(0.85))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.15))
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+            )
+            .padding(.top, 2)
+    }
+
+    private func runStatusText(_ run: ActiveRunStatus) -> String {
+        let percentValue = Int(round(min(1.0, max(0.0, run.progress)) * 100.0))
+        switch run.kind {
+        case .automation, .transition:
+            if run.title == "Loading..." {
+                return "Loading..."
+            } else if run.expectedEnd != nil || run.progress > 0 {
+                return "\(run.title) \(percentValue)%"
+            } else {
+                return "Running: \(run.title)"
+            }
+        case .effect:
+            return "Effect: \(run.title)"
+        case .applying:
+            return "Applying: \(run.title)"
         }
     }
     
@@ -214,9 +265,7 @@ struct EnhancedDeviceCard: View {
                 
                 Task {
                     await viewModel.toggleDevicePower(device)
-                    
-                    // Allow time for the API call and state propagation
-                    try? await Task.sleep(nanoseconds: 750_000_000) // 0.75 seconds
+                    let settled = await viewModel.awaitPowerToggleSettlement(for: device, targetState: targetState)
                     
                     // Reset UI state after completion
                     await MainActor.run {
@@ -226,10 +275,14 @@ struct EnhancedDeviceCard: View {
                         // UI will reflect the coordinated state through currentPowerState
                         let finalState = viewModel.getCurrentPowerState(for: deviceId)
                         
-                        if finalState == targetState {
+                        if settled && finalState == targetState {
+                            #if DEBUG
                             print("✅ Device tab toggle successful: \(targetState ? "ON" : "OFF")")
+                            #endif
                         } else {
+                            #if DEBUG
                             print("⚠️ Device tab toggle mismatch - wanted: \(targetState), got: \(finalState)")
+                            #endif
                         }
                     }
                 }
@@ -237,14 +290,14 @@ struct EnhancedDeviceCard: View {
                 ZStack {
                     Image(systemName: "power")
                         .font(.headline.weight(.medium))
-                        .foregroundColor(currentPowerState ? .black : .white)
+                        .foregroundColor(powerIconColor)
                         .opacity(isToggling ? 0.7 : 1.0)
                     
                     // Loading indicator overlay
                     if isToggling {
                         ProgressView()
                             .scaleEffect(0.8)
-                            .foregroundColor(currentPowerState ? .black : .white)
+                            .foregroundColor(powerIconColor)
                     }
                 }
                 .frame(width: 36, height: 36) // Reduced by 10% (40 * 0.9)
@@ -253,10 +306,21 @@ struct EnhancedDeviceCard: View {
                         .fill(currentPowerState ? .white : .clear)
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(.white, lineWidth: currentPowerState ? 0 : 1.5)
+                                .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
                         )
                 )
-                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                .shadow(
+                    color: glassSurface.controlShadowAmbient.color,
+                    radius: glassSurface.controlShadowAmbient.radius,
+                    x: glassSurface.controlShadowAmbient.x,
+                    y: glassSurface.controlShadowAmbient.y
+                )
+                .shadow(
+                    color: glassSurface.controlShadowKey.color,
+                    radius: glassSurface.controlShadowKey.radius,
+                    x: glassSurface.controlShadowKey.x,
+                    y: glassSurface.controlShadowKey.y
+                )
                 .scaleEffect(isToggling ? 0.95 : 1.0)
                 .animation(.easeInOut(duration: 0.1), value: isToggling)
                 .animation(.easeInOut(duration: 0.2), value: currentPowerState)
@@ -281,7 +345,7 @@ struct EnhancedDeviceCard: View {
                 Text("Brightness")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                    .foregroundColor(.primary)
+                    .foregroundColor(glassText.pagePrimaryText)
                 
                 Spacer()
                 
@@ -291,11 +355,11 @@ struct EnhancedDeviceCard: View {
                 }) {
                     Image(systemName: "pencil")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(glassText.pageSecondaryText)
                         .frame(width: 28, height: 28)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color(.systemGray5))
+                                .fill(glassSurface.fieldFill)
                         )
                 }
                 .buttonStyle(.plain)
@@ -390,18 +454,61 @@ struct EnhancedDeviceCard: View {
     }
     
     private var cardFill: Color {
-        Color.white.opacity(adjustedOpacity(currentPowerState ? 0.16 : 0.08))
+        if colorSchemeContrast == .increased {
+            if colorScheme == .dark {
+                return Color.white.opacity(currentPowerState ? 0.18 : 0.12)
+            }
+            return Color.white.opacity(currentPowerState ? 0.28 : 0.22)
+        }
+        return currentPowerState ? glassSurface.cardFillActive : glassSurface.cardFillInactive
     }
 
-    private var borderStroke: Color {
-        Color.white.opacity(adjustedOpacity(0.28))
+    private var powerIconColor: Color {
+        if !currentPowerState {
+            return .white
+        }
+        return colorScheme == .dark ? .black : glassText.pagePrimaryText
+    }
+
+    private var borderStrokeOuter: Color {
+        if colorSchemeContrast == .increased {
+            return colorScheme == .dark ? Color.white.opacity(0.3) : Color.black.opacity(0.11)
+        }
+        return glassSurface.cardStrokeOuter
+    }
+
+    private var borderStrokeInner: Color {
+        if colorSchemeContrast == .increased {
+            return colorScheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.36)
+        }
+        return glassSurface.cardStrokeInner
+    }
+
+    private var cardShadowKey: GlassShadowStyle {
+        if colorSchemeContrast == .increased {
+            if colorScheme == .dark {
+                return GlassShadowStyle(color: Color.black.opacity(0.28), radius: 10, x: 0, y: 5)
+            }
+            return GlassShadowStyle(color: Color.black.opacity(0.15), radius: 20, x: 0, y: 12)
+        }
+        return glassSurface.cardShadowKey
+    }
+
+    private var cardShadowAmbient: GlassShadowStyle {
+        if colorSchemeContrast == .increased {
+            if colorScheme == .dark {
+                return GlassShadowStyle(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 1)
+            }
+            return GlassShadowStyle(color: Color.black.opacity(0.07), radius: 6, x: 0, y: 2)
+        }
+        return glassSurface.cardShadowAmbient
     }
 
     private var trackBackground: Color {
-        if colorSchemeContrast == .increased {
-            return Color.white.opacity(0.3)
+        if colorScheme == .dark {
+            return colorSchemeContrast == .increased ? Color.white.opacity(0.24) : Color.white.opacity(0.14)
         }
-        return Color.white.opacity(0.12)
+        return colorSchemeContrast == .increased ? Color.white.opacity(0.3) : glassSurface.fieldFill
     }
 
     private var progressFill: LinearGradient {
@@ -414,11 +521,7 @@ struct EnhancedDeviceCard: View {
     }
 
     private var progressLabelColor: Color {
-        colorSchemeContrast == .increased ? .white : .primary
-    }
-
-    private func adjustedOpacity(_ base: Double) -> Double {
-        colorSchemeContrast == .increased ? min(1.0, base * 1.7) : base
+        colorSchemeContrast == .increased ? (colorScheme == .dark ? .white : glassText.pagePrimaryText) : glassText.pagePrimaryText
     }
     
     private func syncWithDeviceState() {
@@ -771,7 +874,9 @@ class DeviceImageManager: ObservableObject {
             setImageName(customImageName, for: deviceId)
             return customImageName
         } catch {
+            #if DEBUG
             print("Error saving custom image: \(error)")
+            #endif
             return "product_image" // fallback to default
         }
     }
@@ -795,7 +900,9 @@ class DeviceImageManager: ObservableObject {
                 return (imageName, displayName)
             }
         } catch {
+            #if DEBUG
             print("Error reading uploaded images: \(error)")
+            #endif
             return []
         }
     }

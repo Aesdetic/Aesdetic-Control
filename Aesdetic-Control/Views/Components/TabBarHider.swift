@@ -9,6 +9,12 @@ struct TabBarHider: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: Controller, context: Context) {}
 
     final class Controller: UIViewController {
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .clear
+            view.isOpaque = false
+        }
+
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
             hideTabBar()

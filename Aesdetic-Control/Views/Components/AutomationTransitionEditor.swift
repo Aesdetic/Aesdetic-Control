@@ -17,6 +17,8 @@ struct AutomationTransitionEditor: View {
     @Binding var startWhiteLevel: Double?
     @Binding var endTemperature: Double?
     @Binding var endWhiteLevel: Double?
+    let transitionProfile: TransitionStepProfile?
+    let automationGuaranteeCount: Int
     
     // Preview state
     @State private var previewEnabled: Bool = false
@@ -34,12 +36,52 @@ struct AutomationTransitionEditor: View {
     @State private var selectedStartPresetId: UUID?
     @State private var selectedEndPresetId: UUID?
     @State private var selectedTransitionPresetId: UUID?
-    @State private var durationHours: Int = 0
-    @State private var durationMinutes: Int = 1
+    @State private var durationMinutesPart: Int = 1
+    @State private var durationSecondsPart: Int = 0
     @State private var isApplyingTransition: Bool = false
+    @State private var previewTask: Task<Void, Never>?
+    @State private var lastPreviewTarget: GradientTarget = .end
+
+    init(
+        viewModel: DeviceControlViewModel,
+        device: WLEDDevice,
+        startGradient: Binding<LEDGradient>,
+        endGradient: Binding<LEDGradient>,
+        startBrightness: Binding<Double>,
+        endBrightness: Binding<Double>,
+        durationSeconds: Binding<Double>,
+        startTemperature: Binding<Double?>,
+        startWhiteLevel: Binding<Double?>,
+        endTemperature: Binding<Double?>,
+        endWhiteLevel: Binding<Double?>,
+        transitionProfile: TransitionStepProfile? = nil,
+        automationGuaranteeCount: Int = 5
+    ) {
+        self.viewModel = viewModel
+        self.device = device
+        self._startGradient = startGradient
+        self._endGradient = endGradient
+        self._startBrightness = startBrightness
+        self._endBrightness = endBrightness
+        self._durationSeconds = durationSeconds
+        self._startTemperature = startTemperature
+        self._startWhiteLevel = startWhiteLevel
+        self._endTemperature = endTemperature
+        self._endWhiteLevel = endWhiteLevel
+        self.transitionProfile = transitionProfile
+        self.automationGuaranteeCount = automationGuaranteeCount
+    }
     
-    private var allowedMinuteValues: [Int] {
-        durationHours >= 24 ? [0] : Array(0...59)
+    private var allowedSecondValues: [Int] {
+        durationMinutesPart >= 60 ? [0] : Array(0...59)
+    }
+
+    private var selectedDurationSeconds: Int {
+        TransitionDurationPicker.totalSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart)
+    }
+
+    private var transitionExceedsRecommendedMax: Bool {
+        TransitionDurationPicker.exceedsRecommendedMax(Double(selectedDurationSeconds))
     }
     
     private var colorPresets: [ColorPreset] {
@@ -74,8 +116,20 @@ struct AutomationTransitionEditor: View {
             updateDurationFromSeconds(durationSeconds)
             hydrateStopMapsIfNeeded()
         }
+        .onChange(of: previewEnabled) { _, enabled in
+            if enabled {
+                schedulePreview()
+            } else {
+                cancelPreview()
+            }
+        }
         .onChange(of: durationSeconds) { _, newValue in
             updateDurationFromSeconds(newValue)
+        }
+        .onDisappear {
+            Task {
+                await stopPreviewOnExit()
+            }
         }
     }
     
@@ -152,9 +206,7 @@ struct AutomationTransitionEditor: View {
             endWhiteLevel = preset.whiteLevelB
             
             if previewEnabled {
-                Task {
-                    await previewTransition()
-                }
+                schedulePreview(target: .end)
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
@@ -187,7 +239,7 @@ struct AutomationTransitionEditor: View {
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
-                Text("\(Int(preset.durationSec))s")
+                Text(formatDuration(preset.durationSec))
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.6))
             }
@@ -209,11 +261,11 @@ struct AutomationTransitionEditor: View {
             
             HStack(spacing: 12) {
                 VStack(spacing: 4) {
-                    Text("Hours")
+                    Text("Minutes")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.6))
-                    Picker("Hours", selection: $durationHours) {
-                        ForEach(0...24, id: \.self) { value in
+                    Picker("Minutes", selection: $durationMinutesPart) {
+                        ForEach(0...60, id: \.self) { value in
                             Text(String(format: "%02d", value))
                                 .tag(value)
                         }
@@ -221,17 +273,18 @@ struct AutomationTransitionEditor: View {
                     .pickerStyle(.wheel)
                     .frame(height: 110)
                     .clipped()
-                    .onChange(of: durationHours) { _, _ in
+                    .accessibilityLabel("Transition minutes")
+                    .onChange(of: durationMinutesPart) { _, _ in
                         updateDurationToSeconds()
                     }
                 }
                 
                 VStack(spacing: 4) {
-                    Text("Minutes")
+                    Text("Seconds")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.6))
-                    Picker("Minutes", selection: $durationMinutes) {
-                        ForEach(allowedMinuteValues, id: \.self) { value in
+                    Picker("Seconds", selection: $durationSecondsPart) {
+                        ForEach(allowedSecondValues, id: \.self) { value in
                             Text(String(format: "%02d", value))
                                 .tag(value)
                         }
@@ -239,14 +292,98 @@ struct AutomationTransitionEditor: View {
                     .pickerStyle(.wheel)
                     .frame(height: 110)
                     .clipped()
-                    .onChange(of: durationMinutes) { _, _ in
+                    .accessibilityLabel("Transition seconds")
+                    .onChange(of: durationSecondsPart) { _, _ in
                         updateDurationToSeconds()
                     }
                 }
             }
             .frame(maxWidth: .infinity)
+
+            durationRecommendationGuide
+            transitionPlanningSummary
         }
         .padding(.horizontal, 16)
+    }
+
+    private var durationRecommendationGuide: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            GeometryReader { geo in
+                let width = max(1, geo.size.width)
+                let progress = min(
+                    1.0,
+                    Double(selectedDurationSeconds) / Double(TransitionDurationPicker.maxSeconds)
+                )
+                let markerX = width * TransitionDurationPicker.recommendedMaxRatio
+
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(height: 6)
+
+                    Capsule()
+                        .fill(transitionExceedsRecommendedMax ? Color.orange.opacity(0.9) : Color.white.opacity(0.45))
+                        .frame(width: width * progress, height: 6)
+
+                    Rectangle()
+                        .fill(Color.orange.opacity(0.95))
+                        .frame(width: 2, height: 12)
+                        .offset(x: max(0, min(width - 2, markerX - 1)))
+                }
+                .frame(height: 12)
+            }
+            .frame(height: 12)
+
+            HStack {
+                Text("0:00")
+                Spacer()
+                Text("\(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) recommended")
+                    .foregroundColor(.orange.opacity(0.9))
+                Spacer()
+                Text("60:00")
+            }
+            .font(.caption2)
+            .foregroundColor(.white.opacity(0.55))
+
+            if transitionExceedsRecommendedMax {
+                Text("Above \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) may reduce automation reliability and increase preset storage use.")
+                    .font(.caption2)
+                    .foregroundColor(.orange.opacity(0.9))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var transitionPlanningSummary: some View {
+        if let profile = transitionProfile {
+            VStack(alignment: .leading, spacing: 6) {
+                let budgetText = profile.perAutomationBudget.map { "\($0) slots / automation" } ?? "No budget limit"
+                let quality = profile.qualityLabel.displayName
+                Text("Estimated storage: \(profile.slotsRequired) slots")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.88))
+                Text("Quality: \(quality) (\(Int(profile.legSeconds))s legs)")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.7))
+                Text("\(automationGuaranteeCount)-automation budget: \(budgetText)")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.65))
+                if profile.wasCoarsened {
+                    Text("Auto-adjusted from \(Int(profile.baseLegSeconds))s to \(Int(profile.legSeconds))s legs to fit storage budget.")
+                        .font(.caption2)
+                        .foregroundColor(.orange.opacity(0.92))
+                }
+                Text(profile.fitsBudget ? "Fits guaranteed storage budget." : "Exceeds guaranteed storage budget. Reduce duration or free preset slots.")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(profile.fitsBudget ? .green.opacity(0.9) : .orange.opacity(0.95))
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+        }
     }
     
     private var startSection: some View {
@@ -270,9 +407,7 @@ struct AutomationTransitionEditor: View {
                 .tint(.white)
                 .onChange(of: startBrightness) { _, _ in
                     if previewEnabled {
-                        Task {
-                            await previewTransition()
-                        }
+                        schedulePreview(target: .start)
                     }
                 }
             
@@ -335,9 +470,7 @@ struct AutomationTransitionEditor: View {
                     selectedA = new.id
                     
                     if previewEnabled {
-                        Task {
-                            await previewTransition()
-                        }
+                        schedulePreview(target: .start)
                     }
                 },
                 onStopsChanged: { stops, phase in
@@ -348,9 +481,7 @@ struct AutomationTransitionEditor: View {
                     startTemperature = stopTemperaturesA.values.first
                     startWhiteLevel = stopWhiteLevelsA.values.first
                     if previewEnabled && phase == .ended {
-                        Task {
-                            await previewTransition()
-                        }
+                        schedulePreview(target: .start)
                     }
                 }
             )
@@ -388,9 +519,7 @@ struct AutomationTransitionEditor: View {
                 .tint(.white)
                 .onChange(of: endBrightness) { _, _ in
                     if previewEnabled {
-                        Task {
-                            await previewTransition()
-                        }
+                        schedulePreview(target: .end)
                     }
                 }
             
@@ -453,9 +582,7 @@ struct AutomationTransitionEditor: View {
                     selectedB = new.id
                     
                     if previewEnabled {
-                        Task {
-                            await previewTransition()
-                        }
+                        schedulePreview(target: .end)
                     }
                 },
                 onStopsChanged: { stops, phase in
@@ -466,9 +593,7 @@ struct AutomationTransitionEditor: View {
                     endTemperature = stopTemperaturesB.values.first
                     endWhiteLevel = stopWhiteLevelsB.values.first
                     if previewEnabled && phase == .ended {
-                        Task {
-                            await previewTransition()
-                        }
+                        schedulePreview(target: .end)
                     }
                 }
             )
@@ -534,9 +659,7 @@ struct AutomationTransitionEditor: View {
             }
             
             if previewEnabled {
-                Task {
-                    await previewTransition()
-                }
+                schedulePreview(target: target)
             }
         } label: {
             LinearGradient(
@@ -572,8 +695,10 @@ struct AutomationTransitionEditor: View {
             supportsCCT: supportsCCT,
             supportsWhite: supportsWhite,
             usesKelvinCCT: usesKelvin,
-            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device),
+            allowCCTForTemperatureStops: viewModel.temperatureStopsUseCCT(for: device)
+                && viewModel.supportsCCTOutput(for: device, segmentId: 0),
             allowManualWhite: advancedUIEnabled,
+            autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
             cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, whiteLevel in
                 if target == .start {
@@ -625,9 +750,7 @@ struct AutomationTransitionEditor: View {
                 }
                 
                 if previewEnabled {
-                    Task {
-                        await previewTransition()
-                    }
+                    schedulePreview(target: target)
                 }
             },
             onRemove: {
@@ -657,9 +780,7 @@ struct AutomationTransitionEditor: View {
                 showWheel = false
                 
                 if previewEnabled {
-                    Task {
-                        await previewTransition()
-                    }
+                    schedulePreview(target: target)
                 }
             },
             onDismiss: { showWheel = false }
@@ -689,13 +810,27 @@ struct AutomationTransitionEditor: View {
     // MARK: - Helper Functions
     
     private func updateDurationFromSeconds(_ seconds: Double) {
-        let total = Int(seconds)
-        durationHours = total / 3600
-        durationMinutes = (total % 3600) / 60
+        let components = TransitionDurationPicker.components(from: seconds)
+        durationMinutesPart = components.minutes
+        durationSecondsPart = components.seconds
     }
     
     private func updateDurationToSeconds() {
-        durationSeconds = Double(max(0, durationHours * 3600 + durationMinutes * 60))
+        if durationMinutesPart > 60 {
+            durationMinutesPart = 60
+        }
+        if durationMinutesPart < 0 {
+            durationMinutesPart = 0
+        }
+        if durationMinutesPart == 60 {
+            durationSecondsPart = 0
+        }
+        durationSecondsPart = max(0, min(durationSecondsPart, 59))
+        durationSeconds = Double(TransitionDurationPicker.totalSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart))
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        TransitionDurationPicker.clockString(seconds: seconds)
     }
 
     private func hydrateStopMapsIfNeeded() {
@@ -714,43 +849,89 @@ struct AutomationTransitionEditor: View {
     }
     
     // MARK: - Preview Functions
+
+    private func schedulePreview(target: GradientTarget? = nil) {
+        if let target {
+            lastPreviewTarget = target
+        }
+        previewTask?.cancel()
+        previewTask = Task {
+            // Debounce rapid edits from sliders/wheels so only latest preview starts.
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            await previewTransition()
+        }
+    }
     
     private func previewTransition() async {
         await MainActor.run {
             isApplyingTransition = true
         }
-        
-        await viewModel.cancelActiveTransitionIfNeeded(for: device)
-        try? await Task.sleep(nanoseconds: 120_000_000)
-        
-        let startTemps = stopTemperaturesA.isEmpty ? nil : stopTemperaturesA
-        let startWhites = stopWhiteLevelsA.isEmpty ? nil : stopWhiteLevelsA
-        let resolvedEndTemps = stopTemperaturesB.isEmpty ? startTemps : stopTemperaturesB
-        let resolvedEndWhites = stopWhiteLevelsB.isEmpty ? startWhites : stopWhiteLevelsB
-        await viewModel.startTransition(
-            from: startGradient,
-            aBrightness: Int(startBrightness),
-            to: endGradient,
-            bBrightness: Int(endBrightness),
-            durationSec: durationSeconds,
-            device: device,
-            startStopTemperatures: startTemps,
-            startStopWhiteLevels: startWhites,
-            endStopTemperatures: resolvedEndTemps,
-            endStopWhiteLevels: resolvedEndWhites
-        )
-        
-        await MainActor.run {
-            isApplyingTransition = false
+
+        defer {
+            Task { @MainActor in
+                isApplyingTransition = false
+            }
         }
+
+        guard !Task.isCancelled else { return }
+
+        let hasActiveRun = await MainActor.run {
+            viewModel.activeRunStatus[device.id] != nil
+        }
+        guard !hasActiveRun else { return }
+
+        let snapshot = await MainActor.run {
+            let target = lastPreviewTarget
+            switch target {
+            case .start:
+                return (
+                    gradient: startGradient,
+                    brightness: Int(startBrightness),
+                    temperatures: stopTemperaturesA.isEmpty ? nil : stopTemperaturesA,
+                    whites: stopWhiteLevelsA.isEmpty ? nil : stopWhiteLevelsA
+                )
+            case .end:
+                return (
+                    gradient: endGradient,
+                    brightness: Int(endBrightness),
+                    temperatures: stopTemperaturesB.isEmpty ? nil : stopTemperaturesB,
+                    whites: stopWhiteLevelsB.isEmpty ? nil : stopWhiteLevelsB
+                )
+            }
+        }
+
+        let ledCount = await MainActor.run {
+            viewModel.totalLEDCount(for: device)
+        }
+
+        await viewModel.applyGradientStopsAcrossStrip(
+            device,
+            stops: snapshot.gradient.stops,
+            ledCount: ledCount,
+            stopTemperatures: snapshot.temperatures,
+            stopWhiteLevels: snapshot.whites,
+            interpolation: snapshot.gradient.interpolation,
+            brightness: snapshot.brightness,
+            preferSegmented: true,
+            forceSegmentedOnly: true
+        )
     }
     
     private func cancelPreview() {
-        Task {
-            await viewModel.stopTransitionAndRevertToA(device: device)
-            await MainActor.run {
-                isApplyingTransition = false
-            }
+        previewTask?.cancel()
+        previewTask = nil
+        Task { @MainActor in
+            isApplyingTransition = false
+        }
+    }
+
+    private func stopPreviewOnExit() async {
+        previewTask?.cancel()
+        previewTask = nil
+        await MainActor.run {
+            isApplyingTransition = false
+            previewEnabled = false
         }
     }
 }

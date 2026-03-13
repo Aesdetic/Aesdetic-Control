@@ -58,5 +58,311 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertEqual(components.hour, 6)
         XCTAssertEqual(components.minute, 30)
     }
-}
 
+    func testAutomationMetadataSyncStateDefaultsToUnknown() {
+        let metadata = AutomationMetadata()
+        XCTAssertEqual(metadata.syncState(for: "device-1"), .unknown)
+        XCTAssertNil(metadata.lastSyncError(for: "device-1"))
+        XCTAssertNil(metadata.lastSyncAt(for: "device-1"))
+    }
+
+    func testAutomationMetadataPerDeviceSyncStateHelpers() {
+        let now = Date()
+        let metadata = AutomationMetadata(
+            wledSyncStateByDevice: ["a": .synced, "b": .notSynced],
+            wledLastSyncErrorByDevice: ["b": "Timer mismatch"],
+            wledLastSyncAtByDevice: ["a": now]
+        )
+        XCTAssertEqual(metadata.syncState(for: "a"), .synced)
+        XCTAssertEqual(metadata.syncState(for: "b"), .notSynced)
+        XCTAssertEqual(metadata.syncState(for: "missing"), .unknown)
+        XCTAssertEqual(metadata.lastSyncError(for: "b"), "Timer mismatch")
+        XCTAssertNil(metadata.lastSyncError(for: "a"))
+        XCTAssertEqual(metadata.lastSyncAt(for: "a"), now)
+    }
+
+    func testAutomationMetadataSyncStateRoundTripCodable() throws {
+        let original = AutomationMetadata(
+            wledSyncStateByDevice: ["d1": .syncing, "d2": .synced]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AutomationMetadata.self, from: data)
+        XCTAssertEqual(decoded.wledSyncStateByDevice?["d1"], .syncing)
+        XCTAssertEqual(decoded.wledSyncStateByDevice?["d2"], .synced)
+    }
+
+    func testAutomationMacroAssetKindMapping() {
+        XCTAssertEqual(
+            AutomationAction.playlist(PlaylistActionPayload(playlistId: 1, playlistName: nil)).macroAssetKind,
+            .playlist
+        )
+        XCTAssertEqual(
+            AutomationAction.transition(
+                TransitionActionPayload(
+                    startGradient: LEDGradient(stops: [GradientStop(position: 0, hexColor: "FFA000"), GradientStop(position: 1, hexColor: "FFFFFF")]),
+                    startBrightness: 100,
+                    endGradient: LEDGradient(stops: [GradientStop(position: 0, hexColor: "FFFFFF"), GradientStop(position: 1, hexColor: "FFA000")]),
+                    endBrightness: 120,
+                    durationSeconds: 60
+                )
+            ).macroAssetKind,
+            .playlist
+        )
+        XCTAssertEqual(
+            AutomationAction.preset(PresetActionPayload(presetId: 8, paletteName: nil, durationSeconds: nil)).macroAssetKind,
+            .preset
+        )
+        XCTAssertEqual(
+            AutomationAction.gradient(
+                GradientActionPayload(
+                    gradient: LEDGradient(stops: [GradientStop(position: 0, hexColor: "FFFFFF"), GradientStop(position: 1, hexColor: "FFFFFF")]),
+                    brightness: 128,
+                    durationSeconds: 0
+                )
+            ).macroAssetKind,
+            .preset
+        )
+    }
+
+    func testAutomationMetadataManagedSignaturesRoundTripCodable() throws {
+        let original = AutomationMetadata(
+            wledManagedPlaylistSignatureByDevice: ["d1": "playlist-signature"],
+            wledManagedPresetSignatureByDevice: ["d1": "preset-signature"]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AutomationMetadata.self, from: data)
+        XCTAssertEqual(decoded.managedPlaylistSignature(for: "d1"), "playlist-signature")
+        XCTAssertEqual(decoded.managedPresetSignature(for: "d1"), "preset-signature")
+    }
+
+    func testClearWLEDMacroMetadataResetsTargetedDeviceState() {
+        var metadata = AutomationMetadata(
+            wledPlaylistId: 42,
+            wledPlaylistIdsByDevice: ["d1": 42, "d2": 43],
+            wledPresetIdsByDevice: ["d1": 11, "d2": 12],
+            wledManagedPlaylistSignatureByDevice: ["d1": "playlist", "d2": "other"],
+            wledManagedPresetSignatureByDevice: ["d1": "preset", "d2": "other"],
+            wledSyncStateByDevice: ["d1": .synced, "d2": .synced],
+            wledLastSyncErrorByDevice: ["d1": "error"],
+            wledLastSyncAtByDevice: ["d1": Date()]
+        )
+
+        metadata.clearWLEDMacroMetadata(for: ["d1"], preserveTimerSlots: true)
+
+        XCTAssertNil(metadata.wledPlaylistIdsByDevice?["d1"])
+        XCTAssertEqual(metadata.wledPlaylistIdsByDevice?["d2"], 43)
+        XCTAssertNil(metadata.wledPresetIdsByDevice?["d1"])
+        XCTAssertEqual(metadata.wledPresetIdsByDevice?["d2"], 12)
+        XCTAssertEqual(metadata.syncState(for: "d1"), .unknown)
+        XCTAssertNil(metadata.lastSyncError(for: "d1"))
+        XCTAssertNil(metadata.lastSyncAt(for: "d1"))
+        XCTAssertNil(metadata.managedPlaylistSignature(for: "d1"))
+        XCTAssertNil(metadata.managedPresetSignature(for: "d1"))
+    }
+
+    func testNormalizeWLEDScalarFallbacksClearsMultiTargetScalars() {
+        var metadata = AutomationMetadata(
+            wledPlaylistId: 99,
+            wledTimerSlot: 7,
+            wledPlaylistIdsByDevice: ["d1": 10, "d2": 20],
+            wledTimerSlotsByDevice: ["d1": 3, "d2": 4]
+        )
+
+        metadata.normalizeWLEDScalarFallbacks(for: ["d1", "d2"])
+
+        XCTAssertNil(metadata.wledPlaylistId)
+        XCTAssertNil(metadata.wledTimerSlot)
+        XCTAssertEqual(metadata.wledPlaylistIdsByDevice?["d1"], 10)
+        XCTAssertEqual(metadata.wledTimerSlotsByDevice?["d2"], 4)
+    }
+
+    func testNormalizeWLEDScalarFallbacksUsesSingleTargetMaps() {
+        var metadata = AutomationMetadata(
+            wledPlaylistId: 88,
+            wledTimerSlot: 2,
+            wledPlaylistIdsByDevice: ["target": 11, "stale": 44],
+            wledTimerSlotsByDevice: ["target": 6, "stale": 9]
+        )
+
+        metadata.normalizeWLEDScalarFallbacks(for: ["target"])
+
+        XCTAssertEqual(metadata.wledPlaylistId, 11)
+        XCTAssertEqual(metadata.wledTimerSlot, 6)
+        XCTAssertEqual(metadata.wledPlaylistIdsByDevice?["target"], 11)
+        XCTAssertNil(metadata.wledPlaylistIdsByDevice?["stale"])
+        XCTAssertEqual(metadata.wledTimerSlotsByDevice?["target"], 6)
+        XCTAssertNil(metadata.wledTimerSlotsByDevice?["stale"])
+    }
+
+    @MainActor
+    func testLocalTimerCapacityBlocksNinthSpecificTimeAutomation() {
+        let store = AutomationStore.shared
+        let original = store.automations
+        defer { store.automations = original }
+
+        let deviceId = "device-capacity"
+        store.automations = (0..<8).map { idx in
+            makeOnDeviceAutomation(
+                name: "Time \(idx)",
+                trigger: .specificTime(
+                    TimeTrigger(
+                        time: String(format: "%02d:00", idx),
+                        weekdays: WeekdayMask.allDaysSunFirst,
+                        timezoneIdentifier: TimeZone.current.identifier
+                    )
+                ),
+                deviceId: deviceId
+            )
+        }
+
+        let validation = store.validateLocalTimerCapacity(
+            triggerKind: .specificTime,
+            targetDeviceIds: [deviceId]
+        )
+
+        XCTAssertFalse(validation.isValid)
+        XCTAssertTrue(validation.message?.contains("max 8") == true)
+    }
+
+    @MainActor
+    func testLocalTimerCapacitySunriseAndSunsetExclusivity() {
+        let store = AutomationStore.shared
+        let original = store.automations
+        defer { store.automations = original }
+
+        let deviceId = "device-solar"
+        store.automations = [
+            makeOnDeviceAutomation(
+                name: "Sunrise Existing",
+                trigger: .sunrise(
+                    SolarTrigger(
+                        offset: .minutes(0),
+                        location: .followDevice,
+                        weekdays: WeekdayMask.allDaysSunFirst
+                    )
+                ),
+                deviceId: deviceId
+            )
+        ]
+
+        let sunriseValidation = store.validateLocalTimerCapacity(
+            triggerKind: .sunrise,
+            targetDeviceIds: [deviceId]
+        )
+        XCTAssertFalse(sunriseValidation.isValid)
+        XCTAssertTrue(sunriseValidation.message?.contains("slot 8") == true)
+
+        let sunsetValidation = store.validateLocalTimerCapacity(
+            triggerKind: .sunset,
+            targetDeviceIds: [deviceId]
+        )
+        XCTAssertTrue(sunsetValidation.isValid)
+    }
+
+    @MainActor
+    func testUpdateClearsMacroMetadataWhenActionKindChanges() {
+        let store = AutomationStore.shared
+        let original = store.automations
+        defer { store.automations = original }
+
+        let deviceId = "device-macro-reset"
+        var automation = makeOnDeviceAutomation(
+            name: "Macro Reset",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: "12:00",
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            deviceId: deviceId
+        )
+        automation.action = .playlist(PlaylistActionPayload(playlistId: 12, playlistName: "Demo"))
+        automation.metadata.wledPlaylistId = 12
+        automation.metadata.wledPlaylistIdsByDevice = [deviceId: 12]
+        automation.metadata.wledSyncStateByDevice = [deviceId: .synced]
+        store.automations = [automation]
+
+        var edited = automation
+        edited.action = .preset(PresetActionPayload(presetId: 5, paletteName: "Warm", durationSeconds: nil))
+        store.update(edited, syncOnDevice: false)
+
+        guard let updated = store.automations.first else {
+            return XCTFail("Expected updated automation")
+        }
+        XCTAssertNil(updated.metadata.wledPlaylistIdsByDevice?[deviceId])
+        XCTAssertEqual(updated.metadata.syncState(for: deviceId), .unknown)
+    }
+
+    func testSelectTimerSlotDoesNotReuseActionableMacroWhenDisabled() {
+        let timers = [
+            WLEDTimer(id: 0, enabled: false, hour: 8, minute: 30, days: 0x7F, macroId: 99, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil),
+            WLEDTimer(id: 1, enabled: false, hour: 0, minute: 0, days: 0x7F, macroId: 0, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil),
+            WLEDTimer(id: 2, enabled: false, hour: 0, minute: 0, days: 0x7F, macroId: 0, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil)
+        ]
+
+        let selection = AutomationStore._selectTimerSlotForTesting(
+            existingSlot: nil,
+            preferredSlot: 0,
+            allowedSlots: Set([0, 1, 2]),
+            timers: timers,
+            reservedSlots: Set<Int>(),
+            reclaimableSlots: Set<Int>()
+        )
+
+        XCTAssertEqual(selection?.slot, 1)
+        XCTAssertEqual(selection?.reason, "free")
+    }
+
+    func testSelectTimerSlotAllowsReclaimableOccupiedSlot() {
+        let timers = [
+            WLEDTimer(id: 0, enabled: true, hour: 6, minute: 0, days: 0x7F, macroId: 88, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil),
+            WLEDTimer(id: 1, enabled: false, hour: 0, minute: 0, days: 0x7F, macroId: 0, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil)
+        ]
+
+        let selection = AutomationStore._selectTimerSlotForTesting(
+            existingSlot: nil,
+            preferredSlot: 0,
+            allowedSlots: Set([0, 1]),
+            timers: timers,
+            reservedSlots: Set<Int>(),
+            reclaimableSlots: Set([0])
+        )
+
+        XCTAssertEqual(selection?.slot, 0)
+        XCTAssertEqual(selection?.reason, "reclaimable")
+    }
+
+    func testSelectTimerSlotAlwaysReusesExistingSlotFirst() {
+        let timers = [
+            WLEDTimer(id: 0, enabled: true, hour: 7, minute: 0, days: 0x7F, macroId: 77, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil),
+            WLEDTimer(id: 1, enabled: false, hour: 0, minute: 0, days: 0x7F, macroId: 0, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil)
+        ]
+
+        let selection = AutomationStore._selectTimerSlotForTesting(
+            existingSlot: 0,
+            preferredSlot: 1,
+            allowedSlots: Set([0, 1]),
+            timers: timers,
+            reservedSlots: Set<Int>(),
+            reclaimableSlots: Set<Int>()
+        )
+
+        XCTAssertEqual(selection?.slot, 0)
+        XCTAssertEqual(selection?.reason, "existing")
+    }
+
+    private func makeOnDeviceAutomation(
+        name: String,
+        trigger: AutomationTrigger,
+        deviceId: String
+    ) -> Automation {
+        Automation(
+            name: name,
+            trigger: trigger,
+            action: .preset(PresetActionPayload(presetId: 1, paletteName: "Test", durationSeconds: nil)),
+            targets: AutomationTargets(deviceIds: [deviceId], syncGroupName: nil, allowPartialFailure: false),
+            metadata: AutomationMetadata(runOnDevice: true)
+        )
+    }
+}

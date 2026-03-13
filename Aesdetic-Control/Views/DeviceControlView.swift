@@ -9,33 +9,41 @@ import SwiftUI
 import Network
 import Foundation
 import Combine
+import UIKit
 
 struct DeviceControlView: View {
     @ObservedObject private var viewModel = DeviceControlViewModel.shared
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showRealTimeSettings: Bool = false
     @State private var selectedDevice: WLEDDevice?
     @State private var selectedLocation: DeviceLocation = .all
     @State private var showManualEntry: Bool = false
     @State private var manualIP: String = ""
+    @State private var showDiagnostics: Bool = false
+    @State private var diagnosticsTapCount: Int = 0
+    @State private var diagnosticsResetWorkItem: DispatchWorkItem?
+    @AppStorage("DeviceListView.showOfflineDevices") private var showOfflineDevices: Bool = true
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AppBackground()
-            
-            GeometryReader { geometry in
+
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 0) {
                         // Enhanced safe area spacing for status bar
                         Spacer()
-                            .frame(height: max(80, geometry.safeAreaInsets.top + 40))
+                            .frame(height: 16)
                         
                         // Header - matching Dashboard style exactly
                         HStack(alignment: .lastTextBaseline, spacing: 12) {
                             Text("Devices")
                                 .font(.largeTitle.weight(.bold))
-                                .foregroundColor(.white)
+                                .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                                 .lineLimit(1)
+                                .onTapGesture {
+                                    handleDiagnosticsTap()
+                                }
                             
                             Spacer()
                             
@@ -45,7 +53,7 @@ struct DeviceControlView: View {
                             } label: {
                                 Image(systemName: "gear")
                                     .font(.title2)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                             }
                             
                             // Add Device Button
@@ -56,11 +64,23 @@ struct DeviceControlView: View {
                             } label: {
                                 Image(systemName: "plus")
                                     .font(.title2)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                             }
+
                         }
                         .padding(.horizontal, 20)
                         .padding(.bottom, 20)
+
+                        if let discoveryErrorMessage = viewModel.discoveryErrorMessage {
+                            ErrorBanner(
+                                message: discoveryErrorMessage,
+                                actionTitle: discoveryErrorActionTitle(for: discoveryErrorMessage),
+                                onAction: { handleDiscoveryErrorAction(for: discoveryErrorMessage) },
+                                onDismiss: { viewModel.dismissDiscoveryError() }
+                            )
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 12)
+                        }
                     
                     // Location Filter Pills
                     locationFilterPills
@@ -90,20 +110,20 @@ struct DeviceControlView: View {
                                         .scaleEffect(0.7)
                                     Text("Discovering devices...")
                                         .font(.caption)
-                                        .foregroundColor(.gray)
+                                        .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                                     Spacer()
                                     Text("\(viewModel.devices.count) found")
                                         .font(.caption)
                                         .foregroundColor(.green)
                                 }
                                 
-                                Text("Listening for WLED broadcasts (up to 30s).")
+                                Text("Listening for WLED devices (mDNS).")
                                     .font(.caption2)
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
-                            .background(Color.gray.opacity(0.1))
+                            .background(DeviceLightPalette.panelFill(colorScheme))
                             .cornerRadius(8)
                             .padding(.horizontal, 16)
                             .transition(.opacity)
@@ -118,17 +138,20 @@ struct DeviceControlView: View {
                     
                         // Bottom spacing to prevent tab bar overlap and shadow clipping
                         Spacer()
-                            .frame(height: geometry.safeAreaInsets.bottom + 120) // Increased for shadow space
+                            .frame(height: 16)
                     }
                 }
             }
-        }
-        .preferredColorScheme(.dark)
+            .background(Color.clear)
             .sheet(isPresented: $showRealTimeSettings) {
                 RealTimeSettingsView(viewModel: viewModel)
             }
+            .sheet(isPresented: $showDiagnostics) {
+                DiagnosticsView(viewModel: viewModel)
+            }
             .sheet(item: $selectedDevice) { device in
                 DeviceDetailView(device: device, viewModel: viewModel)
+                    .preferredColorScheme(.light)
             }
             .navigationBarHidden(true)
             .onReceive(viewModel.$devices) { _ in
@@ -143,9 +166,11 @@ struct DeviceControlView: View {
                 viewModel.enableActiveHealthChecksIfNeeded()
             }
         }
+        .background(Color.clear)
     }
-    
+
     // MARK: - Helper Properties
+    
     
     private var realTimeStatusColor: Color {
         guard viewModel.isRealTimeEnabled else { return .gray }
@@ -165,10 +190,14 @@ struct DeviceControlView: View {
     // MARK: - Filtered Devices
     
     private var filteredDevicesByLocation: [WLEDDevice] {
-        if selectedLocation == .all {
-            return viewModel.devices
+        var devices = viewModel.devices
+        if selectedLocation != .all {
+            devices = devices.filter { $0.location == selectedLocation }
         }
-        return viewModel.devices.filter { $0.location == selectedLocation }
+        if !showOfflineDevices {
+            devices = devices.filter { $0.isOnline }
+        }
+        return devices
     }
     
     @State private var cachedAvailableLocations: [DeviceLocation] = [.all, .livingRoom, .bedroom]
@@ -202,6 +231,21 @@ struct DeviceControlView: View {
             return viewModel.devices.count
         }
         return viewModel.devices.filter { $0.location == location }.count
+    }
+
+    private func handleDiagnosticsTap() {
+        diagnosticsTapCount += 1
+        diagnosticsResetWorkItem?.cancel()
+        let resetTask = DispatchWorkItem { diagnosticsTapCount = 0 }
+        diagnosticsResetWorkItem = resetTask
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: resetTask)
+
+        if diagnosticsTapCount >= 7 {
+            diagnosticsTapCount = 0
+            diagnosticsResetWorkItem?.cancel()
+            diagnosticsResetWorkItem = nil
+            showDiagnostics = true
+        }
     }
     
     private func updateAvailableLocations() {
@@ -238,7 +282,7 @@ struct DeviceControlView: View {
             HStack {
                 Text("Add device manually")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                 
                 Spacer()
                 
@@ -254,10 +298,10 @@ struct DeviceControlView: View {
             if showManualEntry {
                 HStack(spacing: 12) {
                     TextField("192.168.1.100", text: $manualIP)
-                        .foregroundColor(.white)
+                        .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
-                        .background(Color.gray.opacity(0.2))
+                        .background(DeviceLightPalette.fieldFill(colorScheme))
                         .cornerRadius(10)
                         .keyboardType(.numbersAndPunctuation)
                         .textInputAutocapitalization(.never)
@@ -275,7 +319,7 @@ struct DeviceControlView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.gray.opacity(0.1))
+        .background(DeviceLightPalette.panelFill(colorScheme))
         .cornerRadius(12)
         .padding(.horizontal, 16)
     }
@@ -288,29 +332,43 @@ struct LocationPillButton: View {
     let isSelected: Bool
     let deviceCount: Int
     let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    private var surfaceStyle: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
     
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Text(location.displayName)
                     .font(.subheadline.weight(.medium))
-                    .foregroundColor(isSelected ? .black : .white)
+                    .foregroundColor(DeviceLightPalette.pillText(colorScheme, isSelected: isSelected))
                 
                 if deviceCount > 0 {
                     Text("\(deviceCount)")
                         .font(.caption.weight(.semibold))
-                        .foregroundColor(isSelected ? .black.opacity(0.6) : .white.opacity(0.6))
+                        .foregroundColor(DeviceLightPalette.pillSubtext(colorScheme, isSelected: isSelected))
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 18)
-                    .fill(isSelected ? Color.white : Color.white.opacity(0.15))
+                    .fill(DeviceLightPalette.pillFill(colorScheme, isSelected: isSelected))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
-                    .stroke(Color.white.opacity(isSelected ? 0 : 0.3), lineWidth: 1)
+                    .stroke(DeviceLightPalette.pillStroke(colorScheme, isSelected: isSelected), lineWidth: 1)
+            )
+            .shadow(
+                color: surfaceStyle.controlShadowAmbient.color,
+                radius: surfaceStyle.controlShadowAmbient.radius,
+                x: surfaceStyle.controlShadowAmbient.x,
+                y: surfaceStyle.controlShadowAmbient.y
+            )
+            .shadow(
+                color: surfaceStyle.controlShadowKey.color,
+                radius: surfaceStyle.controlShadowKey.radius,
+                x: surfaceStyle.controlShadowKey.x,
+                y: surfaceStyle.controlShadowKey.y
             )
         }
         .buttonStyle(.plain)
@@ -325,24 +383,25 @@ struct LocationPillButton: View {
 struct EmptyStateView: View {
     let onScan: () -> Void
     let onAddDevice: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
         VStack(spacing: 24) {
             // Icon
             Image(systemName: "lightbulb.slash")
                 .font(.system(.largeTitle, design: .rounded))
-                .foregroundColor(.gray)
+                .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
             
             // Title and Description
             VStack(spacing: 8) {
                 Text("No WLED Devices Found")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                 
                 Text("Make sure your WLED devices are powered on and connected to the same WiFi network.")
                     .font(.body)
-                    .foregroundColor(.gray)
+                    .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
             }
@@ -370,6 +429,7 @@ struct ScanningStateView: View {
     let progress: String
     let devicesFound: Int
     let lastDiscoveryTime: Date?
+    @Environment(\.colorScheme) private var colorScheme
     
     @State private var animationProgress: Double = 0
     
@@ -407,11 +467,11 @@ struct ScanningStateView: View {
                 Text("Discovering WLED Devices")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                 
                 Text(progress)
                     .font(.body)
-                    .foregroundColor(.gray)
+                    .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                     .multilineTextAlignment(.center)
                     .animation(.easeInOut(duration: 0.3), value: progress)
                 
@@ -434,7 +494,7 @@ struct ScanningStateView: View {
             VStack(spacing: 12) {
                 Text("Using multiple discovery methods:")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                 
                 HStack(spacing: 20) {
                     DiscoveryMethodBadge(
@@ -462,7 +522,7 @@ struct ScanningStateView: View {
             if let lastTime = lastDiscoveryTime {
                 Text("Last scan: \(formatRelativeTime(lastTime))")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                     .padding(.top, 16)
             }
         }
@@ -483,6 +543,7 @@ struct DiscoveryMethodBadge: View {
     let icon: String
     let title: String
     let description: String
+    @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
         VStack(spacing: 4) {
@@ -493,15 +554,15 @@ struct DiscoveryMethodBadge: View {
             Text(title)
                 .font(.caption2)
                 .fontWeight(.medium)
-                .foregroundColor(.white)
+                .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
             
             Text(description)
                 .font(.caption2)
-                .foregroundColor(.gray)
+                .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
-        .background(Color.gray.opacity(0.1))
+        .background(DeviceLightPalette.panelFill(colorScheme))
         .cornerRadius(8)
     }
 }
@@ -522,6 +583,7 @@ struct CardButtonStyle: ButtonStyle {
 struct AddDeviceSheet: View {
     let viewModel: DeviceControlViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var manualIP: String = ""
     @State private var isScanning: Bool = false
     
@@ -552,11 +614,11 @@ struct AddDeviceSheet: View {
                             Text("Auto Discovery")
                                 .font(.title2)
                                 .fontWeight(.semibold)
-                                .foregroundColor(.white)
+                                .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                                 
                             Text("Automatically scan your network for WLED devices using mDNS, UDP broadcasts, and IP scanning")
                                 .font(.body)
-                                .foregroundColor(.gray)
+                                .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                                 .multilineTextAlignment(.center)
                             
                             Button("Start Comprehensive Scan") {
@@ -576,7 +638,7 @@ struct AddDeviceSheet: View {
                             
                             Text("OR")
                                 .font(.caption)
-                                .foregroundColor(.gray)
+                                .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                                 .padding(.horizontal, 16)
                             
                             Rectangle()
@@ -589,18 +651,18 @@ struct AddDeviceSheet: View {
                             Text("Manual Entry")
                                 .font(.title2)
                                 .fontWeight(.semibold)
-                                .foregroundColor(.white)
+                                .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                             
                             Text("Enter the IP address of your WLED device if auto-discovery doesn't find it")
                                 .font(.body)
-                                .foregroundColor(.gray)
+                                .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                                 .multilineTextAlignment(.center)
                             
                             TextField("192.168.1.100", text: $manualIP)
-                                .foregroundColor(.white)
+                                .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
-                                .background(Color.gray.opacity(0.2))
+                                .background(DeviceLightPalette.fieldFill(colorScheme))
                                 .cornerRadius(12)
                                 .keyboardType(.numbersAndPunctuation)
                                 .textInputAutocapitalization(.never)
@@ -623,15 +685,15 @@ struct AddDeviceSheet: View {
                             Text("💡 Tips for finding your WLED device:")
                                 .font(.caption)
                                 .fontWeight(.medium)
-                                .foregroundColor(.gray)
+                                .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                             
                             Text("• Check your router's device list\n• Look for devices named 'WLED' or 'ESP'\n• Try accessing the WLED web interface\n• Use a network scanner app")
                                 .font(.caption)
-                                .foregroundColor(.gray)
+                                .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                                 .multilineTextAlignment(.leading)
                         }
                         .padding()
-                        .background(Color.gray.opacity(0.1))
+                        .background(DeviceLightPalette.panelFill(colorScheme))
                         .cornerRadius(12)
                     }
                 }
@@ -668,7 +730,75 @@ struct AddDeviceSheet: View {
     }
 }
 
+private enum DeviceLightPalette {
+    static func textPrimary(_ scheme: ColorScheme) -> Color {
+        GlassTheme.text(for: scheme).pagePrimaryText
+    }
 
-#Preview {
-    DeviceControlView()
-} 
+    static func textSecondary(_ scheme: ColorScheme) -> Color {
+        GlassTheme.text(for: scheme).pageSecondaryText
+    }
+
+    static func textTertiary(_ scheme: ColorScheme) -> Color {
+        GlassTheme.text(for: scheme).pageTertiaryText
+    }
+
+    static func pillFill(_ scheme: ColorScheme, isSelected: Bool) -> Color {
+        let style = GlassTheme.surfaces(for: scheme)
+        return isSelected ? style.pillFillSelected : style.pillFillDefault
+    }
+
+    static func pillStroke(_ scheme: ColorScheme, isSelected: Bool) -> Color {
+        if scheme == .dark && isSelected {
+            return .clear
+        }
+        return GlassTheme.surfaces(for: scheme).pillStroke
+    }
+
+    static func pillText(_ scheme: ColorScheme, isSelected: Bool) -> Color {
+        let style = GlassTheme.text(for: scheme)
+        return isSelected ? style.pillTextSelected : style.pillTextDefault
+    }
+
+    static func pillSubtext(_ scheme: ColorScheme, isSelected: Bool) -> Color {
+        let style = GlassTheme.text(for: scheme)
+        return isSelected ? style.pillSubtextSelected : style.pillSubtextDefault
+    }
+
+    static func fieldFill(_ scheme: ColorScheme) -> Color {
+        GlassTheme.surfaces(for: scheme).fieldFill
+    }
+
+    static func panelFill(_ scheme: ColorScheme) -> Color {
+        GlassTheme.surfaces(for: scheme).panelFill
+    }
+}
+
+private extension DeviceControlView {
+    func discoveryErrorActionTitle(for message: String) -> String? {
+        let lower = message.lowercased()
+        if lower.contains("local network") || lower.contains("permission") {
+            return "Open Settings"
+        }
+        return "Rescan"
+    }
+    
+    func handleDiscoveryErrorAction(for message: String) {
+        let lower = message.lowercased()
+        if lower.contains("local network") || lower.contains("permission") {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+        } else {
+            viewModel.enableActiveHealthChecksIfNeeded()
+            Task { await viewModel.startScanning() }
+        }
+    }
+}
+
+
+struct DeviceControlView_Previews: PreviewProvider {
+    static var previews: some View {
+        DeviceControlView()
+    }
+}

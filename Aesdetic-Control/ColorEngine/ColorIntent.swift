@@ -14,7 +14,7 @@ struct ColorIntent: Codable {
     // Core fields
     var on: Bool? = nil                   // Power state (for combining with gradient on power-on)
     var brightness: Int? = nil            // 0...255
-    var transitionMs: Int? = nil          // optional top-level transition
+    var transitionDeciseconds: Int? = nil // optional top-level transition (tt)
 
     // Solid color
     var solidRGB: [Int]? = nil            // [r,g,b] or [r,g,b,w]
@@ -39,5 +39,4 @@ struct ColorIntent: Codable {
         self.mode = mode
     }
 }
-
 

@@ -10,6 +10,7 @@ struct ColorWheelInline: View {
     let usesKelvinCCT: Bool
     let allowCCTForTemperatureStops: Bool
     let allowManualWhite: Bool
+    let autoWhiteEnabled: Bool
     let cctKelvinRange: ClosedRange<Int>
     let onColorChange: (Color, Double?, Double?) -> Void  // Color, optional temperature (0-1), optional white level (0-1)
     let onRemove: () -> Void
@@ -26,6 +27,7 @@ struct ColorWheelInline: View {
     @State private var hexInput: String = ""
     @State private var isUsingTemperatureSlider: Bool = false
     @State private var isEditingHex: Bool = false
+    @State private var isProgrammaticSyncInProgress: Bool = false
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
     init(
@@ -38,6 +40,7 @@ struct ColorWheelInline: View {
         usesKelvinCCT: Bool,
         allowCCTForTemperatureStops: Bool = false,
         allowManualWhite: Bool = true,
+        autoWhiteEnabled: Bool = false,
         cctKelvinRange: ClosedRange<Int>? = nil,
         onColorChange: @escaping (Color, Double?, Double?) -> Void,
         onRemove: @escaping () -> Void,
@@ -52,6 +55,7 @@ struct ColorWheelInline: View {
         self.usesKelvinCCT = usesKelvinCCT
         self.allowCCTForTemperatureStops = allowCCTForTemperatureStops
         self.allowManualWhite = allowManualWhite
+        self.autoWhiteEnabled = autoWhiteEnabled
         self.cctKelvinRange = cctKelvinRange ?? Self.defaultKelvinRange
         self.onColorChange = onColorChange
         self.onRemove = onRemove
@@ -104,6 +108,12 @@ struct ColorWheelInline: View {
                                 isEditingHex = false
                             }
                             .onChange(of: hexInput) { _, newValue in
+                                if isProgrammaticSyncInProgress {
+                                    #if DEBUG
+                                    print("color_wheel.hex_auto_apply_suppressed_programmatic_sync")
+                                    #endif
+                                    return
+                                }
                                 // Auto-apply when valid hex is entered, but NOT during temperature slider drag
                                 if isValidHex(newValue) && !isUsingTemperatureSlider {
                                     applyHexColor()
@@ -536,6 +546,10 @@ struct ColorWheelInline: View {
         if !force, initialColor.toHex() == selectedColor.toHex() {
             return
         }
+        #if DEBUG
+        print("color_wheel.sync.begin force=\(force)")
+        #endif
+        isProgrammaticSyncInProgress = true
         selectedColor = initialColor
         extractHSV(from: initialColor)
         if let initialTemperature {
@@ -551,6 +565,12 @@ struct ColorWheelInline: View {
         }
         updatePickerPosition()
         updateHexInput()
+        Task { @MainActor in
+            isProgrammaticSyncInProgress = false
+            #if DEBUG
+            print("color_wheel.sync.end")
+            #endif
+        }
     }
     
     private var temperatureText: String {
@@ -815,6 +835,7 @@ struct ColorWheelInline: View {
     }
     
     private func applyHexColor() {
+        guard !isProgrammaticSyncInProgress else { return }
         let cleanHex = hexInput.replacingOccurrences(of: "#", with: "").uppercased()
         guard isValidHex(cleanHex) else { return }
         
@@ -832,8 +853,16 @@ struct ColorWheelInline: View {
 
     private func resolvedWhiteLevel(forTemperature: Bool) -> Double? {
         guard supportsWhite, allowManualWhite else { return nil }
-        if allowCCTForTemperatureStops, forTemperature {
-            return nil
+        if forTemperature {
+            if allowCCTForTemperatureStops {
+                return nil
+            }
+            if whiteLevel > 0.0 { return whiteLevel }
+            if autoWhiteEnabled {
+                return nil
+            }
+            // Default gentle white blend when CCT is unavailable on RGBW strips.
+            return 0.35
         }
         if whiteLevel > 0.0 { return whiteLevel }
         return nil

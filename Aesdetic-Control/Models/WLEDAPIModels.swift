@@ -10,7 +10,7 @@ import SwiftUI
 // MARK: - API Request Models
 
 /// Model for updating WLED device state via API
-/// - Note: Transition time is stored in milliseconds internally but encoded as `tt` in deciseconds (tenths of a second) for WLED API.
+/// - Note: Transition time is expressed in deciseconds (tenths of a second) per WLED JSON API.
 struct WLEDStateUpdate: Codable {
     /// Power state (on/off)
     let on: Bool?
@@ -19,42 +19,62 @@ struct WLEDStateUpdate: Codable {
     /// Array of segment updates
     let seg: [SegmentUpdate]?
     let udpn: UDPNUpdate?
-    /// Transition time in milliseconds (converted to deciseconds for WLED API)
-    private let transitionMilliseconds: Int?
-    /// Global transition time in deciseconds (applies to subsequent state changes)
+    /// One-off transition time for this update (deciseconds, encoded as `tt`)
     private let transitionDeciseconds: Int?
+    /// Default transition time for subsequent updates (deciseconds, encoded as `transition`)
+    private let defaultTransitionDeciseconds: Int?
+    /// Main segment index
+    private let mainSegment: Int?
     /// Apply preset by ID
     let ps: Int?
-    /// Current playlist ID (read-only in WLED JSON API)
+    /// Current playlist ID (settable in WLED JSON API)
     let pl: Int?
     /// Night Light configuration
     let nl: NightLightUpdate?
     /// Live override release (0 disables realtime streaming)
     let lor: Int?
+    /// Reboot device
+    let rb: Bool?
     
-    init(on: Bool? = nil, bri: Int? = nil, seg: [SegmentUpdate]? = nil, udpn: UDPNUpdate? = nil, transition: Int? = nil, transitionDeciseconds: Int? = nil, ps: Int? = nil, pl: Int? = nil, nl: NightLightUpdate? = nil, lor: Int? = nil) {
+    init(
+        on: Bool? = nil,
+        bri: Int? = nil,
+        seg: [SegmentUpdate]? = nil,
+        udpn: UDPNUpdate? = nil,
+        transitionDeciseconds: Int? = nil,
+        defaultTransitionDeciseconds: Int? = nil,
+        mainSegment: Int? = nil,
+        ps: Int? = nil,
+        pl: Int? = nil,
+        nl: NightLightUpdate? = nil,
+        lor: Int? = nil,
+        rb: Bool? = nil
+    ) {
         self.on = on
         self.bri = bri
         self.seg = seg
         self.udpn = udpn
-        self.transitionMilliseconds = transition
         self.transitionDeciseconds = transitionDeciseconds
+        self.defaultTransitionDeciseconds = defaultTransitionDeciseconds
+        self.mainSegment = mainSegment
         self.ps = ps
         self.pl = pl
         self.nl = nl
         self.lor = lor
+        self.rb = rb
     }
     
-    /// Convenience accessor for transition time in milliseconds
+    /// Convenience accessor for one-off transition time (deciseconds)
     var transition: Int? {
-        return transitionMilliseconds
+        transitionDeciseconds
     }
     
     enum CodingKeys: String, CodingKey {
         case on, bri, seg, udpn
         case transitionDeciseconds = "tt"  // WLED expects "tt" field name
-        case transition = "transition"
-        case ps, pl, nl, lor
+        case defaultTransitionDeciseconds = "transition"
+        case mainSegment = "mainseg"
+        case ps, pl, nl, lor, rb
     }
     
     func encode(to encoder: Encoder) throws {
@@ -63,19 +83,20 @@ struct WLEDStateUpdate: Codable {
         try container.encodeIfPresent(bri, forKey: .bri)
         try container.encodeIfPresent(seg, forKey: .seg)
         try container.encodeIfPresent(udpn, forKey: .udpn)
-        // Convert milliseconds to deciseconds (tenths of a second) for WLED API
-        if let transitionMs = transitionMilliseconds {
-            // Round to nearest decisecond to preserve intent (e.g. 300ms → 3)
-            let deciseconds = max(0, Int((Double(transitionMs) / 100.0).rounded()))
-            try container.encode(deciseconds, forKey: .transitionDeciseconds)
-        }
         if let transitionDeciseconds {
-            try container.encode(transitionDeciseconds, forKey: .transition)
+            try container.encode(transitionDeciseconds, forKey: .transitionDeciseconds)
+        }
+        if let defaultTransitionDeciseconds {
+            try container.encode(defaultTransitionDeciseconds, forKey: .defaultTransitionDeciseconds)
+        }
+        if let mainSegment {
+            try container.encode(mainSegment, forKey: .mainSegment)
         }
         try container.encodeIfPresent(ps, forKey: .ps)
         try container.encodeIfPresent(pl, forKey: .pl)
         try container.encodeIfPresent(nl, forKey: .nl)
         try container.encodeIfPresent(lor, forKey: .lor)
+        try container.encodeIfPresent(rb, forKey: .rb)
     }
     
     init(from decoder: Decoder) throws {
@@ -84,17 +105,14 @@ struct WLEDStateUpdate: Codable {
         self.bri = try container.decodeIfPresent(Int.self, forKey: .bri)
         self.seg = try container.decodeIfPresent([SegmentUpdate].self, forKey: .seg)
         self.udpn = try container.decodeIfPresent(UDPNUpdate.self, forKey: .udpn)
-        // Convert deciseconds back to milliseconds when decoding
-        if let deciseconds = try container.decodeIfPresent(Int.self, forKey: .transitionDeciseconds) {
-            self.transitionMilliseconds = deciseconds * 100
-        } else {
-            self.transitionMilliseconds = nil
-        }
-        self.transitionDeciseconds = try container.decodeIfPresent(Int.self, forKey: .transition)
+        self.transitionDeciseconds = try container.decodeIfPresent(Int.self, forKey: .transitionDeciseconds)
+        self.defaultTransitionDeciseconds = try container.decodeIfPresent(Int.self, forKey: .defaultTransitionDeciseconds)
+        self.mainSegment = try container.decodeIfPresent(Int.self, forKey: .mainSegment)
         self.ps = try container.decodeIfPresent(Int.self, forKey: .ps)
         self.pl = try container.decodeIfPresent(Int.self, forKey: .pl)
         self.nl = try container.decodeIfPresent(NightLightUpdate.self, forKey: .nl)
         self.lor = try container.decodeIfPresent(Int.self, forKey: .lor)
+        self.rb = try container.decodeIfPresent(Bool.self, forKey: .rb)
     }
 }
 
@@ -138,12 +156,22 @@ struct SegmentUpdate: Codable {
     let sx: Int?
     let ix: Int?
     let pal: Int?
+    let c1: Int?
+    let c2: Int?
+    let c3: Int?
 
     // Flags
     let sel: Bool?
     let rev: Bool?
     let mi: Bool?
     let cln: Int?
+    let o1: Bool?
+    let o2: Bool?
+    let o3: Bool?
+    let si: Int?
+    let m12: Int?
+    let setId: Int?
+    let name: String?
     /// Freeze flag: true = freeze segment (stop animations), false = resume
     let frz: Bool?
 
@@ -163,10 +191,20 @@ struct SegmentUpdate: Codable {
         sx: Int? = nil,
         ix: Int? = nil,
         pal: Int? = nil,
+        c1: Int? = nil,
+        c2: Int? = nil,
+        c3: Int? = nil,
         sel: Bool? = nil,
         rev: Bool? = nil,
         mi: Bool? = nil,
         cln: Int? = nil,
+        o1: Bool? = nil,
+        o2: Bool? = nil,
+        o3: Bool? = nil,
+        si: Int? = nil,
+        m12: Int? = nil,
+        setId: Int? = nil,
+        name: String? = nil,
         frz: Bool? = nil
     ) {
         self.id = id
@@ -184,20 +222,36 @@ struct SegmentUpdate: Codable {
         self.sx = sx
         self.ix = ix
         self.pal = pal
+        self.c1 = c1
+        self.c2 = c2
+        self.c3 = c3
         self.sel = sel
         self.rev = rev
         self.mi = mi
         self.cln = cln
+        self.o1 = o1
+        self.o2 = o2
+        self.o3 = o3
+        self.si = si
+        self.m12 = m12
+        self.setId = setId
+        self.name = name
         self.frz = frz
     }
     
     // CRITICAL: Custom encoding to omit col when nil
     // Omit col when intentionally sending CCT-only updates
     enum CodingKeys: String, CodingKey {
-        case id, start, stop, len, grp, spc, ofs
+        case id, start, stop, len, grp, spc
+        case ofs = "of"
         case on, bri, col, cct
         case fx, sx, ix, pal
-        case sel, rev, mi, cln, frz
+        case c1, c2, c3
+        case sel, rev, mi, cln
+        case o1, o2, o3, si, m12
+        case setId = "set"
+        case name = "n"
+        case frz
     }
     
     func encode(to encoder: Encoder) throws {
@@ -225,10 +279,20 @@ struct SegmentUpdate: Codable {
         try sx.map { try container.encode($0, forKey: .sx) }
         try ix.map { try container.encode($0, forKey: .ix) }
         try pal.map { try container.encode($0, forKey: .pal) }
+        try c1.map { try container.encode($0, forKey: .c1) }
+        try c2.map { try container.encode($0, forKey: .c2) }
+        try c3.map { try container.encode($0, forKey: .c3) }
         try sel.map { try container.encode($0, forKey: .sel) }
         try rev.map { try container.encode($0, forKey: .rev) }
         try mi.map { try container.encode($0, forKey: .mi) }
         try cln.map { try container.encode($0, forKey: .cln) }
+        try o1.map { try container.encode($0, forKey: .o1) }
+        try o2.map { try container.encode($0, forKey: .o2) }
+        try o3.map { try container.encode($0, forKey: .o3) }
+        try si.map { try container.encode($0, forKey: .si) }
+        try m12.map { try container.encode($0, forKey: .m12) }
+        try setId.map { try container.encode($0, forKey: .setId) }
+        try name.map { try container.encode($0, forKey: .name) }
         try frz.map { try container.encode($0, forKey: .frz) }
     }
 }
@@ -265,23 +329,56 @@ struct WLEDEffect: Codable, Identifiable {
 struct WLEDPreset: Codable, Identifiable {
     let id: Int
     let name: String
-    let quickLoad: Bool?
+    let quickLoad: String?
     let segment: SegmentUpdate?
+    let state: WLEDStateUpdate?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case quickLoad = "ql"
+        case segment = "seg"
+        case state = "win"
+    }
 }
 
 struct WLEDPresetSaveRequest {
     let id: Int
     let name: String
-    let quickLoad: Bool?
+    let quickLoad: String?
     let state: WLEDStateUpdate?
     let saveOnly: Bool?
+    let includeBrightness: Bool?
+    let saveSegmentBounds: Bool?
+    let selectedSegmentsOnly: Bool?
+    let transitionDeciseconds: Int?
+    let applyAtBoot: Bool?
+    let customAPICommand: String?
 
-    init(id: Int, name: String, quickLoad: Bool?, state: WLEDStateUpdate?, saveOnly: Bool? = nil) {
+    init(
+        id: Int,
+        name: String,
+        quickLoad: String?,
+        state: WLEDStateUpdate?,
+        saveOnly: Bool? = nil,
+        includeBrightness: Bool? = nil,
+        saveSegmentBounds: Bool? = nil,
+        selectedSegmentsOnly: Bool? = nil,
+        transitionDeciseconds: Int? = nil,
+        applyAtBoot: Bool? = nil,
+        customAPICommand: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.quickLoad = quickLoad
         self.state = state
         self.saveOnly = saveOnly
+        self.includeBrightness = includeBrightness
+        self.saveSegmentBounds = saveSegmentBounds
+        self.selectedSegmentsOnly = selectedSegmentsOnly
+        self.transitionDeciseconds = transitionDeciseconds
+        self.applyAtBoot = applyAtBoot
+        self.customAPICommand = customAPICommand
     }
 }
 
@@ -290,47 +387,51 @@ struct WLEDPlaylist: Codable, Identifiable {
     let id: Int
     let name: String
     let presets: [Int]
-    let duration: [Int]
-    let transition: [Int]
+    let duration: [Int]  // Per-step entry duration in deciseconds (native WLED `dur`)
+    let transition: [Int]  // Per-step transition in deciseconds (native WLED)
     let `repeat`: Int?
     let endPresetId: Int?
+    let shuffle: Int?
 }
 
 /// Model for WLED timer/macro configuration
-/// WLED timers are stored in /json/cfg under "timers" array
-/// Each timer slot can trigger presets, playlists, or macros based on time
+/// WLED timers are stored in /json/cfg under "timers.ins"
+/// Each timer slot triggers a preset ID (WLED "macro") based on time
 struct WLEDTimer: Codable, Identifiable {
     /// Timer slot ID (0-based index, typically 0-9)
     let id: Int
     /// Enable/disable timer
     let enabled: Bool
-    /// Time in minutes from midnight (0-1439)
-    let time: Int
-    /// Days of week bitmask (bit 0=Sun, bit 6=Sat)
-    /// 0x01 = Sunday, 0x02 = Monday, ..., 0x40 = Saturday
-    /// 0x7F = All days, 0x3E = Weekdays only
+    /// Hour (0-23, 24 = hourly, 255 = sunrise/sunset)
+    let hour: Int
+    /// Minute (0-59 for standard timers, offset for sunrise/sunset)
+    let minute: Int
+    /// Days of week bitmask (WLED native: bit 0=Mon ... bit 6=Sun)
+    /// 0x01 = Monday, 0x02 = Tuesday, ..., 0x40 = Sunday
+    /// 0x7F = All days, 0x1F = Weekdays only (Mon-Fri)
     let days: Int
-    /// Action type: 0=preset, 1=playlist, 2=macro
-    let action: Int
-    /// Preset/playlist/macro ID to trigger
-    let presetId: Int
-    /// Start preset ID (for sunrise/sunset transitions)
-    let startPresetId: Int?
-    /// End preset ID (for sunrise/sunset transitions)
-    let endPresetId: Int?
-    /// Transition duration in deciseconds (for preset transitions)
-    let transition: Int?
+    /// Preset ID to trigger (WLED "macro" field)
+    let macroId: Int
+    /// Optional start date month (1-12)
+    let startMonth: Int?
+    /// Optional start date day (1-31)
+    let startDay: Int?
+    /// Optional end date month (1-12)
+    let endMonth: Int?
+    /// Optional end date day (1-31)
+    let endDay: Int?
     
     enum CodingKeys: String, CodingKey {
         case id
         case enabled = "en"
-        case time = "time"
+        case hour = "hour"
+        case minute = "min"
         case days = "dow"
-        case action = "act"
-        case presetId = "ps"
-        case startPresetId = "ps1"
-        case endPresetId = "ps2"
-        case transition = "tt"
+        case macroId = "macro"
+        case startMonth = "startMonth"
+        case startDay = "startDay"
+        case endMonth = "endMonth"
+        case endDay = "endDay"
     }
 }
 
@@ -340,32 +441,56 @@ struct WLEDTimerUpdate: Codable {
     let id: Int
     /// Enable/disable timer
     let enabled: Bool?
-    /// Time in minutes from midnight (0-1439)
-    let time: Int?
-    /// Days of week bitmask
+    /// Hour (0-23, 24 = hourly, 255 = sunrise/sunset)
+    let hour: Int?
+    /// Minute (0-59 for standard timers, offset for sunrise/sunset)
+    let minute: Int?
+    /// Days of week bitmask (WLED native: bit 0=Mon ... bit 6=Sun)
     let days: Int?
-    /// Action type: 0=preset, 1=playlist, 2=macro
-    let action: Int?
-    /// Preset/playlist/macro ID to trigger
-    let presetId: Int?
-    /// Start preset ID (for sunrise/sunset transitions)
-    let startPresetId: Int?
-    /// End preset ID (for sunrise/sunset transitions)
-    let endPresetId: Int?
-    /// Transition duration in deciseconds
-    let transition: Int?
+    /// Preset ID to trigger (WLED "macro" field)
+    let macroId: Int?
+    /// Optional start date month (1-12)
+    let startMonth: Int?
+    /// Optional start date day (1-31)
+    let startDay: Int?
+    /// Optional end date month (1-12)
+    let endMonth: Int?
+    /// Optional end date day (1-31)
+    let endDay: Int?
     
     enum CodingKeys: String, CodingKey {
         case id
         case enabled = "en"
-        case time = "time"
+        case hour = "hour"
+        case minute = "min"
         case days = "dow"
-        case action = "act"
-        case presetId = "ps"
-        case startPresetId = "ps1"
-        case endPresetId = "ps2"
-        case transition = "tt"
+        case macroId = "macro"
+        case startMonth = "startMonth"
+        case startDay = "startDay"
+        case endMonth = "endMonth"
+        case endDay = "endDay"
     }
+}
+
+/// WLED macro trigger bindings in /json/cfg.
+/// These are native firmware hooks that can execute a preset/playlist macro ID.
+struct WLEDMacroBindings: Equatable {
+    let buttonPressMacro: Int
+    let buttonLongPressMacro: Int
+    let buttonDoublePressMacro: Int
+    let alexaOnMacro: Int
+    let alexaOffMacro: Int
+    let nightLightMacro: Int
+}
+
+/// Partial update payload for WLED macro trigger bindings.
+struct WLEDMacroBindingsUpdate {
+    let buttonPressMacro: Int?
+    let buttonLongPressMacro: Int?
+    let buttonDoublePressMacro: Int?
+    let alexaOnMacro: Int?
+    let alexaOffMacro: Int?
+    let nightLightMacro: Int?
 }
 
 // MARK: - WLED Transition Constants
@@ -379,17 +504,119 @@ let maxWLEDTransitionDeciseconds = 65535
 let maxWLEDTransitionSeconds = 6553.5
 
 /// Practical upper bound for native transitions in this app (policy cap below WLED max)
-let maxWLEDNativeTransitionSeconds = min(maxWLEDTransitionSeconds, 3600.0)
+let maxWLEDNativeTransitionSeconds = maxWLEDTransitionSeconds
 
-/// Playlist constraints: WLED uses uint16 ms transitions and 100-entry playlists.
+/// Playlist constraints: WLED uses per-step decisecond timing and 100-entry playlists.
 let maxWLEDPlaylistEntries = 100
-let maxWLEDPlaylistTransitionSeconds = 60.0
+let maxWLEDPlaylistTransitionSeconds = 65.0
+let maxWLEDPlaylistTransitionDeciseconds = 650
+let maxWLEDPlaylistTransitionMilliseconds = maxWLEDPlaylistTransitionDeciseconds * 100
 let maxWLEDPlaylistDurationSeconds = 3600.0
-let playlistHoldThresholdSeconds = 1200.0
-let playlistHoldScaleSeconds = 2400.0
-let playlistHoldMaxSeconds = 30.0
 let maxWLEDPresetSlots = 250
 let presetSlotReserve = 20
+let temporaryTransitionReservedPresetLower = 170
+let temporaryTransitionReservedPresetUpper = 250
+let temporaryTransitionCleanupGraceMinutes = 15.0
+
+enum TransitionGenerationContext: String, Codable {
+    case temporaryLive
+    case persistentAutomation
+}
+
+enum GeneratedPlaylistTimingMode: Equatable {
+    case fullBlend
+    case boundaryCompensated(padDeciseconds: Int)
+
+    var padDeciseconds: Int {
+        switch self {
+        case .fullBlend:
+            return 0
+        case .boundaryCompensated(let padDeciseconds):
+            return max(0, padDeciseconds)
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .fullBlend:
+            return "full-blend"
+        case .boundaryCompensated(let padDeciseconds):
+            return "boundary-compensated(\(max(0, padDeciseconds))ds)"
+        }
+    }
+}
+
+enum TransitionStepQualityLabel: String, Codable {
+    case high
+    case balanced
+    case conservative
+
+    var displayName: String {
+        switch self {
+        case .high: return "High"
+        case .balanced: return "Balanced"
+        case .conservative: return "Conservative"
+        }
+    }
+}
+
+struct TransitionStepProfile: Equatable {
+    let context: TransitionGenerationContext
+    let baseLegSeconds: Double
+    let legSeconds: Double
+    let qualityLabel: TransitionStepQualityLabel
+    let steps: Int
+    let slotsRequired: Int
+    let fitsBudget: Bool
+    let wasCoarsened: Bool
+    let availableSlots: Int?
+    let perAutomationBudget: Int?
+    let reserve: Int?
+    let maxDurationSecondsAtCurrentQuality: Double?
+}
+
+enum TransitionDurationPicker {
+    static let maxMinutes = 60
+    static let maxSeconds = maxMinutes * 60
+    static let recommendedMaxMinutes = 35
+    static let recommendedMaxSeconds = recommendedMaxMinutes * 60
+    static let recommendedMaxRatio = Double(recommendedMaxSeconds) / Double(maxSeconds)
+
+    static func clampedTotalSeconds(_ seconds: Double) -> Int {
+        max(0, min(Int(seconds.rounded()), maxSeconds))
+    }
+
+    static func components(from seconds: Double) -> (minutes: Int, seconds: Int) {
+        let total = clampedTotalSeconds(seconds)
+        return (total / 60, total % 60)
+    }
+
+    static func totalSeconds(minutes: Int, seconds: Int) -> Int {
+        let clampedMinutes = max(0, min(minutes, maxMinutes))
+        if clampedMinutes == maxMinutes {
+            return maxSeconds
+        }
+        let clampedSeconds = max(0, min(seconds, 59))
+        return clampedMinutes * 60 + clampedSeconds
+    }
+
+    static func clockString(seconds: Double) -> String {
+        let comps = components(from: seconds)
+        return "\(comps.minutes):\(String(format: "%02d", comps.seconds))"
+    }
+
+    static func summaryString(seconds: Double) -> String {
+        let total = clampedTotalSeconds(seconds)
+        if total == 0 {
+            return "Instant"
+        }
+        return clockString(seconds: Double(total))
+    }
+
+    static func exceedsRecommendedMax(_ seconds: Double) -> Bool {
+        clampedTotalSeconds(seconds) > recommendedMaxSeconds
+    }
+}
 
 // MARK: - API Configuration Models
 
@@ -630,6 +857,59 @@ enum LEDStripType: Int, CaseIterable, Codable {
     case sm16825 = 13
     case ws2811White = 14
     case ws281xWWA = 15
+
+    static func fromWLEDType(_ type: Int) -> LEDStripType? {
+        switch type {
+        case 18, 19:
+            return .ws2811White
+        case 20, 21:
+            return .ws281xWWA
+        case 22, 24:
+            return .ws281x
+        case 25:
+            return .tm1829
+        case 26:
+            return .ucs8903
+        case 27:
+            return .apa106
+        case 28:
+            return .fw1906
+        case 29:
+            return .ucs8904
+        case 30:
+            return .sk6812
+        case 31:
+            return .tm1814
+        case 32:
+            return .ws2805
+        case 33:
+            return .tm1914
+        case 34:
+            return .sm16825
+        case 41:
+            return .ws2811White
+        case 42:
+            return .ws2805
+        case 44:
+            return .sk6812
+        case 45:
+            return .ws2805
+        case 46:
+            return .sm16825
+        case 50:
+            return .ws2801
+        case 51:
+            return .apa102
+        case 52, 53, 54:
+            return .lpd8806
+        case 80:
+            return .ws281x
+        case 88:
+            return .sk6812
+        default:
+            return LEDStripType(rawValue: type)
+        }
+    }
     
     var displayName: String {
         switch self {
@@ -672,6 +952,24 @@ enum LEDStripType: Int, CaseIterable, Codable {
         case .ws281xWWA: return "WS281x Warm White Amber LEDs"
         }
     }
+
+    var usesWhiteChannel: Bool {
+        switch self {
+        case .sk6812, .ucs8904, .ws2805, .sm16825, .fw1906, .ws2811White, .ws281xWWA:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var usesCCT: Bool {
+        switch self {
+        case .fw1906, .ws2805, .sm16825, .ws281xWWA:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// Color order options for LED strips
@@ -699,6 +997,15 @@ enum LEDColorOrder: Int, CaseIterable, Codable {
         case .brg: return "Blue-Red-Green"
         case .grbw: return "Green-Red-Blue-White"
         case .rgbw: return "Red-Green-Blue-White"
+        }
+    }
+
+    var usesWhiteChannel: Bool {
+        switch self {
+        case .grbw, .rgbw:
+            return true
+        default:
+            return false
         }
     }
 }

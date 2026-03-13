@@ -105,7 +105,7 @@ struct SaveSceneDialog: View {
         }
         .preferredColorScheme(.dark)
         .onAppear {
-            sceneName = "Scene \(Date().formatted(date: .omitted, time: .shortened))"
+            sceneName = "Scene \(Date().presetNameTimestamp())"
         }
     }
     

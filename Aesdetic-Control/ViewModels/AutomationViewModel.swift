@@ -30,11 +30,8 @@ class AutomationViewModel: ObservableObject {
     func refreshAutomations() async {
         isLoading = true
         errorMessage = nil
-        
-        // Simulate network delay
-        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-        
-        // The AutomationStore handles the data, so we just need to trigger a refresh
+
+        await AutomationStore.shared.importOnDeviceAutomationsFromDevices()
         isLoading = false
     }
     

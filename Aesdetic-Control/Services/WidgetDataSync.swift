@@ -14,13 +14,13 @@ class WidgetDataSync {
     static let shared = WidgetDataSync()
     
     private let appGroupID = "group.com.aesdetic.control"
-    private let widgetDeviceKey = "widgetDevice"
+    private let widgetDeviceFilename = "widgetDevice.json"
     
     private init() {}
     
     /// Sync device data to shared UserDefaults for widget access
     func syncDevice(_ device: WLEDDevice) {
-        guard let sharedDefaults = UserDefaults(suiteName: appGroupID) else {
+        guard let containerURL = sharedContainerURL() else {
             #if DEBUG
             print("⚠️ Failed to access App Group UserDefaults")
             #endif
@@ -37,20 +37,28 @@ class WidgetDataSync {
         )
         
         if let encoded = try? JSONEncoder().encode(widgetDevice) {
-            sharedDefaults.set(encoded, forKey: widgetDeviceKey)
-            sharedDefaults.synchronize()
-            
-            // Trigger widget timeline reload
-            WidgetCenter.shared.reloadTimelines(ofKind: "DeviceControlWidget")
+            let fileURL = containerURL.appendingPathComponent(widgetDeviceFilename)
+            do {
+                try encoded.write(to: fileURL, options: [.atomic])
+                WidgetCenter.shared.reloadTimelines(ofKind: "DeviceControlWidget")
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to write widget data: \(error.localizedDescription)")
+                #endif
+            }
         }
     }
     
     /// Clear widget data
     func clearWidgetData() {
-        guard let sharedDefaults = UserDefaults(suiteName: appGroupID) else { return }
-        sharedDefaults.removeObject(forKey: widgetDeviceKey)
-        sharedDefaults.synchronize()
+        guard let containerURL = sharedContainerURL() else { return }
+        let fileURL = containerURL.appendingPathComponent(widgetDeviceFilename)
+        try? FileManager.default.removeItem(at: fileURL)
         WidgetCenter.shared.reloadTimelines(ofKind: "DeviceControlWidget")
+    }
+
+    private func sharedContainerURL() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
     }
 }
 

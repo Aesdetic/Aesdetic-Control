@@ -171,7 +171,10 @@ struct EmptyDevicesView: View {
 struct QuickPresetCard: View {
     let template: AutomationTemplate
     var onSelect: (AutomationTemplate) -> Void
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isPressed: Bool = false
+    private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
+    private var glassText: GlassTextStyle { GlassTheme.text(for: colorScheme) }
     
     var body: some View {
         Button(action: {
@@ -180,18 +183,18 @@ struct QuickPresetCard: View {
             VStack(spacing: 10) {
                 Image(systemName: template.iconName)
                     .font(.title2.weight(.medium))
-                    .foregroundColor(.white.opacity(0.92))
+                    .foregroundColor(glassText.pagePrimaryText)
                 
                 VStack(spacing: 2) {
                     Text(template.name)
                         .font(.footnote.weight(.semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(glassText.pagePrimaryText)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     
                     Text(template.subtitle)
                         .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(glassText.pageSecondaryText)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
                 }
@@ -200,12 +203,14 @@ struct QuickPresetCard: View {
             .frame(maxWidth: .infinity)
             .frame(height: 110)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    )
+                GlassCardBackground(
+                    cornerRadius: 14,
+                    fill: glassSurface.cardFillInactive,
+                    outerStroke: glassSurface.cardStrokeOuter,
+                    innerStroke: glassSurface.cardStrokeInner,
+                    keyShadow: glassSurface.cardShadowKey,
+                    ambientShadow: glassSurface.cardShadowAmbient
+                )
             )
             .scaleEffect(isPressed ? 0.95 : 1.0)
             .animation(.easeInOut(duration: 0.2), value: isPressed)
@@ -291,20 +296,24 @@ struct AutomationCard: View {
 }
 
 struct EmptyAutomationsView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
+    private var glassText: GlassTextStyle { GlassTheme.text(for: colorScheme) }
+
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: "clock")
                 .font(.largeTitle.weight(.light))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(glassText.pageTertiaryText)
             
             VStack(spacing: 8) {
                 Text("No automations yet")
                     .font(.title3.weight(.semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(glassText.pagePrimaryText)
                 
                 Text("Create your first automation to schedule lighting routines and make your home smarter.")
                     .font(.footnote.weight(.medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(glassText.pageSecondaryText)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
             }
@@ -313,12 +322,14 @@ struct EmptyAutomationsView: View {
         .padding(.vertical, 40)
         .padding(.horizontal, 20)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.white.opacity(0.05))
-                )
+            GlassCardBackground(
+                cornerRadius: 12,
+                fill: glassSurface.panelFill,
+                outerStroke: glassSurface.cardStrokeOuter,
+                innerStroke: glassSurface.cardStrokeInner,
+                keyShadow: glassSurface.cardShadowKey,
+                ambientShadow: glassSurface.cardShadowAmbient
+            )
         )
     }
 }
