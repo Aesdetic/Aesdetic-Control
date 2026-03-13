@@ -39,6 +39,10 @@ Aesdetic-Control.xcodeproj/project.xcworkspace/xcuserdata/
 Aesdetic-Control.xcodeproj/xcuserdata/
 Aesdetic-Control.xcworkspace/xcuserdata/
 
+# Local scratch/work folders
+.codex_tmp/
+tmp/
+
 # Swift Package Manager
 /.build/
 /Packages/
