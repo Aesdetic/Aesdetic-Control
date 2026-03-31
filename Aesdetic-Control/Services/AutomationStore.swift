@@ -16,6 +16,7 @@ class AutomationStore: ObservableObject {
     
     @Published var automations: [Automation] = []
     @Published private(set) var upcomingAutomationInfo: (automation: Automation, date: Date)?
+    @Published private(set) var deletingAutomationIds: Set<UUID> = []
     
     private let fileURL: URL
     private var schedulerTimer: Timer?
@@ -177,15 +178,34 @@ class AutomationStore: ObservableObject {
     }
     
     func delete(id: UUID) {
-        guard let index = automations.firstIndex(where: { $0.id == id }) else { return }
-        let automation = automations.remove(at: index)
-        removeTimerSignatures(for: id)
-        save()
-        scheduleNext()
-        scheduleSolarRefreshIfNeeded()
-        scheduleOnDeviceSyncRetryIfNeeded()
-        logger.info("Deleted automation: \(automation.name)")
+        guard let automation = automations.first(where: { $0.id == id }) else { return }
+        guard !deletingAutomationIds.contains(id) else { return }
+        deletingAutomationIds.insert(id)
+        logger.info("automation.delete.requested automation=\(automation.id.uuidString, privacy: .public) name=\(automation.name, privacy: .public)")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.deleteAutomationAfterDeviceCleanup(automation)
+        }
+    }
+
+    func isDeletionInProgress(for id: UUID) -> Bool {
+        deletingAutomationIds.contains(id)
+    }
+
+    private func deleteAutomationAfterDeviceCleanup(_ automation: Automation) async {
+        defer {
+            deletingAutomationIds.remove(automation.id)
+        }
         cleanupDeviceEntries(for: automation)
+        if let index = automations.firstIndex(where: { $0.id == automation.id }) {
+            let removed = automations.remove(at: index)
+            removeTimerSignatures(for: removed.id)
+            save()
+            scheduleNext()
+            scheduleSolarRefreshIfNeeded()
+            scheduleOnDeviceSyncRetryIfNeeded()
+            logger.info("Deleted automation: \(removed.name)")
+        }
     }
     
     func applyAutomation(_ automation: Automation) {

@@ -707,12 +707,13 @@ struct DeviceDetailView: View {
                 automationEmptyState
             } else {
                 VStack(spacing: 14) {
-                    ForEach(deviceAutomations) { automation in
+                    ForEach(deviceAutomations, id: \.id) { (automation: Automation) in
                         let runStatus = activeAutomationRunStatus(for: automation)
                         AutomationRow(
                             automation: automation,
                             scenes: scenesStore.scenes,
                             isNext: nextAutomationID == automation.id,
+                            isDeleting: automationStore.isDeletionInProgress(for: automation.id),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
                             subtitle: activeDevice.name,

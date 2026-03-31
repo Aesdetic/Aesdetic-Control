@@ -129,12 +129,13 @@ struct AutomationView: View {
                 EmptyAutomationsView()
             } else {
                 VStack(spacing: 14) {
-                    ForEach(viewModel.automations) { automation in
+                    ForEach(viewModel.automations, id: \.id) { (automation: Automation) in
                         let runStatus = activeAutomationRunStatus(for: automation)
                         AutomationRow(
                             automation: automation,
                             scenes: scenesStore.scenes,
                             isNext: nextAutomationID == automation.id,
+                            isDeleting: AutomationStore.shared.isDeletionInProgress(for: automation.id),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
                             subtitle: targetName(for: automation),

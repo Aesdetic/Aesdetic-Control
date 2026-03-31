@@ -4,6 +4,7 @@ struct AutomationRow: View {
     let automation: Automation
     let scenes: [Scene]
     let isNext: Bool
+    var isDeleting: Bool = false
     var isRunning: Bool = false
     var runningProgress: Double? = nil
     var subtitle: String? = nil
@@ -25,6 +26,16 @@ struct AutomationRow: View {
         )
     }
     private let cardCornerRadius: CGFloat = 20
+    private var isInteractionLockedDuringSync: Bool {
+        guard automation.metadata.runOnDevice else { return false }
+        let deviceIds = automation.targets.deviceIds
+        guard !deviceIds.isEmpty else { return false }
+        return deviceIds.contains { automation.metadata.syncState(for: $0) == .syncing }
+    }
+
+    private var isInteractionLocked: Bool {
+        isDeleting || isInteractionLockedDuringSync
+    }
     
     private var accentColor: Color {
         if let accent = automation.metadata.accentColorHex ?? automation.metadata.colorPreviewHex,
@@ -52,8 +63,17 @@ struct AutomationRow: View {
         .background(
             AppCardBackground(style: cardStyle)
         )
+        .blur(radius: isInteractionLocked ? 3 : 0)
+        .overlay {
+            if isInteractionLocked {
+                loadingOverlay
+            }
+        }
         .contentShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+        .allowsHitTesting(!isInteractionLocked)
+        .animation(.easeInOut(duration: 0.2), value: isInteractionLocked)
         .onTapGesture {
+            guard !isInteractionLocked else { return }
             onEdit?()
         }
         .onAppear {
@@ -64,7 +84,35 @@ struct AutomationRow: View {
         }
         .accessibilityLabel("\(automation.name) automation")
         .accessibilityValue(automation.enabled ? "Enabled" : "Disabled")
-        .accessibilityHint(automation.enabled ? "Double tap to disable this automation." : "Double tap to enable this automation.")
+        .accessibilityHint(
+            isDeleting
+                ? "Automation is being deleted from device. Keep app open until it completes."
+                : (isInteractionLockedDuringSync
+                    ? "Automation is getting ready. Controls are temporarily locked."
+                : (automation.enabled ? "Double tap to disable this automation." : "Double tap to enable this automation.")
+                  )
+        )
+    }
+
+    private var loadingOverlay: some View {
+        RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+            .fill(theme.surface.opacity(colorScheme == .dark ? 0.58 : 0.74))
+            .overlay(
+                VStack(spacing: 10) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(theme.textPrimary)
+                    Text(isDeleting ? "Deleting on device..." : "Getting ready...")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(theme.textPrimary)
+                    if isDeleting {
+                        Text("Keep app open")
+                            .font(.caption2)
+                            .foregroundColor(theme.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 20)
+            )
     }
     
     private var headerRow: some View {
