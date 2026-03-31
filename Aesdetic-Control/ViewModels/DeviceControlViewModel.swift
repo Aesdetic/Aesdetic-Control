@@ -6656,7 +6656,7 @@ class DeviceControlViewModel: ObservableObject {
         print("segments.auto_restore.\(success ? "success" : "failed") device=\(device.id) target=\(target)")
         #endif
         await MainActor.run {
-            segmentAutoRestoreInFlight.remove(device.id)
+            _ = segmentAutoRestoreInFlight.remove(device.id)
         }
     }
 
@@ -7796,6 +7796,35 @@ class DeviceControlViewModel: ObservableObject {
         return false
     }
 
+    private func isTransientPresetStoreWriteError(_ error: Error) -> Bool {
+        guard let apiError = error as? WLEDAPIError else {
+            let message = error.localizedDescription.lowercased()
+            return message.contains("timed out")
+                || message.contains("timeout")
+                || message.contains("network")
+                || message.contains("503")
+                || message.contains("service unavailable")
+        }
+        switch apiError {
+        case .timeout, .networkError, .deviceBusy, .deviceOffline, .deviceUnreachable:
+            return true
+        case .httpError(let statusCode):
+            return statusCode == 429 || statusCode >= 500
+        default:
+            return false
+        }
+    }
+
+    private func waitForStateWriteBackoffIfNeeded(
+        deviceId: String,
+        timeoutSeconds: TimeInterval = 3.0
+    ) async {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while await apiService.isStateWriteBackoffActive(deviceId: deviceId), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 180_000_000)
+        }
+    }
+
     private func savePresetWithRetry(
         _ request: WLEDPresetSaveRequest,
         device: WLEDDevice,
@@ -7804,6 +7833,9 @@ class DeviceControlViewModel: ObservableObject {
         var lastError: Error?
         let attempts = max(1, retryAttempts)
         for attempt in 1...attempts {
+            if attempts > 1 {
+                await waitForStateWriteBackoffIfNeeded(deviceId: device.id)
+            }
             do {
                 try await apiService.savePreset(request, to: device)
                 let delay = presetSaveDelayNanos * UInt64(attempt)
@@ -7811,10 +7843,12 @@ class DeviceControlViewModel: ObservableObject {
                 return
             } catch {
                 lastError = error
-                if attempt < attempts {
-                    let delay = presetSaveDelayNanos * UInt64(attempt)
-                    try? await Task.sleep(nanoseconds: delay)
-                }
+                guard attempt < attempts, isTransientPresetStoreWriteError(error) else { break }
+                let backoffNanos = max(
+                    presetSaveDelayNanos * UInt64(attempt),
+                    UInt64(min(2.4, 0.45 * Double(attempt)) * 1_000_000_000)
+                )
+                try? await Task.sleep(nanoseconds: backoffNanos)
             }
         }
         throw lastError ?? WLEDAPIError.invalidResponse
@@ -7844,6 +7878,9 @@ class DeviceControlViewModel: ObservableObject {
         var lastError: Error?
         let attempts = max(1, retryAttempts)
         for attempt in 1...attempts {
+            if attempts > 1 {
+                await waitForStateWriteBackoffIfNeeded(deviceId: device.id)
+            }
             do {
                 _ = try await apiService.savePlaylist(request, to: device)
                 let delay = playlistSaveDelayNanos * UInt64(attempt)
@@ -7851,10 +7888,12 @@ class DeviceControlViewModel: ObservableObject {
                 return
             } catch {
                 lastError = error
-                if attempt < attempts {
-                    let delay = playlistSaveDelayNanos * UInt64(attempt)
-                    try? await Task.sleep(nanoseconds: delay)
-                }
+                guard attempt < attempts, isTransientPresetStoreWriteError(error) else { break }
+                let backoffNanos = max(
+                    playlistSaveDelayNanos * UInt64(attempt),
+                    UInt64(min(2.8, 0.55 * Double(attempt)) * 1_000_000_000)
+                )
+                try? await Task.sleep(nanoseconds: backoffNanos)
             }
         }
         throw lastError ?? WLEDAPIError.invalidResponse

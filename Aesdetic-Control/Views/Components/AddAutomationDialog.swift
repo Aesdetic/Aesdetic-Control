@@ -1611,7 +1611,7 @@ struct AddAutomationDialog: View {
     @MainActor
     private func handleTriggerSelectionTap(_ option: TriggerSelection) async {
         if option == .sunrise || option == .sunset {
-            switch CLLocationManager.authorizationStatus() {
+            switch CLLocationManager().authorizationStatus {
             case .denied, .restricted:
                 onDeviceScheduleValidationMessage = "Location permission is off. Sunrise/sunset requires location access."
                 onDeviceScheduleValidationIsWarning = false
@@ -1620,7 +1620,7 @@ struct AddAutomationDialog: View {
             case .notDetermined:
                 let coordinate = await AutomationStore.shared.currentCoordinate()
                 if coordinate == nil {
-                    switch CLLocationManager.authorizationStatus() {
+                    switch CLLocationManager().authorizationStatus {
                     case .denied, .restricted:
                         onDeviceScheduleValidationMessage = "Location permission is required for sunrise/sunset."
                         onDeviceScheduleValidationIsWarning = false

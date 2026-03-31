@@ -196,7 +196,7 @@ class AutomationStore: ObservableObject {
         defer {
             deletingAutomationIds.remove(automation.id)
         }
-        cleanupDeviceEntries(for: automation)
+        await cleanupDeviceEntries(for: automation)
         if let index = automations.firstIndex(where: { $0.id == automation.id }) {
             let removed = automations.remove(at: index)
             removeTimerSignatures(for: removed.id)
@@ -1997,6 +1997,8 @@ class AutomationStore: ObservableObject {
             updated.metadata.setManagedPresetSignature(nil, for: deviceId)
             if let playlistStepPresetIds {
                 updated.metadata.setManagedStepPresetIds(playlistStepPresetIds, for: deviceId)
+            } else if managedPlaylistSignature == nil {
+                updated.metadata.setManagedStepPresetIds(nil, for: deviceId)
             }
         }
         if let presetId {
@@ -2117,6 +2119,18 @@ class AutomationStore: ObservableObject {
         }
     }
 
+    private func managedStepPresetClaimedByAnotherAutomation(
+        _ presetId: Int,
+        deviceId: String,
+        excluding automationId: UUID
+    ) -> Bool {
+        automations.contains { record in
+            guard record.id != automationId else { return false }
+            guard let stepPresetIds = record.metadata.managedStepPresetIds(for: deviceId) else { return false }
+            return stepPresetIds.contains(presetId)
+        }
+    }
+
     private func ensureAutomationTransitionPlaylist(
         for automation: Automation,
         device: WLEDDevice,
@@ -2124,6 +2138,8 @@ class AutomationStore: ObservableObject {
     ) async -> ManagedTransitionPlaylistAsset? {
         let desiredSignature = transitionPayloadSignature(payload)
         let storedSignature = automation.metadata.managedPlaylistSignature(for: device.id)
+        let previousManagedPlaylistId = storedPlaylistId(for: automation, deviceId: device.id)
+        let previousManagedStepPresetIds = Set(storedManagedTransitionStepPresetIds(for: automation, deviceId: device.id))
         if let existing = storedPlaylistId(for: automation, deviceId: device.id) {
             if managedPlaylistClaimedByAnotherAutomation(existing, deviceId: device.id, excluding: automation.id) {
                 logger.warning("Automation transition playlist is claimed by another automation, rebuilding: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public) playlist=\(existing)")
@@ -2163,6 +2179,40 @@ class AutomationStore: ObservableObject {
         ) {
             DeviceCleanupManager.shared.removeIds(type: .playlist, deviceId: device.id, ids: [playlist.playlistId])
             DeviceCleanupManager.shared.removeIds(type: .preset, deviceId: device.id, ids: playlist.stepPresetIds)
+
+            if let previousManagedPlaylistId,
+               previousManagedPlaylistId != playlist.playlistId,
+               !managedPlaylistClaimedByAnotherAutomation(
+                    previousManagedPlaylistId,
+                    deviceId: device.id,
+                    excluding: automation.id
+               ) {
+                await DeviceCleanupManager.shared.requestDelete(
+                    type: .playlist,
+                    device: device,
+                    ids: [previousManagedPlaylistId],
+                    source: .automation
+                )
+            }
+
+            let staleStepPresetIds = previousManagedStepPresetIds
+                .subtracting(Set(playlist.stepPresetIds))
+                .filter {
+                    !managedStepPresetClaimedByAnotherAutomation(
+                        $0,
+                        deviceId: device.id,
+                        excluding: automation.id
+                    )
+                }
+            if !staleStepPresetIds.isEmpty {
+                await DeviceCleanupManager.shared.requestDelete(
+                    type: .preset,
+                    device: device,
+                    ids: Array(staleStepPresetIds).sorted(),
+                    source: .automation
+                )
+            }
+
             return ManagedTransitionPlaylistAsset(
                 playlistId: playlist.playlistId,
                 stepPresetIds: playlist.stepPresetIds
@@ -2244,19 +2294,84 @@ class AutomationStore: ObservableObject {
         return nil
     }
 
+    private func isTransientPresetStoreWriteError(_ error: Error) -> Bool {
+        guard let apiError = error as? WLEDAPIError else {
+            let message = error.localizedDescription.lowercased()
+            return message.contains("timed out")
+                || message.contains("timeout")
+                || message.contains("service unavailable")
+                || message.contains("503")
+                || message.contains("network")
+        }
+        switch apiError {
+        case .timeout, .networkError, .deviceBusy, .deviceOffline, .deviceUnreachable:
+            return true
+        case .httpError(let statusCode):
+            return statusCode == 429 || statusCode >= 500
+        default:
+            return false
+        }
+    }
+
     private func savePresetWithRetry(_ request: WLEDPresetSaveRequest, device: WLEDDevice) async -> Bool {
-        for attempt in 1...3 {
+        let maxAttempts = 5
+        for attempt in 1...maxAttempts {
             do {
                 try await apiService.savePreset(request, to: device)
                 return true
             } catch {
                 logger.error("Automation preset save failed (attempt \(attempt)) for \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                if attempt < 3 {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                }
+                guard attempt < maxAttempts, isTransientPresetStoreWriteError(error) else { return false }
+                let backoffSeconds = min(2.5, 0.45 * Double(attempt))
+                try? await Task.sleep(nanoseconds: UInt64(backoffSeconds * 1_000_000_000))
             }
         }
         return false
+    }
+
+    private func requiresManagedAssetRefresh(
+        for automation: Automation,
+        device: WLEDDevice
+    ) -> Bool {
+        switch automation.action {
+        case .transition(let payload):
+            if let transitionPresetId = payload.presetId,
+               let sourcePreset = presetsStore.transitionPreset(id: transitionPresetId),
+               sourcePreset.deviceId == device.id,
+               sourcePreset.wledSyncState == .synced,
+               let playlistId = sourcePreset.wledPlaylistId,
+               (1...250).contains(playlistId),
+               !isPlaylistQueuedForDelete(playlistId, deviceId: device.id) {
+                let hasStaleManagedMarkers =
+                    automation.metadata.managedPlaylistSignature(for: device.id) != nil
+                    || !(automation.metadata.managedStepPresetIds(for: device.id) ?? []).isEmpty
+                return storedPlaylistId(for: automation, deviceId: device.id) != playlistId || hasStaleManagedMarkers
+            }
+            if payload.presetId != nil {
+                return true
+            }
+
+            let resolved = resolveTransitionPayload(payload, device: device)
+            let desiredSignature = transitionPayloadSignature(resolved)
+            guard desiredSignature == automation.metadata.managedPlaylistSignature(for: device.id),
+                  let playlistId = storedPlaylistId(for: automation, deviceId: device.id),
+                  (1...250).contains(playlistId),
+                  !isPlaylistQueuedForDelete(playlistId, deviceId: device.id) else {
+                return true
+            }
+            return false
+        case .gradient, .directState, .effect, .scene:
+            guard let state = automationPresetState(for: automation, device: device),
+                  presetSnapshotSignature(state) == automation.metadata.managedPresetSignature(for: device.id),
+                  let presetId = storedPresetId(for: automation, deviceId: device.id),
+                  (1...250).contains(presetId),
+                  !isPresetQueuedForDelete(presetId, deviceId: device.id) else {
+                return true
+            }
+            return false
+        case .preset, .playlist:
+            return false
+        }
     }
 
     private func ensureAutomationPresetSnapshot(
@@ -2648,11 +2763,14 @@ class AutomationStore: ObservableObject {
             }
 
             if requiresManagedAssetGeneration {
+                let needsManagedAssetRefresh = requiresManagedAssetRefresh(for: updated, device: device)
                 switch await viewModel.waitForHeavyOpQuiescence(deviceId: device.id, timeout: 8.0) {
                 case .ready:
                     break
                 case .timedOut(let reason):
-                    if previousSyncState == .synced, let preservedSlot = previousTimerSlot {
+                    if previousSyncState == .synced,
+                       let preservedSlot = previousTimerSlot,
+                       !needsManagedAssetRefresh {
                         updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: preservedSlot)
                         updated = updateAutomationSyncMetadata(
                             updated,
@@ -2701,7 +2819,9 @@ class AutomationStore: ObservableObject {
                     }
 
                     if shouldDeferActionTargetFailure {
-                        if previousSyncState == .synced, let preservedSlot = previousTimerSlot {
+                        if previousSyncState == .synced,
+                           let preservedSlot = previousTimerSlot,
+                           !requiresManagedAssetRefresh(for: updated, device: device) {
                             updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: preservedSlot)
                             updated = updateAutomationSyncMetadata(
                                 updated,
@@ -2768,6 +2888,14 @@ class AutomationStore: ObservableObject {
                                 managedPresetSignature: signature
                             )
                         }
+                    } else if case .transition = metadataCandidate.action {
+                        metadataCandidate = updateAutomationMetadata(
+                            metadataCandidate,
+                            deviceId: device.id,
+                            playlistId: macroId,
+                            playlistStepPresetIds: nil,
+                            managedPlaylistSignature: nil
+                        )
                     }
                 }
             } else {
@@ -3652,7 +3780,7 @@ class AutomationStore: ObservableObject {
         return OnDeviceScheduleValidation(isValid: true, message: nil, isWarning: false)
     }
 
-    private func cleanupDeviceEntries(for automation: Automation) {
+    private func cleanupDeviceEntries(for automation: Automation) async {
         let deviceIds = automation.targets.deviceIds
         for deviceId in deviceIds {
             let deleteTraceId = UUID().uuidString
@@ -3722,154 +3850,191 @@ class AutomationStore: ObservableObject {
             }
 
             if let device = onlineDevice {
-                Task { @MainActor in
-                    var runtimePresetDeleteIds = presetDeleteIds
-                    if shouldDeleteManagedPlaylist,
-                       let playlistId,
-                       storedManagedTransitionStepPresetIds(for: automation, deviceId: deviceId).isEmpty {
-                        let fetchedStepIds = await fetchPlaylistStepPresetIds(playlistId: playlistId, device: device)
-                        if !fetchedStepIds.isEmpty {
-                            runtimePresetDeleteIds.formUnion(fetchedStepIds)
+                await cleanupDeviceEntriesOnOnlineDevice(
+                    automation: automation,
+                    device: device,
+                    deviceId: deviceId,
+                    deleteTraceId: deleteTraceId,
+                    playlistId: playlistId,
+                    timerSlot: timerSlot,
+                    presetDeleteIds: presetDeleteIds,
+                    shouldDeleteManagedPlaylist: shouldDeleteManagedPlaylist,
+                    shouldDeleteTimerSlot: shouldDeleteTimerSlot
+                )
+            }
+        }
+    }
+
+    private func cleanupDeviceEntriesOnOnlineDevice(
+        automation: Automation,
+        device: WLEDDevice,
+        deviceId: String,
+        deleteTraceId: String,
+        playlistId: Int?,
+        timerSlot: Int?,
+        presetDeleteIds: Set<Int>,
+        shouldDeleteManagedPlaylist: Bool,
+        shouldDeleteTimerSlot: Bool
+    ) async {
+        var runtimePresetDeleteIds = presetDeleteIds
+        if shouldDeleteManagedPlaylist,
+           let playlistId,
+           storedManagedTransitionStepPresetIds(for: automation, deviceId: deviceId).isEmpty {
+            let fetchedStepIds = await fetchPlaylistStepPresetIds(playlistId: playlistId, device: device)
+            if !fetchedStepIds.isEmpty {
+                runtimePresetDeleteIds.formUnion(fetchedStepIds)
+                DeviceCleanupManager.shared.enqueue(
+                    type: .preset,
+                    deviceId: deviceId,
+                    ids: fetchedStepIds,
+                    source: .automation
+                )
+            }
+        }
+
+        if shouldDeleteManagedPlaylist, let playlistId {
+            logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=playlist ids=[\(playlistId, privacy: .public)]")
+            await DeviceCleanupManager.shared.requestDelete(
+                type: .playlist,
+                device: device,
+                ids: [playlistId],
+                source: .automation
+            )
+        }
+        if !runtimePresetDeleteIds.isEmpty {
+            logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=preset ids=\(Array(runtimePresetDeleteIds).sorted(), privacy: .public)")
+            await DeviceCleanupManager.shared.requestDelete(
+                type: .preset,
+                device: device,
+                ids: Array(runtimePresetDeleteIds).sorted(),
+                source: .automation
+            )
+        }
+
+        if let timerSlot {
+            if shouldDeleteTimerSlot {
+                let ownership = await timerOwnershipStatusForDeletion(
+                    automation: automation,
+                    device: device,
+                    slot: timerSlot
+                )
+                switch ownership {
+                case .owned:
+                    logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=timer ids=[\(timerSlot, privacy: .public)] ownership=owned")
+                    await DeviceCleanupManager.shared.requestDelete(
+                        type: .timer,
+                        device: device,
+                        ids: [timerSlot],
+                        source: .automation
+                    )
+                case .notOwned:
+                    DeviceCleanupManager.shared.removeIds(
+                        type: .timer,
+                        deviceId: device.id,
+                        ids: [timerSlot]
+                    )
+                    logger.info(
+                        "automation.delete.timer.skip_not_owned device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                    )
+                case .unknown(let reason):
+                    DeviceCleanupManager.shared.enqueue(
+                        type: .timer,
+                        deviceId: device.id,
+                        ids: [timerSlot],
+                        source: .automation
+                    )
+                    logger.warning(
+                        "automation.delete.timer.defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"
+                    )
+                }
+            } else {
+                DeviceCleanupManager.shared.removeIds(
+                    type: .timer,
+                    deviceId: device.id,
+                    ids: [timerSlot]
+                )
+                logger.info(
+                    "automation.delete.timer.skip_claimed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                )
+            }
+        }
+
+        await cleanupOrphanedAutomationPresets(for: device)
+        logger.info("automation.delete.pipeline.orphan_cleanup_done trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public)")
+
+        if let timerSlot, shouldDeleteTimerSlot {
+            do {
+                if let timer = try await apiService.fetchTimers(for: device).first(where: { $0.id == timerSlot }) {
+                    let actionable = isTimerActionable(timer)
+                    logger.info(
+                        "automation.delete.timer.postcheck device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) en=\(timer.enabled) hour=\(timer.hour) min=\(timer.minute) dow=\(timer.days) macro=\(timer.macroId) actionable=\(actionable)"
+                    )
+                    if actionable {
+                        let ownership = await timerOwnershipStatusForDeletion(
+                            automation: automation,
+                            device: device,
+                            slot: timerSlot
+                        )
+                        switch ownership {
+                        case .owned:
                             DeviceCleanupManager.shared.enqueue(
-                                type: .preset,
-                                deviceId: deviceId,
-                                ids: fetchedStepIds,
+                                type: .timer,
+                                deviceId: device.id,
+                                ids: [timerSlot],
                                 source: .automation
                             )
-                        }
-                    }
-                    if shouldDeleteManagedPlaylist, let playlistId {
-                        logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=playlist ids=[\(playlistId, privacy: .public)]")
-                        await DeviceCleanupManager.shared.requestDelete(
-                            type: .playlist,
-                            device: device,
-                            ids: [playlistId],
-                            source: .automation
-                        )
-                    }
-                    if !runtimePresetDeleteIds.isEmpty {
-                        logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=preset ids=\(Array(runtimePresetDeleteIds).sorted(), privacy: .public)")
-                        await DeviceCleanupManager.shared.requestDelete(
-                            type: .preset,
-                            device: device,
-                            ids: Array(runtimePresetDeleteIds).sorted(),
-                            source: .automation
-                        )
-                    }
-                    if let timerSlot {
-                        if shouldDeleteTimerSlot {
-                            let ownership = await timerOwnershipStatusForDeletion(
-                                automation: automation,
-                                device: device,
-                                slot: timerSlot
+                            logger.warning(
+                                "automation.delete.timer.postcheck_requeue device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
                             )
-                            switch ownership {
-                            case .owned:
-                                logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=timer ids=[\(timerSlot, privacy: .public)] ownership=owned")
-                                await DeviceCleanupManager.shared.requestDelete(
-                                    type: .timer,
-                                    device: device,
-                                    ids: [timerSlot],
-                                    source: .automation
-                                )
-                            case .notOwned:
-                                DeviceCleanupManager.shared.removeIds(
-                                    type: .timer,
-                                    deviceId: device.id,
-                                    ids: [timerSlot]
-                                )
-                                logger.info(
-                                    "automation.delete.timer.skip_not_owned device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
-                                )
-                            case .unknown(let reason):
-                                DeviceCleanupManager.shared.enqueue(
-                                    type: .timer,
-                                    deviceId: device.id,
-                                    ids: [timerSlot],
-                                    source: .automation
-                                )
-                                logger.warning(
-                                    "automation.delete.timer.defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"
-                                )
-                            }
-                        } else {
+                        case .notOwned:
                             DeviceCleanupManager.shared.removeIds(
                                 type: .timer,
                                 deviceId: device.id,
                                 ids: [timerSlot]
                             )
                             logger.info(
-                                "automation.delete.timer.skip_claimed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                                "automation.delete.timer.postcheck_skip_not_owned device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
                             )
-                        }
-                    }
-                    await cleanupOrphanedAutomationPresets(for: device)
-                    logger.info("automation.delete.pipeline.orphan_cleanup_done trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public)")
-                    if let timerSlot, shouldDeleteTimerSlot {
-                        do {
-                            if let timer = try await apiService.fetchTimers(for: device).first(where: { $0.id == timerSlot }) {
-                                let actionable = isTimerActionable(timer)
-                                logger.info(
-                                    "automation.delete.timer.postcheck device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) en=\(timer.enabled) hour=\(timer.hour) min=\(timer.minute) dow=\(timer.days) macro=\(timer.macroId) actionable=\(actionable)"
-                                )
-                                if actionable {
-                                    let ownership = await timerOwnershipStatusForDeletion(
-                                        automation: automation,
-                                        device: device,
-                                        slot: timerSlot
-                                    )
-                                    switch ownership {
-                                    case .owned:
-                                        DeviceCleanupManager.shared.enqueue(
-                                            type: .timer,
-                                            deviceId: device.id,
-                                            ids: [timerSlot],
-                                            source: .automation
-                                        )
-                                        logger.warning(
-                                            "automation.delete.timer.postcheck_requeue device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
-                                        )
-                                    case .notOwned:
-                                        DeviceCleanupManager.shared.removeIds(
-                                            type: .timer,
-                                            deviceId: device.id,
-                                            ids: [timerSlot]
-                                        )
-                                        logger.info(
-                                            "automation.delete.timer.postcheck_skip_not_owned device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
-                                        )
-                                    case .unknown(let reason):
-                                        DeviceCleanupManager.shared.enqueue(
-                                            type: .timer,
-                                            deviceId: device.id,
-                                            ids: [timerSlot],
-                                            source: .automation
-                                        )
-                                        logger.warning(
-                                            "automation.delete.timer.postcheck_defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"
-                                        )
-                                    }
-                                }
-                            } else {
-                                logger.warning(
-                                    "automation.delete.timer.postcheck_missing_slot device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
-                                )
-                            }
-                        } catch {
+                        case .unknown(let reason):
+                            DeviceCleanupManager.shared.enqueue(
+                                type: .timer,
+                                deviceId: device.id,
+                                ids: [timerSlot],
+                                source: .automation
+                            )
                             logger.warning(
-                                "automation.delete.timer.postcheck_failed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) error=\(error.localizedDescription, privacy: .public)"
+                                "automation.delete.timer.postcheck_defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"
                             )
                         }
                     }
-                    await DeviceCleanupManager.shared.processQueueUntilIdle(for: device.id, maxPasses: 4)
-                    let pendingTimer = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .timer, deviceId: device.id)).sorted()
-                    let pendingPlaylist = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .playlist, deviceId: device.id)).sorted()
-                    let pendingPreset = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .preset, deviceId: device.id)).sorted()
-                    logger.info(
-                        "automation.delete.pipeline.summary trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) pendingTimer=\(pendingTimer, privacy: .public) pendingPlaylist=\(pendingPlaylist, privacy: .public) pendingPreset=\(pendingPreset, privacy: .public)"
+                } else {
+                    logger.warning(
+                        "automation.delete.timer.postcheck_missing_slot device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
                     )
                 }
+            } catch {
+                logger.warning(
+                    "automation.delete.timer.postcheck_failed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) error=\(error.localizedDescription, privacy: .public)"
+                )
             }
+        }
+
+        let targetedDeleteCount =
+            runtimePresetDeleteIds.count +
+            ((shouldDeleteManagedPlaylist && playlistId != nil) ? 1 : 0) +
+            ((shouldDeleteTimerSlot && timerSlot != nil) ? 1 : 0)
+        let maxDrainPasses = max(4, min(48, targetedDeleteCount * 2))
+        await DeviceCleanupManager.shared.processQueueUntilIdle(for: device.id, maxPasses: maxDrainPasses)
+        let pendingTimer = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .timer, deviceId: device.id)).sorted()
+        let pendingPlaylist = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .playlist, deviceId: device.id)).sorted()
+        let pendingPreset = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .preset, deviceId: device.id)).sorted()
+        logger.info(
+            "automation.delete.pipeline.summary trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) pendingTimer=\(pendingTimer, privacy: .public) pendingPlaylist=\(pendingPlaylist, privacy: .public) pendingPreset=\(pendingPreset, privacy: .public)"
+        )
+        if !pendingTimer.isEmpty || !pendingPlaylist.isEmpty || !pendingPreset.isEmpty {
+            logger.warning(
+                "automation.delete.pipeline.incomplete trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) pendingTimer=\(pendingTimer, privacy: .public) pendingPlaylist=\(pendingPlaylist, privacy: .public) pendingPreset=\(pendingPreset, privacy: .public)"
+            )
         }
     }
 

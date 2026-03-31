@@ -289,14 +289,27 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         sequence: Int,
         state: WLEDStateUpdate
     ) async -> StateMutationSlotResult {
-        if isStateWriteBackoffExempt(state) {
+        await waitForStateWriteBudget(
+            deviceId: deviceId,
+            sequence: sequence,
+            backoffExempt: isStateWriteBackoffExempt(state)
+        )
+    }
+
+    private func waitForStateWriteBudget(
+        deviceId: String,
+        sequence: Int?,
+        backoffExempt: Bool
+    ) async -> StateMutationSlotResult {
+        if backoffExempt {
             return .acquired
         }
         while true {
             if Task.isCancelled {
                 return .cancelled
             }
-            if isSupersededStateMutation(deviceId: deviceId, sequence: sequence) {
+            if let sequence,
+               isSupersededStateMutation(deviceId: deviceId, sequence: sequence) {
                 return .superseded
             }
             let now = Date()
@@ -1306,6 +1319,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         print("timer.delete.begin device=\(device.id) slot=\(slot) current=en:\(current.enabled) hour:\(current.hour) min:\(current.minute) dow:\(current.days) macro:\(current.macroId)")
         #endif
 
+        if isTimerSlotCleared(current) {
+            logger.info("timer.delete.already_cleared device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
+            return true
+        }
+
         // Timer-slot deletion should fully clear actionable state so it is reusable.
         let clearUpdate = WLEDTimerUpdate(
             id: slot,
@@ -1339,8 +1357,27 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             endMonth: nil,
             endDay: nil
         )
-        let verified = try await verifyTimer(verifyUpdate, on: device)
+        let verified: Bool
+        do {
+            verified = try await verifyTimer(verifyUpdate, on: device)
+        } catch {
+            if let reconciled = try? await fetchTimers(for: device).first(where: { $0.id == slot }),
+               isTimerSlotCleared(reconciled) {
+                logger.info(
+                    "timer.delete.reconcile_cleared_after_verify_error device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)"
+                )
+                return true
+            }
+            throw error
+        }
         if !verified {
+            if let reconciled = try? await fetchTimers(for: device).first(where: { $0.id == slot }),
+               isTimerSlotCleared(reconciled) {
+                logger.info(
+                    "timer.delete.reconcile_cleared_after_mismatch device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)"
+                )
+                return true
+            }
             logger.warning("timer.delete.verify_failed device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
             return false
         }
@@ -1352,6 +1389,18 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         #endif
         logger.info("timer.delete.cleared device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
         return true
+    }
+
+    private func isTimerSlotCleared(_ timer: WLEDTimer) -> Bool {
+        !timer.enabled &&
+            timer.hour == 0 &&
+            timer.minute == 0 &&
+            timer.days == 0x7F &&
+            timer.macroId == 0 &&
+            timer.startMonth == nil &&
+            timer.startDay == nil &&
+            timer.endMonth == nil &&
+            timer.endDay == nil
     }
 
     // MARK: - Macro Trigger Bindings
@@ -3985,15 +4034,49 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-        let (data, response) = try await urlSession.data(for: request)
-        try validateHTTPResponse(response, device: device)
-        #if DEBUG
-        if let httpResponse = response as? HTTPURLResponse {
-            let snippet = debugPayloadSnippet(data, limit: 200)
-            print("✅ State POST for \(device.name): status=\(httpResponse.statusCode) bytes=\(data.count) body=\(snippet)")
+
+        let slotAcquired = await acquireStateMutationSlot(deviceId: device.id)
+        guard slotAcquired else {
+            throw WLEDAPIError.networkError(URLError(.cancelled))
         }
-        #endif
-        return try parseResponse(data: data, device: device)
+        defer { releaseStateMutationSlot(deviceId: device.id) }
+
+        let pacingResult = await waitForStateWriteBudget(
+            deviceId: device.id,
+            sequence: nil,
+            backoffExempt: false
+        )
+        switch pacingResult {
+        case .acquired:
+            break
+        case .cancelled:
+            throw WLEDAPIError.networkError(URLError(.cancelled))
+        case .superseded:
+            break
+        }
+
+        lastStateWriteAttemptAtByDevice[device.id] = Date()
+
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            recordSuccessfulRequest(deviceId: device.id)
+            noteStateWriteSuccess(deviceId: device.id)
+            #if DEBUG
+            if let httpResponse = response as? HTTPURLResponse {
+                let snippet = debugPayloadSnippet(data, limit: 200)
+                print("✅ State POST for \(device.name): status=\(httpResponse.statusCode) bytes=\(data.count) body=\(snippet)")
+            }
+            #endif
+            if data.isEmpty {
+                return createSuccessResponse(for: device)
+            }
+            return try parseResponse(data: data, device: device)
+        } catch {
+            let mapped = handleError(error, device: device)
+            noteStateWriteFailure(deviceId: device.id, error: mapped)
+            throw mapped
+        }
     }
 
     private func sanitizedPresetName(_ name: String, fallback: String) -> String {

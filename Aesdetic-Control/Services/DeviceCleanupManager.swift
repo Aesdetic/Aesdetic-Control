@@ -15,6 +15,16 @@ final class DeviceCleanupManager: ObservableObject {
     private let maxAttempts = 12
     private let cleanupEnabled = true
     private let maxDeletesPerPass = 2
+    private let interDeleteDelayNanoseconds: UInt64 = 180_000_000
+
+    private struct DeleteAttemptOutcome {
+        let succeededIds: [Int]
+        let failedIds: [Int]
+        let lastError: String?
+
+        var isSuccess: Bool { failedIds.isEmpty }
+        var madeProgress: Bool { !succeededIds.isEmpty }
+    }
     
     private init() {
         load()
@@ -102,16 +112,31 @@ final class DeviceCleanupManager: ObservableObject {
             return
         }
         if device.isOnline {
-            let success = await attemptDelete(
+            let outcome = await attemptDelete(
                 type: type,
                 device: device,
                 ids: uniqueIds,
                 context: "requestDelete_immediate"
             )
-            if success {
+            if outcome.isSuccess {
                 // Remove any queued entries that overlap these ids (across all sources).
                 removeIds(type: type, deviceId: device.id, ids: uniqueIds)
                 return
+            }
+            if outcome.madeProgress {
+                removeIds(type: type, deviceId: device.id, ids: outcome.succeededIds)
+                let remaining = uniqueIds.filter { !Set(outcome.succeededIds).contains($0) }
+                if !remaining.isEmpty {
+                    enqueue(
+                        type: type,
+                        deviceId: device.id,
+                        ids: remaining,
+                        source: source,
+                        leaseId: leaseId,
+                        verificationRequired: verificationRequired
+                    )
+                    return
+                }
             }
         }
         enqueue(
@@ -158,37 +183,61 @@ final class DeviceCleanupManager: ObservableObject {
             logger.info(
                 "cleanup.queue_attempt device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) ids=\(delete.ids, privacy: .public) retries=\(delete.retries, privacy: .public) lastError=\((delete.lastError ?? "none"), privacy: .public)"
             )
-            let success = await attemptDelete(
+            let idsToAttempt = Array(delete.ids.prefix(maxIdsPerAttempt(for: delete.type)))
+            if idsToAttempt.count < delete.ids.count {
+                logger.info(
+                    "cleanup.queue_chunked device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) attempting=\(idsToAttempt, privacy: .public) remaining=\(delete.ids.count - idsToAttempt.count, privacy: .public)"
+                )
+            }
+            let outcome = await attemptDelete(
                 type: delete.type,
                 device: device,
-                ids: delete.ids,
+                ids: idsToAttempt,
                 context: "queue:\(delete.id.uuidString)"
             )
-            if success {
-                // Remove from queue on success
-                self.pendingDeletes.removeAll { $0.id == delete.id }
-                self.save()
-                logger.info("Successfully processed \(delete.type.rawValue) deletion for device \(deviceId)")
-            } else {
-                // Update retry count and schedule next attempt
-                if let index = self.pendingDeletes.firstIndex(where: { $0.id == delete.id }) {
-                    self.pendingDeletes[index].retries += 1
-                    self.pendingDeletes[index].lastAttempt = Date()
-                    let attempts = self.pendingDeletes[index].retries
-                    self.pendingDeletes[index].nextAttemptAt = Date().addingTimeInterval(self.retryDelay(forAttempt: attempts))
+            if let index = self.pendingDeletes.firstIndex(where: { $0.id == delete.id }) {
+                var entry = self.pendingDeletes[index]
+                let succeeded = Set(outcome.succeededIds)
+                if !succeeded.isEmpty {
+                    entry.ids = entry.ids.filter { !succeeded.contains($0) }
+                }
+                entry.lastAttempt = Date()
 
-                    if attempts >= self.maxAttempts {
-                        if delete.type == .timer {
-                            // Timer cleanup controls automation re-import safety; keep retrying instead of dead-lettering.
-                            self.pendingDeletes[index].retries = self.maxAttempts - 1
-                            self.pendingDeletes[index].nextAttemptAt = Date().addingTimeInterval(self.retryDelay(forAttempt: self.maxAttempts))
-                            logger.warning("Max attempts exceeded for timer deletion \(delete.id), keeping queued with capped backoff")
+                if entry.ids.isEmpty {
+                    self.pendingDeletes.remove(at: index)
+                    self.save()
+                    logger.info("Successfully processed \(delete.type.rawValue) deletion for device \(deviceId)")
+                } else if outcome.isSuccess {
+                    // Chunk succeeded but entry still has IDs; continue in staged passes.
+                    entry.lastError = nil
+                    entry.nextAttemptAt = Date()
+                    self.pendingDeletes[index] = entry
+                    self.save()
+                } else {
+                    entry.lastError = outcome.lastError ?? "Delete failed"
+                    if !outcome.madeProgress {
+                        entry.retries += 1
+                    }
+                    let retryAttempt = outcome.madeProgress ? 1 : max(1, entry.retries)
+                    entry.nextAttemptAt = Date().addingTimeInterval(self.retryDelay(forAttempt: retryAttempt))
+
+                    if !outcome.madeProgress && entry.retries >= self.maxAttempts {
+                        if delete.type == .timer || delete.source == .automation {
+                            // Timer cleanup controls automation re-import safety. Automation-sourced
+                            // asset cleanup should also keep retrying so managed resources are not
+                            // permanently stranded in dead-letter.
+                            entry.retries = self.maxAttempts - 1
+                            entry.nextAttemptAt = Date().addingTimeInterval(self.retryDelay(forAttempt: self.maxAttempts))
+                            logger.warning(
+                                "Max attempts exceeded for \(delete.type.rawValue) deletion \(delete.id), source=\(delete.source.rawValue, privacy: .public), keeping queued with capped backoff"
+                            )
                         } else {
                             logger.warning("Max attempts exceeded for \(delete.type.rawValue) deletion \(delete.id), moving to dead-letter")
-                            self.pendingDeletes[index].deadLetteredAt = Date()
-                            self.pendingDeletes[index].nextAttemptAt = nil
+                            entry.deadLetteredAt = Date()
+                            entry.nextAttemptAt = nil
                         }
                     }
+                    self.pendingDeletes[index] = entry
                     self.save()
                 }
             }
@@ -216,27 +265,36 @@ final class DeviceCleanupManager: ObservableObject {
         guard cleanupEnabled else { return }
         let passLimit = max(1, maxPasses)
         for pass in 1...passLimit {
-            let before = pendingDeletes.filter {
+            let beforeEntries = pendingDeletes.filter {
                 $0.deviceId == deviceId && $0.deadLetteredAt == nil
             }.count
-            guard before > 0 else {
+            let beforeIds = activeDeleteIdCount(deviceId: deviceId)
+            guard beforeEntries > 0, beforeIds > 0 else {
                 logger.info("cleanup.queue_drain_complete device=\(deviceId, privacy: .public) pass=\(pass, privacy: .public) remaining=0")
                 return
             }
 
             await processQueue(for: deviceId)
 
-            let after = pendingDeletes.filter {
+            let afterEntries = pendingDeletes.filter {
                 $0.deviceId == deviceId && $0.deadLetteredAt == nil
             }.count
+            let afterIds = activeDeleteIdCount(deviceId: deviceId)
             logger.info(
-                "cleanup.queue_drain_pass device=\(deviceId, privacy: .public) pass=\(pass, privacy: .public) before=\(before, privacy: .public) after=\(after, privacy: .public)"
+                "cleanup.queue_drain_pass device=\(deviceId, privacy: .public) pass=\(pass, privacy: .public) beforeEntries=\(beforeEntries, privacy: .public) afterEntries=\(afterEntries, privacy: .public) beforeIds=\(beforeIds, privacy: .public) afterIds=\(afterIds, privacy: .public)"
             )
-            if after == 0 {
+            if afterEntries == 0 || afterIds == 0 {
                 return
             }
 
-            let delayNs: UInt64 = after < before ? 250_000_000 : 500_000_000
+            if let nextAttemptAt = earliestNextAttemptAt(deviceId: deviceId), nextAttemptAt > Date() {
+                let waitSeconds = min(1.0, max(0.15, nextAttemptAt.timeIntervalSinceNow))
+                let waitNs = UInt64(waitSeconds * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: waitNs)
+                continue
+            }
+
+            let delayNs: UInt64 = afterIds < beforeIds ? 250_000_000 : 500_000_000
             try? await Task.sleep(nanoseconds: delayNs)
         }
     }
@@ -247,62 +305,59 @@ final class DeviceCleanupManager: ObservableObject {
         device: WLEDDevice,
         ids: [Int],
         context: String
-    ) async -> Bool {
+    ) async -> DeleteAttemptOutcome {
         logger.info("cleanup.delete.begin device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(ids, privacy: .public) context=\(context, privacy: .public)")
-        
-        do {
-            switch type {
-            case .preset:
-                // Delete presets
-                for presetId in ids {
-                    let success = try await WLEDAPIService.shared.deletePreset(id: presetId, device: device)
-                    if !success {
-                        logger.error("Failed to delete preset \(presetId) from device \(device.id)")
-                        return false
-                    }
-                }
-                return true
-                
-            case .playlist:
-                // Delete playlists
-                for playlistId in ids {
-                    let success = try await WLEDAPIService.shared.deletePlaylist(id: playlistId, device: device)
-                    if !success {
-                        logger.error("Failed to delete playlist \(playlistId) from device \(device.id)")
-                        return false
-                    }
-                }
-                return true
-                
-            case .timer:
-                // Disable timers
-                for timerSlot in ids {
+        var succeeded: [Int] = []
+        var failed: [Int] = []
+        var lastError: String?
+
+        for id in ids {
+            do {
+                let success: Bool
+                switch type {
+                case .preset:
+                    success = try await WLEDAPIService.shared.deletePreset(id: id, device: device)
+                case .playlist:
+                    success = try await WLEDAPIService.shared.deletePlaylist(id: id, device: device)
+                case .timer:
                     #if DEBUG
-                    if let before = try? await WLEDAPIService.shared.fetchTimers(for: device).first(where: { $0.id == timerSlot }) {
-                        print("cleanup.timer.delete.before device=\(device.id) slot=\(timerSlot) en=\(before.enabled) hour=\(before.hour) min=\(before.minute) dow=\(before.days) macro=\(before.macroId)")
+                    if let before = try? await WLEDAPIService.shared.fetchTimers(for: device).first(where: { $0.id == id }) {
+                        print("cleanup.timer.delete.before device=\(device.id) slot=\(id) en=\(before.enabled) hour=\(before.hour) min=\(before.minute) dow=\(before.days) macro=\(before.macroId)")
                     }
                     #endif
-                    let success = try await WLEDAPIService.shared.disableTimer(slot: timerSlot, device: device)
-                    if !success {
-                        logger.error("cleanup.timer.delete.failed device=\(device.id, privacy: .public) slot=\(timerSlot, privacy: .public) context=\(context, privacy: .public)")
-                        return false
-                    }
+                    success = try await WLEDAPIService.shared.disableTimer(slot: id, device: device)
                     #if DEBUG
-                    if let after = try? await WLEDAPIService.shared.fetchTimers(for: device).first(where: { $0.id == timerSlot }) {
-                        print("cleanup.timer.delete.after device=\(device.id) slot=\(timerSlot) en=\(after.enabled) hour=\(after.hour) min=\(after.minute) dow=\(after.days) macro=\(after.macroId)")
+                    if let after = try? await WLEDAPIService.shared.fetchTimers(for: device).first(where: { $0.id == id }) {
+                        print("cleanup.timer.delete.after device=\(device.id) slot=\(id) en=\(after.enabled) hour=\(after.hour) min=\(after.minute) dow=\(after.days) macro=\(after.macroId)")
                     }
                     #endif
-                    logger.info("cleanup.timer.delete.ok device=\(device.id, privacy: .public) slot=\(timerSlot, privacy: .public) context=\(context, privacy: .public)")
                 }
-                return true
+                if success {
+                    succeeded.append(id)
+                    logger.info("cleanup.delete.item_ok device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public)")
+                } else {
+                    failed.append(id)
+                    lastError = "delete returned unsuccessful status for id \(id)"
+                    logger.error("cleanup.delete.item_failed device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public)")
+                    break
+                }
+            } catch {
+                failed.append(id)
+                lastError = error.localizedDescription
+                logger.error("cleanup.delete.error device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                break
             }
-        } catch {
-            logger.error("cleanup.delete.error device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(ids, privacy: .public) context=\(context, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
-            if let index = pendingDeletes.firstIndex(where: { $0.deviceId == device.id && $0.type == type && Set($0.ids) == Set(ids) }) {
-                pendingDeletes[index].lastError = error.localizedDescription
+
+            if id != ids.last {
+                try? await Task.sleep(nanoseconds: interDeleteDelayNanoseconds)
             }
-            return false
         }
+
+        return DeleteAttemptOutcome(
+            succeededIds: succeeded,
+            failedIds: failed,
+            lastError: lastError
+        )
     }
 
     /// Returns active queued delete IDs for a device/type (dead-lettered entries excluded).
@@ -427,5 +482,27 @@ final class DeviceCleanupManager: ObservableObject {
         guard attempt > 0 else { return 0 }
         let index = min(schedule.count - 1, max(0, attempt - 1))
         return schedule[index]
+    }
+
+    private func maxIdsPerAttempt(for type: PendingDeviceDelete.DeleteType) -> Int {
+        switch type {
+        case .preset:
+            return 2
+        case .playlist, .timer:
+            return 1
+        }
+    }
+
+    private func activeDeleteIdCount(deviceId: String) -> Int {
+        pendingDeletes
+            .filter { $0.deviceId == deviceId && $0.deadLetteredAt == nil }
+            .reduce(0) { $0 + $1.ids.count }
+    }
+
+    private func earliestNextAttemptAt(deviceId: String) -> Date? {
+        pendingDeletes
+            .filter { $0.deviceId == deviceId && $0.deadLetteredAt == nil }
+            .compactMap(\.nextAttemptAt)
+            .min()
     }
 }

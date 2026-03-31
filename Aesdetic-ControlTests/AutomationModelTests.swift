@@ -3,6 +3,21 @@ import SwiftUI
 @testable import Aesdetic_Control
 
 final class AutomationModelTests: XCTestCase {
+    @MainActor
+    private func waitForCondition(
+        timeoutNanoseconds: UInt64 = 1_500_000_000,
+        pollNanoseconds: UInt64 = 20_000_000,
+        _ condition: @MainActor @escaping () -> Bool
+    ) async -> Bool {
+        let start = DispatchTime.now().uptimeNanoseconds
+        while DispatchTime.now().uptimeNanoseconds - start < timeoutNanoseconds {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: pollNanoseconds)
+        }
+        return condition()
+    }
     
     func testSunriseTemplatePrefillBuildsTransition() {
         let device = WLEDDevice(
@@ -295,7 +310,7 @@ final class AutomationModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteManagedTransitionAutomationEnqueuesPlaylistAndStepPresetCleanup() {
+    func testDeleteManagedTransitionAutomationEnqueuesPlaylistAndStepPresetCleanup() async {
         let store = AutomationStore.shared
         let cleanup = DeviceCleanupManager.shared
         let originalAutomations = store.automations
@@ -341,6 +356,10 @@ final class AutomationModelTests: XCTestCase {
 
         store.automations = [automation]
         store.delete(id: automation.id)
+        let deleteFinished = await waitForCondition {
+            !store.isDeletionInProgress(for: automation.id)
+        }
+        XCTAssertTrue(deleteFinished, "Expected managed transition delete to finish")
 
         XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
         XCTAssertTrue(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: playlistId))
@@ -350,7 +369,7 @@ final class AutomationModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteUserSelectedPresetAndPlaylistActionsPreserveUnderlyingAssets() {
+    func testDeleteUserSelectedPresetAndPlaylistActionsPreserveUnderlyingAssets() async {
         let store = AutomationStore.shared
         let cleanup = DeviceCleanupManager.shared
         let originalAutomations = store.automations
@@ -388,10 +407,19 @@ final class AutomationModelTests: XCTestCase {
         store.automations = [presetAutomation, playlistAutomation]
 
         store.delete(id: presetAutomation.id)
-        XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
+        let presetDeleteFinished = await waitForCondition {
+            !store.isDeletionInProgress(for: presetAutomation.id)
+        }
+        XCTAssertTrue(presetDeleteFinished, "Expected preset automation delete to finish")
+        XCTAssertFalse(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
         XCTAssertFalse(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: userPresetId))
 
         store.delete(id: playlistAutomation.id)
+        let playlistDeleteFinished = await waitForCondition {
+            !store.isDeletionInProgress(for: playlistAutomation.id)
+        }
+        XCTAssertTrue(playlistDeleteFinished, "Expected playlist automation delete to finish")
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
         XCTAssertFalse(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: userPlaylistId))
     }
 
