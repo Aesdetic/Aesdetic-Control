@@ -332,6 +332,11 @@ struct WLEDSettingsView: View {
             infoRow(label: "IP", value: device.ipAddress)
             if let ver = info?.ver { infoRow(label: "Firmware", value: ver) }
             infoRow(label: "MAC", value: device.id)
+            if let deviceTime = info?.time, !deviceTime.isEmpty {
+                infoRow(label: "Device Time", value: deviceTime)
+            } else {
+                infoRow(label: "Device Time", value: "Unavailable")
+            }
             infoRow(label: "LEDs", value: "\(segStop)")
             if viewModel.supportsCCT(for: device, segmentId: 0) {
                 SettingsSectionHeader(title: "Temperature")

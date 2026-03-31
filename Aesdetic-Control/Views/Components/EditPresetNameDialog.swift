@@ -91,7 +91,6 @@ struct EditPresetNameDialog: View {
                 Text("Are you sure you want to delete this preset? This action cannot be undone.")
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {
@@ -123,6 +122,5 @@ struct DeleteButtonStyle: ButtonStyle {
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
-
 
 

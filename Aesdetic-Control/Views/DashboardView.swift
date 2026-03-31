@@ -26,10 +26,7 @@ struct DashboardView: View {
     @State private var lastDerivedUpdate: Date = .distantPast
     @State private var derivedUpdateWorkItem: DispatchWorkItem?
     
-    // Animation optimization
-    private let standardAnimation: Animation = .easeInOut(duration: 0.25)
     private let fastAnimation: Animation = .easeInOut(duration: 0.15)
-    private let smoothAnimation: Animation = .interpolatingSpring(stiffness: 300, damping: 30)
     private let debugHideGreeting = false
     private let debugHideQuote = false
     private let debugHideScenes = false
@@ -42,8 +39,9 @@ struct DashboardView: View {
     private var deviceStatistics: (total: Int, online: Int, offline: Int) { memoizedDeviceStats }
     private var filteredDevices: [WLEDDevice] { memoizedFilteredDevices }
 
-    private var primaryTextColor: Color { DashboardPalette.primaryText(colorScheme) }
-    private var secondaryTextColor: Color { DashboardPalette.secondaryText(colorScheme) }
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var primaryTextColor: Color { theme.textPrimary }
+    private var secondaryTextColor: Color { theme.textSecondary }
     
     private func updateMemoizedStats() {
         let devices = deviceControlViewModel.devices
@@ -97,103 +95,98 @@ struct DashboardView: View {
             ZStack {
                 AppBackground()
 
-                VStack(spacing: 0) {
-                // Header hierarchy: greeting dominates, quote sits as supporting copy.
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if !debugHideGreeting {
-                            Text(dashboardViewModel.currentGreeting)
-                                .font(.system(.largeTitle, design: .rounded).weight(.semibold))
-                                .foregroundColor(primaryTextColor)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
-                                .id(dashboardViewModel.currentGreeting)
-                        }
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 18) {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                if !debugHideGreeting {
+                                    Text(dashboardViewModel.currentGreeting)
+                                        .font(.system(.largeTitle, design: .rounded).weight(.semibold))
+                                        .foregroundColor(primaryTextColor)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
+                                        .id(dashboardViewModel.currentGreeting)
+                                }
 
-                        if !debugHideQuote {
-                            Text(dashboardViewModel.currentQuote)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundColor(secondaryTextColor.opacity(0.92))
-                                .lineLimit(2)
-                                .lineSpacing(2)
-                                .multilineTextAlignment(.leading)
-                                .id(dashboardViewModel.currentQuote)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if !debugHideQuote {
+                                    Text(dashboardViewModel.currentQuote)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundColor(secondaryTextColor.opacity(0.94))
+                                        .lineLimit(2)
+                                        .lineSpacing(2)
+                                        .multilineTextAlignment(.leading)
+                                        .id(dashboardViewModel.currentQuote)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if !debugHideLogo {
-                        Group {
-                            if let logoImage = UIImage(named: "aesdetic_logo") {
-                                Image(uiImage: logoImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                            } else {
-                                Image(systemName: "sparkles")
-                                    .font(.title3.weight(.medium))
-                                    .foregroundColor(primaryTextColor)
+                            if !debugHideLogo {
+                                Group {
+                                    if let logoImage = UIImage(named: "aesdetic_logo") {
+                                        Image(uiImage: logoImage)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                    } else {
+                                        Image(systemName: "sparkles")
+                                            .font(.title3.weight(.medium))
+                                            .foregroundColor(primaryTextColor)
+                                    }
+                                }
+                                .frame(width: 40, height: 40)
+                                .padding(.top, 2)
                             }
                         }
-                        .frame(width: 44, height: 44)
-                        .padding(.top, 2)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 14)
 
-                // Scenes & Automations
-                if !debugHideScenes {
-                    ScenesAutomationsSection(
-                        automations: automationViewModel.automations,
-                        deviceViewModel: deviceControlViewModel,
-                        onToggle: { automation in
-                            Task { automationViewModel.toggleAutomation(automation) }
+                        if !debugHideScenes {
+                            ScenesAutomationsSection(
+                                automations: automationViewModel.automations,
+                                deviceViewModel: deviceControlViewModel,
+                                onToggle: { automation in
+                                    Task { automationViewModel.toggleAutomation(automation) }
+                                }
+                            )
+                            .onReceive(automationViewModel.$automations) { _ in
+                                DispatchQueue.main.async { recomputeDerivedIfNeeded() }
+                            }
                         }
-                    )
-                    .padding(.top, 0)
-                    .padding(.bottom, 8)
-                    .onReceive(automationViewModel.$automations) { _ in
+
+                        if !debugHideStats {
+                            DeviceStatsSection(
+                                totalDevices: deviceStatistics.total,
+                                activeDevices: deviceStatistics.online,
+                                activeAutomations: automationViewModel.automations.filter { $0.enabled }.count
+                            )
+                            .padding(.horizontal, 16)
+                        }
+
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 18)],
+                            spacing: 18
+                        ) {
+                            ForEach(filteredDevices, id: \.id) { device in
+                                MiniDeviceCard(device: device, onTap: {
+                                    selectedDevice = device
+                                })
+                                .id(device.id)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                    }
+                    .padding(.bottom, 104)
+                    .onChange(of: deviceControlViewModel.devices) { _, _ in
                         DispatchQueue.main.async { recomputeDerivedIfNeeded() }
                     }
-                }
-
-                // Devices stats (from derived cache)
-                if !debugHideStats {
-                    DeviceStatsSection(
-                        totalDevices: deviceStatistics.total,
-                        activeDevices: deviceStatistics.online,
-                        activeAutomations: automationViewModel.automations.filter { $0.enabled }.count
-                    )
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                }
-
-                // Device cards grid (from derived cache)
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 18)],
-                    spacing: 18
-                ) {
-                    ForEach(filteredDevices, id: \.id) { device in
-                        MiniDeviceCard(device: device, onTap: {
-                            selectedDevice = device
-                        })
-                        .id(device.id)
+                    .onChange(of: deviceControlViewModel.selectedLocationFilter) { _, _ in
+                        DispatchQueue.main.async { updateMemoizedFilteredDevices() }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .background(Color.clear)
-                .onChange(of: deviceControlViewModel.devices) { _, _ in
-                    DispatchQueue.main.async { recomputeDerivedIfNeeded() }
+                .refreshable {
+                    await refreshData()
                 }
-                .onChange(of: deviceControlViewModel.selectedLocationFilter) { _, _ in
-                    DispatchQueue.main.async { updateMemoizedFilteredDevices() }
-                }
-
-                Spacer(minLength: 8)
             }
-        }
             .onAppear {
                 updateMemoizedStats()
                 updateMemoizedFilteredDevices()
@@ -352,7 +345,7 @@ struct ScenesAutomationsSection: View {
                 Text("Scenes")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(DashboardPalette.primaryText(colorScheme))
+                    .foregroundColor(AppTheme.tokens(for: colorScheme).textPrimary)
 
                 Spacer()
 
@@ -363,7 +356,7 @@ struct ScenesAutomationsSection: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
                     ForEach(displayedSceneShortcuts) { item in
-                        DashboardPillButton(
+                        AppGlassPillButton(
                             title: item.title,
                             isSelected: false,
                             action: {
@@ -390,7 +383,7 @@ struct ScenesAutomationsSection: View {
                 Text("Automations")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(DashboardPalette.primaryText(colorScheme))
+                    .foregroundColor(AppTheme.tokens(for: colorScheme).textPrimary)
 
                 Spacer()
 
@@ -401,7 +394,7 @@ struct ScenesAutomationsSection: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
                     ForEach(displayedAutomations) { automation in
-                        DashboardPillButton(
+                        AppGlassPillButton(
                             title: automation.name,
                             isSelected: automation.enabled,
                             action: {
@@ -560,75 +553,6 @@ struct ScenesAutomationsSection: View {
     }
 }
 
-// MARK: - Dashboard Pill Button (Matches Device Location Pills)
-
-struct DashboardPillButton: View {
-    enum Size {
-        case regular
-        case compact
-    }
-
-    let title: String
-    let isSelected: Bool
-    var iconName: String? = nil
-    var trailingText: String? = nil
-    var size: Size = .regular
-    let action: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var fillColor: Color { DashboardPalette.pillFill(colorScheme, isSelected: isSelected) }
-    private var strokeColor: Color { DashboardPalette.pillStroke(colorScheme, isSelected: isSelected) }
-    private var textColor: Color { DashboardPalette.pillText(colorScheme, isSelected: isSelected) }
-    private var secondaryTextColor: Color { DashboardPalette.pillSubtext(colorScheme, isSelected: isSelected) }
-    private var surfaceStyle: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: size == .compact ? 6 : 8) {
-                if let iconName = iconName {
-                    Image(systemName: iconName)
-                        .font(size == .compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
-                        .foregroundColor(textColor)
-                }
-                
-                Text(title)
-                    .font(size == .compact ? .caption.weight(.semibold) : .subheadline.weight(.medium))
-                    .foregroundColor(textColor)
-                    .lineLimit(1)
-                
-                if let trailingText = trailingText {
-                    Text(trailingText)
-                        .font(size == .compact ? .caption2.weight(.semibold) : .caption.weight(.semibold))
-                        .foregroundColor(secondaryTextColor)
-                }
-            }
-            .padding(.horizontal, size == .compact ? 12 : 16)
-            .padding(.vertical, size == .compact ? 6 : 8)
-            .background(
-                RoundedRectangle(cornerRadius: size == .compact ? 14 : 18, style: .continuous)
-                    .fill(fillColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: size == .compact ? 14 : 18, style: .continuous)
-                    .stroke(strokeColor, lineWidth: 1)
-            )
-            .shadow(
-                color: surfaceStyle.controlShadowAmbient.color,
-                radius: surfaceStyle.controlShadowAmbient.radius,
-                x: surfaceStyle.controlShadowAmbient.x,
-                y: surfaceStyle.controlShadowAmbient.y
-            )
-            .shadow(
-                color: surfaceStyle.controlShadowKey.color,
-                radius: surfaceStyle.controlShadowKey.radius,
-                x: surfaceStyle.controlShadowKey.x,
-                y: surfaceStyle.controlShadowKey.y
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 @MainActor
 final class DashboardShortcutUsageStore: ObservableObject {
     static let shared = DashboardShortcutUsageStore()
@@ -754,108 +678,17 @@ struct DeviceStatsSection: View {
             Text("Devices")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(DashboardPalette.primaryText(colorScheme))
+                .foregroundColor(AppTheme.tokens(for: colorScheme).textPrimary)
             
             // Unified Statistics Card with Vertical Dividers
-            UnifiedStatsCard(
-                totalDevices: totalDevices,
-                activeDevices: activeDevices,
-                activeAutomations: activeAutomations
+            AppOverviewCard(
+                metrics: [
+                    AppOverviewMetric(value: "\(totalDevices)", label: "Total\nDevices"),
+                    AppOverviewMetric(value: "\(activeDevices)", label: "Active\nDevices"),
+                    AppOverviewMetric(value: "\(activeAutomations)", label: "Scenes\nOn")
+                ]
             )
         }
-    }
-}
-
-// MARK: - Unified Statistics Card with Vertical Dividers
-
-struct UnifiedStatsCard: View {
-    let totalDevices: Int
-    let activeDevices: Int
-    let activeAutomations: Int
-    private let cornerRadius: CGFloat = 20
-    @Environment(\.colorScheme) private var colorScheme
-    
-    var body: some View {
-        HStack(spacing: 0) {
-            // Total Devices
-            StatisticItem(
-                number: "\(totalDevices)",
-                label: "Total\nDevices"
-            )
-            
-            // Vertical Divider
-            VerticalDivider()
-            
-            // Active Devices
-            StatisticItem(
-                number: "\(activeDevices)",
-                label: "Active\nDevices"
-            )
-            
-            // Vertical Divider
-            VerticalDivider()
-            
-            // Scenes On
-            StatisticItem(
-                number: "\(activeAutomations)",
-                label: "Scenes\nOn"
-            )
-        }
-        .frame(height: 68)
-        .background(
-            GlassCardBackground(
-                cornerRadius: cornerRadius,
-                fill: DashboardPalette.cardFill(colorScheme),
-                outerStroke: DashboardPalette.cardStrokeOuter(colorScheme),
-                innerStroke: DashboardPalette.cardStrokeInner(colorScheme),
-                keyShadow: DashboardPalette.cardShadowKey(colorScheme).asGlassShadow,
-                ambientShadow: DashboardPalette.cardShadowAmbient(colorScheme).asGlassShadow
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
-}
-
-// MARK: - Individual Statistic Item
-
-struct StatisticItem: View {
-    let number: String
-    let label: String
-    @Environment(\.colorScheme) private var colorScheme
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            // Large Number (left side)
-            Text(number)
-                .font(.title.bold())
-                .foregroundColor(DashboardPalette.primaryText(colorScheme))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            
-            // Description Text (right side, left-aligned)
-            Text(label)
-                .font(.caption.weight(.medium))
-                .foregroundColor(DashboardPalette.secondaryText(colorScheme))
-                .multilineTextAlignment(.leading)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .padding(.horizontal, 16)
-    }
-}
-
-// MARK: - Vertical Divider
-
-struct VerticalDivider: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        Rectangle()
-            .fill(DashboardPalette.divider(colorScheme))
-            .frame(width: 1)
-            .padding(.vertical, 16)
     }
 }
 
@@ -908,11 +741,24 @@ struct MiniDeviceCard: View {
         currentPowerState ? Double(device.brightness) / 255.0 : 0.0
     }
 
-    private var primaryTextColor: Color { DashboardPalette.primaryText(colorScheme) }
-    private var secondaryTextColor: Color { DashboardPalette.secondaryText(colorScheme) }
-    private var cardFillColor: Color { DashboardPalette.cardFill(colorScheme, isActive: currentPowerState) }
-    private var surfaceStyle: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var primaryTextColor: Color { theme.textPrimary }
+    private var secondaryTextColor: Color { theme.textSecondary }
+    private let miniCardCornerRadius: CGFloat = 20
+    private var cardStyle: AppCardStyle {
+        AppCardStyles.glass(
+            for: colorScheme,
+            tone: currentPowerState ? .active : .inactive,
+            cornerRadius: miniCardCornerRadius
+        )
+    }
     private var activeRunStatus: ActiveRunStatus? { viewModel.activeRunStatus[device.id] }
+    private var liftKeyShadowColor: Color {
+        colorScheme == .light ? Color.black.opacity(0.16) : Color.black.opacity(0.28)
+    }
+    private var liftAmbientShadowColor: Color {
+        colorScheme == .light ? Color.black.opacity(0.08) : Color.black.opacity(0.15)
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -970,16 +816,11 @@ struct MiniDeviceCard: View {
         .frame(maxWidth: .infinity)
         .scaleEffect(1.0)
         .background(
-            GlassCardBackground(
-                cornerRadius: 20,
-                fill: cardFillColor,
-                outerStroke: DashboardPalette.cardStrokeOuter(colorScheme),
-                innerStroke: DashboardPalette.cardStrokeInner(colorScheme),
-                keyShadow: DashboardPalette.cardShadowKey(colorScheme).asGlassShadow,
-                ambientShadow: DashboardPalette.cardShadowAmbient(colorScheme).asGlassShadow
-            )
+            AppCardBackground(style: cardStyle)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: miniCardCornerRadius, style: .continuous))
+        .shadow(color: liftAmbientShadowColor, radius: 10, x: 0, y: 4)
+        .shadow(color: liftKeyShadowColor, radius: 22, x: 0, y: 14)
         .onTapGesture {
             onTap()
         }
@@ -1060,36 +901,36 @@ struct MiniDeviceCard: View {
             ZStack {
                 Image(systemName: "power")
                     .font(.headline.weight(.medium))
-                    .foregroundColor(DashboardPalette.powerIcon(colorScheme, isOn: currentPowerState))
+                    .foregroundColor(AppTheme.controlForeground(for: colorScheme, isActive: currentPowerState))
                     .opacity(isToggling ? 0.7 : 1.0)
                 
                 // Loading indicator overlay
                 if isToggling {
                     ProgressView()
                         .scaleEffect(0.8)
-                        .foregroundColor(DashboardPalette.powerIcon(colorScheme, isOn: currentPowerState))
+                        .foregroundColor(AppTheme.controlForeground(for: colorScheme, isActive: currentPowerState))
                 }
             }
             .frame(width: 36, height: 36)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(DashboardPalette.powerFill(colorScheme, isOn: currentPowerState))
+                    .fill(currentPowerState ? .white : .clear)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(DashboardPalette.powerStroke(colorScheme, isOn: currentPowerState), lineWidth: 1.2)
+                            .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
                     )
             )
             .shadow(
-                color: surfaceStyle.controlShadowAmbient.color,
-                radius: surfaceStyle.controlShadowAmbient.radius,
-                x: surfaceStyle.controlShadowAmbient.x,
-                y: surfaceStyle.controlShadowAmbient.y
+                color: theme.controlShadowAmbient.color,
+                radius: theme.controlShadowAmbient.radius,
+                x: theme.controlShadowAmbient.x,
+                y: theme.controlShadowAmbient.y
             )
             .shadow(
-                color: surfaceStyle.controlShadowKey.color,
-                radius: surfaceStyle.controlShadowKey.radius,
-                x: surfaceStyle.controlShadowKey.x,
-                y: surfaceStyle.controlShadowKey.y
+                color: theme.controlShadowKey.color,
+                radius: theme.controlShadowKey.radius,
+                x: theme.controlShadowKey.x,
+                y: theme.controlShadowKey.y
             )
             .scaleEffect(isToggling ? 0.95 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: isToggling)
@@ -1104,16 +945,16 @@ struct MiniDeviceCard: View {
     private func runStatusChip(_ run: ActiveRunStatus) -> some View {
         Text(runStatusText(run))
         .font(.caption2)
-        .foregroundColor(.white.opacity(0.85))
+        .foregroundColor(theme.textPrimary.opacity(0.84))
         .lineLimit(1)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
             Capsule()
-                .fill(Color.white.opacity(0.15))
+                .fill(theme.surfaceMuted)
                 .overlay(
                     Capsule()
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        .stroke(theme.divider.opacity(0.85), lineWidth: 1)
                 )
         )
         .padding(.top, 1)
@@ -1144,7 +985,7 @@ struct AddSceneButton: View {
     var compact: Bool = false
     
     var body: some View {
-        DashboardPillButton(
+        AppGlassPillButton(
             title: "Add Scene",
             isSelected: false,
             iconName: "plus.circle",
@@ -1165,7 +1006,7 @@ struct AddAutomationButton: View {
     var compact: Bool = false
     
     var body: some View {
-        DashboardPillButton(
+        AppGlassPillButton(
             title: "Add Automation",
             isSelected: false,
             iconName: "plus.circle",
@@ -1185,104 +1026,8 @@ struct AddAutomationButton: View {
     }
 }
 
-private enum DashboardPalette {
-    struct ShadowStyle {
-        let color: Color
-        let radius: CGFloat
-        let x: CGFloat
-        let y: CGFloat
-    }
-
-    private static let lightDashboardText = Color(red: 95.0 / 255.0, green: 91.0 / 255.0, blue: 87.0 / 255.0) // #5F5B57
-
-    static func primaryText(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? GlassTheme.text(for: scheme).pagePrimaryText : lightDashboardText
-    }
-
-    static func secondaryText(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? GlassTheme.text(for: scheme).pageSecondaryText : lightDashboardText
-    }
-
-    static func cardFill(_ scheme: ColorScheme, isActive: Bool = true) -> Color {
-        let style = GlassTheme.surfaces(for: scheme)
-        return isActive ? style.cardFillActive : style.cardFillInactive
-    }
-
-    static func cardStrokeOuter(_ scheme: ColorScheme) -> Color {
-        GlassTheme.surfaces(for: scheme).cardStrokeOuter
-    }
-
-    static func cardStrokeInner(_ scheme: ColorScheme) -> Color {
-        GlassTheme.surfaces(for: scheme).cardStrokeInner
-    }
-
-    static func cardShadowKey(_ scheme: ColorScheme) -> ShadowStyle {
-        let shadow = GlassTheme.surfaces(for: scheme).cardShadowKey
-        return ShadowStyle(color: shadow.color, radius: shadow.radius, x: shadow.x, y: shadow.y)
-    }
-
-    static func cardShadowAmbient(_ scheme: ColorScheme) -> ShadowStyle {
-        let shadow = GlassTheme.surfaces(for: scheme).cardShadowAmbient
-        return ShadowStyle(color: shadow.color, radius: shadow.radius, x: shadow.x, y: shadow.y)
-    }
-
-    static func divider(_ scheme: ColorScheme) -> Color {
-        GlassTheme.surfaces(for: scheme).separator
-    }
-
-    static func pillFill(_ scheme: ColorScheme, isSelected: Bool) -> Color {
-        let style = GlassTheme.surfaces(for: scheme)
-        return isSelected ? style.pillFillSelected : style.pillFillDefault
-    }
-
-    static func pillStroke(_ scheme: ColorScheme, isSelected: Bool) -> Color {
-        if scheme == .dark && isSelected {
-            return .clear
-        }
-        return GlassTheme.surfaces(for: scheme).pillStroke
-    }
-
-    static func pillText(_ scheme: ColorScheme, isSelected: Bool) -> Color {
-        if scheme == .dark {
-            let textStyle = GlassTheme.text(for: scheme)
-            return isSelected ? textStyle.pillTextSelected : textStyle.pillTextDefault
-        }
-        return lightDashboardText
-    }
-
-    static func pillSubtext(_ scheme: ColorScheme, isSelected: Bool) -> Color {
-        if scheme == .dark {
-            let textStyle = GlassTheme.text(for: scheme)
-            return isSelected ? textStyle.pillSubtextSelected : textStyle.pillSubtextDefault
-        }
-        return lightDashboardText
-    }
-
-    static func powerIcon(_ scheme: ColorScheme, isOn: Bool) -> Color {
-        if scheme == .dark {
-            return isOn ? .black : .white
-        }
-        return lightDashboardText
-    }
-
-    static func powerFill(_ scheme: ColorScheme, isOn: Bool) -> Color {
-        isOn ? .white : .clear
-    }
-
-    static func powerStroke(_ scheme: ColorScheme, isOn: Bool) -> Color {
-        scheme == .dark ? (isOn ? .clear : .white) : .clear
-    }
-}
-
-private extension DashboardPalette.ShadowStyle {
-    var asGlassShadow: GlassShadowStyle {
-        GlassShadowStyle(color: color, radius: radius, x: x, y: y)
-    }
-}
-
 struct DashboardView_Previews: PreviewProvider {
     static var previews: some View {
         DashboardView()
-            .preferredColorScheme(.dark)
     }
 }

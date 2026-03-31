@@ -102,7 +102,12 @@ final class DeviceCleanupManager: ObservableObject {
             return
         }
         if device.isOnline {
-            let success = await attemptDelete(type: type, device: device, ids: uniqueIds)
+            let success = await attemptDelete(
+                type: type,
+                device: device,
+                ids: uniqueIds,
+                context: "requestDelete_immediate"
+            )
             if success {
                 // Remove any queued entries that overlap these ids (across all sources).
                 removeIds(type: type, deviceId: device.id, ids: uniqueIds)
@@ -150,7 +155,15 @@ final class DeviceCleanupManager: ObservableObject {
                 logger.info("cleanup.queue_deferred_active_lease_overlap device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public)")
                 continue
             }
-            let success = await attemptDelete(type: delete.type, device: device, ids: delete.ids)
+            logger.info(
+                "cleanup.queue_attempt device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) ids=\(delete.ids, privacy: .public) retries=\(delete.retries, privacy: .public) lastError=\((delete.lastError ?? "none"), privacy: .public)"
+            )
+            let success = await attemptDelete(
+                type: delete.type,
+                device: device,
+                ids: delete.ids,
+                context: "queue:\(delete.id.uuidString)"
+            )
             if success {
                 // Remove from queue on success
                 self.pendingDeletes.removeAll { $0.id == delete.id }
@@ -195,10 +208,47 @@ final class DeviceCleanupManager: ObservableObject {
             await processQueue(for: deviceId)
         }
     }
+
+    /// Drain queued deletes for a device in the current online session.
+    /// Useful after automation delete so step-preset cleanup does not get stranded
+    /// behind maxDeletesPerPass throttling.
+    func processQueueUntilIdle(for deviceId: String, maxPasses: Int = 4) async {
+        guard cleanupEnabled else { return }
+        let passLimit = max(1, maxPasses)
+        for pass in 1...passLimit {
+            let before = pendingDeletes.filter {
+                $0.deviceId == deviceId && $0.deadLetteredAt == nil
+            }.count
+            guard before > 0 else {
+                logger.info("cleanup.queue_drain_complete device=\(deviceId, privacy: .public) pass=\(pass, privacy: .public) remaining=0")
+                return
+            }
+
+            await processQueue(for: deviceId)
+
+            let after = pendingDeletes.filter {
+                $0.deviceId == deviceId && $0.deadLetteredAt == nil
+            }.count
+            logger.info(
+                "cleanup.queue_drain_pass device=\(deviceId, privacy: .public) pass=\(pass, privacy: .public) before=\(before, privacy: .public) after=\(after, privacy: .public)"
+            )
+            if after == 0 {
+                return
+            }
+
+            let delayNs: UInt64 = after < before ? 250_000_000 : 500_000_000
+            try? await Task.sleep(nanoseconds: delayNs)
+        }
+    }
     
     /// Attempt to process a single deletion
-    private func attemptDelete(type: PendingDeviceDelete.DeleteType, device: WLEDDevice, ids: [Int]) async -> Bool {
-        logger.info("Attempting to delete \(type.rawValue) \(ids) from device \(device.id)")
+    private func attemptDelete(
+        type: PendingDeviceDelete.DeleteType,
+        device: WLEDDevice,
+        ids: [Int],
+        context: String
+    ) async -> Bool {
+        logger.info("cleanup.delete.begin device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(ids, privacy: .public) context=\(context, privacy: .public)")
         
         do {
             switch type {
@@ -227,16 +277,27 @@ final class DeviceCleanupManager: ObservableObject {
             case .timer:
                 // Disable timers
                 for timerSlot in ids {
+                    #if DEBUG
+                    if let before = try? await WLEDAPIService.shared.fetchTimers(for: device).first(where: { $0.id == timerSlot }) {
+                        print("cleanup.timer.delete.before device=\(device.id) slot=\(timerSlot) en=\(before.enabled) hour=\(before.hour) min=\(before.minute) dow=\(before.days) macro=\(before.macroId)")
+                    }
+                    #endif
                     let success = try await WLEDAPIService.shared.disableTimer(slot: timerSlot, device: device)
                     if !success {
-                        logger.error("Failed to disable timer slot \(timerSlot) on device \(device.id)")
+                        logger.error("cleanup.timer.delete.failed device=\(device.id, privacy: .public) slot=\(timerSlot, privacy: .public) context=\(context, privacy: .public)")
                         return false
                     }
+                    #if DEBUG
+                    if let after = try? await WLEDAPIService.shared.fetchTimers(for: device).first(where: { $0.id == timerSlot }) {
+                        print("cleanup.timer.delete.after device=\(device.id) slot=\(timerSlot) en=\(after.enabled) hour=\(after.hour) min=\(after.minute) dow=\(after.days) macro=\(after.macroId)")
+                    }
+                    #endif
+                    logger.info("cleanup.timer.delete.ok device=\(device.id, privacy: .public) slot=\(timerSlot, privacy: .public) context=\(context, privacy: .public)")
                 }
                 return true
             }
         } catch {
-            logger.error("Error processing deletion for device \(device.id): \(error.localizedDescription)")
+            logger.error("cleanup.delete.error device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(ids, privacy: .public) context=\(context, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
             if let index = pendingDeletes.firstIndex(where: { $0.deviceId == device.id && $0.type == type && Set($0.ids) == Set(ids) }) {
                 pendingDeletes[index].lastError = error.localizedDescription
             }

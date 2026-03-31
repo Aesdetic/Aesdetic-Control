@@ -16,8 +16,14 @@ struct AutomationRow: View {
     
     @Environment(\.colorScheme) private var colorScheme
     @State private var solarTriggerDate: Date?
-    private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
-    private var glassText: GlassTextStyle { GlassTheme.text(for: colorScheme) }
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var cardStyle: AppCardStyle {
+        AppCardStyles.glass(
+            for: colorScheme,
+            tone: automation.enabled ? .active : .inactive,
+            cornerRadius: cardCornerRadius
+        )
+    }
     private let cardCornerRadius: CGFloat = 20
     
     private var accentColor: Color {
@@ -25,7 +31,7 @@ struct AutomationRow: View {
            !accent.isEmpty {
             return Color(hex: accent)
         }
-        return glassText.pagePrimaryText
+        return theme.textPrimary
     }
     
     private var devicesLabel: String? {
@@ -44,14 +50,7 @@ struct AutomationRow: View {
         }
         .padding(18)
         .background(
-            GlassCardBackground(
-                cornerRadius: cardCornerRadius,
-                fill: rowFill,
-                outerStroke: rowOuterStroke,
-                innerStroke: rowInnerStroke,
-                keyShadow: glassSurface.cardShadowKey,
-                ambientShadow: glassSurface.cardShadowAmbient
-            )
+            AppCardBackground(style: cardStyle)
         )
         .contentShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
         .onTapGesture {
@@ -76,11 +75,11 @@ struct AutomationRow: View {
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundColor(glassText.pageSecondaryText)
+                        .foregroundColor(theme.textSecondary)
                 }
                 Text(actionDescription)
                     .font(.subheadline)
-                    .foregroundColor(glassText.pageSecondaryText)
+                    .foregroundColor(theme.textSecondary)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 10) {
@@ -95,27 +94,27 @@ struct AutomationRow: View {
             triggerRow
             if let devicesLabel {
                 Capsule()
-                    .fill(glassSurface.pillFillDefault)
+                    .fill(theme.surfaceMuted)
                     .overlay(
                         Text(devicesLabel)
                             .font(.caption)
-                            .foregroundColor(glassText.pageSecondaryText)
+                            .foregroundColor(theme.textSecondary)
                             .padding(.horizontal, 10)
                     )
             }
             if isRunning {
                 Capsule()
-                    .fill(glassSurface.pillFillDefault)
+                    .fill(theme.surfaceMuted)
                     .overlay(
                         Text(runningChipText)
                             .font(.caption)
-                            .foregroundColor(.green)
+                            .foregroundColor(theme.status.positive)
                             .padding(.horizontal, 10)
                     )
             }
             if let deviceTimerStatus {
                 Capsule()
-                    .fill(glassSurface.pillFillDefault)
+                    .fill(theme.surfaceMuted)
                     .overlay(
                         Text(deviceTimerStatus.text)
                             .font(.caption)
@@ -130,17 +129,17 @@ struct AutomationRow: View {
                     onRetrySync()
                 }
                 .font(.caption.weight(.semibold))
-                .foregroundColor(.orange)
+                .foregroundColor(theme.status.warning)
                 .buttonStyle(.plain)
             }
             TimelineView(.periodic(from: .now, by: 20)) { context in
                 if let triggerText = recentOnDeviceTriggerText(referenceDate: context.date) {
                     Capsule()
-                        .fill(glassSurface.pillFillDefault)
+                        .fill(theme.surfaceMuted)
                         .overlay(
                             Text(triggerText)
                                 .font(.caption)
-                                .foregroundColor(.cyan)
+                                .foregroundColor(theme.status.info)
                                 .padding(.horizontal, 10)
                         )
                 }
@@ -149,7 +148,7 @@ struct AutomationRow: View {
             if let nextTriggerDescription {
                 Text(nextTriggerDescription)
                     .font(.caption)
-                    .foregroundColor(glassText.pageSecondaryText)
+                    .foregroundColor(theme.textSecondary)
             }
         }
     }
@@ -161,7 +160,7 @@ struct AutomationRow: View {
                 .font(.body.weight(.semibold))
                 .foregroundColor(accentColor.opacity(0.9))
                 .padding(10)
-                .background(glassSurface.pillFillDefault)
+                .background(theme.surfaceMuted)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
@@ -170,14 +169,14 @@ struct AutomationRow: View {
         HStack(spacing: 8) {
             Text(automation.name)
                 .font(.headline.weight(.semibold))
-                .foregroundColor(glassText.pagePrimaryText)
+                .foregroundColor(theme.textPrimary)
             if isNext {
                 Text("Next")
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.orange.opacity(0.2))
-                    .foregroundColor(.orange)
+                    .background(theme.status.warning.opacity(0.18))
+                    .foregroundColor(theme.status.warning)
                     .clipShape(Capsule())
             }
         }
@@ -190,7 +189,7 @@ struct AutomationRow: View {
                     onShortcutToggle(!shortcutPinned)
                 } label: {
                     Image(systemName: shortcutPinned ? "heart.fill" : "heart")
-                        .foregroundColor(shortcutPinned ? .orange : glassText.pageSecondaryText)
+                        .foregroundColor(shortcutPinned ? theme.status.warning : theme.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(shortcutPinned ? "Remove from shortcuts" : "Add to shortcuts")
@@ -207,14 +206,7 @@ struct AutomationRow: View {
     private var executionControls: some View {
         HStack(spacing: 8) {
             if let onRun {
-                Button(action: onRun) {
-                    Image(systemName: "play.fill")
-                        .foregroundColor(glassText.pagePrimaryText)
-                        .padding(10)
-                        .background(glassSurface.pillFillSelected)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
+                AppGlassIconButton(systemName: "play.fill", size: 40, action: onRun)
                 .accessibilityLabel("Run \(automation.name)")
             }
             Toggle("", isOn: Binding(
@@ -234,7 +226,7 @@ struct AutomationRow: View {
             
             Text(automation.trigger.displayName)
                 .font(.caption.weight(.medium))
-                .foregroundColor(glassText.pagePrimaryText)
+                .foregroundColor(theme.textPrimary)
         }
     }
 
@@ -247,18 +239,18 @@ struct AutomationRow: View {
         let states = deviceIds.map { automation.metadata.syncState(for: $0) }
         let syncedCount = states.filter { $0 == .synced }.count
         if syncedCount == deviceIds.count {
-            return ("Ready", .green, false)
+            return ("Ready", theme.status.positive, false)
         }
         if states.contains(.syncing) {
-            return ("Getting ready", glassText.pageSecondaryText, false)
+            return ("Getting ready", theme.textSecondary, false)
         }
         if states.contains(.notSynced) {
             if syncedCount > 0 {
-                return ("Partially ready", .orange, true)
+                return ("Partially ready", theme.status.warning, true)
             }
-            return ("Not ready", .orange, true)
+            return ("Not ready", theme.status.warning, true)
         }
-        return ("Not ready", .orange, true)
+        return ("Not ready", theme.status.warning, true)
     }
 
     private var runningChipText: String {
@@ -291,8 +283,8 @@ struct AutomationRow: View {
             actionLabel(icon: "list.bullet.rectangle", text: "Preset \(payload.presetId)")
         case .playlist(let payload):
             actionLabel(icon: "list.bullet.rectangle", text: payload.playlistName ?? "Playlist \(payload.playlistId)")
-        case .gradient:
-            actionLabel(icon: "rainbow", text: "Color routine")
+        case .gradient(let payload):
+            actionLabel(icon: payload.powerOn ? "rainbow" : "power", text: payload.powerOn ? "Color routine" : "Power off")
         case .transition(let payload):
             let title = payload.presetName ?? "Transition"
             actionLabel(icon: "sunrise.fill", text: title)
@@ -311,20 +303,8 @@ struct AutomationRow: View {
                 .foregroundColor(accentColor)
             Text(text)
                 .font(.caption)
-                .foregroundColor(glassText.pageSecondaryText)
+                .foregroundColor(theme.textSecondary)
         }
-    }
-
-    private var rowFill: Color {
-        automation.enabled ? glassSurface.cardFillActive : glassSurface.cardFillInactive
-    }
-
-    private var rowOuterStroke: Color {
-        glassSurface.cardStrokeOuter
-    }
-
-    private var rowInnerStroke: Color {
-        glassSurface.cardStrokeInner
     }
     
     private var actionDescription: String {
@@ -336,8 +316,8 @@ struct AutomationRow: View {
             return "Preset #\(payload.presetId)"
         case .playlist(let payload):
             return "Playlist #\(payload.playlistId)"
-        case .gradient:
-            return "Color · \(automation.summary)"
+        case .gradient(let payload):
+            return payload.powerOn ? "Color · \(automation.summary)" : "Power · Off"
         case .transition:
             return "Transition · \(automation.summary)"
         case .effect(let payload):

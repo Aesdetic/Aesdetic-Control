@@ -103,7 +103,6 @@ struct SaveSceneDialog: View {
             }
             .navigationBarHidden(true)
         }
-        .preferredColorScheme(.dark)
         .onAppear {
             sceneName = "Scene \(Date().presetNameTimestamp())"
         }

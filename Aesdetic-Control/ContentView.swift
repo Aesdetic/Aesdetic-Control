@@ -6,11 +6,16 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     // Use the shared ViewModels to ensure proper state management
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     @State private var selectedTab: DockTab = .dashboard
+    private let dockHorizontalPadding: CGFloat = 16
+    private let dockTopInsetPadding: CGFloat = 0
+    private let dockBottomInsetOffset: CGFloat = -8
+
     var body: some View {
         TabView(selection: $selectedTab) {
             DashboardView()
@@ -41,10 +46,12 @@ struct ContentView: View {
         .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             DockBar(selectedTab: $selectedTab)
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
+                .padding(.horizontal, dockHorizontalPadding)
+                .padding(.top, dockTopInsetPadding)
+                .padding(.bottom, dockBottomInsetOffset)
         }
         .onAppear {
+            UITabBar.appearance().isHidden = true
             // Passive discovery at launch (UDP/mDNS only)
             deviceViewModel.startPassiveDiscovery()
         }

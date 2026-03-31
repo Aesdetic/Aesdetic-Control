@@ -131,7 +131,6 @@ struct SaveTransitionPresetDialog: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {

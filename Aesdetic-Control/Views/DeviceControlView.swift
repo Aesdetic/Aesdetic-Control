@@ -151,7 +151,6 @@ struct DeviceControlView: View {
             }
             .sheet(item: $selectedDevice) { device in
                 DeviceDetailView(device: device, viewModel: viewModel)
-                    .preferredColorScheme(.light)
             }
             .navigationBarHidden(true)
             .onReceive(viewModel.$devices) { _ in
@@ -724,7 +723,6 @@ struct AddDeviceSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }

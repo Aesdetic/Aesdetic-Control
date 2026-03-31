@@ -37,7 +37,19 @@ struct GradientBar: View {
                     let w = max(1, geo.size.width - handleWidth)
                     let x = min(max(0, location.x - handleWidth / 2), w)
                     let t = Double(x / w)
-                    // Delegate tap handling to caller (can add stop or select nearest)
+                    // If user tapped near an existing stop handle, treat it as stop selection
+                    // instead of adding a new stop. This avoids accidental duplicate stops.
+                    if let nearest = gradient.stops.min(by: {
+                        abs(CGFloat($0.position) * w - x) < abs(CGFloat($1.position) * w - x)
+                    }) {
+                        let nearestDistance = abs(CGFloat(nearest.position) * w - x)
+                        if nearestDistance <= (handleWidth * 0.95) {
+                            selectedStopId = nearest.id
+                            onTapStop(nearest.id)
+                            return
+                        }
+                    }
+                    // Delegate tap handling to caller (can add stop).
                     onTapAnywhere(t, nil)
                 }
 

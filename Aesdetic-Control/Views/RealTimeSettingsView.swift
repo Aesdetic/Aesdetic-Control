@@ -4,10 +4,25 @@ import SwiftUI
 struct RealTimeSettingsView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("AppAppearance.selection") private var appearanceSelection = AppAppearance.system.rawValue
     
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Picker("Appearance", selection: $appearanceSelection) {
+                        ForEach(AppAppearance.allCases) { appearance in
+                            Text(appearance.title)
+                                .tag(appearance.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Appearance Testing")
+                } footer: {
+                    Text("Temporarily override the app appearance while tuning the glass and layout.")
+                }
+
                 // MARK: - Real-Time Controls Section
                 Section {
                     // Main toggle for real-time updates

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PresetsListView: View {
     @ObservedObject var store = PresetsStore.shared
+    @ObservedObject private var automationStore = AutomationStore.shared
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
     let onRequestRename: (PresetRenameContext) -> Void
@@ -9,6 +10,7 @@ struct PresetsListView: View {
     @State private var isPlaylistEditorPresented = false
     @State private var playlistEditorOriginalId: Int?
     @State private var playlistEditorDraft = PlaylistEditorDraft.defaultDraft
+    @State private var expandedAutomationFolders: Set<UUID> = []
     
     var body: some View {
         ScrollView {
@@ -18,6 +20,10 @@ struct PresetsListView: View {
                 
                 // Effect Presets Section
                 effectPresetsSection
+
+                if advancedUIEnabled {
+                    automationAssetsAdvancedSection
+                }
             }
             .padding(.vertical, 20)
             .padding(.horizontal, 16)
@@ -80,7 +86,63 @@ struct PresetsListView: View {
         }
         .task {
             await viewModel.refreshPresetsIfModified(for: device)
+            if advancedUIEnabled {
+                await viewModel.loadPlaylists(for: device, force: false)
+                await viewModel.loadPresets(for: device, force: false)
+            }
         }
+        .onChange(of: advancedUIEnabled) { _, enabled in
+            guard enabled else { return }
+            Task {
+                await viewModel.loadPlaylists(for: device, force: false)
+                await viewModel.loadPresets(for: device, force: false)
+            }
+        }
+    }
+
+    private var devicePlaylistsById: [Int: WLEDPlaylist] {
+        Dictionary(uniqueKeysWithValues: viewModel.playlists(for: device).map { ($0.id, $0) })
+    }
+
+    private var automationFolders: [AutomationAssetFolder] {
+        automationStore.automations.compactMap { automation in
+            guard automation.metadata.runOnDevice,
+                  automation.targets.deviceIds.contains(device.id) else {
+                return nil
+            }
+            let mappedPlaylistId = automation.metadata.wledPlaylistIdsByDevice?[device.id]
+            let fallbackPlaylistId = automation.targets.deviceIds.count == 1 ? automation.metadata.wledPlaylistId : nil
+            let mappedPresetId = automation.metadata.wledPresetIdsByDevice?[device.id]
+            let playlistId = mappedPlaylistId ?? fallbackPlaylistId
+            guard (playlistId ?? mappedPresetId) != nil else { return nil }
+            return AutomationAssetFolder(
+                automationId: automation.id,
+                automationName: automation.name,
+                playlistId: playlistId,
+                presetId: mappedPresetId,
+                action: automation.action
+            )
+        }
+        .sorted { $0.automationName.localizedCaseInsensitiveCompare($1.automationName) == .orderedAscending }
+    }
+
+    private var nonPlaylistDevicePresets: [WLEDPreset] {
+        if viewModel.isLoadingPlaylists(for: device), viewModel.playlists(for: device).isEmpty {
+            return []
+        }
+        let playlistIds = Set(devicePlaylistsById.keys)
+        return viewModel
+            .presets(for: device)
+            .filter { !playlistIds.contains($0.id) }
+            .sorted { $0.id < $1.id }
+    }
+
+    private func isEffectDevicePreset(_ preset: WLEDPreset) -> Bool {
+        let segments = preset.state?.seg ?? (preset.segment.map { [$0] } ?? [])
+        if let fx = segments.compactMap(\.fx).first {
+            return fx > 0
+        }
+        return false
     }
     
     // MARK: - Color Presets Section
@@ -276,32 +338,241 @@ struct PresetsListView: View {
         }
     }
 
-    // MARK: - Advanced Playlists Section (WLED)
-
-    private var playlistDiscoverabilitySection: some View {
+    private var automationAssetsAdvancedSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("Device Playlists", systemImage: "list.bullet.rectangle")
+                Label("Automation Assets (Advanced)", systemImage: "folder")
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
             }
 
-            Text("Device playlist controls are available in Advanced mode.")
+            if automationFolders.isEmpty {
+                emptyStateView(
+                    icon: "folder",
+                    message: "No automation-managed assets",
+                    hint: "Automation-created presets/playlists will appear here"
+                )
+            } else {
+                let presetById = Dictionary(uniqueKeysWithValues: nonPlaylistDevicePresets.map { ($0.id, $0) })
+                VStack(spacing: 8) {
+                    ForEach(automationFolders) { folder in
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { expandedAutomationFolders.contains(folder.id) },
+                                set: { isExpanded in
+                                    if isExpanded {
+                                        expandedAutomationFolders.insert(folder.id)
+                                    } else {
+                                        expandedAutomationFolders.remove(folder.id)
+                                    }
+                                }
+                            )
+                        ) {
+                            VStack(spacing: 8) {
+                                if let playlistId = folder.playlistId,
+                                   let playlist = devicePlaylistsById[playlistId] {
+                                    let preview = automationManagedPlaylistPreview(
+                                        for: folder,
+                                        playlist: playlist,
+                                        presetById: presetById
+                                    )
+                                    DevicePlaylistRecordRow(
+                                        playlist: playlist,
+                                        preview: preview,
+                                        onRun: {
+                                            Task {
+                                                _ = await viewModel.startPlaylist(
+                                                    device: device,
+                                                    playlistId: playlist.id,
+                                                    runTitle: playlist.name,
+                                                    expectedDurationSeconds: nil,
+                                                    transitionDeciseconds: nil,
+                                                    runKind: .automation,
+                                                    preferWebSocketFirst: true
+                                                )
+                                            }
+                                        },
+                                        onEdit: {
+                                            onRequestRename(.devicePlaylist(id: playlist.id, name: playlist.name, device: device))
+                                        },
+                                        onDelete: {
+                                            Task {
+                                                await viewModel.deletePlaylist(playlist, for: device)
+                                            }
+                                        }
+                                    )
+
+                                    let stepIds = playlist.presets.filter { $0 > 0 }
+                                    if !stepIds.isEmpty {
+                                        Text("Step presets: \(stepIds.map(String.init).joined(separator: ", "))")
+                                            .font(.caption2)
+                                            .foregroundColor(.white.opacity(0.55))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+
+                                if let presetId = folder.presetId,
+                                   let preset = nonPlaylistDevicePresets.first(where: { $0.id == presetId }) {
+                                    let preview = devicePresetPreview(for: preset)
+                                    DevicePresetRecordRow(
+                                        preset: preset,
+                                        previewGradient: preview.gradient,
+                                        previewBrightness: preview.brightness,
+                                        onApply: {
+                                            Task {
+                                                _ = await viewModel.applyPresetId(
+                                                    preset.id,
+                                                    to: device,
+                                                    transitionDeciseconds: nil,
+                                                    preferWebSocketFirst: true
+                                                )
+                                            }
+                                        },
+                                        onEdit: {
+                                            onRequestRename(.devicePreset(id: preset.id, name: preset.name, device: device))
+                                        },
+                                        onDelete: {
+                                            Task {
+                                                _ = await viewModel.deletePresetRecord(preset.id, for: device)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                            .padding(.top, 8)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "folder.fill")
+                                    .foregroundColor(.white.opacity(0.85))
+                                Text(folder.automationName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                Spacer()
+                                if folder.playlistId != nil {
+                                    Text("Playlist")
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.65))
+                                } else if folder.presetId != nil {
+                                    Text("Preset")
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.65))
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Advanced Playlists Section (WLED)
+
+    private var playlistDiscoverabilitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Device Presets & Playlists", systemImage: "list.bullet.rectangle")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+            }
+
+            Text("Device preset and playlist controls are available in Advanced mode.")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.75))
-            Text("Enable Advanced mode to view, run, and delete playlists synced from WLED.")
+            Text("Enable Advanced mode to view, run, rename, and delete WLED preset/playlist records.")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.55))
 
             Button {
                 advancedUIEnabled = true
-                Task { await viewModel.loadPlaylists(for: device, force: false) }
+                Task {
+                    await viewModel.loadPresets(for: device, force: false)
+                    await viewModel.loadPlaylists(for: device, force: false)
+                }
             } label: {
                 Label("Enable Advanced Mode", systemImage: "slider.horizontal.3")
                     .font(.caption.weight(.semibold))
             }
             .buttonStyle(PrimaryButtonStyle())
+        }
+    }
+
+    private var advancedDevicePresetsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Device Presets", systemImage: "square.stack.3d.down.forward")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+                Button("Refresh") {
+                    Task { await viewModel.refreshPresets(for: device) }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.white.opacity(0.12))
+                )
+            }
+
+            let presets = viewModel.presets(for: device)
+            if presets.isEmpty {
+                emptyStateView(
+                    icon: "square.stack.3d.down.forward",
+                    message: viewModel.isLoadingPresets(for: device) ? "Loading presets…" : "No presets found",
+                    hint: "Preset records saved in WLED will appear here"
+                )
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(presets) { preset in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(preset.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundColor(.white)
+                                Text("Preset \(preset.id)")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.6))
+                            }
+                            Spacer()
+                            Button("Run") {
+                                Task {
+                                    _ = await viewModel.applyPresetId(
+                                        preset.id,
+                                        to: device,
+                                        transitionDeciseconds: nil,
+                                        preferWebSocketFirst: true
+                                    )
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.blue.opacity(0.7))
+                            )
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -469,6 +740,181 @@ struct PresetsListView: View {
             endText = "None"
         }
         return "Repeat \(repeatText) • Shuffle \(shuffleText) • End \(endText)"
+    }
+
+    private struct DevicePresetPreview {
+        let gradient: LEDGradient
+        let brightness: Int
+    }
+
+    private struct AutomationAssetFolder: Identifiable {
+        let automationId: UUID
+        let automationName: String
+        let playlistId: Int?
+        let presetId: Int?
+        let action: AutomationAction
+
+        var id: UUID { automationId }
+    }
+
+    struct DevicePlaylistPreview {
+        let gradientA: LEDGradient
+        let brightnessA: Int
+        let gradientB: LEDGradient
+        let brightnessB: Int
+        let durationSec: Double
+    }
+
+    private func devicePresetPreview(for preset: WLEDPreset) -> DevicePresetPreview {
+        let preferredSegments = (preset.state?.seg ?? []).filter { ($0.col?.isEmpty == false) }
+        let segments: [SegmentUpdate]
+        if !preferredSegments.isEmpty {
+            segments = preferredSegments
+        } else if let segment = preset.segment, segment.col?.isEmpty == false {
+            segments = [segment]
+        } else {
+            segments = []
+        }
+
+        let stops = gradientStopsFromSegments(segments)
+        let gradient = LEDGradient(
+            stops: stops.isEmpty ? fallbackGradientStops() : stops,
+            interpolation: .linear
+        )
+        let brightness = max(0, min(255, preset.state?.bri ?? preset.segment?.bri ?? 255))
+        return DevicePresetPreview(gradient: gradient, brightness: brightness)
+    }
+
+    private func devicePlaylistPreview(for playlist: WLEDPlaylist, presetById: [Int: WLEDPreset]) -> DevicePlaylistPreview {
+        let firstPresetId = playlist.presets.first(where: { $0 > 0 })
+        let lastPresetId = playlist.presets.last(where: { $0 > 0 }) ?? firstPresetId
+
+        let first = firstPresetId.flatMap { presetById[$0] }.map(devicePresetPreview(for:))
+        let last = lastPresetId.flatMap { presetById[$0] }.map(devicePresetPreview(for:))
+
+        let fallback = DevicePresetPreview(
+            gradient: LEDGradient(stops: fallbackGradientStops(), interpolation: .linear),
+            brightness: 255
+        )
+
+        let start = first ?? fallback
+        let end = last ?? first ?? fallback
+        let totalDurationSec = Double(playlist.duration.reduce(0) { $0 + max(0, $1) }) / 10.0
+
+        return DevicePlaylistPreview(
+            gradientA: start.gradient,
+            brightnessA: start.brightness,
+            gradientB: end.gradient,
+            brightnessB: end.brightness,
+            durationSec: max(0, totalDurationSec)
+        )
+    }
+
+    private func automationManagedPlaylistPreview(
+        for folder: AutomationAssetFolder,
+        playlist: WLEDPlaylist,
+        presetById: [Int: WLEDPreset]
+    ) -> DevicePlaylistPreview {
+        if case .transition(let payload) = folder.action {
+            return DevicePlaylistPreview(
+                gradientA: payload.startGradient,
+                brightnessA: payload.startBrightness,
+                gradientB: payload.endGradient,
+                brightnessB: payload.endBrightness,
+                durationSec: max(0, payload.durationSeconds)
+            )
+        }
+        return devicePlaylistPreview(for: playlist, presetById: presetById)
+    }
+
+    private func effectIdForDevicePreset(_ preset: WLEDPreset) -> Int? {
+        let segments = preset.state?.seg ?? (preset.segment.map { [$0] } ?? [])
+        return segments.compactMap(\.fx).first
+    }
+
+    private func gradientStopsFromSegments(_ segments: [SegmentUpdate]) -> [GradientStop] {
+        guard !segments.isEmpty else { return [] }
+
+        struct SegmentColorSpan {
+            let index: Int
+            let start: Int?
+            let stop: Int?
+            let hexColor: String
+        }
+
+        let spans = segments.enumerated().compactMap { index, segment -> SegmentColorSpan? in
+            guard let hex = primaryHexColor(from: segment) else { return nil }
+            return SegmentColorSpan(index: index, start: segment.start, stop: segment.stop, hexColor: hex)
+        }
+        guard !spans.isEmpty else { return [] }
+
+        let useAbsoluteBounds = spans.allSatisfy { span in
+            guard let start = span.start, let stop = span.stop else { return false }
+            return stop > start
+        }
+
+        let ordered = useAbsoluteBounds ? spans.sorted { ($0.start ?? 0) < ($1.start ?? 0) } : spans.sorted { $0.index < $1.index }
+
+        var stops: [GradientStop] = []
+        if useAbsoluteBounds {
+            let minStart = ordered.compactMap(\.start).min() ?? 0
+            let maxStop = ordered.compactMap(\.stop).max() ?? (minStart + 1)
+            let spanLength = max(1, maxStop - minStart)
+
+            for span in ordered {
+                guard let start = span.start, let stop = span.stop else { continue }
+                let startPos = max(0.0, min(1.0, Double(start - minStart) / Double(spanLength)))
+                let endPos = max(0.0, min(1.0, Double(stop - minStart) / Double(spanLength)))
+                stops.append(GradientStop(position: startPos, hexColor: span.hexColor))
+                stops.append(GradientStop(position: endPos, hexColor: span.hexColor))
+            }
+        } else {
+            let count = max(1, ordered.count)
+            for (idx, span) in ordered.enumerated() {
+                let startPos = count == 1 ? 0.0 : Double(idx) / Double(count)
+                let endPos = count == 1 ? 1.0 : Double(idx + 1) / Double(count)
+                stops.append(GradientStop(position: startPos, hexColor: span.hexColor))
+                stops.append(GradientStop(position: endPos, hexColor: span.hexColor))
+            }
+        }
+
+        let sorted = stops.sorted { $0.position < $1.position }
+        var normalized: [GradientStop] = []
+        for stop in sorted {
+            if let last = normalized.last, abs(last.position - stop.position) < 0.0005 {
+                normalized[normalized.count - 1] = GradientStop(position: last.position, hexColor: stop.hexColor)
+            } else {
+                normalized.append(stop)
+            }
+        }
+
+        guard let first = normalized.first else { return [] }
+        if first.position > 0 {
+            normalized.insert(GradientStop(position: 0, hexColor: first.hexColor), at: 0)
+        }
+        if let last = normalized.last, last.position < 1 {
+            normalized.append(GradientStop(position: 1, hexColor: last.hexColor))
+        }
+        if normalized.count == 1, let single = normalized.first {
+            normalized.append(GradientStop(position: 1, hexColor: single.hexColor))
+        }
+
+        return normalized
+    }
+
+    private func primaryHexColor(from segment: SegmentUpdate) -> String? {
+        guard let rgb = segment.col?.first, rgb.count >= 3 else { return nil }
+        let r = max(0, min(255, rgb[0]))
+        let g = max(0, min(255, rgb[1]))
+        let b = max(0, min(255, rgb[2]))
+        return String(format: "%02X%02X%02X", r, g, b)
+    }
+
+    private func fallbackGradientStops() -> [GradientStop] {
+        [
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ]
     }
     
     private func emptyStateView(icon: String, message: String, hint: String) -> some View {
@@ -811,6 +1257,383 @@ struct TransitionPresetRow: View {
         case .syncFailed:
             return "Sync issue"
         }
+    }
+}
+
+struct DevicePresetRecordRow: View {
+    let preset: WLEDPreset
+    let previewGradient: LEDGradient
+    let previewBrightness: Int
+    let onApply: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(preset.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Text("Preset \(preset.id)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+
+                Spacer()
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+
+            ZStack(alignment: .bottomTrailing) {
+                LinearGradient(
+                    gradient: Gradient(stops: gradientStops(for: previewGradient)),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 34)
+                .frame(maxWidth: .infinity)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+
+                HStack(spacing: 4) {
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 10))
+                    Text(brightnessString)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(brightnessLabelColor(for: previewGradient))
+                .opacity(0.7)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .padding(4)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture(perform: handleApply)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Device preset \(preset.name)")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func handleApply() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        onApply()
+    }
+
+    private func gradientStops(for gradient: LEDGradient) -> [Gradient.Stop] {
+        gradient.stops
+            .sorted { $0.position < $1.position }
+            .map { stop in
+                Gradient.Stop(color: Color(hex: stop.hexColor), location: max(0.0, min(1.0, stop.position)))
+            }
+    }
+
+    private var brightnessString: String {
+        "\(Int(round(Double(max(0, min(255, previewBrightness))) / 255.0 * 100.0)))%"
+    }
+
+    private func brightnessLabelColor(for gradient: LEDGradient) -> Color {
+        guard let trailingStop = gradient.stops.max(by: { $0.position < $1.position }) else { return .white }
+        return labelColor(forHex: trailingStop.hexColor)
+    }
+
+    private func labelColor(forHex hex: String) -> Color {
+        let sanitizedHex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard sanitizedHex.count >= 6 else { return .white }
+        let rHex = String(sanitizedHex.prefix(2))
+        let gHex = String(sanitizedHex.dropFirst(2).prefix(2))
+        let bHex = String(sanitizedHex.dropFirst(4).prefix(2))
+        let r = Double(Int(rHex, radix: 16) ?? 0) / 255.0
+        let g = Double(Int(gHex, radix: 16) ?? 0) / 255.0
+        let b = Double(Int(bHex, radix: 16) ?? 0) / 255.0
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if luminance > 0.82 {
+            return Color(.sRGB, white: 0.42)
+        }
+        return .white
+    }
+}
+
+struct DeviceEffectRecordRow: View {
+    let preset: WLEDPreset
+    let previewGradient: LEDGradient
+    let previewBrightness: Int
+    let effectId: Int?
+    let onApply: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(preset.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Text("FX \(effectId ?? 0)")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+
+                Text("Preset \(preset.id)")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.5))
+
+                Spacer()
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+
+            ZStack(alignment: .bottomTrailing) {
+                LinearGradient(
+                    gradient: Gradient(stops: gradientStops(for: previewGradient)),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 34)
+                .frame(maxWidth: .infinity)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+
+                HStack(spacing: 4) {
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 10))
+                    Text(brightnessString)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(brightnessLabelColor(for: previewGradient))
+                .opacity(0.7)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .padding(4)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture(perform: handleApply)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Device effect preset \(preset.name)")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func handleApply() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        onApply()
+    }
+
+    private func gradientStops(for gradient: LEDGradient) -> [Gradient.Stop] {
+        gradient.stops
+            .sorted { $0.position < $1.position }
+            .map { stop in
+                Gradient.Stop(color: Color(hex: stop.hexColor), location: max(0.0, min(1.0, stop.position)))
+            }
+    }
+
+    private var brightnessString: String {
+        "\(Int(round(Double(max(0, min(255, previewBrightness))) / 255.0 * 100.0)))%"
+    }
+
+    private func brightnessLabelColor(for gradient: LEDGradient) -> Color {
+        guard let trailingStop = gradient.stops.max(by: { $0.position < $1.position }) else { return .white }
+        let sanitizedHex = trailingStop.hexColor.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard sanitizedHex.count >= 6 else { return .white }
+        let rHex = String(sanitizedHex.prefix(2))
+        let gHex = String(sanitizedHex.dropFirst(2).prefix(2))
+        let bHex = String(sanitizedHex.dropFirst(4).prefix(2))
+        let r = Double(Int(rHex, radix: 16) ?? 0) / 255.0
+        let g = Double(Int(gHex, radix: 16) ?? 0) / 255.0
+        let b = Double(Int(bHex, radix: 16) ?? 0) / 255.0
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if luminance > 0.82 {
+            return Color(.sRGB, white: 0.42)
+        }
+        return .white
+    }
+}
+
+struct DevicePlaylistRecordRow: View {
+    let playlist: WLEDPlaylist
+    let preview: PresetsListView.DevicePlaylistPreview
+    let onRun: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(playlist.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Text(TransitionDurationPicker.summaryString(seconds: preview.durationSec))
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+
+                Text("Playlist \(playlist.id)")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
+
+                Spacer()
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 4) {
+                gradientPreview(for: preview.gradientA, brightness: preview.brightnessA)
+                gradientPreview(for: preview.gradientB, brightness: preview.brightnessB)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture(perform: handleRun)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Device playlist \(playlist.name)")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func handleRun() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        onRun()
+    }
+
+    @ViewBuilder
+    private func gradientPreview(for gradient: LEDGradient, brightness: Int) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            LinearGradient(
+                gradient: Gradient(stops: gradientStops(for: gradient)),
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(height: 34)
+            .frame(maxWidth: .infinity)
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+
+            HStack(spacing: 4) {
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 10))
+                Text(brightnessString(for: brightness))
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(brightnessLabelColor(for: gradient))
+            .opacity(0.7)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .padding(4)
+        }
+    }
+
+    private func gradientStops(for gradient: LEDGradient) -> [Gradient.Stop] {
+        gradient.stops
+            .sorted { $0.position < $1.position }
+            .map { stop in
+                Gradient.Stop(color: Color(hex: stop.hexColor), location: max(0.0, min(1.0, stop.position)))
+            }
+    }
+
+    private func brightnessString(for brightness: Int) -> String {
+        "\(Int(round(Double(max(0, min(255, brightness))) / 255.0 * 100.0)))%"
+    }
+
+    private func brightnessLabelColor(for gradient: LEDGradient) -> Color {
+        guard let trailingStop = gradient.stops.max(by: { $0.position < $1.position }) else { return .white }
+        let sanitizedHex = trailingStop.hexColor.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard sanitizedHex.count >= 6 else { return .white }
+        let rHex = String(sanitizedHex.prefix(2))
+        let gHex = String(sanitizedHex.dropFirst(2).prefix(2))
+        let bHex = String(sanitizedHex.dropFirst(4).prefix(2))
+        let r = Double(Int(rHex, radix: 16) ?? 0) / 255.0
+        let g = Double(Int(gHex, radix: 16) ?? 0) / 255.0
+        let b = Double(Int(bHex, radix: 16) ?? 0) / 255.0
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if luminance > 0.82 {
+            return Color(.sRGB, white: 0.42)
+        }
+        return .white
     }
 }
 
@@ -1390,6 +2213,8 @@ enum PresetRenameContext {
     case color(ColorPreset)
     case transition(TransitionPreset)
     case effect(WLEDEffectPreset)
+    case devicePreset(id: Int, name: String, device: WLEDDevice)
+    case devicePlaylist(id: Int, name: String, device: WLEDDevice)
     
     var currentName: String {
         switch self {
@@ -1399,6 +2224,10 @@ enum PresetRenameContext {
             return preset.name
         case .effect(let preset):
             return preset.name
+        case .devicePreset(_, let name, _):
+            return name
+        case .devicePlaylist(_, let name, _):
+            return name
         }
     }
 }

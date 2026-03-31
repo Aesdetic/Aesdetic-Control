@@ -67,6 +67,7 @@ protocol WLEDAPIServiceProtocol {
     func rebootDevice(_ device: WLEDDevice) async throws
     func isPresetStoreMutationInFlight(deviceId: String) async -> Bool
     func isStateWriteBackoffActive(deviceId: String) async -> Bool
+    func updateDeviceTimeSettings(for device: WLEDDevice, timeZone: TimeZone, coordinate: CLLocationCoordinate2D?) async throws
 }
 
 // MARK: - WLEDAPIService
@@ -1292,31 +1293,64 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard slot >= 0 else {
             throw WLEDAPIError.invalidConfiguration
         }
-        
+
         // Fetch current timers
         let currentTimers = try await fetchTimers(for: device)
-        
-        // Verify the timer slot exists
-        guard currentTimers.contains(where: { $0.id == slot }) else {
-            logger.warning("Timer slot \(slot) not found on device \(device.id)")
+
+        guard let current = currentTimers.first(where: { $0.id == slot }) else {
+            logger.warning("timer.delete.slot_missing device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
             return true
         }
-        
-        // Create update to disable the timer
-        let timerUpdate = WLEDTimerUpdate(
+
+        #if DEBUG
+        print("timer.delete.begin device=\(device.id) slot=\(slot) current=en:\(current.enabled) hour:\(current.hour) min:\(current.minute) dow:\(current.days) macro:\(current.macroId)")
+        #endif
+
+        // Timer-slot deletion should fully clear actionable state so it is reusable.
+        let clearUpdate = WLEDTimerUpdate(
             id: slot,
             enabled: false,
-            hour: nil,
-            minute: nil,
-            days: nil,
-            macroId: nil,
+            hour: 0,
+            minute: 0,
+            days: 0x7F,
+            macroId: 0,
             startMonth: nil,
             startDay: nil,
             endMonth: nil,
             endDay: nil
         )
-        
-        try await updateTimer(timerUpdate, on: device)
+
+        do {
+            try await updateTimer(clearUpdate, on: device)
+        } catch {
+            logger.error("timer.delete.update_failed device=\(device.id, privacy: .public) slot=\(slot, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+
+        let verifyUpdate = WLEDTimerUpdate(
+            id: slot,
+            enabled: false,
+            hour: 0,
+            minute: 0,
+            days: 0x7F,
+            macroId: 0,
+            startMonth: nil,
+            startDay: nil,
+            endMonth: nil,
+            endDay: nil
+        )
+        let verified = try await verifyTimer(verifyUpdate, on: device)
+        if !verified {
+            logger.warning("timer.delete.verify_failed device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
+            return false
+        }
+
+        #if DEBUG
+        if let latest = try? await fetchTimers(for: device).first(where: { $0.id == slot }) {
+            print("timer.delete.done device=\(device.id) slot=\(slot) final=en:\(latest.enabled) hour:\(latest.hour) min:\(latest.minute) dow:\(latest.days) macro:\(latest.macroId)")
+        }
+        #endif
+        logger.info("timer.delete.cleared device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
         return true
     }
 
@@ -1821,6 +1855,59 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )
         return resolved
     }
+
+    /// Update WLED solar reference (if.ntp) using app-provided location/timezone.
+    /// This keeps sunrise/sunset timers device-native while removing manual setup friction.
+    func updateSolarReference(
+        for device: WLEDDevice,
+        coordinate: CLLocationCoordinate2D,
+        timeZone: TimeZone = .current
+    ) async throws {
+        try await updateDeviceTimeSettings(for: device, timeZone: timeZone, coordinate: coordinate)
+    }
+
+    /// Update WLED device time settings (if.ntp) using app-provided timezone,
+    /// optionally updating solar location when coordinate is available.
+    /// This keeps device clock alignment reliable even when location permission is unavailable.
+    func updateDeviceTimeSettings(
+        for device: WLEDDevice,
+        timeZone: TimeZone = .current,
+        coordinate: CLLocationCoordinate2D? = nil
+    ) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+
+        var configPayload = try await fetchRawConfig(for: device)
+        applyTimeSettings(
+            to: &configPayload,
+            coordinate: coordinate,
+            timeZone: timeZone
+        )
+        if var cfg = configPayload["cfg"] as? [String: Any] {
+            applyTimeSettings(
+                to: &cfg,
+                coordinate: coordinate,
+                timeZone: timeZone
+            )
+            configPayload["cfg"] = cfg
+        }
+        _ = enforceColorGammaCorrection(in: &configPayload)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: configPayload, options: [])
+
+        let (_, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+
+        solarReferenceCache[device.id] = (
+            coordinate: coordinate,
+            timeZone: timeZone,
+            timestamp: Date()
+        )
+    }
     
     // MARK: - Configuration Update
     
@@ -1922,6 +2009,35 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }()
 
         return (coordinate: coordinate, timeZone: timeZone)
+    }
+
+    private func applySolarReference(
+        to root: inout [String: Any],
+        coordinate: CLLocationCoordinate2D,
+        timeZone: TimeZone
+    ) {
+        applyTimeSettings(
+            to: &root,
+            coordinate: coordinate,
+            timeZone: timeZone
+        )
+    }
+
+    private func applyTimeSettings(
+        to root: inout [String: Any],
+        coordinate: CLLocationCoordinate2D?,
+        timeZone: TimeZone
+    ) {
+        var interfaces = root["if"] as? [String: Any] ?? [:]
+        var ntp = interfaces["ntp"] as? [String: Any] ?? [:]
+        ntp["en"] = true
+        ntp["offset"] = timeZone.secondsFromGMT()
+        if let coordinate {
+            ntp["lt"] = coordinate.latitude
+            ntp["ln"] = coordinate.longitude
+        }
+        interfaces["ntp"] = ntp
+        root["if"] = interfaces
     }
 
     /// Mutates the provided configuration dictionary to update the server name in all known locations.

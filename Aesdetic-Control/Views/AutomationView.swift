@@ -19,8 +19,10 @@ struct AutomationView: View {
     // Animation constants (matching design system)
     private let standardAnimation: Animation = .easeInOut(duration: 0.25)
     private let fastAnimation: Animation = .easeInOut(duration: 0.15)
-    private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
-    private var glassText: GlassTextStyle { GlassTheme.text(for: colorScheme) }
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var sectionCardStyle: AppCardStyle {
+        AppCardStyles.glass(for: colorScheme, tone: .inactive, cornerRadius: 24)
+    }
 
     var body: some View {
         ZStack {
@@ -29,6 +31,7 @@ struct AutomationView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 24) {
                     headerSection
+                    overviewSection
                     presetsSection
                     automationsSection
                     Spacer(minLength: 24)
@@ -37,8 +40,11 @@ struct AutomationView: View {
                 .padding(.top, 12)
             }
             .refreshable {
-                await viewModel.refreshAutomations()
+                await viewModel.refreshAutomations(force: true)
             }
+        }
+        .task {
+            await viewModel.refreshAutomations()
         }
         .sheet(isPresented: $showingCreateAutomation, onDismiss: {
             builderDevice = nil
@@ -60,41 +66,31 @@ struct AutomationView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Automations")
                     .font(.largeTitle.bold())
-                    .foregroundColor(glassText.pagePrimaryText)
+                    .foregroundColor(theme.textPrimary)
                 Text("Schedule sunrise lamps, bedtime fades, and more.")
                     .font(.subheadline)
-                    .foregroundColor(glassText.pageSecondaryText)
+                    .foregroundColor(theme.textSecondary)
             }
             Spacer()
-            Button(action: { beginCreateAutomation() }) {
-                Image(systemName: "plus")
-                    .font(.title2.weight(.semibold))
-                    .foregroundColor(glassText.pagePrimaryText)
-                    .padding()
-                    .background(glassSurface.pillFillSelected)
-                    .clipShape(Circle())
-                    .shadow(
-                        color: glassSurface.controlShadowAmbient.color,
-                        radius: glassSurface.controlShadowAmbient.radius,
-                        x: glassSurface.controlShadowAmbient.x,
-                        y: glassSurface.controlShadowAmbient.y
-                    )
-                    .shadow(
-                        color: glassSurface.controlShadowKey.color,
-                        radius: glassSurface.controlShadowKey.radius,
-                        x: glassSurface.controlShadowKey.x,
-                        y: glassSurface.controlShadowKey.y
-                    )
-            }
-            .buttonStyle(.plain)
+            AppGlassIconButton(systemName: "plus", action: { beginCreateAutomation() })
         }
     }
-    
+
+    private var overviewSection: some View {
+        AppOverviewCard(
+            metrics: [
+                AppOverviewMetric(value: "\(viewModel.automations.count)", label: "Saved\nAutomations"),
+                AppOverviewMetric(value: "\(viewModel.automations.filter { $0.enabled }.count)", label: "Enabled\nNow"),
+                AppOverviewMetric(value: nextAutomationValue, label: "Next\nRun")
+            ]
+        )
+    }
+
     private var presetsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Quick Starters")
                 .font(.title3.weight(.semibold))
-                .foregroundColor(glassText.pagePrimaryText)
+                .foregroundColor(theme.textPrimary)
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 12),
                 GridItem(.flexible(), spacing: 12)
@@ -108,49 +104,27 @@ struct AutomationView: View {
         }
         .padding(18)
         .background(
-            GlassCardBackground(
-                cornerRadius: 20,
-                fill: glassSurface.cardFillInactive,
-                outerStroke: glassSurface.cardStrokeOuter,
-                innerStroke: glassSurface.cardStrokeInner,
-                keyShadow: glassSurface.cardShadowKey,
-                ambientShadow: glassSurface.cardShadowAmbient
-            )
+            AppCardBackground(style: sectionCardStyle)
         )
+        .clipShape(RoundedRectangle(cornerRadius: sectionCardStyle.cornerRadius, style: .continuous))
     }
-    
+
     private var automationsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("My Automations")
                     .font(.title3.weight(.semibold))
-                    .foregroundColor(glassText.pagePrimaryText)
+                    .foregroundColor(theme.textPrimary)
                 Spacer()
-                Button(action: { beginCreateAutomation() }) {
-                    Label("Create", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(glassSurface.pillFillSelected)
-                        .foregroundColor(glassText.pagePrimaryText)
-                        .clipShape(Capsule())
-                        .shadow(
-                            color: glassSurface.controlShadowAmbient.color,
-                            radius: glassSurface.controlShadowAmbient.radius,
-                            x: glassSurface.controlShadowAmbient.x,
-                            y: glassSurface.controlShadowAmbient.y
-                        )
-                        .shadow(
-                            color: glassSurface.controlShadowKey.color,
-                            radius: glassSurface.controlShadowKey.radius,
-                            x: glassSurface.controlShadowKey.x,
-                            y: glassSurface.controlShadowKey.y
-                        )
-                }
-                .buttonStyle(.plain)
+                AppGlassPillButton(
+                    title: "Create",
+                    isSelected: true,
+                    iconName: "plus",
+                    size: .compact,
+                    action: { beginCreateAutomation() }
+                )
             }
             
-            let nextAutomationID = AutomationStore.shared.upcomingAutomationInfo?.automation.id
             if viewModel.automations.isEmpty {
                 EmptyAutomationsView()
             } else {
@@ -192,15 +166,9 @@ struct AutomationView: View {
         }
         .padding(18)
         .background(
-            GlassCardBackground(
-                cornerRadius: 20,
-                fill: glassSurface.cardFillInactive,
-                outerStroke: glassSurface.cardStrokeOuter,
-                innerStroke: glassSurface.cardStrokeInner,
-                keyShadow: glassSurface.cardShadowKey,
-                ambientShadow: glassSurface.cardShadowAmbient
-            )
+            AppCardBackground(style: sectionCardStyle)
         )
+        .clipShape(RoundedRectangle(cornerRadius: sectionCardStyle.cornerRadius, style: .continuous))
     }
 }
 
@@ -213,6 +181,27 @@ struct AutomationView_Previews: PreviewProvider {
 // MARK: - Helpers
 
 private extension AutomationView {
+    var nextAutomationID: UUID? {
+        AutomationStore.shared.upcomingAutomationInfo?.automation.id
+    }
+
+    var nextAutomationValue: String {
+        if let nextDate = AutomationStore.shared.upcomingAutomationInfo?.date {
+            return nextDate.formatted(date: .omitted, time: .shortened)
+        }
+        if viewModel.automations.contains(where: { automation in
+            switch automation.trigger {
+            case .sunrise, .sunset:
+                return automation.enabled
+            default:
+                return false
+            }
+        }) {
+            return "Solar"
+        }
+        return "--"
+    }
+
     func beginCreateAutomation(with template: AutomationTemplate? = nil) {
         pendingTemplate = template
         if deviceViewModel.devices.count == 1 {

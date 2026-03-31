@@ -1,4 +1,6 @@
+import CoreLocation
 import SwiftUI
+import UIKit
 
 struct AddAutomationDialog: View {
     enum TriggerSelection: String, CaseIterable, Identifiable {
@@ -52,6 +54,7 @@ struct AddAutomationDialog: View {
     @State private var isValidatingOnDeviceSchedule: Bool = false
     @State private var onDeviceScheduleValidationMessage: String?
     @State private var onDeviceScheduleValidationIsWarning: Bool = false
+    @State private var showLocationSettingsAlert: Bool = false
     
     @State private var actionSelection: ActionSelection = .color
     @State private var selectedEffectId: Int?
@@ -62,6 +65,7 @@ struct AddAutomationDialog: View {
     @State private var gradientBrightness: Double
     @State private var gradientDuration: Double = 10
     @State private var gradientInterpolation: GradientInterpolation = .linear
+    @State private var colorPowerOn: Bool = true
     @State private var selectedColorPresetId: UUID?
     @State private var gradientTemperature: Double?
     @State private var gradientWhiteLevel: Double?
@@ -86,6 +90,7 @@ struct AddAutomationDialog: View {
     @State private var lockedAction: AutomationAction?
     @State private var isEditingName: Bool = false
     @FocusState private var isNameFieldFocused: Bool
+    @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     private var isEditing: Bool { editingAutomation != nil }
     
@@ -137,6 +142,7 @@ struct AddAutomationDialog: View {
         var initialGradientBrightness = Double(device.brightness)
         var initialGradientDuration: Double = 10
         var initialEnableColorFade = false
+        var initialColorPowerOn = true
         var initialTransitionDuration: Double = 600
         var initialTemplateGradient: LEDGradient?
         var initialGradientTemperature: Double?
@@ -209,6 +215,7 @@ struct AddAutomationDialog: View {
                 initialGradientBrightness = Double(payload.brightness)
                 initialEnableColorFade = payload.durationSeconds > 0
                 initialGradientDuration = payload.durationSeconds  // Preserve actual duration, don't clamp
+                initialColorPowerOn = payload.powerOn
                 initialSelectedColorPresetId = payload.presetId
                 initialGradientTemperature = payload.temperature
                 initialGradientWhiteLevel = payload.whiteLevel
@@ -238,9 +245,21 @@ struct AddAutomationDialog: View {
                 initialTemplateGradient = payload.gradient
                 initialTemplateEffect = TemplateEffectSettings(gradient: payload.gradient, speed: payload.speed, intensity: payload.intensity)
                 initialSelectedEffectPresetId = payload.presetId
-            case .preset, .directState:
+            case .preset:
                 initialActionSelection = .color
                 initialLockedAction = editing.action
+            case .directState(let payload):
+                initialActionSelection = .color
+                initialTemplateGradient = LEDGradient(stops: [
+                    GradientStop(position: 0.0, hexColor: payload.colorHex),
+                    GradientStop(position: 1.0, hexColor: payload.colorHex)
+                ], interpolation: .linear)
+                initialGradientBrightness = Double(payload.brightness)
+                initialEnableColorFade = payload.transitionDeciseconds > 0
+                initialGradientDuration = Double(payload.transitionDeciseconds) / 10.0
+                initialColorPowerOn = payload.brightness > 0
+                initialGradientTemperature = payload.temperature
+                initialGradientWhiteLevel = payload.whiteLevel
             }
             initialMetadata = editing.metadata
             if let sm = editing.metadata.onDeviceStartMonth,
@@ -334,6 +353,7 @@ struct AddAutomationDialog: View {
         _endDay = State(initialValue: initialEndDay)
         _actionSelection = State(initialValue: initialActionSelection)
         _enableColorFade = State(initialValue: initialEnableColorFade)
+        _colorPowerOn = State(initialValue: initialColorPowerOn)
         _gradientDuration = State(initialValue: initialGradientDuration)
         _gradientInterpolation = State(initialValue: initialTemplateGradient?.interpolation ?? .linear)
         _templateGradient = State(initialValue: initialTemplateGradient ?? viewModel.automationGradient(for: initialActiveDevice))
@@ -426,6 +446,15 @@ struct AddAutomationDialog: View {
         .onAppear {
             normalizeTriggerSelectionIfNeeded()
         }
+        .alert("Location Access Needed", isPresented: $showLocationSettingsAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Open Settings") {
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                UIApplication.shared.open(url)
+            }
+        } message: {
+            Text("Sunrise and sunset automations need location access. Enable Location for Aesdetic in iOS Settings.")
+        }
     }
 
     @ToolbarContentBuilder
@@ -516,6 +545,12 @@ struct AddAutomationDialog: View {
                 Text(message)
                     .font(.footnote)
                     .foregroundColor(onDeviceScheduleValidationIsWarning ? .yellow : .orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let message = timerSlotLimitPromptMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = dateWindowValidationMessage {
@@ -707,7 +742,9 @@ struct AddAutomationDialog: View {
             
             triggerSelectionCard
             solarParityHint
-            dateWindowSection
+            if advancedUIEnabled {
+                dateWindowSection
+            }
         }
     }
     
@@ -987,9 +1024,7 @@ struct AddAutomationDialog: View {
                     
                     Button {
                         guard isAvailable else { return }
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            triggerSelection = option
-                        }
+                        Task { await handleTriggerSelectionTap(option) }
                     } label: {
                         Text(option == .time ? "Time of Day" : option.rawValue)
                             .font(.footnote.weight(.semibold))
@@ -1248,9 +1283,11 @@ struct AddAutomationDialog: View {
             interpolation: $gradientInterpolation,
             fadeDuration: $gradientDuration,
             enableFade: $enableColorFade,
+            powerOn: $colorPowerOn,
             selectedPresetId: $selectedColorPresetId,
             temperature: $gradientTemperature,
-            whiteLevel: $gradientWhiteLevel
+            whiteLevel: $gradientWhiteLevel,
+            showFadeControls: advancedUIEnabled
         )
     }
     private var transitionActionControls: some View {
@@ -1513,6 +1550,24 @@ struct AddAutomationDialog: View {
         timerSlotCapacityValidation.message
     }
 
+    private var timerSlotLimitPromptMessage: String? {
+        guard !timerSlotCapacitySatisfied else { return nil }
+        guard selectedTriggerKindForCapacity == .specificTime else { return timerSlotCapacityMessage }
+        let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
+        return "Maximum reached on \(targetDeviceNames(for: targetIds)): 8/8 time-of-day automations are already set. Delete an existing time-of-day automation to make room for a new one."
+    }
+
+    private func targetDeviceNames(for deviceIds: [String]) -> String {
+        let names = availableDevices
+            .filter { deviceIds.contains($0.id) }
+            .map(\.name)
+            .sorted()
+        if names.isEmpty {
+            return deviceIds.joined(separator: ", ")
+        }
+        return names.joined(separator: ", ")
+    }
+
     private func triggerKind(for selection: TriggerSelection) -> AutomationStore.OnDeviceTriggerKind {
         switch selection {
         case .time:
@@ -1551,6 +1606,38 @@ struct AddAutomationDialog: View {
 
     private var isDateWindowValid: Bool {
         dateWindowValidationMessage == nil
+    }
+
+    @MainActor
+    private func handleTriggerSelectionTap(_ option: TriggerSelection) async {
+        if option == .sunrise || option == .sunset {
+            switch CLLocationManager.authorizationStatus() {
+            case .denied, .restricted:
+                onDeviceScheduleValidationMessage = "Location permission is off. Sunrise/sunset requires location access."
+                onDeviceScheduleValidationIsWarning = false
+                showLocationSettingsAlert = true
+                return
+            case .notDetermined:
+                let coordinate = await AutomationStore.shared.currentCoordinate()
+                if coordinate == nil {
+                    switch CLLocationManager.authorizationStatus() {
+                    case .denied, .restricted:
+                        onDeviceScheduleValidationMessage = "Location permission is required for sunrise/sunset."
+                        onDeviceScheduleValidationIsWarning = false
+                        showLocationSettingsAlert = true
+                    default:
+                        break
+                    }
+                    return
+                }
+            default:
+                break
+            }
+        }
+
+        withAnimation(.easeInOut(duration: 0.25)) {
+            triggerSelection = option
+        }
     }
 
     private var dateWindowValidationMessage: String? {
@@ -1715,7 +1802,8 @@ struct AddAutomationDialog: View {
                         whiteLevel: gradientWhiteLevel,
                         shouldLoop: false,
                         presetId: selectedColorPresetId,
-                        presetName: selectedColorPreset?.name
+                        presetName: selectedColorPreset?.name,
+                        powerOn: colorPowerOn
                     )
                 )
         case .transition:
@@ -1734,6 +1822,9 @@ struct AddAutomationDialog: View {
             }
             return nil
         case .gradient(let payload):
+            if !payload.powerOn {
+                return "000000"
+            }
             return payload.gradient.stops.last?.hexColor
         case .transition(let payload):
             return payload.endGradient.stops.last?.hexColor

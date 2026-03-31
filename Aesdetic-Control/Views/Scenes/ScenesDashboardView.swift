@@ -3,15 +3,22 @@ import SwiftUI
 struct ScenesDashboardView: View {
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     @StateObject private var scenesStore = SceneGroupStore.shared
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingEditor = false
     @State private var editingScene: SceneGroup? = nil
     @State private var undoContext: SceneUndoContext? = nil
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var sectionCardStyle: AppCardStyle {
+        AppCardStyles.glass(for: colorScheme, tone: .inactive, cornerRadius: 24)
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 24) {
                     headerSection
+                    overviewSection
                     scenesSection
                     Spacer(minLength: 40)
                 }
@@ -43,22 +50,24 @@ struct ScenesDashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Scenes")
                     .font(.largeTitle.bold())
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.textPrimary)
                 Text("Run multiple devices together with one tap.")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.75))
+                    .foregroundColor(theme.textSecondary)
             }
             Spacer()
-            Button(action: { beginCreateScene() }) {
-                Image(systemName: "plus")
-                    .font(.title2.weight(.semibold))
-                    .foregroundColor(.black)
-                    .padding()
-                    .background(Color.white)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
+            AppGlassIconButton(systemName: "plus", action: { beginCreateScene() })
         }
+    }
+
+    private var overviewSection: some View {
+        AppOverviewCard(
+            metrics: [
+                AppOverviewMetric(value: "\(sortedScenes.count)", label: "Saved\nScenes"),
+                AppOverviewMetric(value: "\(uniqueDeviceCount)", label: "Linked\nDevices"),
+                AppOverviewMetric(value: "\(animatedSceneCount)", label: "Dynamic\nLooks")
+            ]
+        )
     }
 
     private var scenesSection: some View {
@@ -66,18 +75,15 @@ struct ScenesDashboardView: View {
             HStack {
                 Text("My Scenes")
                     .font(.title3.weight(.semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.textPrimary)
                 Spacer()
-                Button(action: { beginCreateScene() }) {
-                    Label("Create", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Color.white)
-                        .foregroundColor(.black)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
+                AppGlassPillButton(
+                    title: "Create",
+                    isSelected: true,
+                    iconName: "plus",
+                    size: .compact,
+                    action: { beginCreateScene() }
+                )
             }
 
             if scenesStore.scenes.isEmpty {
@@ -105,17 +111,23 @@ struct ScenesDashboardView: View {
         }
         .padding(18)
         .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
+            AppCardBackground(style: sectionCardStyle)
         )
+        .clipShape(RoundedRectangle(cornerRadius: sectionCardStyle.cornerRadius, style: .continuous))
     }
 
     private var sortedScenes: [SceneGroup] {
         scenesStore.scenes.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var uniqueDeviceCount: Int {
+        Set(sortedScenes.flatMap { scene in scene.deviceScenes.map { $0.deviceId } }).count
+    }
+
+    private var animatedSceneCount: Int {
+        sortedScenes.filter { scene in
+            scene.deviceScenes.contains { $0.transitionEnabled || $0.effectsEnabled }
+        }.count
     }
 
     private func beginCreateScene() {
@@ -198,63 +210,109 @@ private struct SceneGroupCard: View {
     let scene: SceneGroup
     let onRun: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var cardStyle: AppCardStyle {
+        AppCardStyles.glass(for: colorScheme, tone: .active, cornerRadius: 20)
+    }
+
     var body: some View {
         Button(action: onRun) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     Text(scene.name)
                         .font(.title3.weight(.semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(theme.textPrimary)
                     Spacer()
+                    Image(systemName: "play.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundColor(theme.textPrimary)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle()
+                                .fill(theme.surfaceMuted)
+                        )
+                }
+
+                HStack(spacing: 8) {
+                    sceneChip(
+                        title: "\(scene.deviceScenes.count) device\(scene.deviceScenes.count == 1 ? "" : "s")",
+                        iconName: "square.stack.3d.up"
+                    )
+                    if hasAnimatedScenes {
+                        sceneChip(title: "Animated", iconName: "sparkles")
+                    }
+                    sceneChip(title: createdDateText, iconName: "calendar")
                 }
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    )
+                AppCardBackground(style: cardStyle)
             )
+            .clipShape(RoundedRectangle(cornerRadius: cardStyle.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    private var hasAnimatedScenes: Bool {
+        scene.deviceScenes.contains { $0.transitionEnabled || $0.effectsEnabled }
+    }
+
+    private var createdDateText: String {
+        scene.createdAt.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private func sceneChip(title: String, iconName: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: iconName)
+                .font(.caption.weight(.semibold))
+            Text(title)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundColor(theme.textSecondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule(style: .continuous)
+                .fill(theme.surfaceMuted)
+        )
     }
 }
 
 private struct EmptyScenesCard: View {
     let onCreate: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var cardStyle: AppCardStyle {
+        AppCardStyles.glass(for: colorScheme, tone: .muted, cornerRadius: 20)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("No scenes yet")
                 .font(.headline.weight(.semibold))
-                .foregroundColor(.white)
+                .foregroundColor(theme.textPrimary)
             Text("Save the current settings across devices and launch them with a single tap.")
                 .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
-            Button(action: onCreate) {
-                Label("Create Scene", systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.white)
-                    .foregroundColor(.black)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
+                .foregroundColor(theme.textSecondary)
+            AppGlassPillButton(
+                title: "Create Scene",
+                isSelected: true,
+                iconName: "plus",
+                action: onCreate
+            )
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white.opacity(0.08))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                )
+            AppCardBackground(style: cardStyle)
         )
+        .clipShape(RoundedRectangle(cornerRadius: cardStyle.cornerRadius, style: .continuous))
     }
 }
 
@@ -265,47 +323,39 @@ private struct SceneUndoBanner: View {
     let onAction: () -> Void
     let onDismiss: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var cardStyle: AppCardStyle {
+        AppCardStyles.glass(for: colorScheme, tone: .active, cornerRadius: 18)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.textPrimary)
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.textSecondary)
             }
             Spacer()
-            Button(actionTitle) {
-                onAction()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.white)
-            .foregroundColor(.black)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.8))
-                    .padding(8)
-                    .background(Circle().fill(Color.white.opacity(0.12)))
-            }
-            .buttonStyle(.plain)
+            AppGlassPillButton(title: actionTitle, isSelected: true, size: .compact, action: onAction)
+            AppGlassIconButton(systemName: "xmark", isProminent: false, size: 34, action: onDismiss)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.black.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                )
+            AppCardBackground(style: cardStyle)
         )
+        .clipShape(RoundedRectangle(cornerRadius: cardStyle.cornerRadius, style: .continuous))
     }
 }
 
 struct SceneEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     @ObservedObject private var scenesStore = SceneGroupStore.shared
 
@@ -321,6 +371,11 @@ struct SceneEditorSheet: View {
         _name = State(initialValue: existingScene?.name ?? "")
         _selectedDeviceIds = State(initialValue: Set(existingScene?.deviceScenes.map { $0.deviceId } ?? []))
         _applyFromDeviceId = State(initialValue: nil)
+    }
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+    private var sectionCardStyle: AppCardStyle {
+        AppCardStyles.glass(for: colorScheme, tone: .inactive, cornerRadius: 20)
     }
 
     var body: some View {
@@ -358,7 +413,6 @@ struct SceneEditorSheet: View {
         }
         .sheet(item: $editingDevice) { device in
             DeviceDetailView(device: device, viewModel: deviceViewModel)
-                .preferredColorScheme(.light)
         }
     }
 
@@ -366,17 +420,17 @@ struct SceneEditorSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Scene name")
                 .font(.headline.weight(.semibold))
-                .foregroundColor(.white)
+                .foregroundColor(theme.textPrimary)
             TextField("Evening Chill", text: $name)
                 .textInputAutocapitalization(.words)
                 .disableAutocorrection(true)
                 .padding(14)
-                .background(Color.white.opacity(0.08))
+                .background(theme.surfaceMuted)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .foregroundColor(.white)
+                .foregroundColor(theme.textPrimary)
             Text("We will capture the current settings from each device.")
                 .font(.footnote)
-                .foregroundColor(.white.opacity(0.65))
+                .foregroundColor(theme.textSecondary)
         }
         .padding(18)
         .background(cardBackground)
@@ -386,21 +440,11 @@ struct SceneEditorSheet: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(quickPicks, id: \.self) { label in
-                    Button(label) {
-                        name = label
-                    }
-                    .buttonStyle(.plain)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.12))
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                            )
+                    AppGlassPillButton(
+                        title: label,
+                        isSelected: name == label,
+                        size: .compact,
+                        action: { name = label }
                     )
                 }
             }
@@ -433,16 +477,22 @@ struct SceneEditorSheet: View {
                 HStack {
                     Text(applyFromLabel)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.black)
+                        .foregroundColor(theme.textPrimary)
                     Spacer()
                     Image(systemName: "chevron.down")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.black.opacity(0.7))
+                        .foregroundColor(theme.textSecondary)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.white)
-                .clipShape(Capsule())
+                .background(
+                    Capsule()
+                        .fill(theme.surfaceMuted)
+                        .overlay(
+                            Capsule()
+                                .stroke(theme.divider, lineWidth: 1)
+                        )
+                )
             }
         }
         .padding(18)
@@ -454,11 +504,11 @@ struct SceneEditorSheet: View {
             HStack {
                 Text("Devices")
                     .font(.headline.weight(.semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.textPrimary)
                 Spacer()
                 Text("\(selectedDeviceIds.count) selected")
                     .font(.footnote)
-                    .foregroundColor(.white.opacity(0.65))
+                    .foregroundColor(theme.textSecondary)
             }
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 12),
@@ -477,7 +527,7 @@ struct SceneEditorSheet: View {
             }
             Text("Tap a device to tweak its settings before saving.")
                 .font(.footnote)
-                .foregroundColor(.white.opacity(0.65))
+                .foregroundColor(theme.textSecondary)
         }
         .padding(18)
         .background(cardBackground)
@@ -485,12 +535,7 @@ struct SceneEditorSheet: View {
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(Color.white.opacity(0.06))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
-            )
+        AppCardBackground(style: sectionCardStyle)
     }
 
     private var isSaveDisabled: Bool {
@@ -587,6 +632,10 @@ private struct SceneDeviceCard: View {
     let onToggle: () -> Void
     let onConfigure: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             MiniDeviceCard(device: device, onTap: onConfigure, showPowerToggle: true)
@@ -599,9 +648,12 @@ private struct SceneDeviceCard: View {
             Button(action: onToggle) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title3.weight(.semibold))
-                    .foregroundColor(isSelected ? .white : .white.opacity(0.6))
+                    .foregroundColor(isSelected ? theme.textPrimary : theme.textSecondary)
                     .padding(6)
-                    .background(Circle().fill(Color.black.opacity(0.35)))
+                    .background(
+                        Circle()
+                            .fill(theme.surfaceMuted)
+                    )
             }
             .buttonStyle(.plain)
             .padding(.bottom, 8)

@@ -45,7 +45,7 @@ struct WellnessView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack {
             AppBackground()
 
             if showInspoBackgroundPreview {

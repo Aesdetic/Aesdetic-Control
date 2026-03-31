@@ -34,10 +34,6 @@ enum DockTab: String, CaseIterable, Identifiable {
         }
     }
 
-    var accent: Color {
-        Color.white
-    }
-
     var accessibilityHint: String {
         switch self {
         case .dashboard:
@@ -117,8 +113,8 @@ private struct DockItemView: View {
                     .overlay(
                         LinearGradient(
                             colors: [
-                                tab.accent.opacity(0.28),
-                                tab.accent.opacity(0.08),
+                                Color.white.opacity(0.28),
+                                Color.white.opacity(0.08),
                                 Color.white.opacity(0.04)
                             ],
                             startPoint: .topLeading,

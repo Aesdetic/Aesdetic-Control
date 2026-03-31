@@ -50,6 +50,9 @@ struct Automation: Codable, Identifiable, Equatable {
         case .playlist(let payload):
             return payload.playlistName ?? "Playlist \(payload.playlistId)"
         case .gradient(let payload):
+            if !payload.powerOn {
+                return "Power off"
+            }
             return payload.gradient.name ?? "Gradient"
         case .transition(let payload):
             if let presetName = payload.presetName {
@@ -381,6 +384,67 @@ struct GradientActionPayload: Codable, Equatable {
     var shouldLoop: Bool = false
     var presetId: UUID? = nil
     var presetName: String? = nil
+    var powerOn: Bool = true
+
+    enum CodingKeys: String, CodingKey {
+        case gradient
+        case brightness
+        case durationSeconds
+        case temperature
+        case whiteLevel
+        case shouldLoop
+        case presetId
+        case presetName
+        case powerOn
+    }
+
+    init(
+        gradient: LEDGradient,
+        brightness: Int,
+        durationSeconds: Double,
+        temperature: Double? = nil,
+        whiteLevel: Double? = nil,
+        shouldLoop: Bool = false,
+        presetId: UUID? = nil,
+        presetName: String? = nil,
+        powerOn: Bool = true
+    ) {
+        self.gradient = gradient
+        self.brightness = brightness
+        self.durationSeconds = durationSeconds
+        self.temperature = temperature
+        self.whiteLevel = whiteLevel
+        self.shouldLoop = shouldLoop
+        self.presetId = presetId
+        self.presetName = presetName
+        self.powerOn = powerOn
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        gradient = try container.decode(LEDGradient.self, forKey: .gradient)
+        brightness = try container.decode(Int.self, forKey: .brightness)
+        durationSeconds = try container.decode(Double.self, forKey: .durationSeconds)
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
+        whiteLevel = try container.decodeIfPresent(Double.self, forKey: .whiteLevel)
+        shouldLoop = try container.decodeIfPresent(Bool.self, forKey: .shouldLoop) ?? false
+        presetId = try container.decodeIfPresent(UUID.self, forKey: .presetId)
+        presetName = try container.decodeIfPresent(String.self, forKey: .presetName)
+        powerOn = try container.decodeIfPresent(Bool.self, forKey: .powerOn) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(gradient, forKey: .gradient)
+        try container.encode(brightness, forKey: .brightness)
+        try container.encode(durationSeconds, forKey: .durationSeconds)
+        try container.encodeIfPresent(temperature, forKey: .temperature)
+        try container.encodeIfPresent(whiteLevel, forKey: .whiteLevel)
+        try container.encode(shouldLoop, forKey: .shouldLoop)
+        try container.encodeIfPresent(presetId, forKey: .presetId)
+        try container.encodeIfPresent(presetName, forKey: .presetName)
+        try container.encode(powerOn, forKey: .powerOn)
+    }
 }
 
 struct TransitionActionPayload: Codable, Equatable {
@@ -503,6 +567,7 @@ struct AutomationMetadata: Codable, Equatable {
     var wledPresetIdsByDevice: [String: Int]? = nil    // Per-device preset IDs (snapshots)
     var wledTimerSlotsByDevice: [String: Int]? = nil   // Per-device timer slots
     var wledManagedPlaylistSignatureByDevice: [String: String]? = nil
+    var wledManagedStepPresetIdsByDevice: [String: [Int]]? = nil
     var wledManagedPresetSignatureByDevice: [String: String]? = nil
     var wledSyncStateByDevice: [String: WLEDSyncState]? = nil
     var wledLastSyncErrorByDevice: [String: String]? = nil
@@ -527,6 +592,7 @@ struct AutomationMetadata: Codable, Equatable {
         wledPresetIdsByDevice: [String: Int]? = nil,
         wledTimerSlotsByDevice: [String: Int]? = nil,
         wledManagedPlaylistSignatureByDevice: [String: String]? = nil,
+        wledManagedStepPresetIdsByDevice: [String: [Int]]? = nil,
         wledManagedPresetSignatureByDevice: [String: String]? = nil,
         wledSyncStateByDevice: [String: WLEDSyncState]? = nil,
         wledLastSyncErrorByDevice: [String: String]? = nil,
@@ -549,6 +615,7 @@ struct AutomationMetadata: Codable, Equatable {
         self.wledPresetIdsByDevice = wledPresetIdsByDevice
         self.wledTimerSlotsByDevice = wledTimerSlotsByDevice
         self.wledManagedPlaylistSignatureByDevice = wledManagedPlaylistSignatureByDevice
+        self.wledManagedStepPresetIdsByDevice = wledManagedStepPresetIdsByDevice
         self.wledManagedPresetSignatureByDevice = wledManagedPresetSignatureByDevice
         self.wledSyncStateByDevice = wledSyncStateByDevice
         self.wledLastSyncErrorByDevice = wledLastSyncErrorByDevice
@@ -580,6 +647,10 @@ struct AutomationMetadata: Codable, Equatable {
         wledManagedPresetSignatureByDevice?[deviceId]
     }
 
+    func managedStepPresetIds(for deviceId: String) -> [Int]? {
+        wledManagedStepPresetIdsByDevice?[deviceId]
+    }
+
     mutating func setManagedPlaylistSignature(_ signature: String?, for deviceId: String) {
         var map = wledManagedPlaylistSignatureByDevice ?? [:]
         if let signature, !signature.isEmpty {
@@ -588,6 +659,21 @@ struct AutomationMetadata: Codable, Equatable {
             map.removeValue(forKey: deviceId)
         }
         wledManagedPlaylistSignatureByDevice = map.isEmpty ? nil : map
+    }
+
+    mutating func setManagedStepPresetIds(_ presetIds: [Int]?, for deviceId: String) {
+        var map = wledManagedStepPresetIdsByDevice ?? [:]
+        if let presetIds {
+            let unique = Array(Set(presetIds.filter { (1...250).contains($0) })).sorted()
+            if unique.isEmpty {
+                map.removeValue(forKey: deviceId)
+            } else {
+                map[deviceId] = unique
+            }
+        } else {
+            map.removeValue(forKey: deviceId)
+        }
+        wledManagedStepPresetIdsByDevice = map.isEmpty ? nil : map
     }
 
     mutating func setManagedPresetSignature(_ signature: String?, for deviceId: String) {
@@ -613,6 +699,10 @@ struct AutomationMetadata: Codable, Equatable {
         if var playlistSignatures = wledManagedPlaylistSignatureByDevice {
             playlistSignatures = playlistSignatures.filter { !targetIds.contains($0.key) }
             wledManagedPlaylistSignatureByDevice = playlistSignatures.isEmpty ? nil : playlistSignatures
+        }
+        if var managedStepIds = wledManagedStepPresetIdsByDevice {
+            managedStepIds = managedStepIds.filter { !targetIds.contains($0.key) }
+            wledManagedStepPresetIdsByDevice = managedStepIds.isEmpty ? nil : managedStepIds
         }
         if var presetSignatures = wledManagedPresetSignatureByDevice {
             presetSignatures = presetSignatures.filter { !targetIds.contains($0.key) }
@@ -656,6 +746,7 @@ struct AutomationMetadata: Codable, Equatable {
         wledPresetIdsByDevice = wledPresetIdsByDevice?.filter { targetIds.contains($0.key) }
         wledTimerSlotsByDevice = wledTimerSlotsByDevice?.filter { targetIds.contains($0.key) }
         wledManagedPlaylistSignatureByDevice = wledManagedPlaylistSignatureByDevice?.filter { targetIds.contains($0.key) }
+        wledManagedStepPresetIdsByDevice = wledManagedStepPresetIdsByDevice?.filter { targetIds.contains($0.key) }
         wledManagedPresetSignatureByDevice = wledManagedPresetSignatureByDevice?.filter { targetIds.contains($0.key) }
         wledSyncStateByDevice = wledSyncStateByDevice?.filter { targetIds.contains($0.key) }
         wledLastSyncErrorByDevice = wledLastSyncErrorByDevice?.filter { targetIds.contains($0.key) }

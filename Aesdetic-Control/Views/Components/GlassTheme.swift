@@ -64,39 +64,39 @@ enum GlassTheme {
     )
 
     private static let lightSurfaceStyle = GlassSurfaceStyle(
-        cardFillActive: Color.white.opacity(0.22),
-        cardFillInactive: Color.white.opacity(0.16),
-        cardStrokeOuter: Color.black.opacity(0.08),
-        cardStrokeInner: Color.white.opacity(0.28),
+        cardFillActive: Color.white.opacity(0.13),
+        cardFillInactive: Color.white.opacity(0.08),
+        cardStrokeOuter: Color.white.opacity(0.22),
+        cardStrokeInner: Color.white.opacity(0.1),
         cardShadowKey: GlassShadowStyle(
-            color: Color.black.opacity(0.1),
-            radius: 26,
+            color: Color.black.opacity(0.2),
+            radius: 14,
             x: 0,
-            y: 14
+            y: 7
         ),
         cardShadowAmbient: GlassShadowStyle(
-            color: Color.black.opacity(0.035),
-            radius: 10,
-            x: 0,
-            y: 4
-        ),
-        pillFillSelected: Color.white.opacity(0.6),
-        pillFillDefault: Color.white.opacity(0.22),
-        pillStroke: Color.black.opacity(0.08),
-        panelFill: Color.white.opacity(0.16),
-        fieldFill: Color.white.opacity(0.24),
-        separator: Color.black.opacity(0.1),
-        controlShadowKey: GlassShadowStyle(
-            color: Color.black.opacity(0.08),
-            radius: 16,
-            x: 0,
-            y: 8
-        ),
-        controlShadowAmbient: GlassShadowStyle(
-            color: Color.black.opacity(0.025),
-            radius: 8,
+            color: Color.black.opacity(0.11),
+            radius: 7,
             x: 0,
             y: 2
+        ),
+        pillFillSelected: Color.white,
+        pillFillDefault: Color.white.opacity(0.14),
+        pillStroke: Color.white.opacity(0.26),
+        panelFill: Color.white.opacity(0.1),
+        fieldFill: Color.white.opacity(0.16),
+        separator: Color.white.opacity(0.16),
+        controlShadowKey: GlassShadowStyle(
+            color: Color.black.opacity(0.14),
+            radius: 10,
+            x: 0,
+            y: 5
+        ),
+        controlShadowAmbient: GlassShadowStyle(
+            color: Color.black.opacity(0.07),
+            radius: 5,
+            x: 0,
+            y: 1
         )
     )
 
@@ -146,15 +146,19 @@ struct GlassCardBackground: View {
     let keyShadow: GlassShadowStyle
     let ambientShadow: GlassShadowStyle
 
-    var body: some View {
+    private var cardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+
+    var body: some View {
+        cardShape
             .fill(fill)
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                cardShape
                     .stroke(outerStroke, lineWidth: 1)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                cardShape
                     .inset(by: 1)
                     .stroke(innerStroke, lineWidth: 1)
             )

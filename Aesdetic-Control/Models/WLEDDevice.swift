@@ -128,10 +128,38 @@ struct Info: Codable {
     let ver: String
     let leds: LedInfo
     let fs: FileSystemInfo?
+    /// Device-local clock string reported by WLED `info.time`.
+    let time: String?
+    /// Optional clock mode flag reported by WLED `info.clock`.
+    let clock: Int?
+    /// Optional NTP status flag reported by WLED `info.ndc`.
+    let ndc: Int?
+
+    init(
+        name: String,
+        mac: String,
+        ver: String,
+        leds: LedInfo,
+        fs: FileSystemInfo? = nil,
+        time: String? = nil,
+        clock: Int? = nil,
+        ndc: Int? = nil
+    ) {
+        self.name = name
+        self.mac = mac
+        self.ver = ver
+        self.leds = leds
+        self.fs = fs
+        self.time = time
+        self.clock = clock
+        self.ndc = ndc
+    }
 }
 
 struct LedInfo: Codable {
     let count: Int
+    /// Maximum number of segments supported by this device/firmware.
+    let maxseg: Int?
     // Segment LED capabilities (array) - optional, present on newer WLED builds
     // Bit 2 (0b100) indicates CCT/temperature capability for the segment.
     let seglc: [Int]?
@@ -145,6 +173,7 @@ struct LedInfo: Codable {
 
     init(
         count: Int,
+        maxseg: Int? = nil,
         seglc: [Int]?,
         lc: Int?,
         cct: Bool?,
@@ -153,6 +182,7 @@ struct LedInfo: Codable {
         matrix: LedMatrix?
     ) {
         self.count = count
+        self.maxseg = maxseg
         self.seglc = seglc
         self.lc = lc
         self.cct = cct
@@ -163,6 +193,7 @@ struct LedInfo: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case count
+        case maxseg
         case seglc
         case lc
         case cct
@@ -174,6 +205,7 @@ struct LedInfo: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         count = try container.decode(Int.self, forKey: .count)
+        maxseg = try container.decodeIfPresent(Int.self, forKey: .maxseg)
         seglc = try container.decodeIfPresent([Int].self, forKey: .seglc)
         lc = try container.decodeIfPresent(Int.self, forKey: .lc)
         cct = Self.decodeBoolOrInt(from: container, forKey: .cct)

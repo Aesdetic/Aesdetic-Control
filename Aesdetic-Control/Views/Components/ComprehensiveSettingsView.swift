@@ -5,6 +5,7 @@
 //  Created by Aesdetic Control Team on 1/27/25.
 //
 
+import CoreLocation
 import SwiftUI
 
 private enum UpdateCheckStatus: Equatable {
@@ -32,14 +33,34 @@ struct ComprehensiveSettingsView: View {
     @State private var nightLightDurationMin: Int = 10
     @State private var nightLightMode: Int = 0
     @State private var nightLightTargetBri: Int = 0
+    @State private var timerDrafts: [NativeTimerDraft] = NativeTimerDraft.standardDefaults
+    @State private var isLoadingTimers: Bool = false
+    @State private var savingTimerSlotIds: Set<Int> = []
     @State private var isEditingName: Bool = false
     @State private var editingName: String = ""
     @State private var temperatureStopsUseCCT: Bool = false
+    @State private var macroButtonPress: Int = 0
+    @State private var macroButtonLongPress: Int = 0
+    @State private var macroButtonDoublePress: Int = 0
+    @State private var macroAlexaOn: Int = 0
+    @State private var macroAlexaOff: Int = 0
+    @State private var macroNightLight: Int = 0
+    @State private var isSavingMacroBindings: Bool = false
+    @State private var isSyncingDeviceTime: Bool = false
+    @State private var deviceTimeSyncMessage: String?
+    @State private var deviceTimeSyncMessageIsError: Bool = false
+    @State private var activeSegmentCountDraft: Int = 1
+    @State private var isApplyingSegmentCount: Bool = false
+    @State private var segmentSettingsMessage: String?
+    @State private var segmentSettingsMessageIsError: Bool = false
+    @State private var segmentColorDrafts: [Int: Color] = [:]
+    @State private var applyingSegmentColorIds: Set<Int> = []
     
     // New state variables for comprehensive settings
     @State private var selectedSettingsCategory: SettingsCategory = .info
     @State private var showWebConfig: Bool = false
     @State private var showFirmwareUpdate: Bool = false
+    @State private var showAutomaticFirmwareUpdate: Bool = false
     @State private var updateCheckStatus: UpdateCheckStatus = .idle
     @State private var latestStableVersion: String?
     @State private var lastUpdateCheck: Date?
@@ -56,11 +77,13 @@ struct ComprehensiveSettingsView: View {
     @State private var showAllNetworks: Bool = true
     @State private var showConnectedMessage: Bool = true
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
+    @AppStorage("showSegmentControlsInColorTabAdvanced") private var showSegmentControlsInColorTabAdvanced: Bool = true
     
     enum SettingsCategory: String, CaseIterable {
         case info = "Info"
         case wifi = "WiFi Setup"
         case leds = "LED Preferences"
+        case segments = "Segments"
         case config2d = "2D Configuration"
         case ui = "User Interface"
         case sync = "Sync Interfaces"
@@ -73,6 +96,7 @@ struct ComprehensiveSettingsView: View {
             case .info: return "info.circle"
             case .wifi: return "wifi"
             case .leds: return "lightbulb"
+            case .segments: return "square.split.2x2"
             case .config2d: return "rectangle.grid.2x2"
             case .ui: return "paintbrush"
             case .sync: return "arrow.triangle.2.circlepath"
@@ -89,6 +113,16 @@ struct ComprehensiveSettingsView: View {
 
     private var rebootWaitRemainingSeconds: Int {
         viewModel.rebootWaitRemainingSeconds(for: device.id)
+    }
+
+    private var activeDevice: WLEDDevice {
+        if let matchedById = viewModel.devices.first(where: { $0.id == device.id }) {
+            return matchedById
+        }
+        if let matchedByIP = viewModel.devices.first(where: { $0.ipAddress == device.ipAddress }) {
+            return matchedByIP
+        }
+        return device
     }
     
     var body: some View {
@@ -138,6 +172,8 @@ struct ComprehensiveSettingsView: View {
                             wifiSection
                         case .leds:
                             ledsSection
+                        case .segments:
+                            segmentsSection
                         case .config2d:
                             config2dSection
                         case .ui:
@@ -164,6 +200,9 @@ struct ComprehensiveSettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .presentationBackground(.ultraThinMaterial)
         .task { 
             await loadState()
             await loadCurrentWiFiInfo()
@@ -171,6 +210,9 @@ struct ComprehensiveSettingsView: View {
         }
         .sheet(isPresented: $showWebConfig) {
             WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/settings")!)
+        }
+        .sheet(isPresented: $showAutomaticFirmwareUpdate) {
+            WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/settings/sec")!)
         }
         .sheet(isPresented: $showFirmwareUpdate) {
             WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/update")!)
@@ -326,6 +368,11 @@ struct ComprehensiveSettingsView: View {
                     if let ver = info?.ver {
                         InfoRow(label: "Firmware", value: ver)
                     }
+                    if let deviceTime = info?.time, !deviceTime.isEmpty {
+                        InfoRow(label: "Device Time", value: deviceTime)
+                    } else {
+                        InfoRow(label: "Device Time", value: "Unavailable")
+                    }
                     InfoRow(label: "LED Count", value: "\(segStop)")
                     if let ledCount = info?.leds.count {
                         InfoRow(label: "LED Count (API)", value: "\(ledCount)")
@@ -363,7 +410,7 @@ struct ComprehensiveSettingsView: View {
                     updateStatusView
 
                     if case .updateAvailable = updateCheckStatus {
-                        Button(action: { showFirmwareUpdate = true }) {
+                        Button(action: { showAutomaticFirmwareUpdate = true }) {
                             SettingsButton(title: "Update Now", icon: "arrow.up.circle.fill")
                         }
                     }
@@ -672,42 +719,6 @@ struct ComprehensiveSettingsView: View {
                 }
             }
             
-            SettingsCard(title: "Segment Configuration") {
-                if advancedUIEnabled {
-                    Toggle(
-                        "Manual segment layout",
-                        isOn: Binding(
-                            get: { viewModel.isManualSegmentationEnabled(for: device.id) },
-                            set: { value in
-                                viewModel.setManualSegmentationEnabled(value, for: device.id)
-                            }
-                        )
-                    )
-                    .tint(.white)
-                    .foregroundColor(.white)
-                    Text("Manual layout preserves segment bounds. Auto layout rebuilds segments for the main UI.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-
-                    if viewModel.isManualSegmentationEnabled(for: device.id) {
-                        SegmentBoundsRow(
-                            device: device,
-                            segmentId: 0,
-                            start: segStart,
-                            stop: segStop
-                        )
-                        .environmentObject(viewModel)
-                    } else {
-                        Text("Auto layout is active. Enable manual layout to edit segment bounds.")
-                            .font(.footnote)
-                            .foregroundColor(.white.opacity(0.7))
-                    }
-                } else {
-                    Text("Enable Advanced UI to edit segment bounds.")
-                        .font(.footnote)
-                        .foregroundColor(.white.opacity(0.7))
-                }
-            }
         }
     }
     
@@ -720,6 +731,211 @@ struct ComprehensiveSettingsView: View {
                     }
                     Button(action: { openURL(URL(string: "http://\(device.ipAddress)/settings/2D")!) }) {
                         SettingsButton(title: "Layout Configuration", icon: "square.grid.3x3")
+                    }
+                }
+            }
+        }
+    }
+
+    private var maxDeviceSegments: Int {
+        let fromInfo = info?.leds.maxseg ?? 0
+        if fromInfo > 0 { return fromInfo }
+        return max(1, viewModel.deviceMaxSegmentCapacity(for: activeDevice))
+    }
+
+    private var maxDeviceSegmentsSourceLabel: String {
+        let fromInfo = info?.leds.maxseg ?? 0
+        return fromInfo > 0 ? "firmware" : "estimated"
+    }
+
+    private var maxUsableSegments: Int {
+        max(1, min(viewModel.totalLEDCount(for: activeDevice), maxDeviceSegments))
+    }
+
+    private var currentActiveSegments: Int {
+        max(1, viewModel.getSegmentCount(for: activeDevice))
+    }
+
+    private var recommendedSegmentCount: Int {
+        min(maxUsableSegments, viewModel.recommendedActiveSegmentCount(for: activeDevice))
+    }
+
+    private var editableSegments: [(id: Int, start: Int, stop: Int, color: Color)] {
+        guard let segments = activeDevice.state?.segments, !segments.isEmpty else {
+            return []
+        }
+        return segments.enumerated().map { index, segment in
+            let id = segment.id ?? index
+            let start = segment.start ?? 0
+            let stop = segment.stop ?? max(start, (segment.len ?? 1) + start)
+            let fallback = segment.colors?.first.map { Color.color(fromRGBArray: $0) } ?? activeDevice.currentColor
+            return (id: id, start: start, stop: stop, color: fallback)
+        }
+        .sorted { lhs, rhs in lhs.id < rhs.id }
+    }
+
+    private var segmentsSection: some View {
+        VStack(spacing: 12) {
+            SettingsCard(title: "1) Segment Info") {
+                VStack(spacing: 12) {
+                    InfoRow(label: "Max Segments (Device)", value: "\(maxDeviceSegments)")
+                    InfoRow(label: "Max Source", value: maxDeviceSegmentsSourceLabel)
+                    InfoRow(label: "Current Active Segments", value: "\(currentActiveSegments)")
+                    InfoRow(label: "Max Usable (LED Count Cap)", value: "\(maxUsableSegments)")
+                    InfoRow(label: "Recommended Active", value: "\(recommendedSegmentCount)")
+                    Text("Recommended targets high visual quality (~75% of max usable) while avoiding heavy update load.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            SettingsCard(title: "2) Active Segment Count") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Stepper(
+                        value: $activeSegmentCountDraft,
+                        in: 1...maxUsableSegments,
+                        step: 1
+                    ) {
+                        HStack {
+                            Text("Active Segments")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text("\(activeSegmentCountDraft)")
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                    }
+                    .tint(.white)
+
+                    Text("This controls segment density used by app-managed gradients and effects for this device.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+
+                    Button(action: applyActiveSegmentCountSetting) {
+                        HStack(spacing: 8) {
+                            if isApplyingSegmentCount {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(.black)
+                            }
+                            Text("Apply Segment Count")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.black)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                    }
+                    .disabled(isApplyingSegmentCount)
+
+                    Toggle("Show segment controls in Colors tab (Advanced UI)", isOn: $showSegmentControlsInColorTabAdvanced)
+                        .tint(.white)
+                        .foregroundColor(.white)
+
+                    if let segmentSettingsMessage {
+                        Text(segmentSettingsMessage)
+                            .font(.caption)
+                            .foregroundColor(segmentSettingsMessageIsError ? .orange : .green)
+                    }
+                }
+            }
+
+            SettingsCard(title: "3) Segment Detail Edit (Temporary Override)") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Manual segment color edits are temporary overrides. Applying color/gradient from the Colors tab will replace them.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+
+                    if editableSegments.isEmpty {
+                        Text("No segments detected yet. Refresh device state and try again.")
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.7))
+                    } else {
+                        ForEach(editableSegments, id: \.id) { segment in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Segment \(segment.id + 1)")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Text("LED \(segment.start)-\(segment.stop)")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.7))
+                                }
+
+                                HStack(spacing: 10) {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(segmentColorDrafts[segment.id] ?? segment.color)
+                                        .frame(width: 28, height: 28)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                        )
+
+                                    ColorPicker(
+                                        "Color",
+                                        selection: colorDraftBinding(segmentId: segment.id, fallback: segment.color),
+                                        supportsOpacity: false
+                                    )
+                                    .labelsHidden()
+
+                                    Spacer(minLength: 8)
+
+                                    Button {
+                                        applySegmentColorOverride(segmentId: segment.id, fallback: segment.color)
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            if applyingSegmentColorIds.contains(segment.id) {
+                                                ProgressView()
+                                                    .scaleEffect(0.7)
+                                                    .tint(.black)
+                                            }
+                                            Text("Apply")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundColor(.black)
+                                        }
+                                        .padding(.vertical, 6)
+                                        .padding(.horizontal, 10)
+                                        .background(Color.white)
+                                        .cornerRadius(8)
+                                    }
+                                    .disabled(applyingSegmentColorIds.contains(segment.id))
+                                }
+                            }
+                            .padding(.vertical, 6)
+                        }
+                    }
+
+                    if advancedUIEnabled {
+                        Divider()
+                            .background(Color.white.opacity(0.15))
+                            .padding(.vertical, 4)
+
+                        Toggle(
+                            "Manual segment layout",
+                            isOn: Binding(
+                                get: { viewModel.isManualSegmentationEnabled(for: device.id) },
+                                set: { value in
+                                    viewModel.setManualSegmentationEnabled(value, for: device.id)
+                                }
+                            )
+                        )
+                        .tint(.white)
+                        .foregroundColor(.white)
+                        Text("Manual layout preserves custom segment bounds. Auto layout is used by app-managed gradient rendering.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+
+                        if viewModel.isManualSegmentationEnabled(for: device.id) {
+                            SegmentBoundsRow(
+                                device: activeDevice,
+                                segmentId: 0,
+                                start: segStart,
+                                stop: segStop
+                            )
+                            .environmentObject(viewModel)
+                        }
                     }
                 }
             }
@@ -792,6 +1008,81 @@ struct ComprehensiveSettingsView: View {
                     Button(action: { openURL(URL(string: "http://\(device.ipAddress)/settings/time")!) }) {
                         SettingsButton(title: "Timer Settings", icon: "timer")
                     }
+                    Button(action: syncDeviceTimeFromPhone) {
+                        HStack(spacing: 10) {
+                            if isSyncingDeviceTime {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(.black)
+                            } else {
+                                Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.black)
+                            }
+
+                            Text("Sync Device Time/Timezone from Phone")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.black)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.9)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                    }
+                    .disabled(isSyncingDeviceTime)
+
+                    if let deviceTimeSyncMessage {
+                        Text(deviceTimeSyncMessage)
+                            .font(.caption)
+                            .foregroundColor(deviceTimeSyncMessageIsError ? .orange : .green)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+
+            SettingsCard(title: "Native Timers") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Timer slots 1-8 are available here for basic preset scheduling. Sunrise and sunset remain managed by the app's automation flow and WLED solar slots.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+
+                    if isLoadingTimers {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Loading timers...")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.75))
+                        }
+                    } else {
+                        ForEach(Array(timerDrafts.enumerated()), id: \.element.id) { index, draft in
+                            TimerSlotEditorCard(
+                                draft: Binding(
+                                    get: { timerDrafts[index] },
+                                    set: { timerDrafts[index] = $0 }
+                                ),
+                                isSaving: savingTimerSlotIds.contains(draft.id),
+                                onSave: {
+                                    commitTimerDraft(slotId: draft.id)
+                                }
+                            )
+                        }
+                    }
+
+                    Button(action: {
+                        Task { await loadTimersAndMacros() }
+                    }) {
+                        Text("Refresh Timers & Macros")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.black)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 14)
+                            .background(Color.white)
+                            .cornerRadius(10)
+                    }
                 }
             }
             
@@ -829,6 +1120,39 @@ struct ComprehensiveSettingsView: View {
                         .padding(.horizontal, 14)
                         .background(Color.white)
                         .cornerRadius(10)
+                }
+            }
+
+            SettingsCard(title: "Macro Triggers") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("0 disables the trigger. These are native WLED hardware and Alexa hooks, not app automations.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+
+                    IntStepperRow(title: "Button Press", value: $macroButtonPress, range: 0...250, onEnd: commitMacroBindings)
+                    IntStepperRow(title: "Button Long Press", value: $macroButtonLongPress, range: 0...250, onEnd: commitMacroBindings)
+                    IntStepperRow(title: "Button Double Press", value: $macroButtonDoublePress, range: 0...250, onEnd: commitMacroBindings)
+                    IntStepperRow(title: "Alexa On", value: $macroAlexaOn, range: 0...250, onEnd: commitMacroBindings)
+                    IntStepperRow(title: "Alexa Off", value: $macroAlexaOff, range: 0...250, onEnd: commitMacroBindings)
+                    IntStepperRow(title: "Night Light End", value: $macroNightLight, range: 0...250, onEnd: commitMacroBindings)
+
+                    Button(action: commitMacroBindings) {
+                        HStack(spacing: 8) {
+                            if isSavingMacroBindings {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(.black)
+                            }
+                            Text("Apply Macro Triggers")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.black)
+                        }
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                    }
+                    .disabled(isSavingMacroBindings)
                 }
             }
         }
@@ -918,6 +1242,139 @@ struct ComprehensiveSettingsView: View {
             )
         }
     }
+
+    private func syncDeviceTimeFromPhone() {
+        guard !isSyncingDeviceTime else { return }
+
+        isSyncingDeviceTime = true
+        deviceTimeSyncMessage = nil
+        deviceTimeSyncMessageIsError = false
+
+        Task {
+            defer {
+                Task { @MainActor in
+                    isSyncingDeviceTime = false
+                }
+            }
+
+            var coordinate = await AutomationStore.shared.currentCoordinate()
+            if coordinate == nil {
+                let existingReference = try? await WLEDAPIService.shared.fetchSolarReference(for: device)
+                coordinate = existingReference?.coordinate
+            }
+
+            do {
+                try await WLEDAPIService.shared.updateDeviceTimeSettings(
+                    for: device,
+                    timeZone: .current,
+                    coordinate: coordinate
+                )
+                await MainActor.run {
+                    deviceTimeSyncMessageIsError = false
+                    if coordinate == nil {
+                        deviceTimeSyncMessage = "Device time/timezone synced. Location was unchanged."
+                    } else {
+                        deviceTimeSyncMessage = "Device time/timezone synced from phone."
+                    }
+                }
+                await loadState()
+            } catch {
+                await MainActor.run {
+                    deviceTimeSyncMessageIsError = true
+                    deviceTimeSyncMessage = "Sync failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func commitTimerDraft(slotId: Int) {
+        guard let draft = timerDrafts.first(where: { $0.id == slotId }) else { return }
+        savingTimerSlotIds.insert(slotId)
+
+        Task {
+            defer {
+                Task { @MainActor in
+                    savingTimerSlotIds.remove(slotId)
+                }
+            }
+
+            let update = WLEDTimerUpdate(
+                id: draft.id,
+                enabled: draft.enabled,
+                hour: max(0, min(23, draft.hour)),
+                minute: max(0, min(59, draft.minute)),
+                days: WeekdayMask.wledDow(fromSunFirst: draft.weekdays),
+                macroId: max(0, min(250, draft.macroId)),
+                startMonth: nil,
+                startDay: nil,
+                endMonth: nil,
+                endDay: nil
+            )
+
+            try? await WLEDAPIService.shared.updateTimer(update, on: device)
+            await loadTimersAndMacros()
+        }
+    }
+
+    private func commitMacroBindings() {
+        isSavingMacroBindings = true
+        Task {
+            defer {
+                Task { @MainActor in
+                    isSavingMacroBindings = false
+                }
+            }
+
+            try? await WLEDAPIService.shared.updateMacroBindings(
+                WLEDMacroBindingsUpdate(
+                    buttonPressMacro: macroButtonPress,
+                    buttonLongPressMacro: macroButtonLongPress,
+                    buttonDoublePressMacro: macroButtonDoublePress,
+                    alexaOnMacro: macroAlexaOn,
+                    alexaOffMacro: macroAlexaOff,
+                    nightLightMacro: macroNightLight
+                ),
+                for: device
+            )
+            await loadTimersAndMacros()
+        }
+    }
+
+    private func loadTimersAndMacros() async {
+        await MainActor.run {
+            isLoadingTimers = true
+        }
+
+        async let timersTask = WLEDAPIService.shared.fetchTimers(for: device)
+        async let macrosTask = WLEDAPIService.shared.fetchMacroBindings(for: device)
+
+        let timers = try? await timersTask
+        let macros = try? await macrosTask
+
+        await MainActor.run {
+            if let timers {
+                var timerById: [Int: WLEDTimer] = [:]
+                for timer in timers {
+                    timerById[timer.id] = timer
+                }
+                timerDrafts = NativeTimerDraft.standardDefaults.map { fallback in
+                    guard let timer = timerById[fallback.id] else { return fallback }
+                    return NativeTimerDraft(timer: timer)
+                }
+            }
+
+            if let macros {
+                macroButtonPress = macros.buttonPressMacro
+                macroButtonLongPress = macros.buttonLongPressMacro
+                macroButtonDoublePress = macros.buttonDoublePressMacro
+                macroAlexaOn = macros.alexaOnMacro
+                macroAlexaOff = macros.alexaOffMacro
+                macroNightLight = macros.nightLightMacro
+            }
+
+            isLoadingTimers = false
+        }
+    }
     
     private func loadState() async {
         isLoading = true
@@ -938,6 +1395,8 @@ struct ComprehensiveSettingsView: View {
                 brightnessDouble = Double(effectiveBrightness) / 255.0 * 100.0
         segStart = 0
         segStop = device.state?.segments.first?.len ?? segStop
+                activeSegmentCountDraft = viewModel.preferredActiveSegmentCount(for: device)
+                seedSegmentColorDrafts(from: device.state?.segments)
             }
             return
         }
@@ -951,6 +1410,8 @@ struct ComprehensiveSettingsView: View {
             segStart = 0
             segStop = liveDevice.state?.segments.first?.len ?? segStop
             temperatureStopsUseCCT = viewModel.temperatureStopsUseCCT(for: device)
+            activeSegmentCountDraft = viewModel.preferredActiveSegmentCount(for: liveDevice)
+            seedSegmentColorDrafts(from: liveDevice.state?.segments)
         }
         
         do {
@@ -978,8 +1439,12 @@ struct ComprehensiveSettingsView: View {
                 }
                 if let len = resp.state.segments.first?.len { segStop = len }
                 temperatureStopsUseCCT = viewModel.temperatureStopsUseCCT(for: device)
+                activeSegmentCountDraft = viewModel.preferredActiveSegmentCount(for: activeDevice)
+                seedSegmentColorDrafts(from: resp.state.segments)
             }
         } catch { }
+
+        await loadTimersAndMacros()
     }
 
     private var supportsCCTInSettings: Bool {
@@ -998,6 +1463,72 @@ struct ComprehensiveSettingsView: View {
             }
         }
         return false
+    }
+
+    private func seedSegmentColorDrafts(from segments: [Segment]?) {
+        guard let segments, !segments.isEmpty else {
+            segmentColorDrafts = [:]
+            return
+        }
+        var drafts: [Int: Color] = [:]
+        for (index, segment) in segments.enumerated() {
+            let id = segment.id ?? index
+            let color = segment.colors?.first.map { Color.color(fromRGBArray: $0) } ?? activeDevice.currentColor
+            drafts[id] = color
+        }
+        segmentColorDrafts = drafts
+    }
+
+    private func colorDraftBinding(segmentId: Int, fallback: Color) -> Binding<Color> {
+        Binding<Color>(
+            get: {
+                segmentColorDrafts[segmentId] ?? fallback
+            },
+            set: { newValue in
+                segmentColorDrafts[segmentId] = newValue
+            }
+        )
+    }
+
+    private func applyActiveSegmentCountSetting() {
+        isApplyingSegmentCount = true
+        segmentSettingsMessage = nil
+        segmentSettingsMessageIsError = false
+
+        Task {
+            let success = await viewModel.applyActiveSegmentCount(activeSegmentCountDraft, for: activeDevice)
+            await MainActor.run {
+                isApplyingSegmentCount = false
+                segmentSettingsMessage = success ? "Segment count updated." : "Failed to update segment count."
+                segmentSettingsMessageIsError = !success
+            }
+            if success {
+                await loadState()
+            }
+        }
+    }
+
+    private func applySegmentColorOverride(segmentId: Int, fallback: Color) {
+        let selectedColor = segmentColorDrafts[segmentId] ?? fallback
+        applyingSegmentColorIds.insert(segmentId)
+
+        Task {
+            let success = await viewModel.applySegmentColorOverride(
+                device: activeDevice,
+                segmentId: segmentId,
+                color: selectedColor
+            )
+            await MainActor.run {
+                applyingSegmentColorIds.remove(segmentId)
+                segmentSettingsMessage = success
+                    ? "Segment \(segmentId + 1) color override applied."
+                    : "Failed to apply Segment \(segmentId + 1) color override."
+                segmentSettingsMessageIsError = !success
+            }
+            if success {
+                await loadState()
+            }
+        }
     }
 
     // MARK: - Firmware Update Helpers
@@ -1359,6 +1890,189 @@ fileprivate struct IntStepperRow: View {
             })
             .labelsHidden()
         }
+    }
+}
+
+private struct NativeTimerDraft: Identifiable, Equatable {
+    let id: Int
+    var enabled: Bool
+    var hour: Int
+    var minute: Int
+    var weekdays: [Bool]
+    var macroId: Int
+
+    static let standardDefaults: [NativeTimerDraft] = (0..<8).map {
+        NativeTimerDraft(
+            id: $0,
+            enabled: false,
+            hour: 18,
+            minute: 0,
+            weekdays: WeekdayMask.allDaysSunFirst,
+            macroId: 0
+        )
+    }
+
+    init(id: Int, enabled: Bool, hour: Int, minute: Int, weekdays: [Bool], macroId: Int) {
+        self.id = id
+        self.enabled = enabled
+        self.hour = hour
+        self.minute = minute
+        self.weekdays = WeekdayMask.normalizeSunFirst(weekdays)
+        self.macroId = macroId
+    }
+
+    init(timer: WLEDTimer) {
+        self.init(
+            id: timer.id,
+            enabled: timer.enabled,
+            hour: timer.hour == 255 || timer.hour == 24 ? 0 : max(0, min(23, timer.hour)),
+            minute: max(0, min(59, timer.minute)),
+            weekdays: WeekdayMask.sunFirst(fromWLEDDow: timer.days),
+            macroId: timer.macroId
+        )
+    }
+
+    var timeLabel: String {
+        String(format: "%02d:%02d", max(0, min(23, hour)), max(0, min(59, minute)))
+    }
+
+    var weekdaySummary: String {
+        let names = ["S", "M", "T", "W", "T", "F", "S"]
+        let selected = weekdays.enumerated().compactMap { index, enabled in
+            enabled ? names[index] : nil
+        }
+        return selected.isEmpty ? "No days" : selected.joined(separator: " ")
+    }
+}
+
+private struct TimerSlotEditorCard: View {
+    @Binding var draft: NativeTimerDraft
+    let isSaving: Bool
+    let onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Timer \(draft.id + 1)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Spacer()
+                Text(draft.timeLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.8))
+                Toggle("", isOn: $draft.enabled)
+                    .labelsHidden()
+                    .tint(.white)
+            }
+
+            HStack(spacing: 12) {
+                IntStepperMini(title: "Hour", value: $draft.hour, range: 0...23)
+                IntStepperMini(title: "Minute", value: $draft.minute, range: 0...59)
+                IntStepperMini(title: "Preset", value: $draft.macroId, range: 0...250)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Days")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.72))
+                HStack(spacing: 6) {
+                    ForEach(0..<7, id: \.self) { dayIndex in
+                        let labels = ["S", "M", "T", "W", "T", "F", "S"]
+                        Button {
+                            draft.weekdays[dayIndex].toggle()
+                        } label: {
+                            Text(labels[dayIndex])
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(draft.weekdays[dayIndex] ? .black : .white.opacity(0.8))
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(draft.weekdays[dayIndex] ? Color.white : Color.white.opacity(0.08))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            HStack {
+                Text(draft.enabled ? "Runs preset \(draft.macroId) on \(draft.weekdaySummary)" : "Disabled")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.65))
+                Spacer()
+                Button(action: onSave) {
+                    HStack(spacing: 8) {
+                        if isSaving {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(.black)
+                        }
+                        Text(draft.enabled ? "Save" : "Apply Disabled")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.black)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.white)
+                    .cornerRadius(10)
+                }
+                .disabled(isSaving)
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+        .cornerRadius(12)
+    }
+}
+
+private struct IntStepperMini: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(.white.opacity(0.72))
+            HStack(spacing: 8) {
+                Button {
+                    value = max(range.lowerBound, value - 1)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
+
+                Text("\(value)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white)
+                    .frame(minWidth: 28)
+
+                Button {
+                    value = min(range.upperBound, value + 1)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.06))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

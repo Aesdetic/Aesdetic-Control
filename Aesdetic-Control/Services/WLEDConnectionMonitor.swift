@@ -364,7 +364,10 @@ class WLEDConnectionMonitor: ObservableObject {
         consecutiveFailures[device.id] = 0
         reconnectionAttempts[device.id] = 0
         
-        let wasOffline = deviceHealthStatus[device.id] == false
+        let priorHealth = deviceHealthStatus[device.id]
+        let wasOffline = priorHealth == false
+        let wasUnknown = priorHealth == nil
+        let hadCompletedPostConnectRecovery = hasCompletedPostConnectRecovery.contains(device.id)
         deviceHealthStatus[device.id] = true
         
         if wasOffline {
@@ -410,12 +413,15 @@ class WLEDConnectionMonitor: ObservableObject {
 
         // Resync on-device timers only when connectivity transitions from offline -> online.
         // Running this on every health-check success can spam /json/cfg writes.
-        if wasOffline {
+        let shouldImportOnConnect = wasOffline || wasUnknown || !hadCompletedPostConnectRecovery
+        if shouldImportOnConnect {
             Task { @MainActor in
                 // Process queued timer/preset cleanup before importing timers so deleted
                 // on-device automations do not get re-imported during transient reconnect.
                 await DeviceCleanupManager.shared.processQueue(for: device.id)
-                await AutomationStore.shared.resyncOnDeviceSchedules(for: device)
+                if wasOffline {
+                    await AutomationStore.shared.resyncOnDeviceSchedules(for: device)
+                }
                 await AutomationStore.shared.importOnDeviceAutomations(for: device)
             }
         }

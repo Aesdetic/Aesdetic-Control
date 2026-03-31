@@ -2,21 +2,61 @@ import SwiftUI
 import UIKit
 
 struct AppBackground: View {
+    private static let alpineImage = UIImage(named: "AlpinePhotoBackground")
+
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let height = proxy.size.height
 
             ZStack {
+                // Always render a full-canvas base first, so we never fall through to
+                // an opaque system/window color during transient layout passes.
                 neutralGlassLayer(width: width, height: height)
 
-                NoiseTexture()
-                    .opacity(0.02)
-                    .blendMode(.overlay)
+                if let alpineImage = Self.alpineImage {
+                    photoLayer(image: alpineImage, width: width, height: height)
+                }
             }
             .ignoresSafeArea()
         }
         .allowsHitTesting(false)
+    }
+
+    private func photoLayer(image: UIImage, width: CGFloat, height: CGFloat) -> some View {
+        let vignetteOuterRadius = max(width, height) * 0.96
+
+        return ZStack {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .saturation(0.92)
+                .contrast(1.02)
+                .ignoresSafeArea()
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.24),
+                    Color.black.opacity(0.07),
+                    Color.white.opacity(0.03)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            RadialGradient(
+                gradient: Gradient(colors: [
+                    Color.black.opacity(0.0),
+                    Color.black.opacity(0.12)
+                ]),
+                center: .center,
+                startRadius: width * 0.22,
+                endRadius: vignetteOuterRadius
+            )
+            .ignoresSafeArea()
+        }
     }
 
     private func neutralGlassLayer(width: CGFloat, height: CGFloat) -> some View {

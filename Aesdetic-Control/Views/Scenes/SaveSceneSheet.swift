@@ -30,8 +30,6 @@ struct SaveSceneSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
-
 

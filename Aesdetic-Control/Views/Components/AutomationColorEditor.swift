@@ -12,9 +12,11 @@ struct AutomationColorEditor: View {
     @Binding var interpolation: GradientInterpolation
     @Binding var fadeDuration: Double
     @Binding var enableFade: Bool
+    @Binding var powerOn: Bool
     @Binding var selectedPresetId: UUID?
     @Binding var temperature: Double?
     @Binding var whiteLevel: Double?
+    let showFadeControls: Bool
     
     // Preview state
     @State private var previewEnabled: Bool = false
@@ -34,12 +36,15 @@ struct AutomationColorEditor: View {
     var body: some View {
         VStack(spacing: 16) {
             headerRow
+            powerSection
             brightnessSection
             blendSelector
             gradientSection
             presetSelector
             colorWheel
-            fadeSection
+            if showFadeControls {
+                fadeSection
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
@@ -53,9 +58,22 @@ struct AutomationColorEditor: View {
         )
         .onChange(of: previewEnabled) { _, enabled in
             if enabled {
-                scheduleGradientPreview(gradient)
+                if powerOn {
+                    scheduleGradientPreview(gradient)
+                } else {
+                    schedulePowerPreview(isOn: false)
+                }
             } else {
                 cancelPreviewTasks()
+            }
+        }
+        .onChange(of: powerOn) { _, isOn in
+            if previewEnabled {
+                if isOn {
+                    scheduleGradientPreview(gradient)
+                } else {
+                    schedulePowerPreview(isOn: false)
+                }
             }
         }
         .onAppear {
@@ -193,6 +211,37 @@ struct AutomationColorEditor: View {
             }
             .buttonStyle(.plain)
             .disabled(isSavingPreset)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var powerSection: some View {
+        HStack {
+            Text("Power")
+                .foregroundColor(.white)
+            Spacer()
+            Button {
+                powerOn.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "power")
+                        .font(.caption.weight(.semibold))
+                    Text(powerOn ? "ON" : "OFF")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundColor(powerOn ? .black : .white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(powerOn ? Color.white : Color.white.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: powerOn ? 0 : 1)
+                )
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
@@ -479,6 +528,10 @@ struct AutomationColorEditor: View {
     // MARK: - Preview Functions
 
     private func scheduleGradientPreview(_ gradient: LEDGradient) {
+        guard powerOn else {
+            schedulePowerPreview(isOn: false)
+            return
+        }
         gradientPreviewTask?.cancel()
         gradientPreviewTask = Task {
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -488,11 +541,22 @@ struct AutomationColorEditor: View {
     }
 
     private func scheduleBrightnessPreview(_ brightness: Int) {
+        guard powerOn else { return }
         brightnessPreviewTask?.cancel()
         brightnessPreviewTask = Task {
             try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled else { return }
             await previewBrightness(brightness)
+        }
+    }
+
+    private func schedulePowerPreview(isOn: Bool) {
+        gradientPreviewTask?.cancel()
+        brightnessPreviewTask?.cancel()
+        gradientPreviewTask = Task {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+            await previewPower(isOn: isOn)
         }
     }
 
@@ -527,6 +591,15 @@ struct AutomationColorEditor: View {
             return
         }
         await viewModel.updateDeviceBrightness(device, brightness: brightness, userInitiated: false)
+    }
+
+    private func previewPower(isOn: Bool) async {
+        if viewModel.activeRunStatus[device.id] != nil {
+            return
+        }
+        let apiService = WLEDAPIService.shared
+        let transitionDs: Int? = enableFade ? Int((fadeDuration * 10.0).rounded()) : nil
+        _ = try? await apiService.setPower(for: device, isOn: isOn, transitionDeciseconds: transitionDs)
     }
     
     // MARK: - Preset Saving

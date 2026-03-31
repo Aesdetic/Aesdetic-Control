@@ -102,14 +102,7 @@ struct EnhancedDeviceCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)
         .background(
-            GlassCardBackground(
-                cornerRadius: 16,
-                fill: cardFill,
-                outerStroke: borderStrokeOuter,
-                innerStroke: borderStrokeInner,
-                keyShadow: cardShadowKey,
-                ambientShadow: cardShadowAmbient
-            )
+            AppCardBackground(style: cardStyle)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(Rectangle())
@@ -461,6 +454,25 @@ struct EnhancedDeviceCard: View {
             return Color.white.opacity(currentPowerState ? 0.28 : 0.22)
         }
         return currentPowerState ? glassSurface.cardFillActive : glassSurface.cardFillInactive
+    }
+
+    private var cardStyle: AppCardStyle {
+        if colorSchemeContrast == .increased {
+            return AppCardStyle(
+                cornerRadius: 16,
+                fill: cardFill,
+                outerStroke: borderStrokeOuter,
+                innerStroke: borderStrokeInner,
+                keyShadow: cardShadowKey,
+                ambientShadow: cardShadowAmbient
+            )
+        }
+
+        return AppCardStyles.glass(
+            for: colorScheme,
+            tone: currentPowerState ? .active : .inactive,
+            cornerRadius: 16
+        )
     }
 
     private var powerIconColor: Color {

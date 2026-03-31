@@ -694,6 +694,7 @@ class DeviceControlViewModel: ObservableObject {
     /// Local cache of device capabilities for synchronous access from MainActor
     private var deviceCapabilities: [String: WLEDCapabilities] = [:]
     private var deviceLedCounts: [String: Int] = [:]
+    private var deviceMaxSegmentCounts: [String: Int] = [:]
     
     // Effect metadata caching
     @Published private(set) var rawEffectMetadata: [String: [String]] = [:]
@@ -714,6 +715,10 @@ class DeviceControlViewModel: ObservableObject {
     @Published private(set) var latestEffectGradientStops: [String: [GradientStop]] = [:]
     @Published private(set) var latestMultiStopEffectGradients: [String: [GradientStop]] = [:]
     @Published private(set) var latestTransitionDurations: [String: Double] = [:]
+    private var hasLiveGradientHydration: Set<String> = []
+    private var lastLiveGradientReconcileAt: [String: Date] = [:]
+    private let liveGradientReconcileCooldown: TimeInterval = 45.0
+    private let liveGradientReconcileDistanceThreshold: Double = 18.0
     private var effectMetadataLastFetched: [String: Date] = [:]
     private var palettePreviewLastFetched: [String: Date] = [:]
     private var lastGradientBeforeEffect: [String: [GradientStop]] = [:]
@@ -728,6 +733,7 @@ class DeviceControlViewModel: ObservableObject {
     private var deviceIsMatrixById: [String: Bool] = [:]
     private let temperatureStopsCCTKeyPrefix = "temperatureStopsCCTEnabled."
     private let manualSegmentationKeyPrefix = "manualSegmentationEnabled."
+    private let activeSegmentCountKeyPrefix = "activeSegmentCount."
     private let defaultCCTKelvinMin: Int = 1900
     private let defaultCCTKelvinMax: Int = 10091
     private var cctKelvinRanges: [String: ClosedRange<Int>] = [:]
@@ -736,13 +742,16 @@ class DeviceControlViewModel: ObservableObject {
     private let discoveryStateRefreshDebounceNanos: UInt64 = 450_000_000
 
     private var appManagedSegmentDevices: Set<String> = []
+    private var segmentAutoRestoreInFlight: Set<String> = []
+    private var segmentAutoRestoreLastAttemptAt: [String: Date] = [:]
+    private let segmentAutoRestoreCooldownSeconds: TimeInterval = 25.0
     private struct SegmentBounds: Equatable {
         let start: Int
         let stop: Int
     }
     private var appManagedSegmentLayouts: [String: [SegmentBounds]] = [:]
-    private let defaultSegmentCount: Int = 12
-    private let maxSegmentCount: Int = 16
+    private let defaultSegmentCountFloor: Int = 12
+    private let defaultSegmentQualityRatio: Double = 0.75
     private let perLedFallbackLedLimit: Int = 30
     private let maxWLEDTransitionDeciseconds: Int = 65535
     private let segmentedTransitionMaxStepSeconds: Double = 60.0
@@ -764,10 +773,12 @@ class DeviceControlViewModel: ObservableObject {
     private let playlistStartDelayNanos: UInt64 = 400_000_000
     private let pendingPlaylistRenameQueueKey = "aesdetic_pending_playlist_renames_v1"
     private let pendingPlaylistRenameRetryLimit = 10
+    private let firstDiscoveryTimeSyncKeyPrefix = "aesdetic_first_discovery_time_sync_v1."
     private var pendingPlaylistRenames: [PendingPlaylistRename] = []
     private var temporaryPlaylistIds: [String: Int] = [:]
     private var temporaryPresetIds: [String: [Int]] = [:]
     private var playlistRunsByDevice: Set<String> = []
+    private var firstDiscoveryTimeSyncAttemptedThisSession: Set<String> = []
     
     private let gradientDefaultsPrefix = "latestGradientStops."
     private let effectGradientDefaultsPrefix = "latestEffectGradientStops."
@@ -797,8 +808,150 @@ class DeviceControlViewModel: ObservableObject {
         lastUserInput[deviceId] = Date()
     }
 
+    private func hasKnownActiveRun(for deviceId: String) -> Bool {
+        if activeRunStatus[deviceId] != nil { return true }
+        if playlistRunsByDevice.contains(deviceId) { return true }
+        if temporaryPlaylistIds[deviceId] != nil { return true }
+        if let playlistId = devices.first(where: { $0.id == deviceId })?.state?.playlistId, playlistId > 0 {
+            return true
+        }
+        return false
+    }
+
+    private func shouldSendPlaylistStopForStateWrite(_ deviceId: String) -> Bool {
+        hasKnownActiveRun(for: deviceId)
+    }
+
+    private func markPlaylistStoppedLocally(deviceId: String) {
+        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else { return }
+        guard let currentState = devices[index].state else { return }
+        guard currentState.playlistId != nil else { return }
+        devices[index].state = WLEDState(
+            brightness: currentState.brightness,
+            isOn: currentState.isOn,
+            segments: currentState.segments,
+            transitionDeciseconds: currentState.transitionDeciseconds,
+            presetId: currentState.presetId,
+            playlistId: nil,
+            mainSegment: currentState.mainSegment
+        )
+    }
+
     private func manualSegmentationKey(for deviceId: String) -> String {
         manualSegmentationKeyPrefix + deviceId
+    }
+
+    private func activeSegmentCountKey(for deviceId: String) -> String {
+        activeSegmentCountKeyPrefix + deviceId
+    }
+
+    func deviceMaxSegmentCapacity(for device: WLEDDevice) -> Int {
+        if let cached = deviceMaxSegmentCounts[device.id], cached > 0 {
+            return cached
+        }
+        if let live = devices.first(where: { $0.id == device.id }),
+           let segmentCount = live.state?.segments.count, segmentCount > 0 {
+            return segmentCount
+        }
+        if let segmentCount = device.state?.segments.count, segmentCount > 0 {
+            return segmentCount
+        }
+        return 1
+    }
+
+    func maximumUsableSegmentCount(for device: WLEDDevice) -> Int {
+        let ledCount = totalLEDCount(for: device)
+        let capacity = deviceMaxSegmentCapacity(for: device)
+        return max(1, min(ledCount, capacity))
+    }
+
+    func recommendedActiveSegmentCount(for device: WLEDDevice) -> Int {
+        let maxUsable = maximumUsableSegmentCount(for: device)
+        return defaultAutoSegmentCount(maxUsableSegments: maxUsable)
+    }
+
+    func preferredActiveSegmentCount(for device: WLEDDevice) -> Int {
+        let maxUsable = maximumUsableSegmentCount(for: device)
+        let stored = UserDefaults.standard.integer(forKey: activeSegmentCountKey(for: device.id))
+        if stored > 0 {
+            return min(max(1, stored), maxUsable)
+        }
+        return recommendedActiveSegmentCount(for: device)
+    }
+
+    func setPreferredActiveSegmentCount(_ requestedCount: Int, for device: WLEDDevice) {
+        let clamped = min(max(1, requestedCount), maximumUsableSegmentCount(for: device))
+        UserDefaults.standard.set(clamped, forKey: activeSegmentCountKey(for: device.id))
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+    }
+
+    func applyActiveSegmentCount(_ requestedCount: Int, for device: WLEDDevice) async -> Bool {
+        let liveDevice = devices.first(where: { $0.id == device.id }) ?? device
+        let totalLEDs = totalLEDCount(for: liveDevice)
+        guard totalLEDs > 0 else { return false }
+
+        let maxUsable = max(1, min(totalLEDs, deviceMaxSegmentCapacity(for: liveDevice)))
+        let count = min(max(1, requestedCount), maxUsable)
+        let stops = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
+        guard !stops.isEmpty else { return false }
+
+        let existingSegments = liveDevice.state?.segments ?? []
+        let existingIds = Set(existingSegments.enumerated().map { index, segment in
+            segment.id ?? index
+        })
+
+        var updates: [SegmentUpdate] = stops.enumerated().map { idx, bounds in
+            SegmentUpdate(
+                id: idx,
+                start: bounds.start,
+                stop: bounds.stop,
+                on: true
+            )
+        }
+        // Clear stale higher-index segments so they cannot black out or fragment the strip.
+        // In WLED, stop <= start removes the segment definition.
+        if !existingIds.isEmpty {
+            let staleIds = existingIds.filter { $0 >= count }.sorted()
+            if !staleIds.isEmpty {
+                updates.append(contentsOf: staleIds.map { id in
+                    SegmentUpdate(id: id, start: 0, stop: 0, on: false)
+                })
+            }
+        }
+
+        do {
+            #if DEBUG
+            let staleCount = updates.count - count
+            print("segments.apply.count device=\(liveDevice.id) totalLEDs=\(totalLEDs) requested=\(requestedCount) active=\(count) staleCleared=\(max(0, staleCount))")
+            #endif
+            _ = try await apiService.updateState(
+                for: liveDevice,
+                state: WLEDStateUpdate(seg: updates, mainSegment: 0)
+            )
+            setPreferredActiveSegmentCount(count, for: liveDevice)
+            await refreshDeviceState(liveDevice)
+            return true
+        } catch {
+            #if DEBUG
+            print("segments.apply.failed device=\(liveDevice.id) error=\(error.localizedDescription)")
+            #endif
+            return false
+        }
+    }
+
+    func applySegmentColorOverride(device: WLEDDevice, segmentId: Int, color: Color) async -> Bool {
+        let rgb = color.toRGBArray()
+        let payloadColor = rgbArrayWithOptionalWhite(rgb, device: device, segmentId: segmentId)
+        let update = SegmentUpdate(id: segmentId, on: true, col: [payloadColor], fx: 0, pal: 0)
+        do {
+            _ = try await apiService.updateState(for: device, state: WLEDStateUpdate(seg: [update]))
+            await refreshDeviceState(device)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func isManualSegmentationEnabled(for deviceId: String) -> Bool {
@@ -2393,6 +2546,13 @@ class DeviceControlViewModel: ObservableObject {
         guard let index = devices.firstIndex(where: { $0.id == stateUpdate.deviceId }) else {
             return
         }
+
+        // On app entry, prefer first live state over persisted/default gradient cache.
+        maybeHydrateGradientFromLiveState(
+            stateUpdate.state,
+            for: stateUpdate.deviceId,
+            reason: "websocket.initial"
+        )
         
         // If the UI has an optimistic state for this device, don't let WebSockets override it.
         if uiToggleStates[stateUpdate.deviceId] != nil {
@@ -2461,6 +2621,7 @@ class DeviceControlViewModel: ObservableObject {
                         if shouldAdoptEffectGradientAsMain(deviceId: stateUpdate.deviceId, effectStops: effectStops) {
                             latestGradientStops[stateUpdate.deviceId] = effectStops
                             persistLatestGradient(effectStops, for: stateUpdate.deviceId)
+                            markGradientHydratedFromLiveState(stateUpdate.deviceId)
                             updatedDevice.currentColor = GradientSampler.sampleColor(at: 0.5, stops: effectStops)
                         }
                     }
@@ -2745,6 +2906,7 @@ class DeviceControlViewModel: ObservableObject {
         for device in newlyAdded {
             if let persistedStops = loadPersistedGradient(for: device.id), !persistedStops.isEmpty {
                 latestGradientStops[device.id] = persistedStops
+                hasLiveGradientHydration.remove(device.id)
                 if allowsAppManagedSegments(for: device.id) {
                     appManagedSegmentDevices.insert(device.id)
                 }
@@ -2883,6 +3045,8 @@ class DeviceControlViewModel: ObservableObject {
                 await MainActor.run {
                     objectWillChange.send()
                 }
+
+                scheduleFirstDiscoveryTimeSyncIfNeeded(for: newDevice)
             }
             
             // Register with connection monitor
@@ -2901,6 +3065,39 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
+    private func firstDiscoveryTimeSyncKey(for deviceId: String) -> String {
+        firstDiscoveryTimeSyncKeyPrefix + deviceId
+    }
+
+    private func scheduleFirstDiscoveryTimeSyncIfNeeded(for device: WLEDDevice) {
+        guard !isPlaceholderDevice(device) else { return }
+        guard !firstDiscoveryTimeSyncAttemptedThisSession.contains(device.id) else { return }
+        guard !UserDefaults.standard.bool(forKey: firstDiscoveryTimeSyncKey(for: device.id)) else { return }
+
+        firstDiscoveryTimeSyncAttemptedThisSession.insert(device.id)
+        let targetDevice = device
+        Task { [weak self] in
+            guard let self else { return }
+            let coordinate = await AutomationStore.shared.currentCoordinate()
+
+            do {
+                try await self.apiService.updateDeviceTimeSettings(
+                    for: targetDevice,
+                    timeZone: .current,
+                    coordinate: coordinate
+                )
+                UserDefaults.standard.set(true, forKey: self.firstDiscoveryTimeSyncKey(for: targetDevice.id))
+                if coordinate == nil {
+                    self.appendDiagnostics("First discovery time sync completed (timezone only): \(targetDevice.name)")
+                } else {
+                    self.appendDiagnostics("First discovery time sync completed: \(targetDevice.name)")
+                }
+            } catch {
+                self.appendDiagnostics("First discovery time sync failed for \(targetDevice.name): \(error.localizedDescription)")
+            }
+        }
+    }
+
     @MainActor
     private func scheduleDiscoveryStateRefresh(for deviceId: String) {
         pendingDiscoveryStateRefreshTasks[deviceId]?.cancel()
@@ -2910,19 +3107,19 @@ class DeviceControlViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             let target = await MainActor.run { self.devices.first(where: { $0.id == deviceId }) }
             guard let target else {
-                await MainActor.run {
+                _ = await MainActor.run {
                     self.pendingDiscoveryStateRefreshTasks.removeValue(forKey: deviceId)
                 }
                 return
             }
             if WLEDWebSocketManager.shared.isDeviceConnected(deviceId) {
-                await MainActor.run {
+                _ = await MainActor.run {
                     self.pendingDiscoveryStateRefreshTasks.removeValue(forKey: deviceId)
                 }
                 return
             }
             await self.refreshDeviceState(target)
-            await MainActor.run {
+            _ = await MainActor.run {
                 self.pendingDiscoveryStateRefreshTasks.removeValue(forKey: deviceId)
             }
         }
@@ -3002,6 +3199,99 @@ class DeviceControlViewModel: ObservableObject {
         guard shouldUseAppManagedSegments(for: deviceId) else { return nil }
         guard let stops = latestGradientStops[deviceId], !stops.isEmpty else { return nil }
         return GradientSampler.sampleColor(at: 0.5, stops: stops)
+    }
+
+    private func markGradientHydratedFromLiveState(_ deviceId: String) {
+        hasLiveGradientHydration.insert(deviceId)
+    }
+
+    private func rememberedGradientStops(for deviceId: String) -> [GradientStop]? {
+        if let cached = latestGradientStops[deviceId], !cached.isEmpty {
+            return cached
+        }
+        if let persisted = loadPersistedGradient(for: deviceId), !persisted.isEmpty {
+            return persisted
+        }
+        return nil
+    }
+
+    private func gradientDistanceScore(_ lhs: [GradientStop], _ rhs: [GradientStop]) -> Double {
+        let samplePositions: [Double] = [0.0, 0.25, 0.5, 0.75, 1.0]
+        let distances = samplePositions.map { t -> Double in
+            let lhsColor = GradientSampler.sampleColor(at: t, stops: lhs).toHex()
+            let rhsColor = GradientSampler.sampleColor(at: t, stops: rhs).toHex()
+            return colorDistance(lhsColor, rhsColor)
+        }
+        guard !distances.isEmpty else { return 0.0 }
+        return distances.reduce(0.0, +) / Double(distances.count)
+    }
+
+    private func shouldAdoptLiveGradient(_ liveStops: [GradientStop], over rememberedStops: [GradientStop]) -> Bool {
+        if rememberedStops.isEmpty { return true }
+        if isEffectivelySingleColor(liveStops), isEffectivelySingleColor(rememberedStops) {
+            let liveHex = GradientSampler.sampleColor(at: 0.5, stops: liveStops).toHex()
+            let rememberedHex = GradientSampler.sampleColor(at: 0.5, stops: rememberedStops).toHex()
+            return !areColorsNearEqual(liveHex, rememberedHex, threshold: liveGradientReconcileDistanceThreshold)
+        }
+        let score = gradientDistanceScore(liveStops, rememberedStops)
+        return score >= liveGradientReconcileDistanceThreshold
+    }
+
+    private func maybeHydrateGradientFromLiveState(
+        _ state: WLEDState?,
+        for deviceId: String,
+        force: Bool = false,
+        reason: String
+    ) {
+        guard let state else { return }
+        let now = Date()
+        let remembered = rememberedGradientStops(for: deviceId)
+        if let remembered, !remembered.isEmpty,
+           !force,
+           let last = lastLiveGradientReconcileAt[deviceId],
+           now.timeIntervalSince(last) < liveGradientReconcileCooldown {
+            return
+        }
+        // Never let background/live hydration clobber active local edits.
+        if isUnderUserControl(deviceId) { return }
+        if let gradientTime = gradientApplicationTimes[deviceId],
+           Date().timeIntervalSince(gradientTime) < gradientProtectionWindow {
+            return
+        }
+        // Ignore effect-driven states for main color reconciliation.
+        if let segment = primarySegment(from: state), (segment.fx ?? 0) != 0 {
+            return
+        }
+        guard let refreshedStops = gradientStopsFromStateSegments(state, deviceId: deviceId), !refreshedStops.isEmpty else {
+            return
+        }
+
+        if let remembered, !remembered.isEmpty {
+            lastLiveGradientReconcileAt[deviceId] = now
+            guard shouldAdoptLiveGradient(refreshedStops, over: remembered) else {
+                #if DEBUG
+                print("gradient.hydrate.skip device=\(deviceId) reason=\(reason) mode=reconcile diff=below_threshold")
+                #endif
+                return
+            }
+            #if DEBUG
+            let score = gradientDistanceScore(refreshedStops, remembered)
+            print("gradient.hydrate.reconcile device=\(deviceId) reason=\(reason) score=\(String(format: "%.2f", score))")
+            #endif
+        } else if !force, hasLiveGradientHydration.contains(deviceId) {
+            return
+        } else {
+            #if DEBUG
+            print("gradient.hydrate.bootstrap device=\(deviceId) reason=\(reason)")
+            #endif
+        }
+
+        latestGradientStops[deviceId] = refreshedStops
+        persistLatestGradient(refreshedStops, for: deviceId)
+        markGradientHydratedFromLiveState(deviceId)
+        #if DEBUG
+        print("gradient.hydrate.live device=\(deviceId) reason=\(reason) stops=\(refreshedStops.count)")
+        #endif
     }
 
     private func discoverySource(for device: WLEDDevice) -> String? {
@@ -3157,9 +3447,11 @@ class DeviceControlViewModel: ObservableObject {
         temporaryPresetIds.removeValue(forKey: device.id)
         temporaryPlaylistIds.removeValue(forKey: device.id)
         playlistRunsByDevice.remove(device.id)
+        hasLiveGradientHydration.remove(device.id)
         lastSeenPersistedAt.removeValue(forKey: device.id)
         deviceCapabilities.removeValue(forKey: device.id)
         deviceLedCounts.removeValue(forKey: device.id)
+        deviceMaxSegmentCounts.removeValue(forKey: device.id)
         effectStates.removeValue(forKey: device.id)
         segmentCCTFormats.removeValue(forKey: device.id)
         presetsCache.removeValue(forKey: device.id)
@@ -3359,12 +3651,7 @@ class DeviceControlViewModel: ObservableObject {
     func updateDeviceBrightness(_ device: WLEDDevice, brightness: Int, userInitiated: Bool = true, origin: SyncOrigin = .user) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
         if userInitiated {
-            let hasActiveRun = activeRunStatus[device.id] != nil
-                || playlistRunsByDevice.contains(device.id)
-                || temporaryPlaylistIds[device.id] != nil
-                || (devices.first(where: { $0.id == device.id })?.state?.playlistId != nil)
-                || (device.state?.playlistId != nil)
-            if hasActiveRun {
+            if hasKnownActiveRun(for: device.id) {
                 await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
             }
         }
@@ -3953,6 +4240,7 @@ class DeviceControlViewModel: ObservableObject {
     func rebootDevice(_ device: WLEDDevice) async {
         await cancelActiveRun(for: device, force: true)
         markUserInteraction(device.id)
+        clearUIOptimisticState(deviceId: device.id)
         let wasOnlineBeforeReboot = isDeviceOnline(device) || device.isOnline
 
         do {
@@ -4001,6 +4289,8 @@ class DeviceControlViewModel: ObservableObject {
                 do {
                     await self.apiService.invalidateStateCache(for: deviceId)
                     _ = try await self.apiService.getState(for: device)
+                    self.clearUIOptimisticState(deviceId: deviceId)
+                    await self.refreshDeviceState(device)
                     self.endRebootWait(for: deviceId)
                     return
                 } catch {
@@ -4059,6 +4349,7 @@ class DeviceControlViewModel: ObservableObject {
             // Check if we have a persisted gradient that will be restored
             let hasPersistedGradient = gradientStops(for: device.id)?.isEmpty == false
             let transitionDeciseconds = resolvedTransitionDeciseconds(for: updatedDevice, fallbackSeconds: directBrightnessTransitionSeconds)
+            let playlistStopValue: Int? = shouldSendPlaylistStopForStateWrite(device.id) ? -1 : nil
             
             // Create state update based on changes
             // CRITICAL FIX: If we have a persisted gradient, DON'T send col field
@@ -4076,7 +4367,7 @@ class DeviceControlViewModel: ObservableObject {
                     bri: updatedDevice.brightness,
                     seg: nil,  // Don't send segment color - let gradient restoration handle it
                     transitionDeciseconds: transitionDeciseconds,
-                    pl: -1,
+                    pl: playlistStopValue,
                     lor: 0
                 )
             } else {
@@ -4090,7 +4381,7 @@ class DeviceControlViewModel: ObservableObject {
                         bri: updatedDevice.brightness,
                         seg: nil,
                         transitionDeciseconds: transitionDeciseconds,
-                        pl: -1,
+                        pl: playlistStopValue,
                         lor: 0
                     )
                 } else {
@@ -4101,7 +4392,7 @@ class DeviceControlViewModel: ObservableObject {
                         bri: updatedDevice.brightness,
                         seg: [SegmentUpdate(col: [rgb])],
                         transitionDeciseconds: transitionDeciseconds,
-                        pl: -1,
+                        pl: playlistStopValue,
                         lor: 0
                     )
                 }
@@ -4232,6 +4523,9 @@ class DeviceControlViewModel: ObservableObject {
             if ledCount > 0 {
                 deviceLedCounts[device.id] = ledCount
             }
+            if let maxseg = response.info.leds.maxseg, maxseg > 0 {
+                deviceMaxSegmentCounts[device.id] = maxseg
+            }
             if let matrix = response.info.leds.matrix {
                 deviceIsMatrixById[device.id] = matrix.w > 0 && matrix.h > 0
             } else {
@@ -4241,6 +4535,12 @@ class DeviceControlViewModel: ObservableObject {
             // Detect and cache capabilities using CapabilityDetector
             let seglc = response.info.leds.seglc ?? fallbackSeglc(from: response.info.leds, state: response.state)
             if let seglc {
+                if !seglc.isEmpty {
+                    let existing = deviceMaxSegmentCounts[device.id] ?? 0
+                    if seglc.count > existing {
+                        deviceMaxSegmentCounts[device.id] = seglc.count
+                    }
+                }
                 let capabilities = await capabilityDetector.detect(deviceId: device.id, seglc: seglc)
                 // Cache locally for synchronous access from MainActor
                 await MainActor.run {
@@ -4253,6 +4553,14 @@ class DeviceControlViewModel: ObservableObject {
             await fetchEffectMetadataIfNeeded(for: device)
             
             await MainActor.run {
+                // Event-driven reconcile: bootstrap once if needed, otherwise
+                // adopt live state only when significantly different.
+                self.maybeHydrateGradientFromLiveState(
+                    response.state,
+                    for: device.id,
+                    reason: "refresh.event"
+                )
+
                 if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                     var updatedDevice = self.devices[index]
                     updatedDevice.state = response.state
@@ -4279,10 +4587,12 @@ class DeviceControlViewModel: ObservableObject {
                             let effectState = self.effectStates[device.id]?[segmentId]
                             let hasActiveEffect = effectState?.isEnabled == true && (effectState?.effectId ?? 0) != 0
                             if !hasActiveEffect,
-                               let refreshedStops = self.gradientStopsFromStateSegments(response.state),
-                               !refreshedStops.isEmpty {
-                                self.latestGradientStops[device.id] = refreshedStops
-                                self.persistLatestGradient(refreshedStops, for: device.id)
+                               self.latestGradientStops[device.id] != nil || self.loadPersistedGradient(for: device.id) != nil {
+                                self.maybeHydrateGradientFromLiveState(
+                                    response.state,
+                                    for: device.id,
+                                    reason: "refresh.reconcile"
+                                )
                             }
                             let normalized = segment.cctNormalized
                             updatedDevice.temperature = normalized
@@ -4362,6 +4672,7 @@ class DeviceControlViewModel: ObservableObject {
                         if shouldAdoptEffectGradientAsMain(deviceId: device.id, effectStops: effectStops) {
                             self.latestGradientStops[device.id] = effectStops
                             self.persistLatestGradient(effectStops, for: device.id)
+                            self.markGradientHydratedFromLiveState(device.id)
                             if let index = self.devices.firstIndex(where: { $0.id == device.id }) {
                                 self.devices[index].currentColor = GradientSampler.sampleColor(at: 0.5, stops: effectStops)
                             }
@@ -4390,6 +4701,8 @@ class DeviceControlViewModel: ObservableObject {
             await coreDataManager.saveDevice(persistDevice)
             
             clearError()
+
+            await maybeAutoRestoreSegmentsAfterReboot(device: device, response: response)
             
         } catch {
             let mappedError = mapToWLEDError(error, device: device)
@@ -5373,7 +5686,7 @@ class DeviceControlViewModel: ObservableObject {
                 let manualSegments = usesManualSegmentation(for: device.id)
                 var updates: [SegmentUpdate] = []
                 if useAppSegments {
-                    let count = segmentCount(for: totalLEDs)
+                    let count = segmentCount(for: currentDevice, ledCount: totalLEDs)
                     let ranges = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
                     let includeLayout: Bool
                     if let layout = appManagedSegmentLayouts[device.id], layout.count == count {
@@ -5461,7 +5774,7 @@ class DeviceControlViewModel: ObservableObject {
                 } else if let layout = appManagedSegmentLayouts[device.id], !layout.isEmpty {
                     knownIds = Set(0..<layout.count)
                 } else if useAppSegments {
-                    knownIds = Set(0..<segmentCount(for: totalLEDs))
+                    knownIds = Set(0..<segmentCount(for: currentDevice, ledCount: totalLEDs))
                 }
                 for id in knownIds where !managedIds.contains(id) {
                     updates.append(SegmentUpdate(id: id, on: false, fx: 0, pal: 0))
@@ -5593,10 +5906,12 @@ class DeviceControlViewModel: ObservableObject {
         let mainSegment = primarySegment(from: state)
         let hasActiveEffect = ((mainSegment?.fx) ?? 0) != 0
         if !isUnderControl && !gradientJustApplied && !hasActiveEffect,
-           let refreshedStops = gradientStopsFromStateSegments(state),
-           !refreshedStops.isEmpty {
-            latestGradientStops[deviceId] = refreshedStops
-            persistLatestGradient(refreshedStops, for: deviceId)
+           latestGradientStops[deviceId] != nil || loadPersistedGradient(for: deviceId) != nil {
+            maybeHydrateGradientFromLiveState(
+                state,
+                for: deviceId,
+                reason: "state.update"
+            )
         }
 
         if let index = devices.firstIndex(where: { $0.id == deviceId }) {
@@ -5943,12 +6258,7 @@ class DeviceControlViewModel: ObservableObject {
     func applyGradientStopsAcrossStrip(_ device: WLEDDevice, stops: [GradientStop], ledCount: Int, stopTemperatures: [UUID: Double]? = nil, stopWhiteLevels: [UUID: Double]? = nil, disableActiveEffect: Bool = false, segmentId: Int = 0, interpolation: GradientInterpolation = .linear, brightness: Int? = nil, on: Bool? = nil, transitionDurationSeconds: Double? = nil, forceNoPerCallTransition: Bool = false, releaseRealtimeOverride: Bool = true, userInitiated: Bool = true, origin: SyncOrigin = .user, preferSegmented: Bool = false, forceSegmentedOnly: Bool = false) async {
         // CRITICAL: Auto-cancel any active transitions/runs on manual input
         if userInitiated {
-            let hasActiveRun = activeRunStatus[device.id] != nil
-                || playlistRunsByDevice.contains(device.id)
-                || temporaryPlaylistIds[device.id] != nil
-                || (devices.first(where: { $0.id == device.id })?.state?.playlistId != nil)
-                || (device.state?.playlistId != nil)
-            if hasActiveRun {
+            if hasKnownActiveRun(for: device.id) {
                 await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
             }
         }
@@ -6280,10 +6590,19 @@ class DeviceControlViewModel: ObservableObject {
         await propagateIfNeeded(source: device, payload: propagationPayload, origin: origin)
     }
 
-    private func segmentCount(for ledCount: Int) -> Int {
+    private func defaultAutoSegmentCount(maxUsableSegments: Int) -> Int {
+        guard maxUsableSegments > 0 else { return 1 }
+        let floor = min(defaultSegmentCountFloor, maxUsableSegments)
+        let qualityTarget = Int((Double(maxUsableSegments) * defaultSegmentQualityRatio).rounded())
+        let recommended = max(floor, qualityTarget)
+        return min(maxUsableSegments, max(1, recommended))
+    }
+
+    private func segmentCount(for device: WLEDDevice, ledCount: Int) -> Int {
         guard ledCount > 0 else { return 0 }
-        let capped = min(defaultSegmentCount, maxSegmentCount)
-        return min(ledCount, max(2, capped))
+        let maxUsable = maximumUsableSegmentCount(for: device)
+        let preferred = preferredActiveSegmentCount(for: device)
+        return min(max(1, preferred), maxUsable)
     }
 
     private func segmentStops(totalLEDs: Int, segmentCount: Int) -> [(start: Int, stop: Int)] {
@@ -6301,6 +6620,44 @@ class DeviceControlViewModel: ObservableObject {
             cursor = stop
         }
         return stops
+    }
+
+    private func maybeAutoRestoreSegmentsAfterReboot(device: WLEDDevice, response: WLEDResponse) async {
+        guard !usesManualSegmentation(for: device.id) else { return }
+        guard !segmentAutoRestoreInFlight.contains(device.id) else { return }
+        if let lastAttempt = segmentAutoRestoreLastAttemptAt[device.id],
+           Date().timeIntervalSince(lastAttempt) < segmentAutoRestoreCooldownSeconds {
+            return
+        }
+
+        let storedPreferred = UserDefaults.standard.integer(forKey: activeSegmentCountKey(for: device.id))
+        guard storedPreferred > 1 else { return }
+
+        let activeCount = max(1, response.state.segments.count)
+        guard activeCount <= 1 else { return }
+
+        let ledCount = max(1, response.info.leds.count)
+        let reportedMax = max(1, response.info.leds.maxseg ?? deviceMaxSegmentCapacity(for: device))
+        let maxUsable = max(1, min(ledCount, reportedMax))
+        let target = min(maxUsable, storedPreferred)
+        guard target > activeCount else { return }
+
+        segmentAutoRestoreInFlight.insert(device.id)
+        segmentAutoRestoreLastAttemptAt[device.id] = Date()
+        #if DEBUG
+        print("segments.auto_restore.begin device=\(device.id) active=\(activeCount) target=\(target) reportedMax=\(reportedMax)")
+        #endif
+
+        let liveDevice = await MainActor.run { () -> WLEDDevice in
+            devices.first(where: { $0.id == device.id }) ?? device
+        }
+        let success = await applyActiveSegmentCount(target, for: liveDevice)
+        #if DEBUG
+        print("segments.auto_restore.\(success ? "success" : "failed") device=\(device.id) target=\(target)")
+        #endif
+        await MainActor.run {
+            segmentAutoRestoreInFlight.remove(device.id)
+        }
     }
 
     private func segmentsMatchLayout(
@@ -6572,8 +6929,10 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
-    private func gradientStopsFromStateSegments(_ state: WLEDState) -> [GradientStop]? {
-        let segmentColors: [(start: Int, stop: Int?, hex: String)] = state.segments.compactMap { segment in
+    private typealias SegmentColorSample = (start: Int, stop: Int?, hex: String)
+
+    private func gradientStopsFromStateSegments(_ state: WLEDState, deviceId: String? = nil) -> [GradientStop]? {
+        let segmentColors: [SegmentColorSample] = state.segments.compactMap { segment in
             guard let colors = segment.colors,
                   let first = colors.first,
                   first.count >= 3 else {
@@ -6591,12 +6950,24 @@ class DeviceControlViewModel: ObservableObject {
             ]
         }
 
-        let sorted = segmentColors.sorted { lhs, rhs in
+        var sorted = segmentColors.sorted { lhs, rhs in
             if lhs.start == rhs.start {
                 return (lhs.stop ?? 0) < (rhs.stop ?? 0)
             }
             return lhs.start < rhs.start
         }
+        if let deviceId,
+           let preferredLimit = preferredHydrationSegmentLimit(for: deviceId),
+           sorted.count > preferredLimit {
+            // Ignore stale extra segments beyond app-managed active segment count.
+            #if DEBUG
+            print("gradient.hydrate.limit device=\(deviceId) from=\(sorted.count) to=\(preferredLimit)")
+            #endif
+            sorted = Array(sorted.prefix(preferredLimit))
+        }
+        sorted = suppressIsolatedSegmentColorNoise(sorted)
+        guard !sorted.isEmpty else { return nil }
+
         let maxStop = sorted.compactMap(\.stop).max()
             ?? state.segments.compactMap(\.stop).max()
             ?? ((sorted.last?.start ?? 0) + 1)
@@ -6629,6 +7000,93 @@ class DeviceControlViewModel: ObservableObject {
         let advancedUI = UserDefaults.standard.bool(forKey: "advancedUIEnabled")
         let maxDisplayStops = advancedUI ? 10 : 6
         return compactGradientStopsForDisplay(stops, maxStops: maxDisplayStops)
+    }
+
+    private func preferredHydrationSegmentLimit(for deviceId: String) -> Int? {
+        let stored = UserDefaults.standard.integer(forKey: activeSegmentCountKey(for: deviceId))
+        guard stored > 0 else { return nil }
+        return max(1, stored)
+    }
+
+    private func suppressIsolatedSegmentColorNoise(_ samples: [SegmentColorSample]) -> [SegmentColorSample] {
+        // Preserve small/manual layouts exactly; denoise only longer app-generated strips.
+        guard samples.count >= 5 else { return samples }
+
+        var keep = Array(repeating: true, count: samples.count)
+        // Remove short spike runs (1-3 segments) when bounded by similar neighbors.
+        // This handles random cluster artifacts around the middle of a smooth gradient.
+        let maxSpikeRun = min(3, samples.count - 2)
+        if maxSpikeRun >= 1 {
+            for run in 1...maxSpikeRun {
+                var start = 1
+                while start + run < samples.count {
+                    let left = samples[start - 1]
+                    let right = samples[start + run]
+                    let neighborsAgree = areColorsNearEqual(left.hex, right.hex, threshold: 16.0)
+                    if neighborsAgree {
+                        let runIndices = start..<(start + run)
+                        let strongSpike = runIndices.allSatisfy { idx in
+                            colorDistance(samples[idx].hex, left.hex) >= 34.0
+                                && colorDistance(samples[idx].hex, right.hex) >= 34.0
+                        }
+                        if strongSpike {
+                            for idx in runIndices {
+                                keep[idx] = false
+                            }
+                            start += run
+                            continue
+                        }
+                    }
+                    start += 1
+                }
+            }
+        }
+
+        for index in 1..<(samples.count - 1) {
+            if !keep[index] { continue }
+            let prev = samples[index - 1]
+            let current = samples[index]
+            let next = samples[index + 1]
+
+            let neighborsAgree = areColorsNearEqual(prev.hex, next.hex, threshold: 14.0)
+            let currentDiffersStrongly = colorDistance(current.hex, prev.hex) >= 36.0
+                && colorDistance(current.hex, next.hex) >= 36.0
+            if neighborsAgree && currentDiffersStrongly {
+                keep[index] = false
+            }
+        }
+
+        var filtered = samples.enumerated().compactMap { idx, sample in
+            keep[idx] ? sample : nil
+        }
+
+        // Endpoint cleanup for stale edge colors after segment-count/layout changes.
+        if filtered.count >= 4 {
+            let first = filtered[0]
+            let second = filtered[1]
+            let third = filtered[2]
+            if areColorsNearEqual(second.hex, third.hex, threshold: 14.0),
+               colorDistance(first.hex, second.hex) >= 42.0 {
+                filtered[0] = (start: first.start, stop: first.stop, hex: second.hex)
+            }
+
+            let lastIndex = filtered.count - 1
+            let last = filtered[lastIndex]
+            let prev = filtered[lastIndex - 1]
+            let prev2 = filtered[lastIndex - 2]
+            if areColorsNearEqual(prev.hex, prev2.hex, threshold: 14.0),
+               colorDistance(last.hex, prev.hex) >= 42.0 {
+                filtered[lastIndex] = (start: last.start, stop: last.stop, hex: prev.hex)
+            }
+        }
+
+        #if DEBUG
+        if filtered.count != samples.count {
+            print("gradient.hydrate.denoise removed=\(samples.count - filtered.count) kept=\(filtered.count)")
+        }
+        #endif
+
+        return filtered
     }
 
     private func compactGradientStopsForDisplay(_ inputStops: [GradientStop], maxStops: Int) -> [GradientStop] {
@@ -6796,7 +7254,7 @@ class DeviceControlViewModel: ObservableObject {
         if manualSegments {
             count = manualSegmentIds.isEmpty ? 1 : manualSegmentIds.count
         } else {
-            count = segmentCount(for: totalLEDs)
+            count = segmentCount(for: device, ledCount: totalLEDs)
         }
         let stops = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
         let layout = stops.map { SegmentBounds(start: $0.start, stop: $0.stop) }
@@ -7163,7 +7621,7 @@ class DeviceControlViewModel: ObservableObject {
         includeSegmentBounds: Bool = true
     ) -> WLEDStateUpdate {
         let totalLEDs = totalLEDCount(for: device)
-        let count = segmentCount(for: totalLEDs)
+        let count = segmentCount(for: device, ledCount: totalLEDs)
         let stops = segmentStops(totalLEDs: totalLEDs, segmentCount: count)
         let colors = segmentColors(for: gradient, count: count)
         let sortedStops = gradient.stops.sorted { $0.position < $1.position }
@@ -9590,16 +10048,14 @@ class DeviceControlViewModel: ObservableObject {
         }
 
         let shouldStopPlaylist = await MainActor.run {
-            let cachedDevicePlaylistId = devices.first(where: { $0.id == device.id })?.state?.playlistId
-            let providedDevicePlaylistId = device.state?.playlistId
-            return playlistRunsByDevice.contains(device.id)
-                || cachedDevicePlaylistId != nil
-                || providedDevicePlaylistId != nil
-                || activeRunStatus[device.id] != nil
+            hasKnownActiveRun(for: device.id)
         }
         if shouldStopPlaylist {
             if await stopPlaylistViaWebSocketIfConnected(device) {
-                playlistRunsByDevice.remove(device.id)
+                await MainActor.run {
+                    playlistRunsByDevice.remove(device.id)
+                    markPlaylistStoppedLocally(deviceId: device.id)
+                }
                 #if DEBUG
                 print("🛑 Explicitly stopped active playlist for \(device.name) during cancel")
                 #endif
@@ -9607,7 +10063,10 @@ class DeviceControlViewModel: ObservableObject {
                 do {
                     let state = try await apiService.stopPlaylist(on: device)
                     updateDevice(device.id, with: state)
-                    playlistRunsByDevice.remove(device.id)
+                    await MainActor.run {
+                        playlistRunsByDevice.remove(device.id)
+                        markPlaylistStoppedLocally(deviceId: device.id)
+                    }
                     #if DEBUG
                     print("🛑 Explicitly stopped active playlist for \(device.name) during cancel")
                     #endif
@@ -9779,6 +10238,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         if let persisted = loadPersistedGradient(for: deviceId), !persisted.isEmpty {
             latestGradientStops[deviceId] = persisted
+            hasLiveGradientHydration.remove(deviceId)
             return persisted
         }
         return nil
@@ -10352,6 +10812,22 @@ class DeviceControlViewModel: ObservableObject {
             #endif
         }
         return wsDispatched
+    }
+
+    @discardableResult
+    func deletePresetRecord(_ presetId: Int, for device: WLEDDevice) async -> Bool {
+        markUserInteraction(device.id)
+        do {
+            _ = try await apiService.deletePreset(id: presetId, device: device)
+            await refreshPresets(for: device)
+            await refreshPlaylists(for: device)
+            clearError()
+            return true
+        } catch {
+            let mappedError = mapToWLEDError(error, device: device)
+            presentError(mappedError)
+            return false
+        }
     }
 
     func deletePlaylist(_ playlist: WLEDPlaylist, for device: WLEDDevice) async {

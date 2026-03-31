@@ -294,6 +294,107 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertEqual(updated.metadata.syncState(for: deviceId), .unknown)
     }
 
+    @MainActor
+    func testDeleteManagedTransitionAutomationEnqueuesPlaylistAndStepPresetCleanup() {
+        let store = AutomationStore.shared
+        let cleanup = DeviceCleanupManager.shared
+        let originalAutomations = store.automations
+        defer {
+            store.automations = originalAutomations
+        }
+
+        let deviceId = "cleanup-test-\(UUID().uuidString)"
+        let timerSlot = 2
+        let playlistId = 211
+        let stepPresetIds = [212, 213, 214]
+
+        defer {
+            cleanup.removeIds(type: .timer, deviceId: deviceId, ids: [timerSlot])
+            cleanup.removeIds(type: .playlist, deviceId: deviceId, ids: [playlistId])
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: stepPresetIds)
+        }
+
+        let transition = TransitionActionPayload(
+            startGradient: LEDGradient(stops: [
+                GradientStop(position: 0.0, hexColor: "FFA000"),
+                GradientStop(position: 1.0, hexColor: "FFFFFF")
+            ]),
+            startBrightness: 128,
+            endGradient: LEDGradient(stops: [
+                GradientStop(position: 0.0, hexColor: "FFFFFF"),
+                GradientStop(position: 1.0, hexColor: "59A4FF")
+            ]),
+            endBrightness: 128,
+            durationSeconds: 180
+        )
+
+        var automation = Automation(
+            name: "Managed Transition Cleanup",
+            trigger: .specificTime(TimeTrigger(time: "08:00", weekdays: WeekdayMask.allDaysSunFirst)),
+            action: .transition(transition),
+            targets: AutomationTargets(deviceIds: [deviceId])
+        )
+        automation.metadata.wledPlaylistIdsByDevice = [deviceId: playlistId]
+        automation.metadata.wledTimerSlotsByDevice = [deviceId: timerSlot]
+        automation.metadata.wledManagedPlaylistSignatureByDevice = [deviceId: "sig-transition"]
+        automation.metadata.wledManagedStepPresetIdsByDevice = [deviceId: stepPresetIds]
+
+        store.automations = [automation]
+        store.delete(id: automation.id)
+
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: playlistId))
+        for stepId in stepPresetIds {
+            XCTAssertTrue(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: stepId))
+        }
+    }
+
+    @MainActor
+    func testDeleteUserSelectedPresetAndPlaylistActionsPreserveUnderlyingAssets() {
+        let store = AutomationStore.shared
+        let cleanup = DeviceCleanupManager.shared
+        let originalAutomations = store.automations
+        defer {
+            store.automations = originalAutomations
+        }
+
+        let deviceId = "cleanup-test-user-assets-\(UUID().uuidString)"
+        let timerSlot = 4
+        let userPresetId = 77
+        let userPlaylistId = 78
+
+        defer {
+            cleanup.removeIds(type: .timer, deviceId: deviceId, ids: [timerSlot])
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [userPresetId])
+            cleanup.removeIds(type: .playlist, deviceId: deviceId, ids: [userPlaylistId])
+        }
+
+        var presetAutomation = Automation(
+            name: "User Preset Action",
+            trigger: .specificTime(TimeTrigger(time: "09:00", weekdays: WeekdayMask.allDaysSunFirst)),
+            action: .preset(PresetActionPayload(presetId: userPresetId, paletteName: "User preset", durationSeconds: nil)),
+            targets: AutomationTargets(deviceIds: [deviceId])
+        )
+        presetAutomation.metadata.wledTimerSlotsByDevice = [deviceId: timerSlot]
+
+        var playlistAutomation = Automation(
+            name: "User Playlist Action",
+            trigger: .specificTime(TimeTrigger(time: "10:00", weekdays: WeekdayMask.allDaysSunFirst)),
+            action: .playlist(PlaylistActionPayload(playlistId: userPlaylistId, playlistName: "User playlist")),
+            targets: AutomationTargets(deviceIds: [deviceId])
+        )
+        playlistAutomation.metadata.wledTimerSlotsByDevice = [deviceId: timerSlot]
+
+        store.automations = [presetAutomation, playlistAutomation]
+
+        store.delete(id: presetAutomation.id)
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
+        XCTAssertFalse(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: userPresetId))
+
+        store.delete(id: playlistAutomation.id)
+        XCTAssertFalse(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: userPlaylistId))
+    }
+
     func testSelectTimerSlotDoesNotReuseActionableMacroWhenDisabled() {
         let timers = [
             WLEDTimer(id: 0, enabled: false, hour: 8, minute: 30, days: 0x7F, macroId: 99, startMonth: nil, startDay: nil, endMonth: nil, endDay: nil),

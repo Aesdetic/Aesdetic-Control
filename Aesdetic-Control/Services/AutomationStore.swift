@@ -487,18 +487,28 @@ class AutomationStore: ObservableObject {
         let pendingTimerDeletes = DeviceCleanupManager.shared.activeDeleteIds(
             type: .timer,
             deviceId: device.id,
-            includeDeadLetter: true
+            includeDeadLetter: false
         )
+        let deadLetterTimerDeletes = DeviceCleanupManager.shared
+            .activeDeleteIds(type: .timer, deviceId: device.id, includeDeadLetter: true)
+            .subtracting(pendingTimerDeletes)
         let configuredTimers = timers.filter {
             $0.macroId > 0
                 && (0...9).contains($0.id)
-                && !pendingTimerDeletes.contains($0.id)
         }
         if !pendingTimerDeletes.isEmpty {
             logger.info(
-                "Skipping import for pending timer-delete slots on \(device.name, privacy: .public): \(Array(pendingTimerDeletes).sorted())"
+                "Pending timer-delete slots present during import on \(device.name, privacy: .public): \(Array(pendingTimerDeletes).sorted()) (not suppressing device-visible timers)"
             )
         }
+        if !deadLetterTimerDeletes.isEmpty {
+            logger.info(
+                "Ignoring dead-letter timer-delete slots during import on \(device.name, privacy: .public): \(Array(deadLetterTimerDeletes).sorted())"
+            )
+        }
+        print(
+            "automation.import.reported device=\(device.id) configuredTimers=\(configuredTimers.count) pendingTimerDeletes=\(Array(pendingTimerDeletes).sorted())"
+        )
         let configuredSlots = Set(configuredTimers.map(\.id))
 
         let playlists: [WLEDPlaylist]
@@ -520,8 +530,9 @@ class AutomationStore: ObservableObject {
             logger.warning("Preset catalog unavailable during automation import for \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
         if playlistCatalogError != nil && presetCatalogError != nil {
-            logger.warning("Skipping automation import for \(device.name, privacy: .public): both WLED catalogs unavailable")
-            return
+            logger.warning(
+                "Continuing automation import for \(device.name, privacy: .public) with placeholder actions: both WLED catalogs unavailable"
+            )
         }
         let playlistById = Dictionary(uniqueKeysWithValues: playlists.map { ($0.id, $0) })
         let presetById = Dictionary(uniqueKeysWithValues: presets.map { ($0.id, $0) })
@@ -579,20 +590,29 @@ class AutomationStore: ObservableObject {
                 importedSyncError = nil
                 importedSyncAt = now
             } else if playlistCatalogError != nil || presetCatalogError != nil {
-                guard let existingAutomation else {
-                    logger.warning("Skipping timer import for \(device.name, privacy: .public) slot=\(timer.id) macro=\(timer.macroId): catalog unavailable and no existing local automation")
-                    continue
-                }
-                action = existingAutomation.action
-                actionLabel = existingAutomation.summary
-                let preservedState = existingAutomation.metadata.syncState(for: device.id)
-                importedSyncState = preservedState
-                importedSyncAt = existingAutomation.metadata.lastSyncAt(for: device.id)
-                if preservedState == .synced {
-                    importedSyncError = nil
+                if let existingAutomation {
+                    action = existingAutomation.action
+                    actionLabel = existingAutomation.summary
+                    let preservedState = existingAutomation.metadata.syncState(for: device.id)
+                    importedSyncState = preservedState
+                    importedSyncAt = existingAutomation.metadata.lastSyncAt(for: device.id)
+                    if preservedState == .synced {
+                        importedSyncError = nil
+                    } else {
+                        importedSyncError = existingAutomation.metadata.lastSyncError(for: device.id)
+                            ?? "WLED catalog unavailable; readiness check deferred"
+                    }
                 } else {
-                    importedSyncError = existingAutomation.metadata.lastSyncError(for: device.id)
-                        ?? "WLED catalog unavailable; readiness check deferred"
+                    // Catalog fetch failed, but timer macro is still actionable.
+                    // Import a placeholder row so users can see/control all device automations.
+                    action = .preset(PresetActionPayload(presetId: timer.macroId, paletteName: nil, durationSeconds: nil))
+                    actionLabel = "Macro \(timer.macroId)"
+                    importedSyncState = .syncing
+                    importedSyncError = "WLED preset/playlist catalog unavailable; metadata will refresh when reachable"
+                    importedSyncAt = nil
+                    logger.warning(
+                        "Importing timer with placeholder action for \(device.name, privacy: .public) slot=\(timer.id) macro=\(timer.macroId): catalogs unavailable"
+                    )
                 }
             } else {
                 action = .preset(PresetActionPayload(presetId: timer.macroId, paletteName: nil, durationSeconds: nil))
@@ -602,48 +622,65 @@ class AutomationStore: ObservableObject {
                 importedSyncAt = nil
             }
             var signatureAutomationId: UUID?
-            let importedStartMonth = timer.startMonth
-            let importedStartDay = timer.startDay
-            let importedEndMonth = timer.endMonth
-            let importedEndDay = timer.endDay
+            let importedWindow = normalizedTimerDateWindow(
+                startMonth: timer.startMonth,
+                startDay: timer.startDay,
+                endMonth: timer.endMonth,
+                endDay: timer.endDay
+            )
+            let importedStartMonth = importedWindow.startMonth
+            let importedStartDay = importedWindow.startDay
+            let importedEndMonth = importedWindow.endMonth
+            let importedEndDay = importedWindow.endDay
 
             if let index = existingIndex {
                 var existing = updatedAutomations[index]
                 signatureAutomationId = existing.id
+                let isImportedTemplateRow =
+                    existing.metadata.templateId?.hasPrefix(importedAutomationTemplatePrefix) == true
+                let preserveAuthoredAction = !isImportedTemplateRow
                 let existingPlaylistId = existing.metadata.wledPlaylistIdsByDevice?[device.id] ?? existing.metadata.wledPlaylistId
                 let existingPresetId = existing.metadata.wledPresetIdsByDevice?[device.id]
                 let previousScalarPlaylistId = updatedAutomations[index].metadata.wledPlaylistId
                 let previousScalarTimerSlot = updatedAutomations[index].metadata.wledTimerSlot
                 let nextPlaylistId: Int? = {
+                    if preserveAuthoredAction {
+                        return existingPlaylistId
+                    }
                     if case .playlist(let payload) = action { return payload.playlistId }
                     return nil
                 }()
                 let nextPresetId: Int? = {
+                    if preserveAuthoredAction {
+                        return existingPresetId
+                    }
                     if case .preset(let payload) = action { return payload.presetId }
                     return nil
                 }()
 
-                var playlistMap = existing.metadata.wledPlaylistIdsByDevice ?? [:]
-                var presetMap = existing.metadata.wledPresetIdsByDevice ?? [:]
-                if let nextPlaylistId {
-                    playlistMap[device.id] = nextPlaylistId
-                    presetMap.removeValue(forKey: device.id)
-                    existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
-                    existing.metadata.setManagedPresetSignature(nil, for: device.id)
-                    if existing.targets.deviceIds.count == 1 {
-                        existing.metadata.wledPlaylistId = nextPlaylistId
+                if !preserveAuthoredAction {
+                    var playlistMap = existing.metadata.wledPlaylistIdsByDevice ?? [:]
+                    var presetMap = existing.metadata.wledPresetIdsByDevice ?? [:]
+                    if let nextPlaylistId {
+                        playlistMap[device.id] = nextPlaylistId
+                        presetMap.removeValue(forKey: device.id)
+                        existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
+                        existing.metadata.setManagedPresetSignature(nil, for: device.id)
+                        if existing.targets.deviceIds.count == 1 {
+                            existing.metadata.wledPlaylistId = nextPlaylistId
+                        }
+                    } else if let nextPresetId {
+                        presetMap[device.id] = nextPresetId
+                        playlistMap.removeValue(forKey: device.id)
+                        existing.metadata.setManagedPresetSignature(nil, for: device.id)
+                        existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
+                        if existing.targets.deviceIds.count == 1 {
+                            existing.metadata.wledPlaylistId = nil
+                        }
                     }
-                } else if let nextPresetId {
-                    presetMap[device.id] = nextPresetId
-                    playlistMap.removeValue(forKey: device.id)
-                    existing.metadata.setManagedPresetSignature(nil, for: device.id)
-                    existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
-                    if existing.targets.deviceIds.count == 1 {
-                        existing.metadata.wledPlaylistId = nil
-                    }
+                    existing.metadata.wledPlaylistIdsByDevice = playlistMap.isEmpty ? nil : playlistMap
+                    existing.metadata.wledPresetIdsByDevice = presetMap.isEmpty ? nil : presetMap
                 }
-                existing.metadata.wledPlaylistIdsByDevice = playlistMap.isEmpty ? nil : playlistMap
-                existing.metadata.wledPresetIdsByDevice = presetMap.isEmpty ? nil : presetMap
                 var slotMap = existing.metadata.wledTimerSlotsByDevice ?? [:]
                 slotMap[device.id] = timer.id
                 existing.metadata.wledTimerSlotsByDevice = slotMap
@@ -673,7 +710,13 @@ class AutomationStore: ObservableObject {
                 existing.metadata.onDeviceEndDay = importedEndDay
                 existing.enabled = timer.enabled
                 existing.trigger = trigger
-                existing.action = action
+                if preserveAuthoredAction {
+                    logger.info(
+                        "automation.import.preserve_action device=\(device.id, privacy: .public) automation=\(existing.id.uuidString, privacy: .public) slot=\(timer.id) action=\(String(describing: existing.action), privacy: .public)"
+                    )
+                } else {
+                    existing.action = action
+                }
                 existing.metadata.runOnDevice = true
                 if existing.metadata.templateId == nil {
                     existing.metadata.templateId = templateId
@@ -842,6 +885,9 @@ class AutomationStore: ObservableObject {
             }
             if let playlistMap = automation.metadata.wledPlaylistIdsByDevice, let id = playlistMap[deviceId] {
                 usedPlaylistIds.insert(id)
+            }
+            if let managedStepIds = automation.metadata.managedStepPresetIds(for: deviceId) {
+                usedPresetIds.formUnion(managedStepIds)
             }
             if let playlistId = automation.metadata.wledPlaylistId {
                 usedPlaylistIds.insert(playlistId)
@@ -1331,6 +1377,22 @@ class AutomationStore: ObservableObject {
             return true
             
         case .gradient(let payload):
+            if !payload.powerOn {
+                let transitionDs: Int?
+                if payload.durationSeconds > 0 {
+                    let clamped = min(payload.durationSeconds, maxWLEDNativeTransitionSeconds)
+                    transitionDs = Int((clamped * 10.0).rounded())
+                } else {
+                    transitionDs = nil
+                }
+                do {
+                    _ = try await apiService.setPower(for: device, isOn: false, transitionDeciseconds: transitionDs)
+                    return true
+                } catch {
+                    logger.error("Failed to power off device for automation \(automation.name): \(error.localizedDescription)")
+                    return false
+                }
+            }
             let gradient = resolveGradientPayload(payload, device: device)
             let ledCount = viewModel.totalLEDCount(for: device)
             let resolvedTemperature = payload.temperature ?? payload.presetId.flatMap { presetsStore.colorPreset(id: $0)?.temperature }
@@ -1446,18 +1508,23 @@ class AutomationStore: ObservableObject {
             
         case .transition(let payload):
             let resolved = resolveTransitionPayload(payload, device: device)
-            if let playlistId = await ensureAutomationTransitionPlaylist(
+            if let managedPlaylist = await ensureAutomationTransitionPlaylist(
                 for: automation,
                 device: device,
                 payload: resolved
             ) {
                 if storedPlaylistId(for: automation, deviceId: device.id) == nil {
-                    let updated = updateAutomationMetadata(automation, deviceId: device.id, playlistId: playlistId)
+                    let updated = updateAutomationMetadata(
+                        automation,
+                        deviceId: device.id,
+                        playlistId: managedPlaylist.playlistId,
+                        playlistStepPresetIds: managedPlaylist.stepPresetIds
+                    )
                     update(updated, syncOnDevice: false)
                 }
                 let started = await viewModel.startPlaylist(
                     device: device,
-                    playlistId: playlistId,
+                    playlistId: managedPlaylist.playlistId,
                     runTitle: automation.name,
                     expectedDurationSeconds: resolved.durationSeconds,
                     runKind: .automation,
@@ -1468,7 +1535,7 @@ class AutomationStore: ObservableObject {
                 if started {
                     return true
                 }
-                logger.error("Failed to start stored transition playlist \(playlistId) for automation \(automation.name)")
+                logger.error("Failed to start stored transition playlist \(managedPlaylist.playlistId) for automation \(automation.name)")
             }
             logger.error("Failed to prepare transition playlist for automation \(automation.name)")
             return false
@@ -1562,6 +1629,10 @@ class AutomationStore: ObservableObject {
         return automation.metadata.wledPlaylistId
     }
 
+    private func storedManagedTransitionStepPresetIds(for automation: Automation, deviceId: String) -> [Int] {
+        automation.metadata.managedStepPresetIds(for: deviceId) ?? []
+    }
+
     private func storedPresetId(for automation: Automation, deviceId: String) -> Int? {
         if let map = automation.metadata.wledPresetIdsByDevice, let id = map[deviceId] {
             return id
@@ -1628,6 +1699,14 @@ class AutomationStore: ObservableObject {
         endMonth: Int?,
         endDay: Int?
     ) -> (startMonth: Int?, startDay: Int?, endMonth: Int?, endDay: Int?) {
+        // Treat "all zero" and partial windows as no-window.
+        let normalizedValues = [startMonth, startDay, endMonth, endDay].map { max(0, $0 ?? 0) }
+        if normalizedValues.allSatisfy({ $0 == 0 }) {
+            return (nil, nil, nil, nil)
+        }
+        guard startMonth != nil, startDay != nil, endMonth != nil, endDay != nil else {
+            return (nil, nil, nil, nil)
+        }
         // Treat explicit full-year windows as equivalent to "no window".
         if startMonth == 1 && startDay == 1 && endMonth == 12 && endDay == 31 {
             return (nil, nil, nil, nil)
@@ -1647,6 +1726,71 @@ class AutomationStore: ObservableObject {
             endMonth: timer.endMonth,
             endDay: timer.endDay
         )
+    }
+
+    private enum TimerOwnershipStatus {
+        case owned
+        case notOwned
+        case unknown(String)
+    }
+
+    private func timerOwnershipStatusForDeletion(
+        automation: Automation,
+        device: WLEDDevice,
+        slot: Int
+    ) async -> TimerOwnershipStatus {
+        guard let macroId = expectedMacroId(for: automation, deviceId: device.id),
+              (1...maxWLEDPresetSlots).contains(macroId) else {
+            return .unknown("missing_expected_macro")
+        }
+        guard let expectedConfig = await wledTimerConfig(for: automation, device: device, referenceDate: Date()) else {
+            return .unknown("missing_expected_timer_config")
+        }
+        let expectedSignatureEnabled = timerSignature(
+            enabled: true,
+            hour: expectedConfig.hour,
+            minute: expectedConfig.minute,
+            days: expectedConfig.days,
+            macroId: macroId,
+            startMonth: expectedConfig.startMonth,
+            startDay: expectedConfig.startDay,
+            endMonth: expectedConfig.endMonth,
+            endDay: expectedConfig.endDay
+        )
+        let expectedSignatureDisabled = timerSignature(
+            enabled: false,
+            hour: expectedConfig.hour,
+            minute: expectedConfig.minute,
+            days: expectedConfig.days,
+            macroId: macroId,
+            startMonth: expectedConfig.startMonth,
+            startDay: expectedConfig.startDay,
+            endMonth: expectedConfig.endMonth,
+            endDay: expectedConfig.endDay
+        )
+        let knownSignature = lastKnownGoodTimerSignatureByAutomationDevice[
+            timerSignatureKey(automationId: automation.id, deviceId: device.id)
+        ]
+
+        do {
+            let timers = try await apiService.fetchTimers(for: device)
+            guard let timer = timers.first(where: { $0.id == slot }) else {
+                return .notOwned
+            }
+            let currentSignature = timerSignature(for: timer)
+            if currentSignature == expectedSignatureEnabled || currentSignature == expectedSignatureDisabled {
+                return .owned
+            }
+            if let knownSignature, currentSignature == knownSignature {
+                return .owned
+            }
+            return .notOwned
+        } catch {
+            if isTransientOnDeviceSyncError(error) {
+                return .unknown(error.localizedDescription)
+            }
+            return .notOwned
+        }
     }
 
     private func doesTimerSlotMatchSignature(device: WLEDDevice, slot: Int, expectedSignature: String) async -> Bool {
@@ -1815,6 +1959,7 @@ class AutomationStore: ObservableObject {
         _ automation: Automation,
         deviceId: String,
         playlistId: Int? = nil,
+        playlistStepPresetIds: [Int]? = nil,
         presetId: Int? = nil,
         timerSlot: Int? = nil,
         managedPlaylistSignature: String? = nil,
@@ -1830,6 +1975,9 @@ class AutomationStore: ObservableObject {
             }
             updated.metadata.setManagedPlaylistSignature(managedPlaylistSignature, for: deviceId)
             updated.metadata.setManagedPresetSignature(nil, for: deviceId)
+            if let playlistStepPresetIds {
+                updated.metadata.setManagedStepPresetIds(playlistStepPresetIds, for: deviceId)
+            }
         }
         if let presetId {
             var map = updated.metadata.wledPresetIdsByDevice ?? [:]
@@ -1837,6 +1985,7 @@ class AutomationStore: ObservableObject {
             updated.metadata.wledPresetIdsByDevice = map
             updated.metadata.setManagedPresetSignature(managedPresetSignature, for: deviceId)
             updated.metadata.setManagedPlaylistSignature(nil, for: deviceId)
+            updated.metadata.setManagedStepPresetIds(nil, for: deviceId)
         }
         if let timerSlot {
             var map = updated.metadata.wledTimerSlotsByDevice ?? [:]
@@ -1901,19 +2050,79 @@ class AutomationStore: ObservableObject {
         )
     }
 
+    private struct ManagedTransitionPlaylistAsset {
+        let playlistId: Int
+        let stepPresetIds: [Int]
+    }
+
+    private func fetchPlaylistStepPresetIds(
+        playlistId: Int,
+        device: WLEDDevice
+    ) async -> [Int] {
+        do {
+            let playlists = try await apiService.fetchPlaylists(for: device)
+            guard let playlist = playlists.first(where: { $0.id == playlistId }) else {
+                return []
+            }
+            return Array(Set(playlist.presets.filter { (1...250).contains($0) })).sorted()
+        } catch {
+            logger.warning("Failed to fetch playlist steps for cleanup: device=\(device.id, privacy: .public) playlist=\(playlistId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    private func managedPlaylistClaimedByAnotherAutomation(
+        _ playlistId: Int,
+        deviceId: String,
+        excluding automationId: UUID
+    ) -> Bool {
+        automations.contains { record in
+            guard record.id != automationId else { return false }
+            let mappedId = record.metadata.wledPlaylistIdsByDevice?[deviceId] ?? record.metadata.wledPlaylistId
+            guard mappedId == playlistId else { return false }
+            return record.metadata.managedPlaylistSignature(for: deviceId) != nil
+        }
+    }
+
+    private func managedPresetClaimedByAnotherAutomation(
+        _ presetId: Int,
+        deviceId: String,
+        excluding automationId: UUID
+    ) -> Bool {
+        automations.contains { record in
+            guard record.id != automationId else { return false }
+            let mappedId = record.metadata.wledPresetIdsByDevice?[deviceId]
+            guard mappedId == presetId else { return false }
+            return record.metadata.managedPresetSignature(for: deviceId) != nil
+        }
+    }
+
     private func ensureAutomationTransitionPlaylist(
         for automation: Automation,
         device: WLEDDevice,
         payload: TransitionActionPayload
-    ) async -> Int? {
+    ) async -> ManagedTransitionPlaylistAsset? {
         let desiredSignature = transitionPayloadSignature(payload)
         let storedSignature = automation.metadata.managedPlaylistSignature(for: device.id)
         if let existing = storedPlaylistId(for: automation, deviceId: device.id) {
-            if isPlaylistQueuedForDelete(existing, deviceId: device.id) {
+            if managedPlaylistClaimedByAnotherAutomation(existing, deviceId: device.id, excluding: automation.id) {
+                logger.warning("Automation transition playlist is claimed by another automation, rebuilding: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public) playlist=\(existing)")
+            } else if isPlaylistQueuedForDelete(existing, deviceId: device.id) {
                 logger.warning("Automation transition playlist queued for delete, rebuilding: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public) playlist=\(existing)")
             } else if storedSignature == desiredSignature,
                       await playlistExistsOnDevice(existing, device: device) {
-                return existing
+                let storedStepIds = storedManagedTransitionStepPresetIds(for: automation, deviceId: device.id)
+                if !storedStepIds.isEmpty {
+                    return ManagedTransitionPlaylistAsset(
+                        playlistId: existing,
+                        stepPresetIds: storedStepIds
+                    )
+                }
+                let fetchedStepIds = await fetchPlaylistStepPresetIds(playlistId: existing, device: device)
+                return ManagedTransitionPlaylistAsset(
+                    playlistId: existing,
+                    stepPresetIds: fetchedStepIds
+                )
             } else if storedSignature != desiredSignature {
                 logger.info("Automation transition playlist signature changed; rebuilding: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public)")
             } else {
@@ -1934,7 +2143,10 @@ class AutomationStore: ObservableObject {
         ) {
             DeviceCleanupManager.shared.removeIds(type: .playlist, deviceId: device.id, ids: [playlist.playlistId])
             DeviceCleanupManager.shared.removeIds(type: .preset, deviceId: device.id, ids: playlist.stepPresetIds)
-            return playlist.playlistId
+            return ManagedTransitionPlaylistAsset(
+                playlistId: playlist.playlistId,
+                stepPresetIds: playlist.stepPresetIds
+            )
         }
         return nil
     }
@@ -1988,7 +2200,7 @@ class AutomationStore: ObservableObject {
     }
 
     private enum OnDeviceActionTarget {
-        case macro(id: Int, managed: Bool, signature: String?)
+        case macro(id: Int, managed: Bool, signature: String?, managedStepPresetIds: [Int]?)
     }
 
     private struct WLEDTimerConfig {
@@ -2037,7 +2249,9 @@ class AutomationStore: ObservableObject {
         let storedSignature = automation.metadata.managedPresetSignature(for: device.id)
         let existingStoredId = storedPresetId(for: automation, deviceId: device.id)
         if let existing = existingStoredId {
-            if isPresetQueuedForDelete(existing, deviceId: device.id) {
+            if managedPresetClaimedByAnotherAutomation(existing, deviceId: device.id, excluding: automation.id) {
+                logger.warning("Automation preset snapshot is claimed by another automation, recreating: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public) preset=\(existing)")
+            } else if isPresetQueuedForDelete(existing, deviceId: device.id) {
                 logger.warning("Automation preset snapshot queued for delete, recreating: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public) preset=\(existing)")
             } else if storedSignature == desiredSignature,
                       await presetExistsOnDevice(existing, device: device) {
@@ -2057,10 +2271,16 @@ class AutomationStore: ObservableObject {
             }
             var excludedIds = Set(existingPresets.map { $0.id })
             excludedIds.formUnion(DeviceCleanupManager.shared.activeDeleteIds(type: .preset, deviceId: device.id))
+            for record in automations where record.id != automation.id {
+                guard let claimedPresetId = record.metadata.wledPresetIdsByDevice?[device.id] else { continue }
+                guard record.metadata.managedPresetSignature(for: device.id) != nil else { continue }
+                excludedIds.insert(claimedPresetId)
+            }
             let presetId: Int
             if let existingStoredId,
                (1...maxWLEDPresetSlots).contains(existingStoredId),
-               !excludedIds.contains(existingStoredId) {
+               !excludedIds.contains(existingStoredId),
+               !managedPresetClaimedByAnotherAutomation(existingStoredId, deviceId: device.id, excluding: automation.id) {
                 presetId = existingStoredId
             } else if let available = availablePresetId(excluding: excludedIds) {
                 presetId = available
@@ -2092,7 +2312,7 @@ class AutomationStore: ObservableObject {
     private func automationPresetState(for automation: Automation, device: WLEDDevice) -> WLEDStateUpdate? {
         switch automation.action {
         case .gradient(let payload):
-            if payload.brightness <= 0 {
+            if !payload.powerOn || payload.brightness <= 0 {
                 return WLEDStateUpdate(on: false, bri: 0)
             }
             let gradient = resolveGradientPayload(payload, device: device)
@@ -2186,12 +2406,12 @@ class AutomationStore: ObservableObject {
             let targetId = payload.presetId
             guard (1...250).contains(targetId) else { return nil }
             guard !isPresetQueuedForDelete(targetId, deviceId: device.id) else { return nil }
-            return .macro(id: targetId, managed: false, signature: nil)
+            return .macro(id: targetId, managed: false, signature: nil, managedStepPresetIds: nil)
         case .playlist(let payload):
             let targetId = payload.playlistId
             guard (1...250).contains(targetId) else { return nil }
             guard !isPlaylistQueuedForDelete(targetId, deviceId: device.id) else { return nil }
-            return .macro(id: targetId, managed: false, signature: nil)
+            return .macro(id: targetId, managed: false, signature: nil, managedStepPresetIds: nil)
         case .transition(let payload):
             if let transitionPresetId = payload.presetId,
                let sourcePreset = presetsStore.transitionPreset(id: transitionPresetId),
@@ -2202,14 +2422,19 @@ class AutomationStore: ObservableObject {
                    !isPlaylistQueuedForDelete(playlistId, deviceId: device.id) {
                     // Reuse the existing saved transition playlist directly.
                     // This avoids re-generating heavy managed assets during automation sync.
-                    return .macro(id: playlistId, managed: false, signature: nil)
+                    return .macro(id: playlistId, managed: false, signature: nil, managedStepPresetIds: nil)
                 }
                 logger.warning("Automation transition preset is not ready on device yet: automation=\(automation.name, privacy: .public) device=\(device.name, privacy: .public) preset=\(transitionPresetId.uuidString, privacy: .public) state=\(sourcePreset.wledSyncState.rawValue, privacy: .public)")
                 return nil
             }
             let resolved = resolveTransitionPayload(payload, device: device)
-            if let playlistId = await ensureAutomationTransitionPlaylist(for: automation, device: device, payload: resolved) {
-                return .macro(id: playlistId, managed: true, signature: transitionPayloadSignature(resolved))
+            if let managedPlaylist = await ensureAutomationTransitionPlaylist(for: automation, device: device, payload: resolved) {
+                return .macro(
+                    id: managedPlaylist.playlistId,
+                    managed: true,
+                    signature: transitionPayloadSignature(resolved),
+                    managedStepPresetIds: managedPlaylist.stepPresetIds
+                )
             }
             return nil
         case .gradient, .directState, .effect, .scene:
@@ -2218,7 +2443,12 @@ class AutomationStore: ObservableObject {
             }
             let label = "Automation \(automation.name)"
             if let presetId = await ensureAutomationPresetSnapshot(for: automation, device: device, state: state, label: label) {
-                return .macro(id: presetId, managed: true, signature: presetSnapshotSignature(state))
+                return .macro(
+                    id: presetId,
+                    managed: true,
+                    signature: presetSnapshotSignature(state),
+                    managedStepPresetIds: nil
+                )
             }
             return nil
         }
@@ -2229,6 +2459,7 @@ class AutomationStore: ObservableObject {
         deviceFilter: Set<String>? = nil
     ) async {
         guard automation.metadata.runOnDevice else { return }
+        guard automations.contains(where: { $0.id == automation.id }) else { return }
         if onDeviceSyncInFlightAutomationIds.contains(automation.id) {
             return
         }
@@ -2247,6 +2478,15 @@ class AutomationStore: ObservableObject {
 
         var updated = automation
         for device in devices {
+            guard let latest = automations.first(where: { $0.id == updated.id }) else {
+                logger.info("automation.sync.aborted_deleted automation=\(updated.id.uuidString, privacy: .public)")
+                return
+            }
+            guard latest.metadata.runOnDevice else {
+                logger.info("automation.sync.aborted_not_run_on_device automation=\(updated.id.uuidString, privacy: .public)")
+                return
+            }
+            updated = latest
             await acquireOnDeviceSyncDeviceLock(for: device.id)
             defer { releaseOnDeviceSyncDeviceLock(for: device.id) }
             defer { commitAutomationSyncSnapshot(updated) }
@@ -2299,6 +2539,20 @@ class AutomationStore: ObservableObject {
             case .slot(let resolvedSlot):
                 timerSlot = resolvedSlot
             case .unavailable:
+                await logOccupiedTimerSlots(
+                    device: device,
+                    allowedSlots: timeConfig.allowedSlots,
+                    automationId: automation.id
+                )
+                if let recoveredSlot = await recoverMatchingTimerSlotWhenUnavailable(
+                    automation: updated,
+                    device: device,
+                    timeConfig: timeConfig
+                ) {
+                    timerSlot = recoveredSlot
+                    logger.info("automation.slot.selected device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=existing_match_unavailable_recovery")
+                    break
+                }
                 if previousSyncState == .synced, let preservedSlot = previousTimerSlot {
                     updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: preservedSlot)
                     updated = updateAutomationSyncMetadata(
@@ -2474,7 +2728,7 @@ class AutomationStore: ObservableObject {
                     continue
                 }
                 switch actionTarget {
-                case .macro(let macroId, let managed, let signature):
+                case .macro(let macroId, let managed, let signature, let managedStepPresetIds):
                     targetId = macroId
                     if managed {
                         switch metadataCandidate.action {
@@ -2483,6 +2737,7 @@ class AutomationStore: ObservableObject {
                                 metadataCandidate,
                                 deviceId: device.id,
                                 playlistId: macroId,
+                                playlistStepPresetIds: managedStepPresetIds,
                                 managedPlaylistSignature: signature
                             )
                         default:
@@ -2512,12 +2767,7 @@ class AutomationStore: ObservableObject {
                 endDay: timeConfig.endDay
             )
             let allowExistingSlotAdoption: Bool = {
-                guard previousTimerSlot == nil else { return false }
-                if let templateId = updated.metadata.templateId,
-                   templateId.hasPrefix(importedAutomationTemplatePrefix) {
-                    return true
-                }
-                return previousSyncState == .synced
+                previousTimerSlot == nil
             }()
             if allowExistingSlotAdoption {
                 let reservedSlots = reservedTimerSlots(excluding: automation, deviceId: device.id)
@@ -2547,6 +2797,10 @@ class AutomationStore: ObservableObject {
             )
 
             do {
+                guard automations.contains(where: { $0.id == updated.id }) else {
+                    logger.info("automation.sync.aborted_deleted_before_write automation=\(updated.id.uuidString, privacy: .public) device=\(device.id, privacy: .public)")
+                    return
+                }
                 // Reclaim the slot before writing so a queued stale delete cannot disable
                 // this freshly assigned automation timer afterwards.
                 DeviceCleanupManager.shared.removeIds(type: .timer, deviceId: device.id, ids: [timerSlot])
@@ -2778,6 +3032,58 @@ class AutomationStore: ObservableObject {
         } catch {
             logger.warning("Could not adopt existing timer slot for \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
+        }
+    }
+
+    private func recoverMatchingTimerSlotWhenUnavailable(
+        automation: Automation,
+        device: WLEDDevice,
+        timeConfig: WLEDTimerConfig
+    ) async -> Int? {
+        guard let macroId = expectedMacroId(for: automation, deviceId: device.id) else {
+            return nil
+        }
+        let expectedSignature = timerSignature(
+            enabled: automation.enabled,
+            hour: timeConfig.hour,
+            minute: timeConfig.minute,
+            days: timeConfig.days,
+            macroId: macroId,
+            startMonth: timeConfig.startMonth,
+            startDay: timeConfig.startDay,
+            endMonth: timeConfig.endMonth,
+            endDay: timeConfig.endDay
+        )
+        let reservedSlots = reservedTimerSlots(excluding: automation, deviceId: device.id)
+        return await findMatchingTimerSlotOnDevice(
+            device: device,
+            allowedSlots: timeConfig.allowedSlots,
+            reservedSlots: reservedSlots,
+            expectedSignature: expectedSignature
+        )
+    }
+
+    private func logOccupiedTimerSlots(
+        device: WLEDDevice,
+        allowedSlots: Set<Int>,
+        automationId: UUID
+    ) async {
+        do {
+            let timers = try await apiService.fetchTimers(for: device)
+            let occupied = timers
+                .filter { allowedSlots.contains($0.id) && $0.macroId > 0 }
+                .sorted { $0.id < $1.id }
+                .map { timer in
+                    "slot=\(timer.id):\(timer.hour):\(timer.minute):macro=\(timer.macroId):en=\(timer.enabled ? 1 : 0)"
+                }
+                .joined(separator: ",")
+            logger.warning(
+                "automation.slot.occupied device=\(device.id, privacy: .public) automation=\(automationId.uuidString, privacy: .public) allowed=\(Array(allowedSlots).sorted(), privacy: .public) occupied=\(occupied, privacy: .public)"
+            )
+        } catch {
+            logger.warning(
+                "automation.slot.occupied_lookup_failed device=\(device.id, privacy: .public) automation=\(automationId.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 
@@ -3036,14 +3342,37 @@ class AutomationStore: ObservableObject {
         switch trigger {
         case .sunrise, .sunset:
             guard let reference = await wledSolarReference(for: device) else {
-                return "Could not read WLED solar settings"
+                let configured = await autoConfigureWLEDSolarReference(for: device)
+                return configured ? nil : "Could not read WLED solar settings"
             }
             guard reference.coordinate != nil else {
-                return "WLED location not configured for sunrise/sunset"
+                let configured = await autoConfigureWLEDSolarReference(for: device)
+                return configured ? nil : "WLED location not configured for sunrise/sunset"
             }
             return nil
         default:
             return nil
+        }
+    }
+
+    private func autoConfigureWLEDSolarReference(for device: WLEDDevice) async -> Bool {
+        do {
+            let coordinate = try await locationProvider.currentCoordinate()
+            try await apiService.updateSolarReference(
+                for: device,
+                coordinate: coordinate,
+                timeZone: .current
+            )
+            if let refreshed = await wledSolarReference(for: device),
+               refreshed.coordinate != nil {
+                logger.info("Auto-configured WLED solar location for \(device.name, privacy: .public)")
+                return true
+            }
+            logger.warning("WLED solar auto-config attempted but coordinate still missing for \(device.name, privacy: .public)")
+            return false
+        } catch {
+            logger.warning("Failed to auto-configure WLED solar location for \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -3081,6 +3410,10 @@ class AutomationStore: ObservableObject {
                 )
                 return .slot(selection.slot)
             }
+            let existingSlotLabel = existingSlot.map(String.init) ?? "nil"
+            logger.warning(
+                "automation.slot.unavailable device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) allowed=\(Array(allowedSlots).sorted(), privacy: .public) reserved=\(Array(reservedSlots).sorted(), privacy: .public) existing=\(existingSlotLabel, privacy: .public) reclaimable=\(Array(reclaimableSlots).sorted(), privacy: .public)"
+            )
             return .unavailable
         } catch {
             logger.error("Failed to fetch timers for \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -3168,6 +3501,8 @@ class AutomationStore: ObservableObject {
     private func reservedTimerSlots(excluding automation: Automation, deviceId: String) -> Set<Int> {
         var reserved = Set<Int>()
         for record in automations where record.id != automation.id {
+            guard record.metadata.runOnDevice else { continue }
+            guard record.targets.deviceIds.contains(deviceId) else { continue }
             if let slot = record.metadata.wledTimerSlotsByDevice?[deviceId] {
                 reserved.insert(slot)
             } else if record.targets.deviceIds.count == 1,
@@ -3237,16 +3572,17 @@ class AutomationStore: ObservableObject {
             )
         }
 
-        var blockedDevices: [String] = []
+        var blockedSlotDevices: [String] = []
+        var blockedConfigReasons: [String] = []
         var unresolvedDevices: [String] = []
         for device in targetDevices {
             do {
                 if let solarIssue = await validateSolarConfigurationIfNeeded(for: automation.trigger, device: device) {
-                    blockedDevices.append("\(device.name) (\(solarIssue))")
+                    blockedConfigReasons.append("\(device.name): \(solarIssue)")
                     continue
                 }
                 guard let timeConfig = await wledTimerConfig(for: automation, device: device, referenceDate: Date()) else {
-                    blockedDevices.append("\(device.name) (timer config unavailable)")
+                    blockedConfigReasons.append("\(device.name): timer config unavailable")
                     continue
                 }
                 let timers = try await apiService.fetchTimers(for: device)
@@ -3262,17 +3598,25 @@ class AutomationStore: ObservableObject {
                     reclaimableSlots: reclaimableSlots
                 )
                 if selection == nil {
-                    blockedDevices.append(device.name)
+                    blockedSlotDevices.append(device.name)
                 }
             } catch {
                 unresolvedDevices.append(device.name)
             }
         }
 
-        if !blockedDevices.isEmpty {
+        if !blockedConfigReasons.isEmpty {
             return OnDeviceScheduleValidation(
                 isValid: false,
-                message: "No available timer slots for: \(blockedDevices.joined(separator: ", ")).",
+                message: blockedConfigReasons.joined(separator: ", "),
+                isWarning: false
+            )
+        }
+
+        if !blockedSlotDevices.isEmpty {
+            return OnDeviceScheduleValidation(
+                isValid: false,
+                message: "No available timer slots for: \(blockedSlotDevices.joined(separator: ", ")).",
                 isWarning: false
             )
         }
@@ -3289,59 +3633,269 @@ class AutomationStore: ObservableObject {
     }
 
     private func cleanupDeviceEntries(for automation: Automation) {
-        let shouldDeleteManagedAssets = shouldDeleteManagedDeviceAssets(for: automation)
         let deviceIds = automation.targets.deviceIds
         for deviceId in deviceIds {
+            let deleteTraceId = UUID().uuidString
             let playlistId = automation.metadata.wledPlaylistIdsByDevice?[deviceId] ?? automation.metadata.wledPlaylistId
             let presetId = automation.metadata.wledPresetIdsByDevice?[deviceId]
             let timerSlot = automation.metadata.wledTimerSlotsByDevice?[deviceId] ?? automation.metadata.wledTimerSlot
+            let shouldDeleteManagedPlaylist = shouldDeleteManagedPlaylistAsset(for: automation, deviceId: deviceId)
+            let shouldDeleteManagedPreset = shouldDeleteManagedPresetAsset(for: automation, deviceId: deviceId)
+            let shouldDeleteTimerSlot: Bool = {
+                guard let timerSlot else { return false }
+                return !timerSlotClaimedByAnotherAutomation(
+                    timerSlot,
+                    deviceId: deviceId,
+                    excluding: automation.id
+                )
+            }()
+            let onlineDevice = viewModel.devices.first(where: { $0.id == deviceId && $0.isOnline })
+            logger.info(
+                "automation.delete.pipeline.begin trace=\(deleteTraceId, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) device=\(deviceId, privacy: .public) timerSlot=\((timerSlot.map(String.init) ?? "nil"), privacy: .public) deleteTimer=\(shouldDeleteTimerSlot, privacy: .public) playlistId=\((playlistId.map(String.init) ?? "nil"), privacy: .public) deletePlaylist=\(shouldDeleteManagedPlaylist, privacy: .public) presetId=\((presetId.map(String.init) ?? "nil"), privacy: .public) deletePreset=\(shouldDeleteManagedPreset, privacy: .public)"
+            )
             // Persist deletion intent synchronously so "delete + force quit" does not resurrect
             // imported automations on next launch.
-            if let timerSlot {
-                DeviceCleanupManager.shared.enqueue(
-                    type: .timer,
-                    deviceId: deviceId,
-                    ids: [timerSlot],
-                    source: .automation
-                )
+            if onlineDevice == nil {
+                if let timerSlot {
+                    if shouldDeleteTimerSlot {
+                        logger.info("automation.delete.pipeline.queue trace=\(deleteTraceId, privacy: .public) type=timer ids=[\(timerSlot, privacy: .public)]")
+                        DeviceCleanupManager.shared.enqueue(
+                            type: .timer,
+                            deviceId: deviceId,
+                            ids: [timerSlot],
+                            source: .automation
+                        )
+                    } else {
+                        // Another automation still owns this slot; do not clear it.
+                        DeviceCleanupManager.shared.removeIds(type: .timer, deviceId: deviceId, ids: [timerSlot])
+                        logger.info(
+                            "automation.delete.timer.skip_claimed device=\(deviceId, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                        )
+                    }
+                }
+                if shouldDeleteManagedPlaylist, let playlistId {
+                    logger.info("automation.delete.pipeline.queue trace=\(deleteTraceId, privacy: .public) type=playlist ids=[\(playlistId, privacy: .public)]")
+                    DeviceCleanupManager.shared.enqueue(
+                        type: .playlist,
+                        deviceId: deviceId,
+                        ids: [playlistId],
+                        source: .automation
+                    )
+                }
             }
-            if shouldDeleteManagedAssets, let playlistId {
-                DeviceCleanupManager.shared.enqueue(
-                    type: .playlist,
-                    deviceId: deviceId,
-                    ids: [playlistId],
-                    source: .automation
-                )
+
+            var presetDeleteIds = Set<Int>()
+            if shouldDeleteManagedPreset, let presetId {
+                presetDeleteIds.insert(presetId)
             }
-            if shouldDeleteManagedAssets, let presetId {
+            if shouldDeleteManagedPlaylist {
+                presetDeleteIds.formUnion(storedManagedTransitionStepPresetIds(for: automation, deviceId: deviceId))
+            }
+            if !presetDeleteIds.isEmpty, onlineDevice == nil {
+                logger.info("automation.delete.pipeline.queue trace=\(deleteTraceId, privacy: .public) type=preset ids=\(Array(presetDeleteIds).sorted(), privacy: .public)")
                 DeviceCleanupManager.shared.enqueue(
                     type: .preset,
                     deviceId: deviceId,
-                    ids: [presetId],
+                    ids: Array(presetDeleteIds).sorted(),
                     source: .automation
                 )
             }
 
-            if let device = viewModel.devices.first(where: { $0.id == deviceId }), device.isOnline {
+            if let device = onlineDevice {
                 Task { @MainActor in
-                    await DeviceCleanupManager.shared.processQueue(for: deviceId)
+                    var runtimePresetDeleteIds = presetDeleteIds
+                    if shouldDeleteManagedPlaylist,
+                       let playlistId,
+                       storedManagedTransitionStepPresetIds(for: automation, deviceId: deviceId).isEmpty {
+                        let fetchedStepIds = await fetchPlaylistStepPresetIds(playlistId: playlistId, device: device)
+                        if !fetchedStepIds.isEmpty {
+                            runtimePresetDeleteIds.formUnion(fetchedStepIds)
+                            DeviceCleanupManager.shared.enqueue(
+                                type: .preset,
+                                deviceId: deviceId,
+                                ids: fetchedStepIds,
+                                source: .automation
+                            )
+                        }
+                    }
+                    if shouldDeleteManagedPlaylist, let playlistId {
+                        logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=playlist ids=[\(playlistId, privacy: .public)]")
+                        await DeviceCleanupManager.shared.requestDelete(
+                            type: .playlist,
+                            device: device,
+                            ids: [playlistId],
+                            source: .automation
+                        )
+                    }
+                    if !runtimePresetDeleteIds.isEmpty {
+                        logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=preset ids=\(Array(runtimePresetDeleteIds).sorted(), privacy: .public)")
+                        await DeviceCleanupManager.shared.requestDelete(
+                            type: .preset,
+                            device: device,
+                            ids: Array(runtimePresetDeleteIds).sorted(),
+                            source: .automation
+                        )
+                    }
+                    if let timerSlot {
+                        if shouldDeleteTimerSlot {
+                            let ownership = await timerOwnershipStatusForDeletion(
+                                automation: automation,
+                                device: device,
+                                slot: timerSlot
+                            )
+                            switch ownership {
+                            case .owned:
+                                logger.info("automation.delete.pipeline.immediate trace=\(deleteTraceId, privacy: .public) type=timer ids=[\(timerSlot, privacy: .public)] ownership=owned")
+                                await DeviceCleanupManager.shared.requestDelete(
+                                    type: .timer,
+                                    device: device,
+                                    ids: [timerSlot],
+                                    source: .automation
+                                )
+                            case .notOwned:
+                                DeviceCleanupManager.shared.removeIds(
+                                    type: .timer,
+                                    deviceId: device.id,
+                                    ids: [timerSlot]
+                                )
+                                logger.info(
+                                    "automation.delete.timer.skip_not_owned device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                                )
+                            case .unknown(let reason):
+                                DeviceCleanupManager.shared.enqueue(
+                                    type: .timer,
+                                    deviceId: device.id,
+                                    ids: [timerSlot],
+                                    source: .automation
+                                )
+                                logger.warning(
+                                    "automation.delete.timer.defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"
+                                )
+                            }
+                        } else {
+                            DeviceCleanupManager.shared.removeIds(
+                                type: .timer,
+                                deviceId: device.id,
+                                ids: [timerSlot]
+                            )
+                            logger.info(
+                                "automation.delete.timer.skip_claimed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                            )
+                        }
+                    }
+                    await cleanupOrphanedAutomationPresets(for: device)
+                    logger.info("automation.delete.pipeline.orphan_cleanup_done trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public)")
+                    if let timerSlot, shouldDeleteTimerSlot {
+                        do {
+                            if let timer = try await apiService.fetchTimers(for: device).first(where: { $0.id == timerSlot }) {
+                                let actionable = isTimerActionable(timer)
+                                logger.info(
+                                    "automation.delete.timer.postcheck device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) en=\(timer.enabled) hour=\(timer.hour) min=\(timer.minute) dow=\(timer.days) macro=\(timer.macroId) actionable=\(actionable)"
+                                )
+                                if actionable {
+                                    let ownership = await timerOwnershipStatusForDeletion(
+                                        automation: automation,
+                                        device: device,
+                                        slot: timerSlot
+                                    )
+                                    switch ownership {
+                                    case .owned:
+                                        DeviceCleanupManager.shared.enqueue(
+                                            type: .timer,
+                                            deviceId: device.id,
+                                            ids: [timerSlot],
+                                            source: .automation
+                                        )
+                                        logger.warning(
+                                            "automation.delete.timer.postcheck_requeue device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                                        )
+                                    case .notOwned:
+                                        DeviceCleanupManager.shared.removeIds(
+                                            type: .timer,
+                                            deviceId: device.id,
+                                            ids: [timerSlot]
+                                        )
+                                        logger.info(
+                                            "automation.delete.timer.postcheck_skip_not_owned device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                                        )
+                                    case .unknown(let reason):
+                                        DeviceCleanupManager.shared.enqueue(
+                                            type: .timer,
+                                            deviceId: device.id,
+                                            ids: [timerSlot],
+                                            source: .automation
+                                        )
+                                        logger.warning(
+                                            "automation.delete.timer.postcheck_defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"
+                                        )
+                                    }
+                                }
+                            } else {
+                                logger.warning(
+                                    "automation.delete.timer.postcheck_missing_slot device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
+                                )
+                            }
+                        } catch {
+                            logger.warning(
+                                "automation.delete.timer.postcheck_failed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) error=\(error.localizedDescription, privacy: .public)"
+                            )
+                        }
+                    }
+                    await DeviceCleanupManager.shared.processQueueUntilIdle(for: device.id, maxPasses: 4)
+                    let pendingTimer = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .timer, deviceId: device.id)).sorted()
+                    let pendingPlaylist = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .playlist, deviceId: device.id)).sorted()
+                    let pendingPreset = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .preset, deviceId: device.id)).sorted()
+                    logger.info(
+                        "automation.delete.pipeline.summary trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) pendingTimer=\(pendingTimer, privacy: .public) pendingPlaylist=\(pendingPlaylist, privacy: .public) pendingPreset=\(pendingPreset, privacy: .public)"
+                    )
                 }
             }
         }
     }
 
-    private func shouldDeleteManagedDeviceAssets(for automation: Automation) -> Bool {
+    private func isTimerActionable(_ timer: WLEDTimer) -> Bool {
+        let hasDateRange = timer.startMonth != nil || timer.startDay != nil || timer.endMonth != nil || timer.endDay != nil
+        let hasClockTime = timer.hour != 0 || timer.minute != 0
+        let hasNonDefaultDays = timer.days != 0x7F
+        let hasMacro = timer.macroId != 0
+        let hasSolarMarker = timer.hour == 255
+        return timer.enabled || hasMacro || hasClockTime || hasNonDefaultDays || hasDateRange || hasSolarMarker
+    }
+
+    private func shouldDeleteManagedPlaylistAsset(for automation: Automation, deviceId: String) -> Bool {
         if let templateId = automation.metadata.templateId,
            templateId.hasPrefix(importedAutomationTemplatePrefix) {
             return false
         }
 
-        switch automation.action {
-        case .scene, .gradient, .transition, .effect, .directState:
-            // These action types may create app-managed snapshots/playlists on WLED.
+        if automation.metadata.managedPlaylistSignature(for: deviceId) != nil {
             return true
+        }
+
+        switch automation.action {
+        case .transition(let payload):
+            return payload.presetId == nil
+        case .preset, .playlist, .scene, .gradient, .effect, .directState:
+            return false
+        }
+    }
+
+    private func shouldDeleteManagedPresetAsset(for automation: Automation, deviceId: String) -> Bool {
+        if let templateId = automation.metadata.templateId,
+           templateId.hasPrefix(importedAutomationTemplatePrefix) {
+            return false
+        }
+
+        if automation.metadata.managedPresetSignature(for: deviceId) != nil {
+            return true
+        }
+
+        switch automation.action {
+        case .scene, .gradient, .effect, .directState:
+            return true
+        case .transition(let payload):
+            return payload.presetId == nil
         case .preset, .playlist:
-            // User-selected preset/playlist actions should keep underlying WLED assets.
             return false
         }
     }

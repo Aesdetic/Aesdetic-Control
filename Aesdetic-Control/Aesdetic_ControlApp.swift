@@ -78,7 +78,7 @@ struct Aesdetic_ControlApp: App {
     
     // MARK: - Appearance Configuration
     private func configureAppearances() {
-        // Make TabView background transparent
+        // Keep tab bar visuals neutral; actual tab bar is hidden in SwiftUI.
         let tabAppearance = UITabBarAppearance()
         tabAppearance.configureWithTransparentBackground()
         tabAppearance.backgroundColor = UIColor.clear
@@ -98,12 +98,12 @@ struct Aesdetic_ControlApp: App {
         UINavigationBar.appearance().compactAppearance = navAppearance
         UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
 
-        // Ensure scroll views don't paint an opaque background
+        // Ensure UIKit-backed containers do not paint opaque fallback colors.
         UIScrollView.appearance().backgroundColor = .clear
         UITableView.appearance().backgroundColor = .clear
         UICollectionView.appearance().backgroundColor = .clear
-        
-        // Keep the window background transparent so AppBackground shows through
+
+        // Keep window transparent so shared AppBackground is always visible.
         DispatchQueue.main.async {
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                let window = windowScene.windows.first {

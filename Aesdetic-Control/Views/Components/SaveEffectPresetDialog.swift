@@ -175,7 +175,6 @@ struct SaveEffectPresetDialog: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {

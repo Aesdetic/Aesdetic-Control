@@ -24,6 +24,10 @@ struct UnifiedColorPane: View {
     @State private var interpolationMode: GradientInterpolation = .linear  // Gradient interpolation mode
     @State private var activeGradientApplyTask: Task<Void, Never>? = nil
     @State private var overrideIssuedDuringCurrentDrag: Bool = false
+    @State private var lastLocalGradientEditAt: Date = .distantPast
+    @State private var pendingLocalGradientSignature: String? = nil
+    @State private var pendingLocalGradientUpdatedAt: Date = .distantPast
+    @State private var selectedStopPositionAnchor: Double? = nil
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     @AppStorage("perLedTransitionsEnabled") private var perLedTransitionsEnabled: Bool = false
 
@@ -212,6 +216,8 @@ struct UnifiedColorPane: View {
                         print("🎨 Found stop with color: \(stop.color)")
                         #endif
                         wheelInitial = stop.color
+                        selectedStopPositionAnchor = stop.position
+                        markLocalGradientEdit()
                         showWheel = true
                         #if DEBUG
                         print("🎨 showWheel set to: \(showWheel)")
@@ -280,6 +286,8 @@ struct UnifiedColorPane: View {
                     
                     gradient = updatedGradient
                     selectedStopId = new.id
+                    selectedStopPositionAnchor = new.position
+                    markLocalGradientEdit(stops: updatedGradient.stops)
                     
                     // Immediately apply the new gradient with the added stop
                     scheduleImmediateApply(stops: updatedGradient.stops)
@@ -351,6 +359,12 @@ struct UnifiedColorPane: View {
         }
         .onChange(of: viewModel.latestGradientStops[device.id] ?? []) { _, newStops in
             guard !newStops.isEmpty else { return }
+            if shouldSuppressIncomingGradient(newStops) {
+                #if DEBUG
+                print("gradient.ui.suppress_incoming device=\(device.id) reason=local_edit_or_pending_signature")
+                #endif
+                return
+            }
             applyIncomingGradient(newStops)
         }
         .onChange(of: liveDevice?.currentColor.toHex()) { _, newHex in
@@ -449,11 +463,14 @@ struct UnifiedColorPane: View {
             autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
             cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, whiteLevel in
+                markLocalGradientEdit()
                 guard let idx = currentGradient.stops.firstIndex(where: { $0.id == selectedId }) else {
                     var updatedGradient = currentGradient
                     if updatedGradient.stops.isEmpty {
                         let newStop = GradientStop(position: 0.0, hexColor: color.toHex())
                         updatedGradient.stops = [newStop]
+                        selectedStopId = newStop.id
+                        selectedStopPositionAnchor = newStop.position
                         if let temp = temperature {
                             stopTemperatures[newStop.id] = temp
                             if let white = whiteLevel {
@@ -465,7 +482,16 @@ struct UnifiedColorPane: View {
                             stopWhiteLevels[newStop.id] = white
                         }
                     } else {
-                        let stop = updatedGradient.stops[0]
+                        let fallbackIndex: Int
+                        if let anchor = selectedStopPositionAnchor,
+                           let nearest = updatedGradient.stops.enumerated().min(by: { abs($0.element.position - anchor) < abs($1.element.position - anchor) }) {
+                            fallbackIndex = nearest.offset
+                        } else {
+                            fallbackIndex = 0
+                        }
+                        let stop = updatedGradient.stops[fallbackIndex]
+                        selectedStopId = stop.id
+                        selectedStopPositionAnchor = stop.position
                         if let temp = temperature {
                             stopTemperatures[stop.id] = temp
                             if let white = whiteLevel {
@@ -476,17 +502,19 @@ struct UnifiedColorPane: View {
                         } else if let white = whiteLevel {
                             stopWhiteLevels[stop.id] = white
                         } else {
-                            updatedGradient.stops[0].hexColor = color.toHex()
+                            updatedGradient.stops[fallbackIndex].hexColor = color.toHex()
                             stopTemperatures.removeValue(forKey: stop.id)
                             stopWhiteLevels.removeValue(forKey: stop.id)
                         }
                     }
                     gradient = updatedGradient
+                    markLocalGradientEdit(stops: updatedGradient.stops)
                     scheduleImmediateApply(stops: updatedGradient.stops)
                     return
                 }
 
                 var updatedGradient = currentGradient
+                selectedStopPositionAnchor = updatedGradient.stops[idx].position
                 if let temp = temperature {
                     stopTemperatures[selectedId] = temp
                     if let white = whiteLevel {
@@ -496,6 +524,7 @@ struct UnifiedColorPane: View {
                     }
                     updatedGradient.stops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
                     gradient = updatedGradient
+                    markLocalGradientEdit(stops: updatedGradient.stops)
                     scheduleImmediateApply(stops: updatedGradient.stops)
                 } else {
                     updatedGradient.stops[idx].hexColor = color.toHex()
@@ -506,6 +535,7 @@ struct UnifiedColorPane: View {
                         stopWhiteLevels.removeValue(forKey: selectedId)
                     }
                     gradient = updatedGradient
+                    markLocalGradientEdit(stops: updatedGradient.stops)
                     scheduleImmediateApply(stops: updatedGradient.stops)
                 }
             },
@@ -517,6 +547,8 @@ struct UnifiedColorPane: View {
                     stopWhiteLevels.removeValue(forKey: selectedId)
                     gradient = updatedGradient
                     selectedStopId = nil
+                    selectedStopPositionAnchor = nil
+                    markLocalGradientEdit(stops: updatedGradient.stops)
                     scheduleImmediateApply(stops: updatedGradient.stops)
                 }
             },
@@ -534,11 +566,26 @@ struct UnifiedColorPane: View {
     private func applyIncomingGradient(_ stops: [GradientStop]) {
         let currentStops = gradient?.stops ?? []
         if currentStops == stops { return }
+        let selectedPosition = selectedStopId.flatMap { id in
+            currentStops.first(where: { $0.id == id })?.position
+        } ?? selectedStopPositionAnchor
         // Preserve interpolation mode when updating gradient
         let existingInterpolation = gradient?.interpolation ?? .linear
         gradient = LEDGradient(stops: stops, interpolation: existingInterpolation)
         interpolationMode = existingInterpolation
-        selectedStopId = nil
+        if let selectedPosition {
+            let sorted = stops.sorted { $0.position < $1.position }
+            if let nearest = sorted.min(by: { abs($0.position - selectedPosition) < abs($1.position - selectedPosition) }) {
+                selectedStopId = nearest.id
+                selectedStopPositionAnchor = nearest.position
+            } else {
+                selectedStopId = nil
+                selectedStopPositionAnchor = nil
+            }
+        } else {
+            selectedStopId = nil
+            selectedStopPositionAnchor = nil
+        }
         stopTemperatures = [:]
         stopWhiteLevels = [:]
     }
@@ -564,6 +611,7 @@ struct UnifiedColorPane: View {
     }
 
     private func throttleApply(stops: [GradientStop], phase: DragPhase) {
+        markLocalGradientEdit(stops: stops)
         let preferSegmentedUpdates = !(advancedUIEnabled && perLedTransitionsEnabled)
         let ledCount = viewModel.totalLEDCount(for: device)
         if phase == .changed {
@@ -598,6 +646,7 @@ struct UnifiedColorPane: View {
     }
 
     private func scheduleImmediateApply(stops: [GradientStop]) {
+        markLocalGradientEdit(stops: stops)
         applyImmediateWorkItem?.cancel()
         let work = DispatchWorkItem {
             Task { await applyNow(stops: stops) }
@@ -647,6 +696,44 @@ struct UnifiedColorPane: View {
                 preferSegmented: preferSegmentedUpdates
             )
         }
+    }
+
+    private func markLocalGradientEdit(stops: [GradientStop]? = nil) {
+        let now = Date()
+        lastLocalGradientEditAt = now
+        if let stops {
+            pendingLocalGradientSignature = gradientSignature(stops)
+            pendingLocalGradientUpdatedAt = now
+        }
+    }
+
+    private func gradientSignature(_ stops: [GradientStop]) -> String {
+        let sorted = stops.sorted { $0.position < $1.position }
+        return sorted.map { stop in
+            let quantized = Int((stop.position * 1000.0).rounded())
+            return "\(quantized):\(stop.hexColor.uppercased())"
+        }
+        .joined(separator: "|")
+    }
+
+    private func shouldSuppressIncomingGradient(_ stops: [GradientStop]) -> Bool {
+        if shouldSuppressIncomingGradientSync { return true }
+        guard let pendingSignature = pendingLocalGradientSignature else { return false }
+        let incomingSignature = gradientSignature(stops)
+        if incomingSignature == pendingSignature {
+            pendingLocalGradientSignature = nil
+            return false
+        }
+        if Date().timeIntervalSince(pendingLocalGradientUpdatedAt) < 4.0 {
+            return true
+        }
+        pendingLocalGradientSignature = nil
+        return false
+    }
+
+    private var shouldSuppressIncomingGradientSync: Bool {
+        if showWheel { return true }
+        return Date().timeIntervalSince(lastLocalGradientEditAt) < 1.2
     }
 }
 

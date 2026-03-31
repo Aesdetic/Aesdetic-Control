@@ -32,6 +32,7 @@ struct DeviceDetailView: View {
     @State private var showRebootConfirm: Bool = false
     @State private var armedCancelRunId: UUID? = nil
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
+    @AppStorage("showSegmentControlsInColorTabAdvanced") private var showSegmentControlsInColorTabAdvanced: Bool = true
     
     // Use coordinated power state from ViewModel
     private var currentPowerState: Bool {
@@ -218,6 +219,9 @@ struct DeviceDetailView: View {
                     ComprehensiveSettingsView(device: activeDevice)
                         .environmentObject(viewModel)
                 }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.hidden)
+                .presentationBackground(.ultraThinMaterial)
             }
             .confirmationDialog(
                 "Delete automation?",
@@ -629,7 +633,9 @@ struct DeviceDetailView: View {
     private var colorsTabContent: some View {
         VStack(spacing: 16) {
             // Segment Picker (only show for multi-segment devices)
-            if advancedUIEnabled, viewModel.hasMultipleSegments(for: activeDevice) {
+            if advancedUIEnabled,
+               showSegmentControlsInColorTabAdvanced,
+               viewModel.hasMultipleSegments(for: activeDevice) {
                 segmentPicker
             }
             
@@ -1280,6 +1286,12 @@ struct DeviceDetailView: View {
                let targetDevice = resolveDevice(updated.deviceId) {
                 presetRenameTargets.append((targetDevice, presetId))
             }
+        case .devicePreset(let presetId, let name, let targetDevice):
+            guard name != trimmed else { break }
+            presetRenameTargets.append((targetDevice, presetId))
+        case .devicePlaylist(let playlistId, let name, let targetDevice):
+            guard name != trimmed else { break }
+            playlistRenameTargets.append((targetDevice, playlistId))
         }
         
         cancelPresetRename()

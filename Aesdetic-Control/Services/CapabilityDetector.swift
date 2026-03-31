@@ -19,6 +19,8 @@ actor CapabilityDetector {
     
     /// Cache of device capabilities indexed by device ID
     private var capabilitiesCache: [String: WLEDCapabilities] = [:]
+    /// Last raw seglc payload per device to avoid redundant recomputation/log spam.
+    private var seglcCache: [String: [Int]] = [:]
     
     /// Singleton instance
     static let shared = CapabilityDetector()
@@ -36,14 +38,25 @@ actor CapabilityDetector {
     func detect(deviceId: String, seglc: [Int]?) -> WLEDCapabilities {
         guard let seglc = seglc, !seglc.isEmpty else {
             // No seglc data - assume basic RGB-only strip
+            if let cached = capabilitiesCache[deviceId] {
+                return cached
+            }
             logger.debug("No seglc data for device \(deviceId), assuming RGB-only")
             let fallback = WLEDCapabilities(deviceId: deviceId, seglc: [1]) // 0b001 = RGB only
             capabilitiesCache[deviceId] = fallback
+            seglcCache[deviceId] = [1]
             return fallback
+        }
+
+        if let cachedRaw = seglcCache[deviceId],
+           cachedRaw == seglc,
+           let cached = capabilitiesCache[deviceId] {
+            return cached
         }
         
         let capabilities = WLEDCapabilities(deviceId: deviceId, seglc: seglc)
         capabilitiesCache[deviceId] = capabilities
+        seglcCache[deviceId] = seglc
         
         logger.info("Detected capabilities for \(deviceId): \(capabilities.segments.count) segments")
         for (segId, segCap) in capabilities.segments {
@@ -78,12 +91,14 @@ actor CapabilityDetector {
     /// - Parameter deviceId: Device identifier
     func clearCache(for deviceId: String) {
         capabilitiesCache.removeValue(forKey: deviceId)
+        seglcCache.removeValue(forKey: deviceId)
         logger.debug("Cleared capability cache for \(deviceId)")
     }
     
     /// Clear all cached capabilities
     func clearAllCaches() {
         capabilitiesCache.removeAll()
+        seglcCache.removeAll()
         logger.debug("Cleared all capability caches")
     }
     
@@ -146,4 +161,3 @@ actor CapabilityDetector {
         return getSegmentCount(for: deviceId) > 1
     }
 }
-
