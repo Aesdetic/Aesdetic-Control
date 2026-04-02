@@ -87,6 +87,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private var presetQueueTokens: [String: Int] = [:]
     private var presetStoreQueueKeyByDeviceId: [String: String] = [:]
     private let presetWriteCooldownNanos: UInt64 = 700_000_000
+    private let timerDeleteVerifyRetryAttempts = 4
+    private let timerDeleteVerifyInitialDelayMs: UInt64 = 180
+    private let timerDeleteVerifyMaxDelayMs: UInt64 = 1_200
     
     // Performance optimization: Request batching and caching
     private var requestCache: [String: (response: WLEDResponse, timestamp: Date)] = [:]
@@ -685,6 +688,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
             guard !presetJsonEndpointUnsupportedByStoreKey.contains(storeKey),
                   shouldAttemptPresetJsonFallback(after: primaryError) else {
+                let errorDescription = primaryError.localizedDescription
+                await MainActor.run {
+                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
+                        deviceId: device.id,
+                        message: "Preset catalog read failed: \(errorDescription)"
+                    )
+                }
                 throw primaryError
             }
 
@@ -711,6 +721,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                         )
                     }
                     return fallback
+                }
+                let errorDescription = primaryError.localizedDescription
+                await MainActor.run {
+                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
+                        deviceId: device.id,
+                        message: "Preset catalog read failed after fallback: \(errorDescription)"
+                    )
                 }
                 throw primaryError
             }
@@ -763,6 +780,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
             guard !presetJsonEndpointUnsupportedByStoreKey.contains(storeKey),
                   shouldAttemptPresetJsonFallback(after: primaryError) else {
+                let errorDescription = primaryError.localizedDescription
+                await MainActor.run {
+                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
+                        deviceId: device.id,
+                        message: "Playlist catalog read failed: \(errorDescription)"
+                    )
+                }
                 throw primaryError
             }
 
@@ -789,6 +813,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                         )
                     }
                     return fallback
+                }
+                let errorDescription = primaryError.localizedDescription
+                await MainActor.run {
+                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
+                        deviceId: device.id,
+                        message: "Playlist catalog read failed after fallback: \(errorDescription)"
+                    )
                 }
                 throw primaryError
             }
@@ -1048,7 +1079,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return timer.enabled || hasMacro || hasClockTime || hasNonDefaultDays || hasDateRange
     }
 
-    private func encodeWLEDTimersForConfig(_ timers: [WLEDTimer]) -> [[String: Any]] {
+    private func encodeWLEDTimersForConfig(
+        _ timers: [WLEDTimer],
+        forceIncludeThroughSlot: Int? = nil
+    ) -> [[String: Any]] {
         let timerById = Dictionary(uniqueKeysWithValues: timers.map { ($0.id, $0) })
         var highestSlotToEncode: Int? = nil
 
@@ -1057,6 +1091,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             if timerHasPersistedMeaning(timer, slot: slot) {
                 highestSlotToEncode = slot
             }
+        }
+
+        if let forcedSlot = forceIncludeThroughSlot,
+           forcedSlot >= 0,
+           forcedSlot < wledTimerSlotCount {
+            highestSlotToEncode = max(highestSlotToEncode ?? forcedSlot, forcedSlot)
         }
 
         guard let highestSlotToEncode else {
@@ -1188,7 +1228,16 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             }
             throw error
         }
-        let timersArray = encodeWLEDTimersForConfig(updatedTimers)
+        let forceIncludeThroughSlot: Int? = {
+            guard let updatedTimer = updatedTimers.first(where: { $0.id == timerUpdate.id }) else {
+                return nil
+            }
+            return timerHasPersistedMeaning(updatedTimer, slot: timerUpdate.id) ? nil : timerUpdate.id
+        }()
+        let timersArray = encodeWLEDTimersForConfig(
+            updatedTimers,
+            forceIncludeThroughSlot: forceIncludeThroughSlot
+        )
         
         // Send update
         var httpRequest = URLRequest(url: url)
@@ -1217,8 +1266,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         decodeWLEDTimers(from: rawTimersArray)
     }
 
-    func _encodeWLEDTimersForTesting(_ timers: [WLEDTimer]) -> [[String: Any]] {
-        encodeWLEDTimersForConfig(timers)
+    func _encodeWLEDTimersForTesting(
+        _ timers: [WLEDTimer],
+        forceIncludeThroughSlot: Int? = nil
+    ) -> [[String: Any]] {
+        encodeWLEDTimersForConfig(timers, forceIncludeThroughSlot: forceIncludeThroughSlot)
     }
 
     func _mergeTimersApplyingUpdateForTesting(
@@ -1231,69 +1283,163 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
     /// Verify a timer slot matches the expected values after update.
     /// Only fields explicitly provided in `timerUpdate` are asserted.
-    func verifyTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws -> Bool {
+    func verifyTimer(
+        _ timerUpdate: WLEDTimerUpdate,
+        on device: WLEDDevice,
+        logMismatch: Bool = true
+    ) async throws -> Bool {
         let timers = try await fetchTimers(for: device)
         guard let timer = timers.first(where: { $0.id == timerUpdate.id }) else {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) reason=slot_missing available=\(timers.map { $0.id })")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) reason=slot_missing available=\(timers.map { $0.id })")
+            }
             #endif
             return false
         }
         if let enabled = timerUpdate.enabled, timer.enabled != enabled {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=en expected=\(enabled) actual=\(timer.enabled)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=en expected=\(enabled) actual=\(timer.enabled)")
+            }
             #endif
             return false
         }
         if let hour = timerUpdate.hour, timer.hour != hour {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=hour expected=\(hour) actual=\(timer.hour)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=hour expected=\(hour) actual=\(timer.hour)")
+            }
             #endif
             return false
         }
         if let minute = timerUpdate.minute, timer.minute != minute {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=min expected=\(minute) actual=\(timer.minute)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=min expected=\(minute) actual=\(timer.minute)")
+            }
             #endif
             return false
         }
         if let days = timerUpdate.days, timer.days != days {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=dow expected=\(days) actual=\(timer.days)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=dow expected=\(days) actual=\(timer.days)")
+            }
             #endif
             return false
         }
         if let macroId = timerUpdate.macroId, timer.macroId != macroId {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=macro expected=\(macroId) actual=\(timer.macroId)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=macro expected=\(macroId) actual=\(timer.macroId)")
+            }
             #endif
             return false
         }
         if let startMonth = timerUpdate.startMonth, timer.startMonth != startMonth {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=start.mon expected=\(startMonth) actual=\(timer.startMonth ?? -1)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=start.mon expected=\(startMonth) actual=\(timer.startMonth ?? -1)")
+            }
             #endif
             return false
         }
         if let startDay = timerUpdate.startDay, timer.startDay != startDay {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=start.day expected=\(startDay) actual=\(timer.startDay ?? -1)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=start.day expected=\(startDay) actual=\(timer.startDay ?? -1)")
+            }
             #endif
             return false
         }
         if let endMonth = timerUpdate.endMonth, timer.endMonth != endMonth {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=end.mon expected=\(endMonth) actual=\(timer.endMonth ?? -1)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=end.mon expected=\(endMonth) actual=\(timer.endMonth ?? -1)")
+            }
             #endif
             return false
         }
         if let endDay = timerUpdate.endDay, timer.endDay != endDay {
             #if DEBUG
-            print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=end.day expected=\(endDay) actual=\(timer.endDay ?? -1)")
+            if logMismatch {
+                print("timer.verify.mismatch device=\(device.id) slot=\(timerUpdate.id) field=end.day expected=\(endDay) actual=\(timer.endDay ?? -1)")
+            }
             #endif
             return false
         }
         return true
+    }
+
+    private func isTransientTimerVerificationError(_ error: Error) -> Bool {
+        if let apiError = error as? WLEDAPIError {
+            switch apiError {
+            case .timeout, .networkError, .deviceBusy, .deviceOffline, .deviceUnreachable:
+                return true
+            case .httpError(let statusCode):
+                return statusCode == 429 || statusCode >= 500
+            case .decodingError, .invalidResponse:
+                return true
+            default:
+                return false
+            }
+        }
+
+        let message = error.localizedDescription.lowercased()
+        return message.contains("timed out")
+            || message.contains("timeout")
+            || message.contains("network")
+            || message.contains("service unavailable")
+            || message.contains("503")
+            || message.contains("decode")
+            || message.contains("invalid response")
+    }
+
+    private func verifyTimerWithBackoff(
+        _ timerUpdate: WLEDTimerUpdate,
+        on device: WLEDDevice,
+        attempts: Int,
+        initialDelayMs: UInt64,
+        context: String
+    ) async throws -> Bool {
+        let totalAttempts = max(1, attempts)
+        var delayMs = max(UInt64(1), initialDelayMs)
+        var lastError: Error?
+
+        for attempt in 1...totalAttempts {
+            do {
+                let shouldLogMismatch = attempt == totalAttempts
+                if try await verifyTimer(timerUpdate, on: device, logMismatch: shouldLogMismatch) {
+                    return true
+                }
+                if attempt < totalAttempts {
+                    logger.debug(
+                        "\(context, privacy: .public).verify_transient_mismatch device=\(device.id, privacy: .public) slot=\(timerUpdate.id, privacy: .public) attempt=\(attempt, privacy: .public)/\(totalAttempts, privacy: .public)"
+                    )
+                }
+            } catch {
+                lastError = error
+                let isRetryable = isTransientTimerVerificationError(error)
+                if attempt < totalAttempts && isRetryable {
+                    logger.debug(
+                        "\(context, privacy: .public).verify_transient_error device=\(device.id, privacy: .public) slot=\(timerUpdate.id, privacy: .public) attempt=\(attempt, privacy: .public)/\(totalAttempts, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                } else {
+                    throw error
+                }
+            }
+
+            if attempt < totalAttempts {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                delayMs = min(delayMs * 2, self.timerDeleteVerifyMaxDelayMs)
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        return false
     }
     
     /// Disable a timer slot on a WLED device
@@ -1359,7 +1505,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )
         let verified: Bool
         do {
-            verified = try await verifyTimer(verifyUpdate, on: device)
+            verified = try await verifyTimerWithBackoff(
+                verifyUpdate,
+                on: device,
+                attempts: self.timerDeleteVerifyRetryAttempts,
+                initialDelayMs: self.timerDeleteVerifyInitialDelayMs,
+                context: "timer.delete"
+            )
         } catch {
             if let reconciled = try? await fetchTimers(for: device).first(where: { $0.id == slot }),
                isTimerSlotCleared(reconciled) {
@@ -1378,7 +1530,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 )
                 return true
             }
-            logger.warning("timer.delete.verify_failed device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
+            logger.warning(
+                "timer.delete.verify_failed device=\(device.id, privacy: .public) slot=\(slot, privacy: .public) attempts=\(self.timerDeleteVerifyRetryAttempts, privacy: .public)"
+            )
             return false
         }
 
@@ -1697,7 +1851,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                     name: "\(preset.name) Step \(idx + 1)",
                     quickLoad: nil,
                     state: state,
-                    saveOnly: true,
                     includeBrightness: true,
                     saveSegmentBounds: true,
                     selectedSegmentsOnly: false,

@@ -310,6 +310,46 @@ final class AutomationModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCleanupQueueSupportsDeferredNotBefore() {
+        let cleanup = DeviceCleanupManager.shared
+        let deviceId = "cleanup-test-deferred-\(UUID().uuidString)"
+        let presetId = 241
+        let deferredAt = Date().addingTimeInterval(120)
+        defer {
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [presetId])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [presetId],
+            source: .automation,
+            verificationRequired: true,
+            notBefore: deferredAt
+        )
+
+        guard let entry = cleanup.pendingDeletes.first(where: {
+            $0.type == .preset
+                && $0.deviceId == deviceId
+                && $0.source == .automation
+                && $0.deadLetteredAt == nil
+                && $0.ids.contains(presetId)
+        }) else {
+            return XCTFail("Expected deferred cleanup entry")
+        }
+
+        XCTAssertTrue(entry.verificationRequired)
+        guard let nextAttemptAt = entry.nextAttemptAt else {
+            return XCTFail("Expected deferred nextAttemptAt")
+        }
+        XCTAssertGreaterThanOrEqual(
+            nextAttemptAt.timeIntervalSince(deferredAt),
+            -1.0,
+            "Expected deferred queue entry to respect notBefore"
+        )
+    }
+
+    @MainActor
     func testDeleteManagedTransitionAutomationEnqueuesPlaylistAndStepPresetCleanup() async {
         let store = AutomationStore.shared
         let cleanup = DeviceCleanupManager.shared
@@ -421,6 +461,105 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertTrue(playlistDeleteFinished, "Expected playlist automation delete to finish")
         XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
         XCTAssertFalse(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: userPlaylistId))
+    }
+
+    @MainActor
+    func testDeleteImportedTemplateWithManagedStepMetadataEnqueuesCleanup() async {
+        let store = AutomationStore.shared
+        let cleanup = DeviceCleanupManager.shared
+        let originalAutomations = store.automations
+        defer {
+            store.automations = originalAutomations
+        }
+
+        let deviceId = "cleanup-test-imported-managed-\(UUID().uuidString)"
+        let timerSlot = 6
+        let playlistId = 131
+        let stepPresetIds = [132, 133, 134]
+
+        defer {
+            cleanup.removeIds(type: .timer, deviceId: deviceId, ids: [timerSlot])
+            cleanup.removeIds(type: .playlist, deviceId: deviceId, ids: [playlistId])
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: stepPresetIds)
+        }
+
+        let transition = TransitionActionPayload(
+            startGradient: LEDGradient(stops: [
+                GradientStop(position: 0.0, hexColor: "FFA000"),
+                GradientStop(position: 1.0, hexColor: "FFFFFF")
+            ]),
+            startBrightness: 96,
+            endGradient: LEDGradient(stops: [
+                GradientStop(position: 0.0, hexColor: "FFFFFF"),
+                GradientStop(position: 1.0, hexColor: "FFA000")
+            ]),
+            endBrightness: 192,
+            durationSeconds: 120
+        )
+
+        var automation = Automation(
+            name: "Imported Managed Transition",
+            trigger: .specificTime(TimeTrigger(time: "11:00", weekdays: WeekdayMask.allDaysSunFirst)),
+            action: .transition(transition),
+            targets: AutomationTargets(deviceIds: [deviceId])
+        )
+        automation.metadata.templateId = "wled.timer.\(deviceId).\(timerSlot)"
+        automation.metadata.wledTimerSlotsByDevice = [deviceId: timerSlot]
+        automation.metadata.wledPlaylistIdsByDevice = [deviceId: playlistId]
+        automation.metadata.wledManagedStepPresetIdsByDevice = [deviceId: stepPresetIds]
+
+        store.automations = [automation]
+        store.delete(id: automation.id)
+        let deleteFinished = await waitForCondition {
+            !store.isDeletionInProgress(for: automation.id)
+        }
+        XCTAssertTrue(deleteFinished, "Expected imported managed transition delete to finish")
+
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: playlistId))
+        for stepId in stepPresetIds {
+            XCTAssertTrue(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: stepId))
+        }
+    }
+
+    @MainActor
+    func testCleanupRequestDeleteDefersPresetMutationWhenIntegrityGuardActive() async {
+        let cleanup = DeviceCleanupManager.shared
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "cleanup-guard-\(UUID().uuidString)"
+        let presetId = 199
+        let device = WLEDDevice(
+            id: deviceId,
+            name: "Guarded Device",
+            ipAddress: "192.168.1.201",
+            isOnline: true,
+            brightness: 128,
+            currentColor: .blue
+        )
+
+        viewModel.debugSetPresetStoreHealthForTests(
+            deviceId: deviceId,
+            health: .unsafeWritesPaused,
+            pauseSeconds: 30,
+            lastMessage: "forced-pause",
+            lastEventAt: Date()
+        )
+        defer {
+            viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId)
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [presetId])
+        }
+
+        await cleanup.requestDelete(
+            type: .preset,
+            device: device,
+            ids: [presetId],
+            source: .automation
+        )
+
+        XCTAssertTrue(
+            cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: presetId),
+            "Expected guarded delete to defer and remain queued"
+        )
     }
 
     func testSelectTimerSlotDoesNotReuseActionableMacroWhenDisabled() {

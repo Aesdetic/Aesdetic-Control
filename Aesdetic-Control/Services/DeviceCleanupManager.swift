@@ -15,7 +15,10 @@ final class DeviceCleanupManager: ObservableObject {
     private let maxAttempts = 12
     private let cleanupEnabled = true
     private let maxDeletesPerPass = 2
-    private let interDeleteDelayNanoseconds: UInt64 = 180_000_000
+    // Preset/playlist filesystem mutations are heavier than timer mutations.
+    // Use a slightly slower cadence to reduce presets-store write pressure.
+    private let interPresetStoreDeleteDelayNanoseconds: UInt64 = 280_000_000
+    private let interTimerDeleteDelayNanoseconds: UInt64 = 180_000_000
 
     private struct DeleteAttemptOutcome {
         let succeededIds: [Int]
@@ -43,11 +46,13 @@ final class DeviceCleanupManager: ObservableObject {
         ids: [Int],
         source: PendingDeviceDelete.DeleteSource = .unknown,
         leaseId: UUID? = nil,
-        verificationRequired: Bool = false
+        verificationRequired: Bool = false,
+        notBefore: Date? = nil
     ) {
         guard cleanupEnabled else { return }
         let uniqueIds = Array(Set(ids)).sorted()
         guard !uniqueIds.isEmpty else { return }
+        let requestedNextAttemptAt = notBefore ?? Date()
         if let index = pendingDeletes.firstIndex(where: {
             $0.type == type
                 && $0.deviceId == deviceId
@@ -58,7 +63,8 @@ final class DeviceCleanupManager: ObservableObject {
             let mergedIds = Array(Set(pendingDeletes[index].ids + uniqueIds)).sorted()
             pendingDeletes[index].ids = mergedIds
             pendingDeletes[index].lastAttempt = Date()
-            pendingDeletes[index].nextAttemptAt = Date()
+            let existingNextAttemptAt = pendingDeletes[index].nextAttemptAt ?? requestedNextAttemptAt
+            pendingDeletes[index].nextAttemptAt = min(existingNextAttemptAt, requestedNextAttemptAt)
             pendingDeletes[index].verificationRequired = pendingDeletes[index].verificationRequired || verificationRequired
             pendingDeletes[index].lastError = nil
             save()
@@ -69,7 +75,7 @@ final class DeviceCleanupManager: ObservableObject {
             type: type,
             deviceId: deviceId,
             ids: uniqueIds,
-            nextAttemptAt: Date(),
+            nextAttemptAt: requestedNextAttemptAt,
             source: source,
             leaseId: leaseId,
             verificationRequired: verificationRequired
@@ -313,6 +319,15 @@ final class DeviceCleanupManager: ObservableObject {
 
         for id in ids {
             do {
+                if (type == .preset || type == .playlist),
+                   !(await DeviceControlViewModel.shared.shouldAllowPresetStoreMutation(deviceId: device.id)) {
+                    failed.append(id)
+                    lastError = "preset-store mutation guard is active"
+                    logger.warning(
+                        "cleanup.delete.deferred_integrity_guard device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public)"
+                    )
+                    break
+                }
                 let success: Bool
                 switch type {
                 case .preset:
@@ -349,6 +364,13 @@ final class DeviceCleanupManager: ObservableObject {
             }
 
             if id != ids.last {
+                let interDeleteDelayNanoseconds: UInt64
+                switch type {
+                case .preset, .playlist:
+                    interDeleteDelayNanoseconds = interPresetStoreDeleteDelayNanoseconds
+                case .timer:
+                    interDeleteDelayNanoseconds = interTimerDeleteDelayNanoseconds
+                }
                 try? await Task.sleep(nanoseconds: interDeleteDelayNanoseconds)
             }
         }

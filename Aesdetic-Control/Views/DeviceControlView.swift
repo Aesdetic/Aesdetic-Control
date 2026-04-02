@@ -187,7 +187,7 @@ struct DeviceControlView: View {
     }
     
     // MARK: - Filtered Devices
-    
+
     private var filteredDevicesByLocation: [WLEDDevice] {
         var devices = viewModel.devices
         if selectedLocation != .all {

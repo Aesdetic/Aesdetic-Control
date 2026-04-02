@@ -742,8 +742,13 @@ struct MiniDeviceCard: View {
     }
 
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
-    private var primaryTextColor: Color { theme.textPrimary }
-    private var secondaryTextColor: Color { theme.textSecondary }
+    private var isReferenceLightMode: Bool { colorScheme == .light }
+    private var primaryTextColor: Color {
+        isReferenceLightMode ? Color.white.opacity(0.92) : theme.textPrimary
+    }
+    private var secondaryTextColor: Color {
+        isReferenceLightMode ? Color.white.opacity(0.74) : theme.textSecondary
+    }
     private let miniCardCornerRadius: CGFloat = 20
     private var cardStyle: AppCardStyle {
         AppCardStyles.glass(
@@ -751,6 +756,9 @@ struct MiniDeviceCard: View {
             tone: currentPowerState ? .active : .inactive,
             cornerRadius: miniCardCornerRadius
         )
+    }
+    private var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: miniCardCornerRadius, style: .continuous)
     }
     private var activeRunStatus: ActiveRunStatus? { viewModel.activeRunStatus[device.id] }
     private var liftKeyShadowColor: Color {
@@ -816,11 +824,21 @@ struct MiniDeviceCard: View {
         .frame(maxWidth: .infinity)
         .scaleEffect(1.0)
         .background(
-            AppCardBackground(style: cardStyle)
+            miniCardBackground
         )
         .clipShape(RoundedRectangle(cornerRadius: miniCardCornerRadius, style: .continuous))
-        .shadow(color: liftAmbientShadowColor, radius: 10, x: 0, y: 4)
-        .shadow(color: liftKeyShadowColor, radius: 22, x: 0, y: 14)
+        .shadow(
+            color: isReferenceLightMode ? .clear : liftAmbientShadowColor,
+            radius: isReferenceLightMode ? 0 : 10,
+            x: 0,
+            y: isReferenceLightMode ? 0 : 4
+        )
+        .shadow(
+            color: isReferenceLightMode ? .clear : liftKeyShadowColor,
+            radius: isReferenceLightMode ? 0 : 22,
+            x: 0,
+            y: isReferenceLightMode ? 0 : 14
+        )
         .onTapGesture {
             onTap()
         }
@@ -831,6 +849,98 @@ struct MiniDeviceCard: View {
         .onDisappear {
             // Clean up UI optimistic state when view disappears
             viewModel.clearUIOptimisticState(deviceId: device.id)
+        }
+    }
+
+    @ViewBuilder
+    private var miniCardBackground: some View {
+        if isReferenceLightMode {
+            cardShape
+                .fill(.ultraThinMaterial)
+                .opacity(0.78)
+                .overlay(
+                    cardShape
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.005),
+                                    Color.white.opacity(0.0010)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    cardShape
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.58, green: 0.70, blue: 0.75).opacity(0.010),
+                                    Color.clear,
+                                    Color(red: 0.90, green: 0.78, blue: 0.68).opacity(0.006)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                )
+                .overlay(
+                    cardShape
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(0.022),
+                                    Color.white.opacity(0.004),
+                                    Color.clear
+                                ],
+                                center: .topTrailing,
+                                startRadius: 8,
+                                endRadius: 170
+                            )
+                        )
+                )
+                .overlay(
+                    cardShape
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.006),
+                                    Color.clear,
+                                    Color.clear
+                                ],
+                                startPoint: .bottomLeading,
+                                endPoint: .topTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    cardShape
+                        .stroke(Color.white.opacity(0.058), lineWidth: 0.34)
+                )
+                .overlay(
+                    cardShape
+                        .inset(by: 1)
+                        .stroke(Color.white.opacity(0.018), lineWidth: 0.21)
+                )
+                .overlay(
+                    cardShape
+                        .inset(by: 1.4)
+                        .stroke(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: Color.white.opacity(0.085), location: 0.0),
+                                    .init(color: Color.white.opacity(0.028), location: 0.34),
+                                    .init(color: Color.clear, location: 0.74)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 0.30
+                        )
+                )
+        } else {
+            AppCardBackground(style: cardStyle)
         }
     }
 
@@ -901,7 +1011,11 @@ struct MiniDeviceCard: View {
             ZStack {
                 Image(systemName: "power")
                     .font(.headline.weight(.medium))
-                    .foregroundColor(AppTheme.controlForeground(for: colorScheme, isActive: currentPowerState))
+                    .foregroundColor(
+                        isReferenceLightMode
+                            ? Color.white.opacity(currentPowerState ? 0.90 : 0.72)
+                            : AppTheme.controlForeground(for: colorScheme, isActive: currentPowerState)
+                    )
                     .opacity(isToggling ? 0.7 : 1.0)
                 
                 // Loading indicator overlay
@@ -913,12 +1027,23 @@ struct MiniDeviceCard: View {
             }
             .frame(width: 36, height: 36)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(currentPowerState ? .white : .clear)
-                    .overlay(
+                Group {
+                    if isReferenceLightMode {
+                        Circle()
+                            .fill(Color.white.opacity(currentPowerState ? 0.14 : 0.08))
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white.opacity(currentPowerState ? 0.20 : 0.11), lineWidth: 0.9)
+                            )
+                    } else {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
-                    )
+                            .fill(currentPowerState ? .white : .clear)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
+                            )
+                    }
+                }
             )
             .shadow(
                 color: theme.controlShadowAmbient.color,

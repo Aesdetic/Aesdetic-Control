@@ -691,4 +691,92 @@ struct DeviceControlViewModelTests {
         #expect(used140.legSeconds == 65)
         #expect(used140.perAutomationBudget == 18)
     }
+
+    @Test("preset-store mutation guard blocks writes while paused")
+    func testPresetStoreMutationGuardBlocksWhenPaused() async {
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "preset-guard-paused-\(UUID().uuidString)"
+        viewModel.debugSetPresetStoreHealthForTests(
+            deviceId: deviceId,
+            health: .unsafeWritesPaused,
+            pauseSeconds: 30,
+            lastMessage: "forced-pause",
+            lastEventAt: Date()
+        )
+        defer { viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId) }
+
+        let allowed = await viewModel.debugShouldAllowPresetStoreMutationForTests(deviceId: deviceId)
+        #expect(allowed == false)
+    }
+
+    @Test("preset-store mutation guard blocks recent transport failures")
+    func testPresetStoreMutationGuardBlocksRecentTransportFailure() async {
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "preset-guard-transport-\(UUID().uuidString)"
+        viewModel.debugSetPresetStoreHealthForTests(
+            deviceId: deviceId,
+            health: .degradedReadable,
+            pauseSeconds: nil,
+            lastMessage: "HTTP 503 Service unavailable",
+            lastEventAt: Date()
+        )
+        defer { viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId) }
+
+        let allowed = await viewModel.debugShouldAllowPresetStoreMutationForTests(deviceId: deviceId)
+        #expect(allowed == false)
+    }
+
+    @Test("preset-store mutation guard blocks recent unreadable catalog failures")
+    func testPresetStoreMutationGuardBlocksRecentUnreadableFailure() async {
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "preset-guard-unreadable-\(UUID().uuidString)"
+        viewModel.debugSetPresetStoreHealthForTests(
+            deviceId: deviceId,
+            health: .degradedReadable,
+            pauseSeconds: nil,
+            lastMessage: "Failed to decode response: The data couldn't be read because it isn't in the correct format.",
+            lastEventAt: Date()
+        )
+        defer { viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId) }
+
+        let allowed = await viewModel.debugShouldAllowPresetStoreMutationForTests(deviceId: deviceId)
+        #expect(allowed == false)
+    }
+
+    @Test("persistent transition build aborts when mutation guard is active")
+    func testPersistentTransitionBuildBlockedByMutationGuard() async {
+        let viewModel = DeviceControlViewModel.shared
+        let device = createTestDevice(id: "persist-guard-\(UUID().uuidString)")
+        viewModel.debugSetPresetStoreHealthForTests(
+            deviceId: device.id,
+            health: .unsafeWritesPaused,
+            pauseSeconds: 30,
+            lastMessage: "forced-pause",
+            lastEventAt: Date()
+        )
+        defer { viewModel.debugClearPresetStoreHealthForTests(deviceId: device.id) }
+
+        let gradientA = LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFA000"),
+            GradientStop(position: 1.0, hexColor: "FFFFFF")
+        ])
+        let gradientB = LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "59A4FF")
+        ])
+
+        let playlist = await viewModel.createTransitionPlaylist(
+            device: device,
+            from: gradientA,
+            to: gradientB,
+            durationSeconds: 60,
+            startBrightness: 64,
+            endBrightness: 128,
+            persist: true,
+            label: "Guarded Playlist"
+        )
+
+        #expect(playlist == nil)
+        #expect(viewModel.presetWriteInProgress.contains(device.id) == false)
+    }
 }

@@ -32,6 +32,8 @@ class AutomationStore: ObservableObject {
     private let maxWLEDTransitionSeconds: Double = 6553.5
     private let cleanupThrottleKey = "aesdetic_automation_cleanup_last"
     private let cleanupThrottleInterval: TimeInterval = 6 * 60 * 60
+    private let managedAssetDeferredCleanupDelaySeconds: TimeInterval = 120
+    private let orphanSweepDeferredCleanupDelaySeconds: TimeInterval = 180
     private let onDeviceSyncRetryInterval: TimeInterval = 30
     private let syncedValidationInterval: TimeInterval = 120
     private var onDeviceSyncInFlightAutomationIds: Set<UUID> = []
@@ -204,6 +206,12 @@ class AutomationStore: ObservableObject {
             scheduleNext()
             scheduleSolarRefreshIfNeeded()
             scheduleOnDeviceSyncRetryIfNeeded()
+            let onlineTargets = removed.targets.deviceIds.compactMap { deviceId in
+                viewModel.devices.first(where: { $0.id == deviceId && $0.isOnline })
+            }
+            for device in onlineTargets {
+                await cleanupOrphanedAutomationPresets(for: device)
+            }
             logger.info("Deleted automation: \(removed.name)")
         }
     }
@@ -686,6 +694,7 @@ class AutomationStore: ObservableObject {
                         presetMap.removeValue(forKey: device.id)
                         existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
                         existing.metadata.setManagedPresetSignature(nil, for: device.id)
+                        existing.metadata.setManagedStepPresetIds(nil, for: device.id)
                         if existing.targets.deviceIds.count == 1 {
                             existing.metadata.wledPlaylistId = nextPlaylistId
                         }
@@ -694,6 +703,7 @@ class AutomationStore: ObservableObject {
                         playlistMap.removeValue(forKey: device.id)
                         existing.metadata.setManagedPresetSignature(nil, for: device.id)
                         existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
+                        existing.metadata.setManagedStepPresetIds(nil, for: device.id)
                         if existing.targets.deviceIds.count == 1 {
                             existing.metadata.wledPlaylistId = nil
                         }
@@ -738,7 +748,7 @@ class AutomationStore: ObservableObject {
                     existing.action = action
                 }
                 existing.metadata.runOnDevice = true
-                if existing.metadata.templateId == nil {
+                if !preserveAuthoredAction && existing.metadata.templateId == nil {
                     existing.metadata.templateId = templateId
                 }
                 existing.metadata.normalizeWLEDScalarFallbacks(for: existing.targets.deviceIds)
@@ -870,10 +880,20 @@ class AutomationStore: ObservableObject {
         }
     }
 
-    func cleanupOrphanedAutomationPresets(for device: WLEDDevice) async {
+    func cleanupOrphanedAutomationPresets(
+        for device: WLEDDevice,
+        excludingAutomationId: UUID? = nil
+    ) async {
         let deviceId = device.id
+        if !(await viewModel.shouldAllowPresetStoreMutation(deviceId: deviceId)) {
+            logger.warning(
+                "automation.cleanup.orphan_sweep.deferred_integrity_guard device=\(deviceId, privacy: .public)"
+            )
+            return
+        }
         var usedPresetIds: Set<Int> = []
         var usedPlaylistIds: Set<Int> = []
+        var fallbackTransitionStepPresetIds: Set<Int> = []
 
         for preset in presetsStore.colorPresets {
             if let ids = preset.wledPresetIds, let id = ids[deviceId] {
@@ -895,11 +915,14 @@ class AutomationStore: ObservableObject {
                 usedPlaylistIds.insert(playlistId)
             }
             if let stepIds = preset.wledStepPresetIds {
-                usedPresetIds.formUnion(stepIds)
+                fallbackTransitionStepPresetIds.formUnion(stepIds)
             }
         }
 
         for automation in automations {
+            if let excludingAutomationId, automation.id == excludingAutomationId {
+                continue
+            }
             if let presetMap = automation.metadata.wledPresetIdsByDevice, let id = presetMap[deviceId] {
                 usedPresetIds.insert(id)
             }
@@ -920,11 +943,14 @@ class AutomationStore: ObservableObject {
             }
         }
 
-        var playlists: [WLEDPlaylist] = []
+        let playlists: [WLEDPlaylist]
         do {
             playlists = try await apiService.fetchPlaylists(for: device)
         } catch {
-            logger.error("Failed to fetch playlists for cleanup on \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.warning(
+                "automation.cleanup.orphan_sweep.skipped_unreadable_playlists device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            return
         }
 
         let usedStepPresetIds = Set(
@@ -933,20 +959,35 @@ class AutomationStore: ObservableObject {
         )
         usedPresetIds.formUnion(usedStepPresetIds)
 
+        let presets: [WLEDPreset]
         do {
-            let presets = try await apiService.fetchPresets(for: device)
-            let presetDeletes = presets.filter { preset in
-                guard !usedPresetIds.contains(preset.id) else { return false }
-                return automationManagedPresetName(preset.name) || temporaryTransitionStepName(preset.name)
-            }.map { $0.id }
-
-            if presetDeletes.count <= 20, !presetDeletes.isEmpty {
-                await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: presetDeletes)
-            } else if presetDeletes.count > 20 {
-                logger.warning("Skipping preset cleanup for \(device.name, privacy: .public): too many candidates (\(presetDeletes.count))")
-            }
+            presets = try await apiService.fetchPresets(for: device)
         } catch {
-            logger.error("Failed to fetch presets for cleanup on \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.warning(
+                "automation.cleanup.orphan_sweep.skipped_unreadable_presets device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            return
+        }
+
+        let fallbackStepDeletes = fallbackTransitionStepPresetIds.filter { !usedPresetIds.contains($0) }
+        let presetDeletes = presets.filter { preset in
+            guard !usedPresetIds.contains(preset.id) else { return false }
+            return automationManagedPresetName(preset.name) || temporaryTransitionStepName(preset.name)
+        }.map { $0.id } + fallbackStepDeletes
+
+        let dedupedPresetDeletes = Array(Set(presetDeletes)).sorted()
+        if dedupedPresetDeletes.count <= 20, !dedupedPresetDeletes.isEmpty {
+            enqueueDeferredManagedAssetCleanup(
+                type: .preset,
+                device: device,
+                ids: dedupedPresetDeletes,
+                delay: orphanSweepDeferredCleanupDelaySeconds,
+                reason: "orphan_sweep"
+            )
+        } else if dedupedPresetDeletes.count > 20 {
+            logger.warning(
+                "Skipping preset cleanup for \(device.name, privacy: .public): too many candidates (\(dedupedPresetDeletes.count))"
+            )
         }
 
         let playlistDeletes = playlists.filter { playlist in
@@ -955,7 +996,13 @@ class AutomationStore: ObservableObject {
         }.map { $0.id }
 
         if playlistDeletes.count <= 10, !playlistDeletes.isEmpty {
-            await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: playlistDeletes)
+            enqueueDeferredManagedAssetCleanup(
+                type: .playlist,
+                device: device,
+                ids: playlistDeletes,
+                delay: orphanSweepDeferredCleanupDelaySeconds,
+                reason: "orphan_sweep"
+            )
         } else if playlistDeletes.count > 10 {
             logger.warning("Skipping playlist cleanup for \(device.name, privacy: .public): too many candidates (\(playlistDeletes.count))")
         }
@@ -963,6 +1010,29 @@ class AutomationStore: ObservableObject {
 
     func cleanupOrphanedAutomationPresetsIfNeeded(for device: WLEDDevice) async {
         await runCleanupOrphanedPresetsIfNeeded(device: device)
+    }
+
+    private func enqueueDeferredManagedAssetCleanup(
+        type: PendingDeviceDelete.DeleteType,
+        device: WLEDDevice,
+        ids: [Int],
+        delay: TimeInterval,
+        reason: String
+    ) {
+        let uniqueIds = Array(Set(ids)).sorted()
+        guard !uniqueIds.isEmpty else { return }
+        let notBefore = Date().addingTimeInterval(max(0, delay))
+        DeviceCleanupManager.shared.enqueue(
+            type: type,
+            deviceId: device.id,
+            ids: uniqueIds,
+            source: .automation,
+            verificationRequired: true,
+            notBefore: notBefore
+        )
+        logger.info(
+            "automation.cleanup.deferred type=\(type.rawValue, privacy: .public) device=\(device.id, privacy: .public) ids=\(uniqueIds, privacy: .public) reason=\(reason, privacy: .public) notBefore=\(notBefore.ISO8601Format(), privacy: .public)"
+        )
     }
 
     private func automationManagedPresetName(_ name: String) -> Bool {
@@ -2187,11 +2257,12 @@ class AutomationStore: ObservableObject {
                     deviceId: device.id,
                     excluding: automation.id
                ) {
-                await DeviceCleanupManager.shared.requestDelete(
+                enqueueDeferredManagedAssetCleanup(
                     type: .playlist,
                     device: device,
                     ids: [previousManagedPlaylistId],
-                    source: .automation
+                    delay: managedAssetDeferredCleanupDelaySeconds,
+                    reason: "managed_transition_replaced"
                 )
             }
 
@@ -2205,11 +2276,12 @@ class AutomationStore: ObservableObject {
                     )
                 }
             if !staleStepPresetIds.isEmpty {
-                await DeviceCleanupManager.shared.requestDelete(
+                enqueueDeferredManagedAssetCleanup(
                     type: .preset,
                     device: device,
                     ids: Array(staleStepPresetIds).sorted(),
-                    source: .automation
+                    delay: managedAssetDeferredCleanupDelaySeconds,
+                    reason: "managed_transition_replaced"
                 )
             }
 
@@ -2428,7 +2500,6 @@ class AutomationStore: ObservableObject {
                 name: label,
                 quickLoad: nil,
                 state: state,
-                saveOnly: true,
                 includeBrightness: true,
                 saveSegmentBounds: false,
                 selectedSegmentsOnly: false
@@ -3959,7 +4030,7 @@ class AutomationStore: ObservableObject {
             }
         }
 
-        await cleanupOrphanedAutomationPresets(for: device)
+        await cleanupOrphanedAutomationPresets(for: device, excludingAutomationId: automation.id)
         logger.info("automation.delete.pipeline.orphan_cleanup_done trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public)")
 
         if let timerSlot, shouldDeleteTimerSlot {
@@ -4048,13 +4119,15 @@ class AutomationStore: ObservableObject {
     }
 
     private func shouldDeleteManagedPlaylistAsset(for automation: Automation, deviceId: String) -> Bool {
+        if automation.metadata.managedPlaylistSignature(for: deviceId) != nil {
+            return true
+        }
+        if !(automation.metadata.managedStepPresetIds(for: deviceId) ?? []).isEmpty {
+            return true
+        }
         if let templateId = automation.metadata.templateId,
            templateId.hasPrefix(importedAutomationTemplatePrefix) {
             return false
-        }
-
-        if automation.metadata.managedPlaylistSignature(for: deviceId) != nil {
-            return true
         }
 
         switch automation.action {
@@ -4066,13 +4139,12 @@ class AutomationStore: ObservableObject {
     }
 
     private func shouldDeleteManagedPresetAsset(for automation: Automation, deviceId: String) -> Bool {
+        if automation.metadata.managedPresetSignature(for: deviceId) != nil {
+            return true
+        }
         if let templateId = automation.metadata.templateId,
            templateId.hasPrefix(importedAutomationTemplatePrefix) {
             return false
-        }
-
-        if automation.metadata.managedPresetSignature(for: deviceId) != nil {
-            return true
         }
 
         switch automation.action {

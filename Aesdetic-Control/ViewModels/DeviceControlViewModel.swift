@@ -771,6 +771,7 @@ class DeviceControlViewModel: ObservableObject {
     private let playlistSaveDelayNanos: UInt64 = 600_000_000
     private let playlistVerifyDelayNanos: UInt64 = 700_000_000
     private let playlistStartDelayNanos: UInt64 = 400_000_000
+    private let persistentRollbackCleanupDelaySeconds: TimeInterval = 120
     private let pendingPlaylistRenameQueueKey = "aesdetic_pending_playlist_renames_v1"
     private let pendingPlaylistRenameRetryLimit = 10
     private let firstDiscoveryTimeSyncKeyPrefix = "aesdetic_first_discovery_time_sync_v1."
@@ -1502,6 +1503,43 @@ class DeviceControlViewModel: ObservableObject {
             count: stepCount
         )
         return (playlistId, stepIds)
+    }
+
+    func debugSetPresetStoreHealthForTests(
+        deviceId: String,
+        health: PresetStoreHealthState = .healthy,
+        pauseSeconds: TimeInterval? = nil,
+        lastMessage: String? = nil,
+        lastEventAt: Date? = nil
+    ) {
+        presetStoreHealthByDeviceId[deviceId] = health
+        if let pauseSeconds {
+            presetStoreWritePauseUntilByDeviceId[deviceId] = Date().addingTimeInterval(pauseSeconds)
+        } else {
+            presetStoreWritePauseUntilByDeviceId.removeValue(forKey: deviceId)
+        }
+        if let lastMessage {
+            lastPresetStoreHealthMessageByDeviceId[deviceId] = lastMessage
+        } else {
+            lastPresetStoreHealthMessageByDeviceId.removeValue(forKey: deviceId)
+        }
+        if let lastEventAt {
+            lastPresetStoreHealthEventByDeviceId[deviceId] = lastEventAt
+        } else {
+            lastPresetStoreHealthEventByDeviceId.removeValue(forKey: deviceId)
+        }
+    }
+
+    func debugClearPresetStoreHealthForTests(deviceId: String) {
+        presetStoreHealthByDeviceId.removeValue(forKey: deviceId)
+        presetStoreWritePauseUntilByDeviceId.removeValue(forKey: deviceId)
+        lastPresetStoreHealthMessageByDeviceId.removeValue(forKey: deviceId)
+        lastPresetStoreHealthEventByDeviceId.removeValue(forKey: deviceId)
+        presetStoreFailureEventsByDeviceId.removeValue(forKey: deviceId)
+    }
+
+    func debugShouldAllowPresetStoreMutationForTests(deviceId: String) async -> Bool {
+        await shouldAllowPresetStoreMutation(deviceId: deviceId)
     }
     #endif
 
@@ -6261,6 +6299,7 @@ class DeviceControlViewModel: ObservableObject {
             if hasKnownActiveRun(for: device.id) {
                 await cancelActiveRun(for: device, force: true, endReason: .cancelledByManualInput)
             }
+            await waitForInteractivePresetWriteWindow(deviceId: device.id)
         }
         
         // CRITICAL: Mark user interaction only for user-driven updates
@@ -7781,19 +7820,33 @@ class DeviceControlViewModel: ObservableObject {
             || message.contains("network")
             || message.contains("503")
             || message.contains("service unavailable")
+            || message.contains("decode")
+            || message.contains("decoding")
+            || message.contains("isn’t in the correct format")
+            || message.contains("isn't in the correct format")
+            || message.contains("invalid response")
+            || message.contains("unreadable")
     }
 
-    private func shouldFailFastTemporaryPlaylistBuild(device: WLEDDevice) async -> Bool {
-        if isPresetStoreWritePaused(for: device.id) {
+    private func shouldBlockPresetStoreMutation(deviceId: String) async -> Bool {
+        if isPresetStoreWritePaused(for: deviceId) {
             return true
         }
-        if hasRecentPresetStoreTransportFailure(deviceId: device.id) {
+        if hasRecentPresetStoreTransportFailure(deviceId: deviceId) {
             return true
         }
-        if await apiService.isStateWriteBackoffActive(deviceId: device.id) {
+        if await apiService.isStateWriteBackoffActive(deviceId: deviceId) {
             return true
         }
         return false
+    }
+
+    func shouldAllowPresetStoreMutation(deviceId: String) async -> Bool {
+        !(await shouldBlockPresetStoreMutation(deviceId: deviceId))
+    }
+
+    private func shouldFailFastTemporaryPlaylistBuild(device: WLEDDevice) async -> Bool {
+        await shouldBlockPresetStoreMutation(deviceId: device.id)
     }
 
     private func isTransientPresetStoreWriteError(_ error: Error) -> Bool {
@@ -7854,20 +7907,45 @@ class DeviceControlViewModel: ObservableObject {
         throw lastError ?? WLEDAPIError.invalidResponse
     }
 
-    private func verifyPresetIds(_ presetIds: [Int], device: WLEDDevice) async -> Bool {
+    private enum CatalogVerificationResult {
+        case verified
+        case missing
+        case unreadable(error: Error?)
+    }
+
+    private func verifyPresetIds(_ presetIds: [Int], device: WLEDDevice) async -> CatalogVerificationResult {
+        var successfulReads = 0
+        var missingReads = 0
+        var lastReadError: Error?
+
         for attempt in 1...presetVerifyRetryAttempts {
-            if let presets = try? await apiService.fetchPresets(for: device) {
+            do {
+                let presets = try await apiService.fetchPresets(for: device)
+                successfulReads += 1
                 let savedIds = Set(presets.map { $0.id })
                 if presetIds.allSatisfy({ savedIds.contains($0) }) {
-                    return true
+                    return .verified
                 }
+                missingReads += 1
+            } catch {
+                lastReadError = error
             }
+
             if attempt < presetVerifyRetryAttempts {
                 let delay = presetVerifyDelayNanos * UInt64(attempt)
                 try? await Task.sleep(nanoseconds: delay)
             }
         }
-        return false
+
+        // Require at least two successful readable misses before concluding "missing".
+        if successfulReads >= 2, missingReads == successfulReads {
+            return .missing
+        }
+        notePresetStoreDegradedReadable(
+            deviceId: device.id,
+            message: "Preset catalog unreadable during verification: \(lastReadError?.localizedDescription ?? "unknown")"
+        )
+        return .unreadable(error: lastReadError)
     }
 
     private func savePlaylistWithRetry(
@@ -7899,18 +7977,37 @@ class DeviceControlViewModel: ObservableObject {
         throw lastError ?? WLEDAPIError.invalidResponse
     }
 
-    private func verifyPlaylistId(_ playlistId: Int, device: WLEDDevice) async -> Bool {
+    private func verifyPlaylistId(_ playlistId: Int, device: WLEDDevice) async -> CatalogVerificationResult {
+        var successfulReads = 0
+        var missingReads = 0
+        var lastReadError: Error?
+
         for attempt in 1...playlistVerifyRetryAttempts {
-            if let playlists = try? await apiService.fetchPlaylists(for: device),
-               playlists.contains(where: { $0.id == playlistId }) {
-                return true
+            do {
+                let playlists = try await apiService.fetchPlaylists(for: device)
+                successfulReads += 1
+                if playlists.contains(where: { $0.id == playlistId }) {
+                    return .verified
+                }
+                missingReads += 1
+            } catch {
+                lastReadError = error
             }
+
             if attempt < playlistVerifyRetryAttempts {
                 let delay = playlistVerifyDelayNanos * UInt64(attempt)
                 try? await Task.sleep(nanoseconds: delay)
             }
         }
-        return false
+
+        if successfulReads >= 2, missingReads == successfulReads {
+            return .missing
+        }
+        notePresetStoreDegradedReadable(
+            deviceId: device.id,
+            message: "Playlist catalog unreadable during verification: \(lastReadError?.localizedDescription ?? "unknown")"
+        )
+        return .unreadable(error: lastReadError)
     }
 
     struct TransitionPlaylistResult {
@@ -7961,6 +8058,12 @@ class DeviceControlViewModel: ObservableObject {
         if !persist, await shouldFailFastTemporaryPlaylistBuild(device: device) {
             #if DEBUG
             print("⚠️ Playlist creation skipped for \(device.name): recent timeout/backoff window active.")
+            #endif
+            return nil
+        }
+        if persist, !(await shouldAllowPresetStoreMutation(deviceId: device.id)) {
+            #if DEBUG
+            print("⚠️ Playlist creation deferred for \(device.name): preset-store mutation guard is active.")
             #endif
             return nil
         }
@@ -8162,6 +8265,12 @@ class DeviceControlViewModel: ObservableObject {
             return nil
         }
 
+        await MainActor.run {
+            // Prevent stale deferred deletes from removing IDs we are actively reusing.
+            DeviceCleanupManager.shared.removeIds(type: .playlist, deviceId: device.id, ids: [playlistId])
+            DeviceCleanupManager.shared.removeIds(type: .preset, deviceId: device.id, ids: stepPresetIds)
+        }
+
         #if DEBUG
         print("transition.playlist_build.ids device=\(device.id)\(operationContext) persist=\(persist) playlist=\(playlistId) stepIds=\(stepPresetIds)")
         #endif
@@ -8189,8 +8298,34 @@ class DeviceControlViewModel: ObservableObject {
         }
 
         let shouldCleanupStepPresets = needsStepIds
-        func cleanupAllocatedStepPresets() async {
+
+        func enqueuePersistentRollbackStepCleanup(reason: String) async {
+            guard persist, shouldCleanupStepPresets, !stepPresetIds.isEmpty else { return }
+            let notBefore = Date().addingTimeInterval(persistentRollbackCleanupDelaySeconds)
+            await MainActor.run {
+                DeviceCleanupManager.shared.enqueue(
+                    type: .preset,
+                    deviceId: device.id,
+                    ids: stepPresetIds,
+                    source: .automation,
+                    verificationRequired: true,
+                    notBefore: notBefore
+                )
+            }
+            #if DEBUG
+            print("transition.playlist_build.rollback_deferred device=\(device.id)\(operationContext) reason=\(reason) ids=\(stepPresetIds) notBefore=\(notBefore.ISO8601Format())")
+            #endif
+        }
+
+        func cleanupAllocatedStepPresets(reason: String) async {
             guard shouldCleanupStepPresets, !stepPresetIds.isEmpty else { return }
+            if persist {
+                await enqueuePersistentRollbackStepCleanup(reason: reason)
+                return
+            }
+            #if DEBUG
+            print("transition.playlist_build.rollback_delete device=\(device.id)\(operationContext) reason=\(reason) ids=\(stepPresetIds)")
+            #endif
             await DeviceCleanupManager.shared.requestDelete(
                 type: .preset,
                 device: device,
@@ -8201,14 +8336,14 @@ class DeviceControlViewModel: ObservableObject {
             )
         }
 
-        func cleanupFailedTemporaryOrAllocated() async {
+        func cleanupFailedTemporaryOrAllocated(reason: String) async {
             if let temporaryLeaseId {
                 await TemporaryTransitionCleanupService.shared.markCreationFailed(
                     leaseId: temporaryLeaseId,
                     device: device
                 )
             } else {
-                await cleanupAllocatedStepPresets()
+                await cleanupAllocatedStepPresets(reason: reason)
             }
         }
 
@@ -8265,7 +8400,7 @@ class DeviceControlViewModel: ObservableObject {
                 #if DEBUG
                 print("⚠️ Playlist creation aborted for \(device.name): device entered timeout/backoff window mid-build.")
                 #endif
-                await cleanupFailedTemporaryOrAllocated()
+                await cleanupFailedTemporaryOrAllocated(reason: "temp_backoff_mid_build")
                 return nil
             }
             let keyframe = keyframes[idx]
@@ -8297,7 +8432,8 @@ class DeviceControlViewModel: ObservableObject {
                 name: "\(autoStepPrefix)\(presetId)",
                 quickLoad: nil,
                 state: state,
-                saveOnly: true,
+                // Use default async preset serialization path (omit `o=true`) to
+                // avoid WLED's immediate API-call save mode that is more fragile.
                 includeBrightness: true,
                 saveSegmentBounds: true,
                 selectedSegmentsOnly: false,
@@ -8319,7 +8455,7 @@ class DeviceControlViewModel: ObservableObject {
                 #if DEBUG
                 print("⚠️ Playlist creation failed: preset save error for \(device.name): \(error.localizedDescription)")
                 #endif
-                await cleanupFailedTemporaryOrAllocated()
+                await cleanupFailedTemporaryOrAllocated(reason: "preset_save_error")
                 return nil
             }
             // Give WLED time to flush presets.json between writes.
@@ -8329,13 +8465,24 @@ class DeviceControlViewModel: ObservableObject {
         try? await Task.sleep(nanoseconds: 500_000_000)
         // Verify presets exist before building playlist for persistent saves.
         if persist {
-            let presetsVerified = await verifyPresetIds(stepPresetIds, device: device)
-            if !presetsVerified {
+            let presetVerification = await verifyPresetIds(stepPresetIds, device: device)
+            switch presetVerification {
+            case .verified:
+                break
+            case .missing:
                 #if DEBUG
                 print("⚠️ Playlist creation warning: missing presets after save for \(device.name): \(stepPresetIds)")
                 #endif
-                await cleanupAllocatedStepPresets()
+                await cleanupAllocatedStepPresets(reason: "preset_verify_missing")
                 return nil
+            case .unreadable(let error):
+                #if DEBUG
+                print("⚠️ Playlist preset verification unreadable for \(device.name); proceeding without destructive cleanup. error=\(error?.localizedDescription ?? "none")")
+                #endif
+                // Do not cleanup on unreadable catalog state. Heavy write windows can make
+                // /presets.json temporarily unreadable; aggressive cleanup here destroys
+                // newly created assets and causes endless automation create retries.
+                break
             }
         }
 
@@ -8390,20 +8537,29 @@ class DeviceControlViewModel: ObservableObject {
                     print("🔎 Playlist saved for \(device.name): id=\(saved.id), ps=\(saved.presets.count), dur=\(saved.duration.count), transition=\(saved.transition.count)")
                 }
                 #endif
-                if !(await verifyPlaylistId(playlistId, device: device)) {
+                let playlistVerification = await verifyPlaylistId(playlistId, device: device)
+                switch playlistVerification {
+                case .verified:
+                    break
+                case .missing:
                     #if DEBUG
                     print("⚠️ Playlist still missing after verification for \(device.name).")
                     #endif
                     playlistUnsupportedDevices.insert(device.id)
-                    await cleanupFailedTemporaryOrAllocated()
+                    await cleanupFailedTemporaryOrAllocated(reason: "playlist_verify_missing")
                     return nil
+                case .unreadable(let error):
+                    #if DEBUG
+                    print("⚠️ Playlist verification unreadable for \(device.name); proceeding without destructive cleanup. error=\(error?.localizedDescription ?? "none")")
+                    #endif
+                    break
                 }
             }
         } catch {
             #if DEBUG
             print("⚠️ Playlist creation failed: playlist save error for \(device.name): \(error.localizedDescription)")
             #endif
-            await cleanupFailedTemporaryOrAllocated()
+            await cleanupFailedTemporaryOrAllocated(reason: "playlist_save_error")
             return nil
         }
 
@@ -8460,17 +8616,39 @@ class DeviceControlViewModel: ObservableObject {
         print("transition_preset.save.synced device=\(device.id)\(operationContext) playlist=\(result.playlistId) stepIds=\(result.stepPresetIds)")
         #endif
 
+        let deferredCleanupAt = Date().addingTimeInterval(persistentRollbackCleanupDelaySeconds)
         if let existingPlaylistId = preset.wledPlaylistId, existingPlaylistId != result.playlistId {
-            await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [existingPlaylistId])
+            await MainActor.run {
+                DeviceCleanupManager.shared.enqueue(
+                    type: .playlist,
+                    deviceId: device.id,
+                    ids: [existingPlaylistId],
+                    source: .unknown,
+                    verificationRequired: true,
+                    notBefore: deferredCleanupAt
+                )
+            }
+            #if DEBUG
+            print("transition_preset.save.cleanup_deferred device=\(device.id)\(operationContext) type=playlist ids=[\(existingPlaylistId)] notBefore=\(deferredCleanupAt.ISO8601Format())")
+            #endif
         }
         if let existingStepPresetIds = preset.wledStepPresetIds {
             let staleStepIds = Set(existingStepPresetIds).subtracting(Set(result.stepPresetIds))
             if !staleStepIds.isEmpty {
-                await DeviceCleanupManager.shared.requestDelete(
-                    type: .preset,
-                    device: device,
-                    ids: Array(staleStepIds).sorted()
-                )
+                let staleIds = Array(staleStepIds).sorted()
+                await MainActor.run {
+                    DeviceCleanupManager.shared.enqueue(
+                        type: .preset,
+                        deviceId: device.id,
+                        ids: staleIds,
+                        source: .unknown,
+                        verificationRequired: true,
+                        notBefore: deferredCleanupAt
+                    )
+                }
+                #if DEBUG
+                print("transition_preset.save.cleanup_deferred device=\(device.id)\(operationContext) type=preset ids=\(staleIds) notBefore=\(deferredCleanupAt.ISO8601Format())")
+                #endif
             }
         }
 
@@ -9544,6 +9722,32 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
+    private func waitForInteractivePresetWriteWindow(deviceId: String, timeout: TimeInterval = 90.0) async {
+        guard presetWriteInProgress.contains(deviceId) else { return }
+        #if DEBUG
+        let startedAt = Date()
+        print("gradient.apply.wait_preset_write.begin device=\(deviceId)")
+        #endif
+        let deadline = Date().addingTimeInterval(timeout)
+        while presetWriteInProgress.contains(deviceId), Date() < deadline {
+            if Task.isCancelled {
+                #if DEBUG
+                print("gradient.apply.wait_preset_write.cancelled device=\(deviceId)")
+                #endif
+                return
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        #if DEBUG
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        if presetWriteInProgress.contains(deviceId) {
+            print("gradient.apply.wait_preset_write.timeout device=\(deviceId) ms=\(elapsedMs)")
+        } else {
+            print("gradient.apply.wait_preset_write.ready device=\(deviceId) ms=\(elapsedMs)")
+        }
+        #endif
+    }
+
     func isTransitionCleanupInProgress(for deviceId: String) -> Bool {
         transitionCleanupInProgress.contains(deviceId)
     }
@@ -9870,6 +10074,14 @@ class DeviceControlViewModel: ObservableObject {
         if message.contains("timed out") || message.contains("timeout") {
             return "timeout"
         }
+        if message.contains("decode")
+            || message.contains("decoding")
+            || message.contains("isn’t in the correct format")
+            || message.contains("isn't in the correct format")
+            || message.contains("invalid response")
+            || message.contains("unreadable") {
+            return "unreadable"
+        }
         return nil
     }
 
@@ -10040,8 +10252,19 @@ class DeviceControlViewModel: ObservableObject {
             // manual cancel is not skipped.
             lockTransitionCancel(for: device.id, seconds: 1.2)
         }
-        let runId = await MainActor.run {
-            activeRunStatus[device.id]?.id
+        let runId = activeRun?.id
+        let shouldStopPlaylist = await MainActor.run { () -> Bool in
+            if playlistRunsByDevice.contains(device.id) { return true }
+            if temporaryPlaylistIds[device.id] != nil { return true }
+            if let playlistId = devices.first(where: { $0.id == device.id })?.state?.playlistId,
+               playlistId > 0 {
+                return true
+            }
+            if let activeRun {
+                if activeRun.kind == .automation { return true }
+                if activeRun.kind == .transition, activeRun.nativeTransition == nil { return true }
+            }
+            return false
         }
         // Check if there's a native WLED transition running that needs to be stopped
         let nativeTransitionInfo = await MainActor.run {
@@ -10050,23 +10273,35 @@ class DeviceControlViewModel: ObservableObject {
         
         // If native transition is active, send immediate state update to stop it
         if let nativeInfo = nativeTransitionInfo {
-            // Send immediate override with transition: 0 to jump to target state
-            let rgb = rgbArrayWithOptionalWhite(nativeInfo.targetColorRGB, device: device)
+            let stopColorRGB: [Int]
+            let stopBrightness: Int
+            if endReason == .cancelledByPresetSave {
+                // During preset-save cancellation, preserve the currently shown color rather
+                // than forcing the transition target/end color.
+                stopColorRGB = device.currentColor.toRGBArray()
+                let fallbackBrightness = device.state?.brightness ?? device.brightness
+                stopBrightness = max(1, fallbackBrightness)
+            } else {
+                stopColorRGB = nativeInfo.targetColorRGB
+                stopBrightness = nativeInfo.targetBrightness
+            }
+            // Send immediate override with transition: 0 to terminate native transition.
+            let rgb = rgbArrayWithOptionalWhite(stopColorRGB, device: device)
             let segment = SegmentUpdate(
                 id: 0,
                 col: [rgb]
             )
             let immediateState = WLEDStateUpdate(
                 on: true,
-                bri: nativeInfo.targetBrightness,
+                bri: stopBrightness,
                 seg: [segment],
-                transitionDeciseconds: 0  // No transition - jump immediately to target
+                transitionDeciseconds: 0  // No transition - terminate immediately at chosen stop state
             )
             
             do {
                 _ = try await apiService.updateState(for: device, state: immediateState)
                 #if DEBUG
-                print("🛑 Stopped native WLED transition for device \(device.name) by jumping to target state")
+                print("🛑 Stopped native WLED transition for device \(device.name) with immediate tt=0 override")
                 #endif
             } catch {
                 #if DEBUG
@@ -10086,9 +10321,6 @@ class DeviceControlViewModel: ObservableObject {
             pendingFinalStates.removeValue(forKey: device.id)
         }
 
-        let shouldStopPlaylist = await MainActor.run {
-            hasKnownActiveRun(for: device.id)
-        }
         if shouldStopPlaylist {
             if await stopPlaylistViaWebSocketIfConnected(device) {
                 await MainActor.run {
@@ -10743,6 +10975,12 @@ class DeviceControlViewModel: ObservableObject {
     private func retryPendingPlaylistRenames(for device: WLEDDevice) async -> Bool {
         let pending = pendingPlaylistRenames.filter { $0.deviceId == device.id }
         guard !pending.isEmpty else { return false }
+        if !(await shouldAllowPresetStoreMutation(deviceId: device.id)) {
+            #if DEBUG
+            print("playlist.rename.retry_deferred_integrity_guard device=\(device.id) pending=\(pending.count)")
+            #endif
+            return false
+        }
         var didMutateRemoteState = false
         for entry in pending {
             do {
@@ -10901,11 +11139,17 @@ class DeviceControlViewModel: ObservableObject {
         markUserInteraction(device.id)
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if shouldDeferPlaylistRename(for: device.id) {
+        let deferForActiveRun = shouldDeferPlaylistRename(for: device.id)
+        let deferForIntegrityGuard = !(await shouldAllowPresetStoreMutation(deviceId: device.id))
+        if deferForActiveRun || deferForIntegrityGuard {
             enqueuePendingPlaylistRename(deviceId: device.id, playlistId: playlistId, desiredName: trimmed)
             applyLocalPlaylistRename(deviceId: device.id, playlistId: playlistId, desiredName: trimmed)
             #if DEBUG
-            print("playlist.rename.deferred_active_run device=\(device.id) playlistId=\(playlistId)")
+            let reasons = [
+                deferForActiveRun ? "active_run" : nil,
+                deferForIntegrityGuard ? "integrity_guard" : nil
+            ].compactMap { $0 }.joined(separator: ",")
+            print("playlist.rename.deferred device=\(device.id) playlistId=\(playlistId) reason=\(reasons)")
             #endif
             clearError()
             return true

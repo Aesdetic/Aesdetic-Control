@@ -1131,6 +1131,40 @@ struct WLEDAPIServiceTests {
         #expect(encoded[1]["macro"] as? Int == 249)
     }
 
+    @Test("encode forceIncludeThroughSlot keeps explicit cleared slot payload")
+    func testEncodeForceIncludeThroughSlotForClearedTimer() async throws {
+        let service = WLEDAPIService.shared
+
+        let timers: [WLEDTimer] = (0..<10).map { slot in
+            WLEDTimer(
+                id: slot,
+                enabled: false,
+                hour: 0,
+                minute: 0,
+                days: 0x7F,
+                macroId: 0,
+                startMonth: nil,
+                startDay: nil,
+                endMonth: nil,
+                endDay: nil
+            )
+        }
+
+        let encodedWithoutForce = await service._encodeWLEDTimersForTesting(timers)
+        #expect(encodedWithoutForce.isEmpty)
+
+        let encodedWithForce = await service._encodeWLEDTimersForTesting(
+            timers,
+            forceIncludeThroughSlot: 0
+        )
+        #expect(encodedWithForce.count == 1)
+        #expect(encodedWithForce[0]["en"] as? Bool == false)
+        #expect(encodedWithForce[0]["hour"] as? Int == 0)
+        #expect(encodedWithForce[0]["min"] as? Int == 0)
+        #expect(encodedWithForce[0]["macro"] as? Int == 0)
+        #expect(encodedWithForce[0]["dow"] as? Int == 0x7F)
+    }
+
     @Test("timer update merge uses fixed logical slots independent of sparse input")
     func testTimerMergeIgnoresSparseCount() async throws {
         let service = WLEDAPIService.shared
