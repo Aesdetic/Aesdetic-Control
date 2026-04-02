@@ -857,14 +857,18 @@ struct MiniDeviceCard: View {
         if isReferenceLightMode {
             cardShape
                 .fill(.ultraThinMaterial)
-                .opacity(0.78)
+                .overlay(
+                    cardShape
+                        .fill(.thinMaterial)
+                        .opacity(0.10)
+                )
                 .overlay(
                     cardShape
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.005),
-                                    Color.white.opacity(0.0010)
+                                    Color.white.opacity(0.003),
+                                    Color.white.opacity(0.0006)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -876,9 +880,9 @@ struct MiniDeviceCard: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color(red: 0.58, green: 0.70, blue: 0.75).opacity(0.010),
+                                    Color(red: 0.58, green: 0.70, blue: 0.75).opacity(0.007),
                                     Color.clear,
-                                    Color(red: 0.90, green: 0.78, blue: 0.68).opacity(0.006)
+                                    Color(red: 0.90, green: 0.78, blue: 0.68).opacity(0.004)
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
@@ -890,8 +894,8 @@ struct MiniDeviceCard: View {
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color.white.opacity(0.022),
-                                    Color.white.opacity(0.004),
+                                    Color.white.opacity(0.016),
+                                    Color.white.opacity(0.003),
                                     Color.clear
                                 ],
                                 center: .topTrailing,
@@ -905,7 +909,7 @@ struct MiniDeviceCard: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.black.opacity(0.006),
+                                    Color.black.opacity(0.004),
                                     Color.clear,
                                     Color.clear
                                 ],
@@ -916,12 +920,12 @@ struct MiniDeviceCard: View {
                 )
                 .overlay(
                     cardShape
-                        .stroke(Color.white.opacity(0.058), lineWidth: 0.34)
+                        .stroke(Color.white.opacity(0.052), lineWidth: 0.32)
                 )
                 .overlay(
                     cardShape
                         .inset(by: 1)
-                        .stroke(Color.white.opacity(0.018), lineWidth: 0.21)
+                        .stroke(Color.white.opacity(0.016), lineWidth: 0.20)
                 )
                 .overlay(
                     cardShape
@@ -929,8 +933,8 @@ struct MiniDeviceCard: View {
                         .stroke(
                             LinearGradient(
                                 stops: [
-                                    .init(color: Color.white.opacity(0.085), location: 0.0),
-                                    .init(color: Color.white.opacity(0.028), location: 0.34),
+                                    .init(color: Color.white.opacity(0.075), location: 0.0),
+                                    .init(color: Color.white.opacity(0.024), location: 0.34),
                                     .init(color: Color.clear, location: 0.74)
                                 ],
                                 startPoint: .topLeading,
