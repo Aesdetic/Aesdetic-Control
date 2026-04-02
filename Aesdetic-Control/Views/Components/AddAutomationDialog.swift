@@ -20,6 +20,7 @@ struct AddAutomationDialog: View {
     
     enum ActionSelection: String, CaseIterable, Identifiable {
         case color = "Colors"
+        case scene = "Scene"
         case transition = "Transitions"
         case effect = "Animations"
         
@@ -36,6 +37,7 @@ struct AddAutomationDialog: View {
     @ObservedObject var viewModel: DeviceControlViewModel
     let defaultName: String?
     let editingAutomation: Automation?
+    let allowSceneAction: Bool
     var onSave: (Automation) -> Void
     
     @State private var automationName: String
@@ -57,6 +59,8 @@ struct AddAutomationDialog: View {
     @State private var showLocationSettingsAlert: Bool = false
     
     @State private var actionSelection: ActionSelection = .color
+    @State private var selectedSceneId: UUID?
+    @State private var sceneBrightnessOverride: Int? = nil
     @State private var selectedEffectId: Int?
     @State private var effectBrightness: Double
     @State private var effectSpeed: Int = 128
@@ -109,6 +113,7 @@ struct AddAutomationDialog: View {
         defaultName: String? = nil,
         editingAutomation: Automation? = nil,
         templatePrefill: AutomationTemplate.Prefill? = nil,
+        allowSceneAction: Bool = true,
         onSave: @escaping (Automation) -> Void
     ) {
         self.device = device
@@ -118,6 +123,7 @@ struct AddAutomationDialog: View {
         self.viewModel = viewModel
         self.defaultName = defaultName
         self.editingAutomation = editingAutomation
+        self.allowSceneAction = allowSceneAction
         self.onSave = onSave
         
         var initialActiveDevice = self.availableDevices.first(where: { $0.id == device.id }) ?? self.availableDevices.first ?? device
@@ -134,6 +140,8 @@ struct AddAutomationDialog: View {
         var initialEndMonth = 12
         var initialEndDay = 31
         var initialActionSelection: ActionSelection = .color
+        var initialSelectedSceneId: UUID?
+        var initialSceneBrightnessOverride: Int?
         var initialEffectId: Int? = effectOptions.first?.id
         var initialEffectBrightness = Double(device.brightness)
         var initialEffectSpeed: Int = 128
@@ -192,18 +200,9 @@ struct AddAutomationDialog: View {
             }
             switch editing.action {
             case .scene(let payload):
-                // Migrate scene action to gradient by finding the scene and extracting its gradient
-                initialActionSelection = .color
-                if let scene = scenes.first(where: { $0.id == payload.sceneId }) {
-                    // Extract gradient from scene (scenes use primaryStops)
-                    initialTemplateGradient = LEDGradient(stops: scene.primaryStops, interpolation: .linear)
-                    initialGradientBrightness = Double(scene.brightness)
-                } else {
-                    // Fallback if scene not found - use device's current gradient
-                    let fallbackGradient = viewModel.automationGradient(for: initialActiveDevice)
-                    initialTemplateGradient = fallbackGradient
-                    initialGradientBrightness = Double(initialActiveDevice.brightness)
-                }
+                initialActionSelection = .scene
+                initialSelectedSceneId = payload.sceneId
+                initialSceneBrightnessOverride = payload.brightnessOverride
             case .playlist:
                 // Playlist actions are not yet supported in the UI editor
                 // Fall through to default gradient behavior
@@ -328,6 +327,8 @@ struct AddAutomationDialog: View {
         
         _automationName = State(initialValue: initialName)
         _selectedEffectId = State(initialValue: initialEffectId)
+        _selectedSceneId = State(initialValue: initialSelectedSceneId)
+        _sceneBrightnessOverride = State(initialValue: initialSceneBrightnessOverride)
         _effectBrightness = State(initialValue: initialEffectBrightness)
         _effectSpeed = State(initialValue: initialEffectSpeed)
         _effectIntensity = State(initialValue: initialEffectIntensity)
@@ -382,6 +383,15 @@ struct AddAutomationDialog: View {
     
     private var weekdayNames: [String] { ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"] }
     private var primaryButtonTitle: String { isEditing ? "Save Changes" : "Save Automation" }
+    private var availableActionSelections: [ActionSelection] {
+        if allowSceneAction {
+            return ActionSelection.allCases
+        }
+        if case .scene = editingAutomation?.action {
+            return ActionSelection.allCases
+        }
+        return ActionSelection.allCases.filter { $0 != .scene }
+    }
     
     private static func dateFrom(hour: Int, minute: Int) -> Date? {
         var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
@@ -440,11 +450,27 @@ struct AddAutomationDialog: View {
         .onChange(of: validationInputsKey) { _, _ in
             clearOnDeviceScheduleValidationMessage()
         }
+        .onChange(of: actionSelection) { _, selection in
+            if selection == .scene {
+                normalizeSceneSelectionIfNeeded()
+            }
+            clearOnDeviceScheduleValidationMessage()
+            Task { await loadPresetSlots() }
+        }
+        .onChange(of: selectedSceneId) { _, _ in
+            normalizeSceneSelectionIfNeeded()
+            clearOnDeviceScheduleValidationMessage()
+            Task { await loadPresetSlots() }
+        }
         .onChange(of: allowPartialFailure) { _, _ in
             Task { await loadPresetSlots() }
         }
         .onAppear {
+            if !availableActionSelections.contains(actionSelection) {
+                actionSelection = .color
+            }
             normalizeTriggerSelectionIfNeeded()
+            normalizeSceneSelectionIfNeeded()
         }
         .alert("Location Access Needed", isPresented: $showLocationSettingsAlert) {
             Button("Cancel", role: .cancel) {}
@@ -523,6 +549,7 @@ struct AddAutomationDialog: View {
             String(endMonth),
             String(endDay),
             actionSelection.rawValue,
+            selectedSceneId?.uuidString ?? "nil",
             selectedEffectId.map(String.init) ?? "nil",
             automationName
         ].joined(separator: "|")
@@ -1175,12 +1202,12 @@ struct AddAutomationDialog: View {
     
     private var automationActionSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Colors")
+            Text("Action")
                 .font(.callout.weight(.semibold))
                 .foregroundColor(.white.opacity(0.7))
             
             Picker("Action", selection: $actionSelection) {
-                ForEach(ActionSelection.allCases) { option in
+                ForEach(availableActionSelections) { option in
                     Text(option.rawValue).tag(option)
                 }
             }
@@ -1190,6 +1217,8 @@ struct AddAutomationDialog: View {
             switch actionSelection {
             case .color:
                 colorActionControls
+            case .scene:
+                sceneActionControls
             case .transition:
                 transitionActionControls
             case .effect:
@@ -1235,6 +1264,75 @@ struct AddAutomationDialog: View {
             ),
             selectedEffectPresetId: $selectedEffectPresetId
         )
+    }
+
+    @ViewBuilder
+    private var sceneActionControls: some View {
+        let choices = sortedScenes
+
+        if choices.isEmpty {
+            Text("No saved scenes for this device yet. Save a scene first, then schedule it.")
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.7))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+            VStack(spacing: 8) {
+                ForEach(choices) { scene in
+                    sceneSelectionRow(scene)
+                }
+            }
+
+            if let scene = selectedScene {
+                Text("Runs on \(deviceName(for: scene.deviceId)) at the scheduled time.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.65))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func sceneSelectionRow(_ scene: Scene) -> some View {
+        let selected = selectedSceneId == scene.id
+        return Button {
+            selectedSceneId = scene.id
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(selected ? .white : .white.opacity(0.45))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(scene.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.95))
+                        .lineLimit(1)
+                    Text(deviceName(for: scene.deviceId))
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                Spacer(minLength: 8)
+                Text(sceneTypeLabel(for: scene))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.65))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(selected ? Color.white.opacity(0.18) : Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(selected ? 0.32 : 0.12), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
     
     private func preparedGradientForSlotCount(_ gradient: LEDGradient, slotCount: Int) -> LEDGradient {
@@ -1327,6 +1425,34 @@ struct AddAutomationDialog: View {
     }
     
     // MARK: - Computed Properties
+
+    private var sortedScenes: [Scene] {
+        scenes.sorted { lhs, rhs in
+            if lhs.createdAt == rhs.createdAt {
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            return lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    private var selectedScene: Scene? {
+        guard let id = selectedSceneId else { return nil }
+        return scenes.first(where: { $0.id == id })
+    }
+
+    private func deviceName(for deviceId: String) -> String {
+        availableDevices.first(where: { $0.id == deviceId })?.name ?? "Device"
+    }
+
+    private func sceneTypeLabel(for scene: Scene) -> String {
+        if scene.transitionEnabled {
+            return "Transition"
+        }
+        if scene.effectsEnabled {
+            return "Animation"
+        }
+        return "Color"
+    }
     
     private var canSave: Bool {
         guard !automationName.trimmed().isEmpty else { return false }
@@ -1338,6 +1464,9 @@ struct AddAutomationDialog: View {
             return false
         }
         if !timerSlotCapacitySatisfied {
+            return false
+        }
+        if actionSelection == .scene && selectedScene == nil {
             return false
         }
         if actionSelection == .effect {
@@ -1453,6 +1582,8 @@ struct AddAutomationDialog: View {
         case .transition:
             return transitionProfilesByDevice.map(\.profile.slotsRequired).max() ?? 0
         case .color:
+            return 1
+        case .scene:
             return 1
         case .effect:
             return 1
@@ -1604,6 +1735,29 @@ struct AddAutomationDialog: View {
         }
     }
 
+    private func normalizeSceneSelectionIfNeeded() {
+        guard actionSelection == .scene else { return }
+
+        guard !sortedScenes.isEmpty else {
+            selectedSceneId = nil
+            return
+        }
+
+        if selectedScene == nil {
+            selectedSceneId = sortedScenes.first?.id
+        }
+
+        guard let scene = selectedScene else { return }
+        let desiredDeviceIds: Set<String> = [scene.deviceId]
+        if selectedDeviceIds != desiredDeviceIds {
+            selectedDeviceIds = desiredDeviceIds
+        }
+        if activeDevice.id != scene.deviceId,
+           let resolved = availableDevices.first(where: { $0.id == scene.deviceId }) {
+            activeDevice = resolved
+        }
+    }
+
     private var isDateWindowValid: Bool {
         dateWindowValidationMessage == nil
     }
@@ -1706,7 +1860,14 @@ struct AddAutomationDialog: View {
             metadata.onDeviceEndMonth = nil
             metadata.onDeviceEndDay = nil
         }
-        let targetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
+        let defaultTargetIds = selectedDeviceIds.isEmpty ? [activeDevice.id] : Array(selectedDeviceIds)
+        let targetIds: [String]
+        if case .scene(let payload) = action,
+           let scene = scenes.first(where: { $0.id == payload.sceneId }) {
+            targetIds = [scene.deviceId]
+        } else {
+            targetIds = defaultTargetIds
+        }
         if let existing = editingAutomation,
            existing.action.macroAssetKind != action.macroAssetKind {
             let impactedIds = Array(Set(existing.targets.deviceIds).union(targetIds))
@@ -1790,22 +1951,30 @@ struct AddAutomationDialog: View {
         if let lockedAction { return lockedAction }
         switch actionSelection {
         case .color:
-            // Always use gradient action (scenes are migrated to gradients)
-                let gradient = currentColorGradient()
-                let duration = enableColorFade ? gradientDuration : 0
-                return .gradient(
-                    GradientActionPayload(
-                        gradient: gradient,
-                        brightness: Int(gradientBrightness),
-                        durationSeconds: duration,
-                        temperature: gradientTemperature,
-                        whiteLevel: gradientWhiteLevel,
-                        shouldLoop: false,
-                        presetId: selectedColorPresetId,
-                        presetName: selectedColorPreset?.name,
-                        powerOn: colorPowerOn
-                    )
+            let gradient = currentColorGradient()
+            let duration = enableColorFade ? gradientDuration : 0
+            return .gradient(
+                GradientActionPayload(
+                    gradient: gradient,
+                    brightness: Int(gradientBrightness),
+                    durationSeconds: duration,
+                    temperature: gradientTemperature,
+                    whiteLevel: gradientWhiteLevel,
+                    shouldLoop: false,
+                    presetId: selectedColorPresetId,
+                    presetName: selectedColorPreset?.name,
+                    powerOn: colorPowerOn
                 )
+            )
+        case .scene:
+            guard let scene = selectedScene else { return nil }
+            return .scene(
+                SceneActionPayload(
+                    sceneId: scene.id,
+                    sceneName: scene.name,
+                    brightnessOverride: sceneBrightnessOverride
+                )
+            )
         case .transition:
             return buildTransitionAction()
         case .effect:
@@ -1816,7 +1985,6 @@ struct AddAutomationDialog: View {
     private func previewHex(for action: AutomationAction) -> String? {
         switch action {
         case .scene(let payload):
-            // Migrated scenes: extract gradient from scene if available
             if let scene = scenes.first(where: { $0.id == payload.sceneId }), let lastColor = scene.primaryStops.last {
                 return lastColor.hexColor
             }
@@ -1838,7 +2006,7 @@ struct AddAutomationDialog: View {
     // MARK: - Device Selection
     
     private var allowDeviceSelection: Bool {
-        availableDevices.count > 1
+        availableDevices.count > 1 && actionSelection != .scene
     }
     
 }

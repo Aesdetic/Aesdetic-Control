@@ -15,6 +15,9 @@ struct ContentView: View {
     private let dockHorizontalPadding: CGFloat = 16
     private let dockTopInsetPadding: CGFloat = 0
     private let dockBottomInsetOffset: CGFloat = -8
+    private var isRunningForPreviews: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -52,6 +55,7 @@ struct ContentView: View {
         }
         .onAppear {
             UITabBar.appearance().isHidden = true
+            guard !isRunningForPreviews else { return }
             // Passive discovery at launch (UDP/mDNS only)
             deviceViewModel.startPassiveDiscovery()
         }
@@ -61,5 +65,6 @@ struct ContentView: View {
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
+            .environmentObject(WellnessViewModel())
     }
 }

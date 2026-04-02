@@ -190,6 +190,13 @@ struct DeviceDetailView: View {
                         defaultGradient: viewModel.automationGradient(for: activeDevice)
                     ))
                 }
+                let allowSceneAction = {
+                    guard let editing = editingAutomation else { return false }
+                    if case .scene = editing.action {
+                        return true
+                    }
+                    return false
+                }()
                 AddAutomationDialog(
                     device: activeDevice,
                     scenes: deviceScenes,
@@ -198,7 +205,8 @@ struct DeviceDetailView: View {
                     viewModel: viewModel,
                     defaultName: automationEditorDefaultName,
                     editingAutomation: editingAutomation,
-                    templatePrefill: prefill
+                    templatePrefill: prefill,
+                    allowSceneAction: allowSceneAction
                 ) { automation in
                     if editingAutomation != nil {
                         automationStore.update(automation)
