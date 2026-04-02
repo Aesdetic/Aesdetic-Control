@@ -21,7 +21,7 @@ struct AutomationTransitionEditor: View {
     let automationGuaranteeCount: Int
     
     // Preview state
-    @State private var previewEnabled: Bool = false
+    @State private var previewEnabled: Bool = true
     
     // Internal UI state
     @State private var selectedA: UUID? = nil
@@ -112,6 +112,7 @@ struct AutomationTransitionEditor: View {
                 )
         )
         .onAppear {
+            previewEnabled = true
             // Initialize duration from durationSeconds
             updateDurationFromSeconds(durationSeconds)
             hydrateStopMapsIfNeeded()
@@ -125,6 +126,11 @@ struct AutomationTransitionEditor: View {
         }
         .onChange(of: durationSeconds) { _, newValue in
             updateDurationFromSeconds(newValue)
+        }
+        .onChange(of: advancedUIEnabled) { _, enabled in
+            if !enabled {
+                previewEnabled = true
+            }
         }
         .onDisappear {
             Task {
@@ -141,19 +147,21 @@ struct AutomationTransitionEditor: View {
                 .font(.headline)
                 .foregroundColor(.white)
             Spacer()
-            
-            Toggle(isOn: $previewEnabled) {
-                HStack(spacing: 4) {
-                    Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
-                        .font(.caption2)
-                    Text("Preview")
-                        .font(.caption.weight(.medium))
+
+            if advancedUIEnabled {
+                Toggle(isOn: $previewEnabled) {
+                    HStack(spacing: 4) {
+                        Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
+                            .font(.caption2)
+                        Text("Preview")
+                            .font(.caption.weight(.medium))
+                    }
                 }
+                .toggleStyle(.button)
+                .tint(previewEnabled ? .green : .gray)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
             }
-            .toggleStyle(.button)
-            .tint(previewEnabled ? .green : .gray)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
         }
         .padding(.horizontal, 16)
     }

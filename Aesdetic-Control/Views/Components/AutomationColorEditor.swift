@@ -19,7 +19,7 @@ struct AutomationColorEditor: View {
     let showFadeControls: Bool
     
     // Preview state
-    @State private var previewEnabled: Bool = false
+    @State private var previewEnabled: Bool = true
     @State private var gradientPreviewTask: Task<Void, Never>?
     @State private var brightnessPreviewTask: Task<Void, Never>?
     
@@ -77,7 +77,13 @@ struct AutomationColorEditor: View {
             }
         }
         .onAppear {
+            previewEnabled = true
             hydrateStopMapsIfNeeded()
+        }
+        .onChange(of: advancedUIEnabled) { _, enabled in
+            if !enabled {
+                previewEnabled = true
+            }
         }
         .onDisappear {
             cancelPreviewTasks()
@@ -166,19 +172,21 @@ struct AutomationColorEditor: View {
                 .font(.headline)
                 .foregroundColor(.white)
             Spacer()
-            
-            Toggle(isOn: $previewEnabled) {
-                HStack(spacing: 4) {
-                    Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
-                        .font(.caption2)
-                    Text("Preview")
-                        .font(.caption.weight(.medium))
+
+            if advancedUIEnabled {
+                Toggle(isOn: $previewEnabled) {
+                    HStack(spacing: 4) {
+                        Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
+                            .font(.caption2)
+                        Text("Preview")
+                            .font(.caption.weight(.medium))
+                    }
                 }
+                .toggleStyle(.button)
+                .tint(previewEnabled ? .green : .gray)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
             }
-            .toggleStyle(.button)
-            .tint(previewEnabled ? .green : .gray)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
             
             Button(action: {
                 Task {
