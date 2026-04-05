@@ -101,10 +101,7 @@ struct EnhancedDeviceCard: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)
-        .background(
-            AppCardBackground(style: cardStyle)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .appLiquidGlass(role: .card, cornerRadius: 16)
         .contentShape(Rectangle())
         // .onTapGesture removed - NavigationLink in DeviceListView handles navigation
         // This allows the card's interactive controls (power, brightness) to work independently

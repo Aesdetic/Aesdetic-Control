@@ -37,9 +37,9 @@ struct AppBackground: View {
 
             LinearGradient(
                 colors: [
-                    Color.black.opacity(0.24),
-                    Color.black.opacity(0.07),
-                    Color.white.opacity(0.03)
+                    Color.black.opacity(0.12),
+                    Color.black.opacity(0.03),
+                    Color.clear
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -49,7 +49,7 @@ struct AppBackground: View {
             RadialGradient(
                 gradient: Gradient(colors: [
                     Color.black.opacity(0.0),
-                    Color.black.opacity(0.12)
+                    Color.black.opacity(0.07)
                 ]),
                 center: .center,
                 startRadius: width * 0.22,
@@ -160,7 +160,7 @@ struct AppBackground: View {
 
             RadialGradient(
                 gradient: Gradient(colors: [
-                    Color.white.opacity(0.24),
+                    Color.white.opacity(0.06),
                     .clear
                 ]),
                 center: UnitPoint(x: 0.5, y: 0.0),
@@ -171,9 +171,9 @@ struct AppBackground: View {
 
             LinearGradient(
                 colors: [
-                    Color.white.opacity(0.08),
+                    Color.white.opacity(0.015),
                     .clear,
-                    Color.black.opacity(0.05)
+                    Color.black.opacity(0.02)
                 ],
                 startPoint: .top,
                 endPoint: .bottom

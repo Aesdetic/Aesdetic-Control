@@ -583,7 +583,7 @@ enum DeviceLocation: Hashable, Codable {
 }
 
 // Extension for Color Codable support
-extension Color: Codable {
+extension Color: @retroactive Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let hex = try container.decode(String.self)

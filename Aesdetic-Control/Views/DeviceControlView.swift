@@ -349,26 +349,17 @@ struct LocationPillButton: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(DeviceLightPalette.pillFill(colorScheme, isSelected: isSelected))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(DeviceLightPalette.pillStroke(colorScheme, isSelected: isSelected), lineWidth: 1)
-            )
-            .shadow(
-                color: surfaceStyle.controlShadowAmbient.color,
-                radius: surfaceStyle.controlShadowAmbient.radius,
-                x: surfaceStyle.controlShadowAmbient.x,
-                y: surfaceStyle.controlShadowAmbient.y
-            )
-            .shadow(
-                color: surfaceStyle.controlShadowKey.color,
-                radius: surfaceStyle.controlShadowKey.radius,
-                x: surfaceStyle.controlShadowKey.x,
-                y: surfaceStyle.controlShadowKey.y
-            )
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(.ultraThinMaterial.opacity(0.5))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color.white.opacity(0.14))
+                        )
+                }
+            }
+            .appLiquidGlass(role: .control, cornerRadius: 18)
         }
         .buttonStyle(.plain)
     }

@@ -23,10 +23,10 @@ class AutomationStore: ObservableObject {
     private var solarRefreshTimer: Timer?
     private var onDeviceSyncRetryTimer: Timer?
     private let logger = Logger(subsystem: "com.aesdetic.control", category: "AutomationStore")
-    private let scenesStore = ScenesStore.shared
-    private let presetsStore = PresetsStore.shared
-    private let viewModel = DeviceControlViewModel.shared
-    private let apiService = WLEDAPIService.shared
+    private lazy var scenesStore = ScenesStore.shared
+    private lazy var presetsStore = PresetsStore.shared
+    private lazy var viewModel = DeviceControlViewModel.shared
+    private lazy var apiService = WLEDAPIService.shared
     private let locationProvider = LocationProvider()
     private var solarCache: [SolarCacheKey: Date] = [:]
     private let maxWLEDTransitionSeconds: Double = 6553.5
@@ -75,6 +75,13 @@ class AutomationStore: ObservableObject {
     private init() {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         fileURL = documentsPath.appendingPathComponent("automations.json")
+
+        let isRunningInPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        if isRunningInPreview {
+            load()
+            return
+        }
+
         load()
         scheduleNext()
         scheduleSolarRefreshIfNeeded()

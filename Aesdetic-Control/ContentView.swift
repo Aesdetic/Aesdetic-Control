@@ -68,3 +68,4 @@ struct ContentView_Previews: PreviewProvider {
             .environmentObject(WellnessViewModel())
     }
 }
+

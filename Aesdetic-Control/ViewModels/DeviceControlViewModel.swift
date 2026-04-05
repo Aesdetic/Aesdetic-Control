@@ -676,20 +676,20 @@ class DeviceControlViewModel: ObservableObject {
     private let diagnosticsLogLimit: Int = 120
     
     // Service dependencies
-    private let apiService = WLEDAPIService.shared
+    private lazy var apiService = WLEDAPIService.shared
     private let colorPipeline = ColorPipeline()
     private lazy var transitionRunner = GradientTransitionRunner(pipeline: colorPipeline)
-    let wledService = WLEDDiscoveryService()
-    private let coreDataManager = CoreDataManager.shared
-    private let webSocketManager = WLEDWebSocketManager.shared
-    private let connectionMonitor = WLEDConnectionMonitor.shared
-    private let deviceSyncManager = DeviceSyncManager.shared
+    lazy var wledService = WLEDDiscoveryService()
+    private lazy var coreDataManager = CoreDataManager.shared
+    private lazy var webSocketManager = WLEDWebSocketManager.shared
+    private lazy var connectionMonitor = WLEDConnectionMonitor.shared
+    private lazy var deviceSyncManager = DeviceSyncManager.shared
     
     // Combine cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Capability Detection
-    private let capabilityDetector = CapabilityDetector.shared
+    private lazy var capabilityDetector = CapabilityDetector.shared
     
     /// Local cache of device capabilities for synchronous access from MainActor
     private var deviceCapabilities: [String: WLEDCapabilities] = [:]
@@ -2386,6 +2386,14 @@ class DeviceControlViewModel: ObservableObject {
     // MARK: - Initialization
     
     private init() {
+        let isRunningInPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        if isRunningInPreview {
+            UserDefaults.standard.register(defaults: [
+                "forceCCTSlider": true
+            ])
+            return
+        }
+
         UserDefaults.standard.register(defaults: [
             "forceCCTSlider": true
         ])

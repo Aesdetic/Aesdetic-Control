@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct DeviceDetailView: View {
     let device: WLEDDevice
@@ -14,7 +15,7 @@ struct DeviceDetailView: View {
     @State private var udpnSend: Bool = false
     @State private var udpnReceive: Bool = false
     @StateObject private var scenesStore = ScenesStore.shared
-    @StateObject private var automationStore = AutomationStore.shared
+    @StateObject private var automationStore = DeviceDetailAutomationStoreBridge()
     @State private var showEditDeviceInfo: Bool = false
     @State private var isToggling: Bool = false
     @State private var dismissColorPicker: Bool = false
@@ -77,6 +78,10 @@ struct DeviceDetailView: View {
     private var currentActiveRunId: UUID? {
         viewModel.activeRunStatus[activeDevice.id]?.id
     }
+
+    private var isRunningInPreview: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
     
     var body: some View {
         GeometryReader { proxy in
@@ -91,18 +96,21 @@ struct DeviceDetailView: View {
             }
             .presentationDetents([.large])
             .presentationDragIndicator(.hidden)
-            .presentationBackground(.ultraThinMaterial)
+            .presentationBackground(.clear)
             .navigationBarHidden(true)
             .onAppear {
+                guard !isRunningInPreview else { return }
                 viewModel.setActiveDevice(activeDevice)
                 Task {
                     await viewModel.prefetchDeviceDetailData(for: activeDevice)
                 }
             }
             .onChange(of: activeDevice.id) { _, _ in
+                guard !isRunningInPreview else { return }
                 viewModel.setActiveDevice(activeDevice)
             }
             .onDisappear {
+                guard !isRunningInPreview else { return }
                 viewModel.clearActiveDeviceIfNeeded(activeDevice.id)
                 viewModel.clearActiveDeviceIfNeeded(device.id)
             }
@@ -248,31 +256,10 @@ struct DeviceDetailView: View {
     }
     
     private var backgroundLayer: some View {
-        LiquidGlassOverlay(
-            blurOpacity: 0.65,
-            highlightOpacity: 0.18,
-            verticalTopOpacity: 0.08,
-            verticalBottomOpacity: 0.08,
-            vignetteOpacity: 0.12,
-            centerSheenOpacity: 0.06
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 0)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.01),
-                            Color.black.opacity(0.01),
-                            Color.white.opacity(0.015),
-                            Color.black.opacity(0.005)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .allowsHitTesting(false)
-        )
-        .ignoresSafeArea()
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(Color.black.opacity(0.16))
+            .ignoresSafeArea()
     }
     
     private var contentLayer: some View {
@@ -1443,6 +1430,93 @@ struct DeviceDetailView: View {
     }
     
 }
+
+@MainActor
+private final class DeviceDetailAutomationStoreBridge: ObservableObject {
+    @Published private(set) var automations: [Automation] = []
+    @Published private(set) var upcomingAutomationInfo: (automation: Automation, date: Date)?
+    @Published private(set) var deletingAutomationIds: Set<UUID> = []
+
+    private var cancellables = Set<AnyCancellable>()
+    private let isRunningInPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+
+    init() {
+        guard !isRunningInPreview else { return }
+
+        let store = AutomationStore.shared
+        automations = store.automations
+        upcomingAutomationInfo = store.upcomingAutomationInfo
+
+        store.$automations
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.automations = $0 }
+            .store(in: &cancellables)
+
+        store.$upcomingAutomationInfo
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.upcomingAutomationInfo = $0 }
+            .store(in: &cancellables)
+
+        store.$deletingAutomationIds
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.deletingAutomationIds = $0 }
+            .store(in: &cancellables)
+    }
+
+    func add(_ automation: Automation) {
+        guard !isRunningInPreview else { return }
+        AutomationStore.shared.add(automation)
+    }
+
+    func update(_ automation: Automation) {
+        guard !isRunningInPreview else { return }
+        AutomationStore.shared.update(automation)
+    }
+
+    func delete(id: UUID) {
+        guard !isRunningInPreview else { return }
+        AutomationStore.shared.delete(id: id)
+    }
+
+    func applyAutomation(_ automation: Automation) {
+        guard !isRunningInPreview else { return }
+        AutomationStore.shared.applyAutomation(automation)
+    }
+
+    func retryOnDeviceSync(for automationId: UUID) {
+        guard !isRunningInPreview else { return }
+        AutomationStore.shared.retryOnDeviceSync(for: automationId)
+    }
+
+    func isDeletionInProgress(for id: UUID) -> Bool {
+        deletingAutomationIds.contains(id)
+    }
+}
+
+#if DEBUG
+struct DeviceDetailView_Previews: PreviewProvider {
+    static var previews: some View {
+        DeviceDetailView(
+            device: previewDevice,
+            viewModel: DeviceControlViewModel.shared
+        )
+        .preferredColorScheme(.dark)
+    }
+
+    private static var previewDevice: WLEDDevice {
+        WLEDDevice(
+            id: "preview-device-1",
+            name: "Living Room Lamp",
+            ipAddress: "192.168.1.120",
+            isOnline: true,
+            brightness: 180,
+            currentColor: .blue,
+            location: .livingRoom,
+            state: nil
+        )
+    }
+}
+#endif
 
 private struct ShortcutAutomationChip: View {
     let automation: Automation

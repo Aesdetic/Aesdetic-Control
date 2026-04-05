@@ -47,12 +47,13 @@ final class WellnessIntegrationService {
                 return false
             }
         } else {
-            return await withCheckedContinuation { continuation in
+            let granted: Bool = await withCheckedContinuation { continuation in
                 eventStore.requestAccess(to: .reminder) { granted, _ in
-                    self.remindersAccessGranted = granted
                     continuation.resume(returning: granted)
                 }
             }
+            remindersAccessGranted = granted
+            return granted
         }
     }
 
@@ -86,12 +87,13 @@ final class WellnessIntegrationService {
                 return false
             }
         } else {
-            return await withCheckedContinuation { continuation in
+            let granted: Bool = await withCheckedContinuation { continuation in
                 eventStore.requestAccess(to: .event) { granted, _ in
-                    self.calendarAccessGranted = granted
                     continuation.resume(returning: granted)
                 }
             }
+            calendarAccessGranted = granted
+            return granted
         }
     }
 

@@ -79,9 +79,7 @@ struct DockBar: View {
         }
         .padding(.vertical, dockPadding)
         .padding(.horizontal, dockPadding)
-        .background(DockCardBackground(cornerRadius: dockCornerRadius))
-        .clipShape(RoundedRectangle(cornerRadius: dockCornerRadius, style: .continuous))
-        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+        .appLiquidGlass(role: .panel, cornerRadius: dockCornerRadius)
     }
 }
 
@@ -104,49 +102,19 @@ private struct DockItemView: View {
         }
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, minHeight: pillHeight)
-        .foregroundColor(isActive ? .white : Color.white.opacity(0.6))
+        .foregroundColor(isActive ? Color.white : Color.white.opacity(0.70))
         .background {
             if isActive {
                 let shape = RoundedRectangle(cornerRadius: pillCornerRadius, style: .continuous)
                 shape
-                    .fill(Color.white.opacity(0.18))
+                    .fill(.ultraThinMaterial.opacity(0.5))
                     .overlay(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.28),
-                                Color.white.opacity(0.08),
-                                Color.white.opacity(0.04)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .clipShape(shape)
+                        shape.fill(Color.white.opacity(0.14))
                     )
-                    .overlay(
-                        shape
-                            .strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
-                    )
+                    .clipShape(shape)
                     .matchedGeometryEffect(id: "dock-active-pill", in: namespace)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isActive)
-    }
-}
-
-private struct DockCardBackground: View {
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-    let cornerRadius: CGFloat
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let fillOpacity: Double = colorSchemeContrast == .increased ? 0.2 : 0.12
-        let strokeOpacity: Double = colorSchemeContrast == .increased ? 0.32 : 0.2
-
-        shape
-            .fill(Color.white.opacity(fillOpacity))
-            .overlay(
-                shape
-                    .strokeBorder(Color.white.opacity(strokeOpacity), lineWidth: 1)
-            )
     }
 }

@@ -116,13 +116,15 @@ class CoreDataManager: ObservableObject {
     
     /// Fetch all devices from Core Data
     func fetchDevices() async -> [WLEDDevice] {
-        await viewContext.perform {
+        let context = viewContext
+        let logger = logger
+        return await context.perform {
             let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
             do {
-                let entities = try self.viewContext.fetch(request)
+                let entities = try context.fetch(request)
                 return entities.compactMap { $0.toWLEDDevice() }
             } catch {
-                self.logger.error("Failed to fetch devices: \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch devices: \(error.localizedDescription, privacy: .public)")
                 return []
             }
         }
@@ -131,13 +133,15 @@ class CoreDataManager: ObservableObject {
     /// Synchronously fetch all devices (used to avoid UI flicker on launch)
     func fetchDevicesSync() -> [WLEDDevice] {
         var result: [WLEDDevice] = []
-        viewContext.performAndWait {
+        let context = viewContext
+        let logger = logger
+        context.performAndWait {
             let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
             do {
-                let entities = try self.viewContext.fetch(request)
+                let entities = try context.fetch(request)
                 result = entities.compactMap { $0.toWLEDDevice() }
             } catch {
-                self.logger.error("Failed to fetch devices (sync): \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch devices (sync): \(error.localizedDescription, privacy: .public)")
                 result = []
             }
         }
@@ -146,14 +150,16 @@ class CoreDataManager: ObservableObject {
 
     /// Fetch a single device by ID (MAC address).
     func fetchDevice(id: String) async -> WLEDDevice? {
-        await viewContext.perform {
+        let context = viewContext
+        let logger = logger
+        return await context.perform {
             let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
             request.predicate = NSPredicate(format: "id == %@", id)
             request.fetchLimit = 1
             do {
-                return try self.viewContext.fetch(request).first?.toWLEDDevice()
+                return try context.fetch(request).first?.toWLEDDevice()
             } catch {
-                self.logger.error("Failed to fetch device \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch device \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 return nil
             }
         }
@@ -180,33 +186,37 @@ class CoreDataManager: ObservableObject {
 
     func fetchWellnessEntry(for date: Date) async -> WellnessEntrySnapshot? {
         let normalizedDate = Calendar.current.startOfDay(for: date)
-        return await viewContext.perform {
+        let context = viewContext
+        let logger = logger
+        return await context.perform {
             let request: NSFetchRequest<WellnessEntryEntity> = WellnessEntryEntity.fetchRequest()
             request.predicate = NSPredicate(format: "date == %@", normalizedDate as NSDate)
             request.fetchLimit = 1
 
             do {
-                let entity = try self.viewContext.fetch(request).first
+                let entity = try context.fetch(request).first
                 return entity?.toSnapshot()
             } catch {
-                self.logger.error("Failed to fetch wellness entry: \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch wellness entry: \(error.localizedDescription, privacy: .public)")
                 return nil
             }
         }
     }
 
     func fetchWellnessEntries(limit: Int? = nil) async -> [WellnessEntrySnapshot] {
-        await viewContext.perform {
+        let context = viewContext
+        let logger = logger
+        return await context.perform {
             let request: NSFetchRequest<WellnessEntryEntity> = WellnessEntryEntity.fetchRequest()
             request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
             if let limit {
                 request.fetchLimit = limit
             }
             do {
-                let entities = try self.viewContext.fetch(request)
+                let entities = try context.fetch(request)
                 return entities.map { $0.toSnapshot() }
             } catch {
-                self.logger.error("Failed to fetch wellness entries: \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch wellness entries: \(error.localizedDescription, privacy: .public)")
                 return []
             }
         }
@@ -215,15 +225,17 @@ class CoreDataManager: ObservableObject {
     func fetchWellnessEntries(from startDate: Date, to endDate: Date) async -> [WellnessEntrySnapshot] {
         let start = Calendar.current.startOfDay(for: startDate)
         let end = Calendar.current.startOfDay(for: endDate)
-        return await viewContext.perform {
+        let context = viewContext
+        let logger = logger
+        return await context.perform {
             let request: NSFetchRequest<WellnessEntryEntity> = WellnessEntryEntity.fetchRequest()
             request.predicate = NSPredicate(format: "date >= %@ AND date <= %@", start as NSDate, end as NSDate)
             request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
             do {
-                let entities = try self.viewContext.fetch(request)
+                let entities = try context.fetch(request)
                 return entities.map { $0.toSnapshot() }
             } catch {
-                self.logger.error("Failed to fetch wellness entries by range: \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch wellness entries by range: \(error.localizedDescription, privacy: .public)")
                 return []
             }
         }
@@ -294,13 +306,14 @@ class CoreDataManager: ObservableObject {
     // MARK: - Statistics with Optimized Queries
     
     func getDeviceStatistics() async -> (total: Int, online: Int, offline: Int) {
+        let context = viewContext
         return await withCheckedContinuation { continuation in
-            viewContext.perform {
+            context.perform {
                 let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
                 request.propertiesToFetch = ["isOnline"] // Only fetch needed properties
                 
                 do {
-                    let devices = try self.viewContext.fetch(request)
+                    let devices = try context.fetch(request)
                     let total = devices.count
                     let online = devices.filter { $0.isOnline }.count
                     let offline = total - online

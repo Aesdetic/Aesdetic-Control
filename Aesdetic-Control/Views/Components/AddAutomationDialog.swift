@@ -20,9 +20,9 @@ struct AddAutomationDialog: View {
     
     enum ActionSelection: String, CaseIterable, Identifiable {
         case color = "Colors"
-        case scene = "Scene"
         case transition = "Transitions"
         case effect = "Animations"
+        case scene = "Scene"
         
         var id: String { rawValue }
     }

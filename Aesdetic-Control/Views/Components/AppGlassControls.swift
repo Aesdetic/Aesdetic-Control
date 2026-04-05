@@ -195,13 +195,21 @@ struct AppOverviewMetric: Identifiable {
 
 struct AppOverviewCard: View {
     let metrics: [AppOverviewMetric]
+
+    enum Style {
+        case standard
+        case liquidGlass(tint: Color? = nil, clarity: LiquidGlassBackground.Clarity = .standard)
+        case systemGlass(tint: Color? = nil, interactive: Bool = false)
+    }
+
+    var style: Style = .systemGlass(tint: nil, interactive: false)
     var cornerRadius: CGFloat = 20
     var enableInnerShine: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 0) {
+        let cardContent = HStack(spacing: 0) {
             ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
                 AppOverviewMetricItem(metric: metric)
 
@@ -211,78 +219,177 @@ struct AppOverviewCard: View {
             }
         }
         .frame(height: 68)
-        .background(
-            AppCardBackground(
-                style: AppCardStyles.glass(
-                    for: colorScheme,
-                    tone: .active,
-                    cornerRadius: cornerRadius
-                )
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay {
-            if enableInnerShine && colorScheme == .light {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .inset(by: 1.0)
-                    .stroke(Color.white.opacity(0.7), lineWidth: 2.0)
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white, location: 0.0),
-                                .init(color: .white.opacity(0.9), location: 0.42),
-                                .init(color: .clear, location: 0.75)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
 
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .inset(by: 1.2)
-                    .stroke(Color.white.opacity(0.42), lineWidth: 1.2)
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white, location: 0.0),
-                                .init(color: .white.opacity(0.62), location: 0.3),
-                                .init(color: .clear, location: 0.68)
-                            ],
-                            startPoint: .bottomTrailing,
-                            endPoint: .topLeading
+        switch style {
+        case .systemGlass(let tint, let interactive):
+            Group {
+                if #available(iOS 26.0, *) {
+                    cardContent
+                        .glassEffect({
+                            var g: Glass = .clear
+                            if let tint { g = g.tint(tint) }
+                            if interactive { g = g.interactive() }
+                            return g
+                        }(), in: .rect(cornerRadius: cornerRadius))
+                } else {
+                    // Fallback for earlier OS versions: keep a transparent liquid-glass look
+                    cardContent
+                        .background(
+                            LiquidGlassBackground(
+                                cornerRadius: cornerRadius,
+                                tint: tint,
+                                clarity: .clear
+                            )
                         )
-                    )
-
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .inset(by: 1.4)
-                    .stroke(Color.white.opacity(0.24), lineWidth: 1.0)
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white, location: 0.0),
-                                .init(color: .white.opacity(0.5), location: 0.24),
-                                .init(color: .clear, location: 0.65)
-                            ],
-                            startPoint: .topTrailing,
-                            endPoint: .bottomLeading
-                        )
-                    )
-
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .inset(by: 1.4)
-                    .stroke(Color.white.opacity(0.2), lineWidth: 1.0)
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white, location: 0.0),
-                                .init(color: .white.opacity(0.46), location: 0.24),
-                                .init(color: .clear, location: 0.65)
-                            ],
-                            startPoint: .bottomLeading,
-                            endPoint: .topTrailing
-                        )
-                    )
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                }
             }
+
+        case .standard:
+            cardContent
+                .background(
+                    AppCardBackground(
+                        style: AppCardStyles.glass(
+                            for: colorScheme,
+                            tone: .active,
+                            cornerRadius: cornerRadius
+                        )
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay {
+                    if enableInnerShine && colorScheme == .light {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.0)
+                            .stroke(Color.white.opacity(0.7), lineWidth: 2.0)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.9), location: 0.42),
+                                        .init(color: .clear, location: 0.75)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.2)
+                            .stroke(Color.white.opacity(0.42), lineWidth: 1.2)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.62), location: 0.3),
+                                        .init(color: .clear, location: 0.68)
+                                    ],
+                                    startPoint: .bottomTrailing,
+                                    endPoint: .topLeading
+                                )
+                            )
+
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.4)
+                            .stroke(Color.white.opacity(0.24), lineWidth: 1.0)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.5), location: 0.24),
+                                        .init(color: .clear, location: 0.65)
+                                    ],
+                                    startPoint: .topTrailing,
+                                    endPoint: .bottomLeading
+                                )
+                            )
+
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.4)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1.0)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.46), location: 0.24),
+                                        .init(color: .clear, location: 0.65)
+                                    ],
+                                    startPoint: .bottomLeading,
+                                    endPoint: .topTrailing
+                                )
+                            )
+                    }
+                }
+
+        case .liquidGlass(let tint, let clarity):
+            cardContent
+                .background(
+                    LiquidGlassBackground(cornerRadius: cornerRadius, tint: tint, clarity: clarity)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay {
+                    if enableInnerShine && colorScheme == .light {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.0)
+                            .stroke(Color.white.opacity(0.7), lineWidth: 2.0)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.9), location: 0.42),
+                                        .init(color: .clear, location: 0.75)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.2)
+                            .stroke(Color.white.opacity(0.42), lineWidth: 1.2)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.62), location: 0.3),
+                                        .init(color: .clear, location: 0.68)
+                                    ],
+                                    startPoint: .bottomTrailing,
+                                    endPoint: .topLeading
+                                )
+                            )
+
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.4)
+                            .stroke(Color.white.opacity(0.24), lineWidth: 1.0)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.5), location: 0.24),
+                                        .init(color: .clear, location: 0.65)
+                                    ],
+                                    startPoint: .topTrailing,
+                                    endPoint: .bottomLeading
+                                )
+                            )
+
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .inset(by: 1.4)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1.0)
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white, location: 0.0),
+                                        .init(color: .white.opacity(0.46), location: 0.24),
+                                        .init(color: .clear, location: 0.65)
+                                    ],
+                                    startPoint: .bottomLeading,
+                                    endPoint: .topTrailing
+                                )
+                            )
+                    }
+                }
         }
     }
 }
@@ -290,19 +397,17 @@ struct AppOverviewCard: View {
 private struct AppOverviewMetricItem: View {
     let metric: AppOverviewMetric
 
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
         HStack(spacing: 12) {
             Text(metric.value)
                 .font(.title.bold())
-                .foregroundColor(AppTheme.tokens(for: colorScheme).textPrimary)
+                .foregroundColor(Color.white.opacity(0.92))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
             Text(metric.label)
                 .font(.caption.weight(.medium))
-                .foregroundColor(AppTheme.tokens(for: colorScheme).textSecondary)
+                .foregroundColor(Color.white.opacity(0.76))
                 .multilineTextAlignment(.leading)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -314,12 +419,11 @@ private struct AppOverviewMetricItem: View {
 }
 
 private struct AppOverviewDivider: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
         Rectangle()
-            .fill(AppTheme.tokens(for: colorScheme).divider)
+            .fill(Color.white.opacity(0.16))
             .frame(width: 1)
             .padding(.vertical, 16)
     }
 }
+

@@ -672,13 +672,13 @@ struct DeviceStatsSection: View {
     let activeDevices: Int
     let activeAutomations: Int
     @Environment(\.colorScheme) private var colorScheme
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Devices")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(AppTheme.tokens(for: colorScheme).textPrimary)
+                .foregroundColor(Color.white.opacity(0.92))
             
             // Unified Statistics Card with Vertical Dividers
             AppOverviewCard(
@@ -686,7 +686,9 @@ struct DeviceStatsSection: View {
                     AppOverviewMetric(value: "\(totalDevices)", label: "Total\nDevices"),
                     AppOverviewMetric(value: "\(activeDevices)", label: "Active\nDevices"),
                     AppOverviewMetric(value: "\(activeAutomations)", label: "Scenes\nOn")
-                ]
+                ],
+                style: .systemGlass(tint: nil, interactive: false),
+                cornerRadius: 20
             )
         }
     }
@@ -744,29 +746,13 @@ struct MiniDeviceCard: View {
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
     private var isReferenceLightMode: Bool { colorScheme == .light }
     private var primaryTextColor: Color {
-        isReferenceLightMode ? Color.white.opacity(0.92) : theme.textPrimary
+        Color.white.opacity(0.92)
     }
     private var secondaryTextColor: Color {
-        isReferenceLightMode ? Color.white.opacity(0.74) : theme.textSecondary
+        Color.white.opacity(0.74)
     }
     private let miniCardCornerRadius: CGFloat = 20
-    private var cardStyle: AppCardStyle {
-        AppCardStyles.glass(
-            for: colorScheme,
-            tone: currentPowerState ? .active : .inactive,
-            cornerRadius: miniCardCornerRadius
-        )
-    }
-    private var cardShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: miniCardCornerRadius, style: .continuous)
-    }
     private var activeRunStatus: ActiveRunStatus? { viewModel.activeRunStatus[device.id] }
-    private var liftKeyShadowColor: Color {
-        colorScheme == .light ? Color.black.opacity(0.16) : Color.black.opacity(0.28)
-    }
-    private var liftAmbientShadowColor: Color {
-        colorScheme == .light ? Color.black.opacity(0.08) : Color.black.opacity(0.15)
-    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -827,18 +813,6 @@ struct MiniDeviceCard: View {
             miniCardBackground
         )
         .clipShape(RoundedRectangle(cornerRadius: miniCardCornerRadius, style: .continuous))
-        .shadow(
-            color: isReferenceLightMode ? .clear : liftAmbientShadowColor,
-            radius: isReferenceLightMode ? 0 : 10,
-            x: 0,
-            y: isReferenceLightMode ? 0 : 4
-        )
-        .shadow(
-            color: isReferenceLightMode ? .clear : liftKeyShadowColor,
-            radius: isReferenceLightMode ? 0 : 22,
-            x: 0,
-            y: isReferenceLightMode ? 0 : 14
-        )
         .onTapGesture {
             onTap()
         }
@@ -854,97 +828,15 @@ struct MiniDeviceCard: View {
 
     @ViewBuilder
     private var miniCardBackground: some View {
-        if isReferenceLightMode {
-            cardShape
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    cardShape
-                        .fill(.thinMaterial)
-                        .opacity(0.10)
-                )
-                .overlay(
-                    cardShape
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.003),
-                                    Color.white.opacity(0.0006)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                )
-                .overlay(
-                    cardShape
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.58, green: 0.70, blue: 0.75).opacity(0.007),
-                                    Color.clear,
-                                    Color(red: 0.90, green: 0.78, blue: 0.68).opacity(0.004)
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                )
-                .overlay(
-                    cardShape
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color.white.opacity(0.016),
-                                    Color.white.opacity(0.003),
-                                    Color.clear
-                                ],
-                                center: .topTrailing,
-                                startRadius: 8,
-                                endRadius: 170
-                            )
-                        )
-                )
-                .overlay(
-                    cardShape
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.black.opacity(0.004),
-                                    Color.clear,
-                                    Color.clear
-                                ],
-                                startPoint: .bottomLeading,
-                                endPoint: .topTrailing
-                            )
-                        )
-                )
-                .overlay(
-                    cardShape
-                        .stroke(Color.white.opacity(0.052), lineWidth: 0.32)
-                )
-                .overlay(
-                    cardShape
-                        .inset(by: 1)
-                        .stroke(Color.white.opacity(0.016), lineWidth: 0.20)
-                )
-                .overlay(
-                    cardShape
-                        .inset(by: 1.4)
-                        .stroke(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: Color.white.opacity(0.075), location: 0.0),
-                                    .init(color: Color.white.opacity(0.024), location: 0.34),
-                                    .init(color: Color.clear, location: 0.74)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 0.30
-                        )
-                )
+        if #available(iOS 26.0, *) {
+            Color.clear
+                .glassEffect(.clear, in: .rect(cornerRadius: miniCardCornerRadius))
         } else {
-            AppCardBackground(style: cardStyle)
+            LiquidGlassBackground(
+                cornerRadius: miniCardCornerRadius,
+                tint: nil,
+                clarity: .clear
+            )
         }
     }
 
@@ -1114,13 +1006,19 @@ struct AddSceneButton: View {
     var compact: Bool = false
     
     var body: some View {
-        AppGlassPillButton(
-            title: "Add Scene",
-            isSelected: false,
-            iconName: "plus.circle",
-            size: compact ? .compact : .regular,
-            action: { showAddScene = true }
-        )
+        Button(action: { showAddScene = true }) {
+            HStack(spacing: compact ? 6 : 8) {
+                Image(systemName: "plus.circle")
+                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                Text("Add Scene")
+                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.medium))
+            }
+            .foregroundColor(Color.white.opacity(0.9))
+            .padding(.horizontal, compact ? 12 : 16)
+            .padding(.vertical, compact ? 6 : 8)
+        }
+        .buttonStyle(.plain)
+        .appLiquidGlass(role: .control)
         .sheet(isPresented: $showAddScene) {
             SceneEditorSheet()
         }
@@ -1135,13 +1033,19 @@ struct AddAutomationButton: View {
     var compact: Bool = false
     
     var body: some View {
-        AppGlassPillButton(
-            title: "Add Automation",
-            isSelected: false,
-            iconName: "plus.circle",
-            size: compact ? .compact : .regular,
-            action: { showAddAutomation = true }
-        )
+        Button(action: { showAddAutomation = true }) {
+            HStack(spacing: compact ? 6 : 8) {
+                Image(systemName: "plus.circle")
+                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                Text("Add Automation")
+                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.medium))
+            }
+            .foregroundColor(Color.white.opacity(0.9))
+            .padding(.horizontal, compact ? 12 : 16)
+            .padding(.vertical, compact ? 6 : 8)
+        }
+        .buttonStyle(.plain)
+        .appLiquidGlass(role: .control)
         .sheet(isPresented: $showAddAutomation, onDismiss: {
             builderDevice = nil
             pendingTemplate = nil
