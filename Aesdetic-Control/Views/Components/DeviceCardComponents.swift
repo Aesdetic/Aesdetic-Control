@@ -86,11 +86,6 @@ struct EnhancedDeviceCard: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 20)
                 
-                // Power button section
-                powerButtonSection
-                    .padding(.horizontal, 20)
-                    .padding(.top, 16)
-                
                 // Push brightness to bottom with more spacing
                 Spacer()
                 Spacer(minLength: 8) // Additional spacing before brightness section
@@ -182,21 +177,7 @@ struct EnhancedDeviceCard: View {
                     .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(glassText.pagePrimaryText)
                 
-                Text(device.ipAddress)
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(glassText.pageSecondaryText)
-
-                if requiresSetup {
-                    Text("Setup Required")
-                        .font(AppTypography.style(.caption2, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(
-                            Capsule()
-                                .fill(Color.white.opacity(0.16))
-                        )
-                }
+                statusIndicator
 
                 if let run = activeRunStatus {
                     runStatusChip(run)
@@ -204,18 +185,8 @@ struct EnhancedDeviceCard: View {
             }
             
             Spacer()
-            
-            // Status indicator
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(device.isOnline ? .green : .red)
-                    .frame(width: 8, height: 8)
-                
-                Text(device.isOnline ? "Online" : "Offline")
-                    .font(AppTypography.style(.caption))
-                    .fontWeight(.medium)
-                    .foregroundColor(device.isOnline ? .green : .red)
-            }
+
+            powerButton
         }
     }
 
@@ -256,104 +227,117 @@ struct EnhancedDeviceCard: View {
         }
     }
     
-    private var powerButtonSection: some View {
-        HStack {
-            Button(action: {
-                if requiresSetup {
-                    onTap()
-                    return
-                }
-                // Calculate target state BEFORE any state changes
-                let targetState = !currentPowerState
-                
-                // CRITICAL: Set optimistic state BEFORE calling toggleDevicePower
-                // This ensures toggleDevicePower uses the correct target state
-                viewModel.setUIOptimisticState(deviceId: device.id, isOn: targetState)
-                
-                // If device appears offline but we're trying to control it, mark it as online
-                // This handles cases where discovery set isOnline=true but UI hasn't updated yet
-                if !device.isOnline {
-                    viewModel.markDeviceOnline(device.id)
-                }
-                
-                isToggling = true
-                
-                // Haptic feedback for immediate response
-                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                impactFeedback.impactOccurred()
-                
-                Task {
-                    await viewModel.toggleDevicePower(device)
-                    let settled = await viewModel.awaitPowerToggleSettlement(for: device, targetState: targetState)
-                    
-                    // Reset UI state after completion
-                    await MainActor.run {
-                        isToggling = false
-                        
-                        // ViewModel will handle state cleanup automatically
-                        // UI will reflect the coordinated state through currentPowerState
-                        let finalState = viewModel.getCurrentPowerState(for: deviceId)
-                        
-                        if settled && finalState == targetState {
-                            #if DEBUG
-                            print("✅ Device tab toggle successful: \(targetState ? "ON" : "OFF")")
-                            #endif
-                        } else {
-                            #if DEBUG
-                            print("⚠️ Device tab toggle mismatch - wanted: \(targetState), got: \(finalState)")
-                            #endif
-                        }
-                    }
-                }
-            }) {
-                ZStack {
-                    Image(systemName: "power")
-                        .font(AppTypography.style(.headline, weight: .medium))
-                        .foregroundColor(powerIconColor)
-                        .opacity(isToggling ? 0.7 : 1.0)
-                    
-                    // Loading indicator overlay
-                    if isToggling {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                            .foregroundColor(powerIconColor)
-                    }
-                }
-                .frame(width: 36, height: 36) // Reduced by 10% (40 * 0.9)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(currentPowerState ? .white : .clear)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
-                        )
+    private var statusIndicator: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(device.isOnline ? Color.white : Color.clear)
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.95), lineWidth: 1.4)
                 )
-                .shadow(
-                    color: glassSurface.controlShadowAmbient.color,
-                    radius: glassSurface.controlShadowAmbient.radius,
-                    x: glassSurface.controlShadowAmbient.x,
-                    y: glassSurface.controlShadowAmbient.y
-                )
-                .shadow(
-                    color: glassSurface.controlShadowKey.color,
-                    radius: glassSurface.controlShadowKey.radius,
-                    x: glassSurface.controlShadowKey.x,
-                    y: glassSurface.controlShadowKey.y
-                )
-                .scaleEffect(isToggling ? 0.95 : 1.0)
-                .animation(.easeInOut(duration: 0.1), value: isToggling)
-                .animation(.easeInOut(duration: 0.2), value: currentPowerState)
-                }
-            .buttonStyle(.plain)
-            .accessibilityElement()
-            .accessibilityLabel("Power")
-            .accessibilityValue(currentPowerState ? "On" : "Off")
-            .accessibilityHint(currentPowerState ? "Double tap to turn the device off." : "Double tap to turn the device on.")
-            .sensorySelection(trigger: isToggling)
-            .disabled(!device.isOnline || isToggling || requiresSetup)
-            
-            Spacer()
+                .frame(width: 8, height: 8)
+
+            Text(device.isOnline ? "Online" : "Offline")
+                .font(AppTypography.style(.caption))
+                .fontWeight(.medium)
+                .foregroundColor(.white.opacity(0.95))
         }
+    }
+
+    private var powerButton: some View {
+        Button(action: {
+            if requiresSetup {
+                onTap()
+                return
+            }
+            // Calculate target state BEFORE any state changes
+            let targetState = !currentPowerState
+
+            // CRITICAL: Set optimistic state BEFORE calling toggleDevicePower
+            // This ensures toggleDevicePower uses the correct target state
+            viewModel.setUIOptimisticState(deviceId: device.id, isOn: targetState)
+
+            // If device appears offline but we're trying to control it, mark it as online
+            // This handles cases where discovery set isOnline=true but UI hasn't updated yet
+            if !device.isOnline {
+                viewModel.markDeviceOnline(device.id)
+            }
+
+            isToggling = true
+
+            // Haptic feedback for immediate response
+            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+            impactFeedback.impactOccurred()
+
+            Task {
+                await viewModel.toggleDevicePower(device)
+                let settled = await viewModel.awaitPowerToggleSettlement(for: device, targetState: targetState)
+
+                // Reset UI state after completion
+                await MainActor.run {
+                    isToggling = false
+
+                    // ViewModel will handle state cleanup automatically
+                    // UI will reflect the coordinated state through currentPowerState
+                    let finalState = viewModel.getCurrentPowerState(for: deviceId)
+
+                    if settled && finalState == targetState {
+                        #if DEBUG
+                        print("✅ Device tab toggle successful: \(targetState ? "ON" : "OFF")")
+                        #endif
+                    } else {
+                        #if DEBUG
+                        print("⚠️ Device tab toggle mismatch - wanted: \(targetState), got: \(finalState)")
+                        #endif
+                    }
+                }
+            }
+        }) {
+            ZStack {
+                Image(systemName: "power")
+                    .font(AppTypography.style(.headline, weight: .medium))
+                    .foregroundColor(powerIconColor)
+                    .opacity(isToggling ? 0.7 : 1.0)
+
+                // Loading indicator overlay
+                if isToggling {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .foregroundColor(powerIconColor)
+                }
+            }
+            .frame(width: 36, height: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(currentPowerState ? .white : .clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
+                    )
+            )
+            .shadow(
+                color: glassSurface.controlShadowAmbient.color,
+                radius: glassSurface.controlShadowAmbient.radius,
+                x: glassSurface.controlShadowAmbient.x,
+                y: glassSurface.controlShadowAmbient.y
+            )
+            .shadow(
+                color: glassSurface.controlShadowKey.color,
+                radius: glassSurface.controlShadowKey.radius,
+                x: glassSurface.controlShadowKey.x,
+                y: glassSurface.controlShadowKey.y
+            )
+            .scaleEffect(isToggling ? 0.95 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: isToggling)
+            .animation(.easeInOut(duration: 0.2), value: currentPowerState)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement()
+        .accessibilityLabel("Power")
+        .accessibilityValue(currentPowerState ? "On" : "Off")
+        .accessibilityHint(currentPowerState ? "Double tap to turn the device off." : "Double tap to turn the device on.")
+        .sensorySelection(trigger: isToggling)
+        .disabled(!device.isOnline || isToggling || requiresSetup)
     }
     
 

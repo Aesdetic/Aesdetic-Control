@@ -10,6 +10,7 @@ struct SaveEffectPresetDialog: View {
     let onSave: (WLEDEffectPreset) -> Void
     
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var automationStore = AutomationStore.shared
     @FocusState private var isTextFieldFocused: Bool
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
@@ -89,7 +90,7 @@ struct SaveEffectPresetDialog: View {
                         .focused($isTextFieldFocused)
                         .submitLabel(.done)
                         .onSubmit {
-                            if !presetName.isEmpty {
+                            if !presetName.isEmpty && !automationStore.hasAnyDeletionInProgress {
                                 savePreset()
                             }
                         }
@@ -159,7 +160,7 @@ struct SaveEffectPresetDialog: View {
                         savePreset()
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(presetName.isEmpty)
+                    .disabled(presetName.isEmpty || automationStore.hasAnyDeletionInProgress)
                 }
                 .padding(.horizontal, 16)
             }
@@ -187,6 +188,7 @@ struct SaveEffectPresetDialog: View {
     }
     
     private func savePreset() {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         let sanitizedQuickLoad = quickLoadTag
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let quickLoadValue = sanitizedQuickLoad.isEmpty

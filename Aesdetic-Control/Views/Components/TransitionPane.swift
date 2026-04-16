@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TransitionPane: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
+    @ObservedObject private var automationStore = AutomationStore.shared
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let device: WLEDDevice
     @Binding var dismissColorPicker: Bool
@@ -111,7 +112,9 @@ struct TransitionPane: View {
     }
 
     private var isPresetButtonDisabled: Bool {
-        isSavingPreset || viewModel.isTransitionPresetButtonDisabled(for: device.id)
+        isSavingPreset
+            || automationStore.hasAnyDeletionInProgress
+            || viewModel.isTransitionPresetButtonDisabled(for: device.id)
     }
 
     private var isApplyDisabled: Bool {
@@ -1371,6 +1374,7 @@ private extension TransitionPane {
     // MARK: - Direct Preset Saving
     
     func saveTransitionPresetDirectly() async {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         guard viewModel.shouldAllowInteractivePresetSaveTap(for: device.id) else {
             #if DEBUG
             let reason = viewModel.transitionPresetSaveBlockReasonDebug(for: device.id) ?? "unknown"

@@ -7874,6 +7874,18 @@ class DeviceControlViewModel: ObservableObject {
         !(await shouldBlockPresetStoreMutation(deviceId: deviceId))
     }
 
+    /// Cleanup deletes should keep progressing even when preset catalogs are temporarily
+    /// unreadable. Only block on explicit write-pause/backoff safety gates.
+    func shouldAllowPresetStoreDeleteMutation(deviceId: String) async -> Bool {
+        if isPresetStoreWritePaused(for: deviceId) {
+            return false
+        }
+        if await apiService.isStateWriteBackoffActive(deviceId: deviceId) {
+            return false
+        }
+        return true
+    }
+
     private func shouldFailFastTemporaryPlaylistBuild(device: WLEDDevice) async -> Bool {
         await shouldBlockPresetStoreMutation(deviceId: device.id)
     }
@@ -8688,6 +8700,12 @@ class DeviceControlViewModel: ObservableObject {
         device: WLEDDevice,
         presetInputSnapshot: TransitionPreset
     ) async -> TransitionPresetSaveOutcome? {
+        if AutomationStore.shared.hasAnyDeletionInProgress {
+            #if DEBUG
+            print("preset_save.blocked_automation_delete device=\(device.id)")
+            #endif
+            return .suppressedBusy
+        }
         let snappedPreset = presetInputSnapshot
         let deviceId = device.id
         #if DEBUG
@@ -11595,6 +11613,10 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func savePreset(name: String, quickLoadTag: String? = nil, for device: WLEDDevice, presetId: Int? = nil) async {
+        if AutomationStore.shared.hasAnyDeletionInProgress {
+            presentError(.apiError(message: "Please wait for automation deletion to finish before saving a new preset."))
+            return
+        }
         markUserInteraction(device.id)
         presetLoadingStates[device.id] = true
         do {
@@ -11626,6 +11648,7 @@ class DeviceControlViewModel: ObservableObject {
                 transitionDeciseconds: response.state.transitionDeciseconds ?? 7
             )
             try await apiService.savePreset(request, to: device)
+            DeviceCleanupManager.shared.removeIds(type: .preset, deviceId: device.id, ids: [targetId])
             let presets = try await apiService.fetchPresets(for: device)
             presetsCache[device.id] = presets
             recordPresetNameMap(for: device.id, presets: presets)

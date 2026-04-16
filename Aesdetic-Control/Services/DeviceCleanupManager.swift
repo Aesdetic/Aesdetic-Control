@@ -320,7 +320,7 @@ final class DeviceCleanupManager: ObservableObject {
         for id in ids {
             do {
                 if (type == .preset || type == .playlist),
-                   !(await DeviceControlViewModel.shared.shouldAllowPresetStoreMutation(deviceId: device.id)) {
+                   !(await DeviceControlViewModel.shared.shouldAllowPresetStoreDeleteMutation(deviceId: device.id)) {
                     failed.append(id)
                     lastError = "preset-store mutation guard is active"
                     logger.warning(

@@ -144,6 +144,8 @@ struct ProductSetupFlowView: View {
         case locationRequired
         case invalidDeviceName
         case noWeekdaysSelected
+        case invalidDeviceLocation(String)
+        case invalidOnDeviceSchedule(String)
 
         var errorDescription: String? {
             switch self {
@@ -153,6 +155,10 @@ struct ProductSetupFlowView: View {
                 return "Please enter a valid device name."
             case .noWeekdaysSelected:
                 return "Select at least one day for your wake automation."
+            case .invalidDeviceLocation(let message):
+                return message
+            case .invalidOnDeviceSchedule(let message):
+                return message
             }
         }
     }
@@ -181,6 +187,10 @@ struct ProductSetupFlowView: View {
     @State private var isConnectingWiFi: Bool = false
     @State private var wifiConnectionStatus: WiFiSetupView.ConnectionStatus = .idle
     @State private var wifiScanTask: Task<Void, Never>?
+    @State private var deviceLatitudeInput: String = ""
+    @State private var deviceLongitudeInput: String = ""
+    @State private var isLoadingDeviceLocation: Bool = false
+    @State private var isResolvingPhoneLocation: Bool = false
 
     @State private var wakeTriggerMode: WakeTriggerMode = .sunrise
     @State private var wakeTime: Date
@@ -219,6 +229,10 @@ struct ProductSetupFlowView: View {
         components.hour = 7
         components.minute = 0
         return Calendar.current.date(from: components) ?? Date()
+    }
+
+    private static func formatCoordinate(_ value: Double) -> String {
+        String(format: "%.6f", value)
     }
 
     private var activeDevice: WLEDDevice {
@@ -277,7 +291,7 @@ struct ProductSetupFlowView: View {
         case .ledPreferences:
             return true
         case .nameAndWiFi:
-            return !trimmedDeviceName.isEmpty && hasConfirmedWiFi
+            return !trimmedDeviceName.isEmpty && hasConfirmedWiFi && locationInputErrorMessage == nil
         case .automation:
             return !isApplying && wakeWeekdays.contains(true)
         }
@@ -285,6 +299,34 @@ struct ProductSetupFlowView: View {
 
     private var trimmedDeviceName: String {
         deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedLatitudeInput: String {
+        deviceLatitudeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedLongitudeInput: String {
+        deviceLongitudeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var locationInputErrorMessage: String? {
+        let latitude = trimmedLatitudeInput
+        let longitude = trimmedLongitudeInput
+
+        if latitude.isEmpty && longitude.isEmpty { return nil }
+        if latitude.isEmpty || longitude.isEmpty {
+            return "Enter both latitude and longitude, or leave both blank."
+        }
+        guard let lat = Double(latitude), let lon = Double(longitude) else {
+            return "Latitude and longitude must be valid numbers."
+        }
+        guard (-90.0...90.0).contains(lat) else {
+            return "Latitude must be between -90 and 90."
+        }
+        guard (-180.0...180.0).contains(lon) else {
+            return "Longitude must be between -180 and 180."
+        }
+        return nil
     }
 
     private var stepProgressValue: Double {
@@ -333,7 +375,7 @@ struct ProductSetupFlowView: View {
                 }
                 .padding(16)
                 .appLiquidGlass(role: .highContrast, cornerRadius: 28)
-                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             .navigationTitle("Product Setup")
             .navigationBarTitleDisplayMode(.inline)
@@ -362,12 +404,16 @@ struct ProductSetupFlowView: View {
             .task {
                 initializeSelectionIfNeeded()
                 await loadCurrentWiFiInfo()
+                await loadCurrentDeviceLocation()
                 scanForWiFiNetworks()
             }
             .onChange(of: step) { _, newStep in
                 guard newStep == .nameAndWiFi else { return }
                 Task {
                     await loadCurrentWiFiInfo()
+                    if trimmedLatitudeInput.isEmpty && trimmedLongitudeInput.isEmpty {
+                        await loadCurrentDeviceLocation()
+                    }
                     scanForWiFiNetworks()
                 }
             }
@@ -591,6 +637,81 @@ struct ProductSetupFlowView: View {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(theme.surfaceMuted)
                     )
+            }
+
+            infoPanel(title: "Device Location") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Set latitude/longitude for this lamp so sunrise automations use the correct location.")
+                        .font(AppTypography.style(.caption))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if isLoadingDeviceLocation {
+                        HStack(spacing: 8) {
+                            ProgressView().scaleEffect(0.8)
+                            Text("Loading current device location…")
+                                .font(AppTypography.style(.subheadline))
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        locationTextField(title: "Latitude", text: $deviceLatitudeInput)
+                        locationTextField(title: "Longitude", text: $deviceLongitudeInput)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button {
+                            fillLocationFromPhone()
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isResolvingPhoneLocation {
+                                    ProgressView().scaleEffect(0.8).tint(.black)
+                                } else {
+                                    Image(systemName: "location.fill")
+                                }
+                                Text(isResolvingPhoneLocation ? "Getting Location…" : "Use Phone Location")
+                            }
+                            .font(AppTypography.style(.subheadline, weight: .semibold))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.white)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isResolvingPhoneLocation)
+
+                        Button {
+                            clearLocationInputs()
+                        } label: {
+                            Text("Clear")
+                                .font(AppTypography.style(.subheadline, weight: .semibold))
+                                .foregroundStyle(theme.textSecondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(theme.surfaceMuted)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if let locationInputErrorMessage {
+                        Text(locationInputErrorMessage)
+                            .font(AppTypography.style(.caption))
+                            .foregroundStyle(theme.status.negative)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if !trimmedLatitudeInput.isEmpty && !trimmedLongitudeInput.isEmpty {
+                        Text("This location will be saved to the device in setup.")
+                            .font(AppTypography.style(.caption))
+                            .foregroundStyle(theme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
 
             infoPanel(title: "Wi-Fi Confirmation") {
@@ -1157,6 +1278,8 @@ struct ProductSetupFlowView: View {
         transitionStartWhiteLevel = nil
         transitionEndTemperature = nil
         transitionEndWhiteLevel = nil
+        deviceLatitudeInput = ""
+        deviceLongitudeInput = ""
     }
 
     private func setupSuggestedName(for device: WLEDDevice) -> String {
@@ -1192,6 +1315,64 @@ struct ProductSetupFlowView: View {
         } catch {
             // Keep the previous reading visible if we temporarily lose connectivity while Wi-Fi changes.
         }
+    }
+
+    private func loadCurrentDeviceLocation() async {
+        isLoadingDeviceLocation = true
+        defer { isLoadingDeviceLocation = false }
+        do {
+            let solarReference = try await WLEDAPIService.shared.fetchSolarReference(for: activeDevice)
+            if let coordinate = solarReference.coordinate {
+                deviceLatitudeInput = Self.formatCoordinate(coordinate.latitude)
+                deviceLongitudeInput = Self.formatCoordinate(coordinate.longitude)
+            }
+        } catch {
+            // Leave fields editable for manual entry if fetch fails.
+        }
+    }
+
+    private func fillLocationFromPhone() {
+        guard !isResolvingPhoneLocation else { return }
+        isResolvingPhoneLocation = true
+        Task {
+            let coordinate = await AutomationStore.shared.currentCoordinate()
+            await MainActor.run {
+                isResolvingPhoneLocation = false
+                if let coordinate {
+                    deviceLatitudeInput = Self.formatCoordinate(coordinate.latitude)
+                    deviceLongitudeInput = Self.formatCoordinate(coordinate.longitude)
+                    localError = nil
+                } else {
+                    localError = "Unable to access phone location. Enter coordinates manually or enable Location permission."
+                }
+            }
+        }
+    }
+
+    private func clearLocationInputs() {
+        deviceLatitudeInput = ""
+        deviceLongitudeInput = ""
+    }
+
+    private func parsedDeviceCoordinate() -> CLLocationCoordinate2D? {
+        let latitude = trimmedLatitudeInput
+        let longitude = trimmedLongitudeInput
+        guard !latitude.isEmpty || !longitude.isEmpty else { return nil }
+        guard let lat = Double(latitude), let lon = Double(longitude) else { return nil }
+        guard (-90.0...90.0).contains(lat), (-180.0...180.0).contains(lon) else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    private func applyDeviceLocationIfNeeded(to device: WLEDDevice) async throws {
+        if let locationInputErrorMessage {
+            throw SetupError.invalidDeviceLocation(locationInputErrorMessage)
+        }
+        guard let coordinate = parsedDeviceCoordinate() else { return }
+        try await WLEDAPIService.shared.updateDeviceTimeSettings(
+            for: device,
+            timeZone: .current,
+            coordinate: coordinate
+        )
     }
 
     private func scanForWiFiNetworks() {
@@ -1309,6 +1490,8 @@ struct ProductSetupFlowView: View {
                     return
                 }
             }
+
+            try await applyDeviceLocationIfNeeded(to: live)
 
             if isCustomProduct {
                 await viewModel.setDeviceSetupMode(live, generic: true)
@@ -1432,40 +1615,60 @@ struct ProductSetupFlowView: View {
         )
 
         let metadata = AutomationMetadata(
-            colorPreviewHex: transitionStartGradient.stops.first?.hexColor ?? "#D9442A",
+            colorPreviewHex: transitionEndGradient.stops.last?.hexColor ?? "#7EC8FF",
             accentColorHex: transitionEndGradient.stops.last?.hexColor ?? "#7EC8FF",
             iconName: "sunrise.fill",
             notes: "Created during device setup",
             templateId: "onboarding_wake_v2",
             pinnedToShortcuts: true,
-            runOnDevice: false
+            runOnDevice: true
         )
 
         let store = AutomationStore.shared
         let targetIds = [device.id]
+        let automationName = "Sunrise"
+        let targets = AutomationTargets(
+            deviceIds: targetIds,
+            syncGroupName: nil,
+            allowPartialFailure: true
+        )
+
+        let draft: Automation
         if let existing = store.automations.first(where: {
             $0.metadata.templateId == "onboarding_wake_v2" && Set($0.targets.deviceIds) == Set(targetIds)
         }) {
             var updated = existing
-            updated.name = "\(trimmedDeviceName) Morning Wake"
+            updated.name = automationName
             updated.trigger = trigger
             updated.action = action
-            updated.targets = AutomationTargets(deviceIds: targetIds, syncGroupName: nil, allowPartialFailure: false)
+            updated.targets = targets
             updated.metadata = metadata
             updated.enabled = true
             updated.updatedAt = Date()
-            store.update(updated)
+            draft = updated
         } else {
-            store.add(
-                Automation(
-                    name: "\(trimmedDeviceName) Morning Wake",
-                    enabled: true,
-                    trigger: trigger,
-                    action: action,
-                    targets: AutomationTargets(deviceIds: targetIds, syncGroupName: nil, allowPartialFailure: false),
-                    metadata: metadata
-                )
+            draft = Automation(
+                name: automationName,
+                enabled: true,
+                trigger: trigger,
+                action: action,
+                targets: targets,
+                metadata: metadata
             )
+        }
+
+        // Match AddAutomationDialog path: validate on-device schedule before persisting.
+        let validation = await store.validateOnDeviceSchedule(for: draft)
+        guard validation.isValid else {
+            throw SetupError.invalidOnDeviceSchedule(
+                validation.message ?? "No available on-device timer slots for this schedule."
+            )
+        }
+
+        if store.automations.contains(where: { $0.id == draft.id }) {
+            store.update(draft)
+        } else {
+            store.add(draft)
         }
     }
 
@@ -1563,6 +1766,22 @@ struct ProductSetupFlowView: View {
                 .foregroundColor(theme.textPrimary)
                 .multilineTextAlignment(.trailing)
         }
+    }
+
+    private func locationTextField(title: String, text: Binding<String>) -> some View {
+        TextField(title, text: text)
+            .textFieldStyle(.plain)
+            .font(AppTypography.style(.subheadline, weight: .medium))
+            .foregroundColor(theme.textPrimary)
+            .keyboardType(.numbersAndPunctuation)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(theme.surfaceMuted)
+            )
     }
 
     private func gradientSwatch(_ hexes: [String]) -> some View {

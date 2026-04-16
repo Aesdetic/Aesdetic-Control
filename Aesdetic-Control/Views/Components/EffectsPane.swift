@@ -3,6 +3,7 @@ import Combine
 
 struct EffectsPane: View {
     @EnvironmentObject private var viewModel: DeviceControlViewModel
+    @ObservedObject private var automationStore = AutomationStore.shared
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.openURL) private var openURL
     let device: WLEDDevice
@@ -446,7 +447,8 @@ struct EffectsPane: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    .disabled(isApplyingEffect || isSavingPreset)
+                    .disabled(isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress)
+                    .opacity((isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
                 }
 
                 Button(action: toggleEffect) {
@@ -1411,6 +1413,7 @@ private extension EffectsPane {
     }
     
     func saveEffectPresetDirectly() async {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         guard !effectOptions.isEmpty else { return }
         let preparedGradient = preparedGradientForSlotCount(effectGradient, slotCount: slotCount)
         let preset = WLEDEffectPreset(
@@ -1428,6 +1431,7 @@ private extension EffectsPane {
     }
 
     func saveEffectPreset(_ presetInput: WLEDEffectPreset) async {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         isSavingPreset = true
         showSaveSuccess = false
         var preset = presetInput

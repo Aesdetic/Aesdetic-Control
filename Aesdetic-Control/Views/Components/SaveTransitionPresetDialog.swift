@@ -14,6 +14,7 @@ struct SaveTransitionPresetDialog: View {
     let onSave: (TransitionPreset) -> Void
     
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var automationStore = AutomationStore.shared
     @FocusState private var isTextFieldFocused: Bool
     
     @State private var presetName: String = ""
@@ -97,7 +98,7 @@ struct SaveTransitionPresetDialog: View {
                         .focused($isTextFieldFocused)
                         .submitLabel(.done)
                         .onSubmit {
-                            if !presetName.isEmpty {
+                            if !presetName.isEmpty && !automationStore.hasAnyDeletionInProgress {
                                 savePreset()
                             }
                         }
@@ -115,7 +116,7 @@ struct SaveTransitionPresetDialog: View {
                         savePreset()
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(presetName.isEmpty)
+                    .disabled(presetName.isEmpty || automationStore.hasAnyDeletionInProgress)
                 }
                 .padding(.horizontal, 16)
             }
@@ -147,6 +148,7 @@ struct SaveTransitionPresetDialog: View {
     }
 
     private func savePreset() {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         let preset = TransitionPreset(
             name: presetName,
             deviceId: device.id,

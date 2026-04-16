@@ -2,6 +2,7 @@ import SwiftUI
 
 struct UnifiedColorPane: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
+    @ObservedObject private var automationStore = AutomationStore.shared
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let device: WLEDDevice
     @Binding var dismissColorPicker: Bool
@@ -109,7 +110,8 @@ struct UnifiedColorPane: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(isSavingPreset)
+                .disabled(isSavingPreset || automationStore.hasAnyDeletionInProgress)
+                .opacity((isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
             }
             .padding(.horizontal, 16)
             
@@ -766,6 +768,7 @@ private extension UnifiedColorPane {
     // MARK: - Direct Preset Saving
     
     func saveColorPresetDirectly() async {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         let preset = ColorPreset(
             name: "Color Preset \(Date().presetNameTimestamp())",
             gradientStops: currentGradient.stops,
@@ -778,6 +781,7 @@ private extension UnifiedColorPane {
     }
 
     func saveColorPreset(_ presetInput: ColorPreset) async {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         await MainActor.run {
             isSavingPreset = true
             showSaveSuccess = false

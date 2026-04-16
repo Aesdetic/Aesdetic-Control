@@ -598,6 +598,12 @@ struct AddAutomationDialog: View {
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if automationStore.hasAnyDeletionInProgress && !isEditing {
+                Text("Please wait for automation deletion to finish before creating a new automation.")
+                    .font(AppTypography.style(.footnote))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -1455,6 +1461,9 @@ struct AddAutomationDialog: View {
     }
     
     private var canSave: Bool {
+        if automationStore.hasAnyDeletionInProgress && !isEditing {
+            return false
+        }
         guard !automationName.trimmed().isEmpty else { return false }
         guard !selectedDeviceIds.isEmpty else { return false }
         if !selectedWeekdays.contains(true) {

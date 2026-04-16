@@ -310,6 +310,61 @@ final class AutomationModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAddAutomationBlockedWhileDeletionInProgress() async {
+        let store = AutomationStore.shared
+        let original = store.automations
+        defer { store.automations = original }
+
+        let deviceId = "device-delete-lock"
+        let first = makeOnDeviceAutomation(
+            name: "Delete Me",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: "18:00",
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            deviceId: deviceId
+        )
+        let second = makeOnDeviceAutomation(
+            name: "Keep Me",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: "19:00",
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            deviceId: deviceId
+        )
+        let attemptedDuringDelete = makeOnDeviceAutomation(
+            name: "Blocked While Deleting",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: "20:00",
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            deviceId: deviceId
+        )
+
+        store.automations = [first, second]
+        store.delete(id: first.id)
+        store.add(attemptedDuringDelete)
+
+        let deleteFinished = await waitForCondition {
+            !store.isDeletionInProgress(for: first.id)
+        }
+        XCTAssertTrue(deleteFinished, "Expected delete to finish")
+        XCTAssertFalse(
+            store.automations.contains(where: { $0.id == attemptedDuringDelete.id }),
+            "Expected add to be blocked during active deletion"
+        )
+    }
+
+    @MainActor
     func testCleanupQueueSupportsDeferredNotBefore() {
         let cleanup = DeviceCleanupManager.shared
         let deviceId = "cleanup-test-deferred-\(UUID().uuidString)"

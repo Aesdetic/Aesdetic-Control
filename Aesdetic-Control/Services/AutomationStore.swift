@@ -17,6 +17,7 @@ class AutomationStore: ObservableObject {
     @Published var automations: [Automation] = []
     @Published private(set) var upcomingAutomationInfo: (automation: Automation, date: Date)?
     @Published private(set) var deletingAutomationIds: Set<UUID> = []
+    var hasAnyDeletionInProgress: Bool { !deletingAutomationIds.isEmpty }
     
     private let fileURL: URL
     private var schedulerTimer: Timer?
@@ -103,6 +104,12 @@ class AutomationStore: ObservableObject {
     // MARK: - Public Methods
     
     func add(_ automation: Automation) {
+        guard !hasAnyDeletionInProgress else {
+            logger.warning(
+                "automation.add.blocked_deletion_in_progress automation=\(automation.name, privacy: .public) pendingDeletes=\(self.deletingAutomationIds.count, privacy: .public)"
+            )
+            return
+        }
         var record = automation
         record.metadata.normalizeWLEDScalarFallbacks(for: record.targets.deviceIds)
         var shouldSyncOnDevice = record.metadata.runOnDevice
@@ -2261,6 +2268,17 @@ class AutomationStore: ObservableObject {
         let stepPresetIds: [Int]
     }
 
+    private struct ManagedAssetDeleteVerificationResult {
+        let remainingPresetIds: [Int]
+        let remainingPlaylistIds: [Int]
+        let playlistCatalogUnreadable: Bool
+        let presetCatalogUnreadable: Bool
+
+        var unreadable: Bool {
+            playlistCatalogUnreadable || presetCatalogUnreadable
+        }
+    }
+
     private func fetchPlaylistStepPresetIds(
         playlistId: Int,
         device: WLEDDevice
@@ -2275,6 +2293,50 @@ class AutomationStore: ObservableObject {
             logger.warning("Failed to fetch playlist steps for cleanup: device=\(device.id, privacy: .public) playlist=\(playlistId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
             return []
         }
+    }
+
+    private func verifyManagedAssetDeletionOnDevice(
+        device: WLEDDevice,
+        presetIds: Set<Int>,
+        playlistIds: Set<Int>
+    ) async -> ManagedAssetDeleteVerificationResult {
+        var remainingPresetIds = Array(presetIds).sorted()
+        var remainingPlaylistIds = Array(playlistIds).sorted()
+        var playlistCatalogUnreadable = false
+        var presetCatalogUnreadable = false
+
+        if !playlistIds.isEmpty {
+            do {
+                let playlists = try await apiService.fetchPlaylists(for: device)
+                let existingIds = Set(playlists.map(\.id))
+                remainingPlaylistIds = Array(existingIds.intersection(playlistIds)).sorted()
+            } catch {
+                playlistCatalogUnreadable = true
+                logger.warning(
+                    "automation.delete.verify.playlists_unreadable device=\(device.id, privacy: .public) ids=\(Array(playlistIds).sorted(), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+
+        if !presetIds.isEmpty {
+            do {
+                let presets = try await apiService.fetchPresets(for: device)
+                let existingIds = Set(presets.map(\.id))
+                remainingPresetIds = Array(existingIds.intersection(presetIds)).sorted()
+            } catch {
+                presetCatalogUnreadable = true
+                logger.warning(
+                    "automation.delete.verify.presets_unreadable device=\(device.id, privacy: .public) ids=\(Array(presetIds).sorted(), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+
+        return ManagedAssetDeleteVerificationResult(
+            remainingPresetIds: remainingPresetIds,
+            remainingPlaylistIds: remainingPlaylistIds,
+            playlistCatalogUnreadable: playlistCatalogUnreadable,
+            presetCatalogUnreadable: presetCatalogUnreadable
+        )
     }
 
     private func managedPlaylistClaimedByAnotherAutomation(
@@ -4136,6 +4198,10 @@ class AutomationStore: ObservableObject {
         shouldDeleteTimerSlot: Bool
     ) async {
         var runtimePresetDeleteIds = presetDeleteIds
+        var targetedPlaylistDeleteIds: Set<Int> = []
+        if shouldDeleteManagedPlaylist, let playlistId {
+            targetedPlaylistDeleteIds.insert(playlistId)
+        }
         if shouldDeleteManagedPlaylist,
            let playlistId,
            storedManagedTransitionStepPresetIds(for: automation, deviceId: deviceId).isEmpty {
@@ -4287,10 +4353,88 @@ class AutomationStore: ObservableObject {
 
         let targetedDeleteCount =
             runtimePresetDeleteIds.count +
-            ((shouldDeleteManagedPlaylist && playlistId != nil) ? 1 : 0) +
+            targetedPlaylistDeleteIds.count +
             ((shouldDeleteTimerSlot && timerSlot != nil) ? 1 : 0)
         let maxDrainPasses = max(4, min(48, targetedDeleteCount * 2))
         await DeviceCleanupManager.shared.processQueueUntilIdle(for: device.id, maxPasses: maxDrainPasses)
+
+        // Verify managed asset IDs are truly absent from presets-store catalogs after queue drain.
+        // If catalogs are transiently unreadable or IDs still exist, requeue for safe retry.
+        let managedAssetVerification = await verifyManagedAssetDeletionOnDevice(
+            device: device,
+            presetIds: runtimePresetDeleteIds,
+            playlistIds: targetedPlaylistDeleteIds
+        )
+        var requeuedManagedAssetDeletes = false
+        let activeQueuedPlaylistIds = DeviceCleanupManager.shared
+            .activeDeleteIds(type: .playlist, deviceId: device.id)
+            .intersection(targetedPlaylistDeleteIds)
+        let activeQueuedPresetIds = DeviceCleanupManager.shared
+            .activeDeleteIds(type: .preset, deviceId: device.id)
+            .intersection(runtimePresetDeleteIds)
+
+        if managedAssetVerification.playlistCatalogUnreadable {
+            let unresolvedIds = Array(activeQueuedPlaylistIds).sorted()
+            if !unresolvedIds.isEmpty {
+                DeviceCleanupManager.shared.enqueue(
+                    type: .playlist,
+                    deviceId: device.id,
+                    ids: unresolvedIds,
+                    source: .automation,
+                    verificationRequired: true
+                )
+                requeuedManagedAssetDeletes = true
+            }
+        } else if !managedAssetVerification.remainingPlaylistIds.isEmpty {
+            DeviceCleanupManager.shared.enqueue(
+                type: .playlist,
+                deviceId: device.id,
+                ids: managedAssetVerification.remainingPlaylistIds,
+                source: .automation,
+                verificationRequired: true
+            )
+            requeuedManagedAssetDeletes = true
+        }
+
+        if managedAssetVerification.presetCatalogUnreadable {
+            let unresolvedIds = Array(activeQueuedPresetIds).sorted()
+            if !unresolvedIds.isEmpty {
+                DeviceCleanupManager.shared.enqueue(
+                    type: .preset,
+                    deviceId: device.id,
+                    ids: unresolvedIds,
+                    source: .automation,
+                    verificationRequired: true
+                )
+                requeuedManagedAssetDeletes = true
+            }
+        } else if !managedAssetVerification.remainingPresetIds.isEmpty {
+            DeviceCleanupManager.shared.enqueue(
+                type: .preset,
+                deviceId: device.id,
+                ids: managedAssetVerification.remainingPresetIds,
+                source: .automation,
+                verificationRequired: true
+            )
+            requeuedManagedAssetDeletes = true
+        }
+
+        if managedAssetVerification.unreadable {
+            logger.warning(
+                "automation.delete.asset_verify_unreadable trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) playlistUnreadable=\(managedAssetVerification.playlistCatalogUnreadable, privacy: .public) presetUnreadable=\(managedAssetVerification.presetCatalogUnreadable, privacy: .public) playlistIds=\(Array(targetedPlaylistDeleteIds).sorted(), privacy: .public) presetIds=\(Array(runtimePresetDeleteIds).sorted(), privacy: .public)"
+            )
+        }
+        if !managedAssetVerification.remainingPlaylistIds.isEmpty || !managedAssetVerification.remainingPresetIds.isEmpty {
+            logger.warning(
+                "automation.delete.asset_verify_remaining trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) playlistIds=\(managedAssetVerification.remainingPlaylistIds, privacy: .public) presetIds=\(managedAssetVerification.remainingPresetIds, privacy: .public)"
+            )
+        }
+
+        if requeuedManagedAssetDeletes {
+            let extraVerificationPasses = max(2, min(18, targetedDeleteCount + 2))
+            await DeviceCleanupManager.shared.processQueueUntilIdle(for: device.id, maxPasses: extraVerificationPasses)
+        }
+
         let pendingTimer = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .timer, deviceId: device.id)).sorted()
         let pendingPlaylist = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .playlist, deviceId: device.id)).sorted()
         let pendingPreset = Array(DeviceCleanupManager.shared.activeDeleteIds(type: .preset, deviceId: device.id)).sorted()

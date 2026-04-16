@@ -10,6 +10,7 @@ import SwiftUI
 struct AutomationView: View {
     @ObservedObject private var viewModel = AutomationViewModel.shared
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
+    @ObservedObject private var automationStore = AutomationStore.shared
     @StateObject private var scenesStore = ScenesStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @State private var showingCreateAutomation = false
@@ -73,6 +74,8 @@ struct AutomationView: View {
             }
             Spacer()
             AppGlassIconButton(systemName: "plus", action: { beginCreateAutomation() })
+                .disabled(automationStore.hasAnyDeletionInProgress)
+                .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
         }
     }
 
@@ -123,6 +126,8 @@ struct AutomationView: View {
                     size: .compact,
                     action: { beginCreateAutomation() }
                 )
+                .disabled(automationStore.hasAnyDeletionInProgress)
+                .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
             }
             
             if viewModel.automations.isEmpty {
@@ -204,6 +209,7 @@ private extension AutomationView {
     }
 
     func beginCreateAutomation(with template: AutomationTemplate? = nil) {
+        guard !automationStore.hasAnyDeletionInProgress else { return }
         pendingTemplate = template
         if deviceViewModel.devices.count == 1 {
             builderDevice = deviceViewModel.devices.first

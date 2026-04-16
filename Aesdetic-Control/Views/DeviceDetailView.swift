@@ -91,6 +91,10 @@ struct DeviceDetailView: View {
         viewModel.isRebootWaitActive(for: activeDevice.id)
     }
 
+    private var isAutomationMutationLocked: Bool {
+        !automationStore.deletingAutomationIds.isEmpty
+    }
+
     private var rebootWaitRemainingSeconds: Int {
         viewModel.rebootWaitRemainingSeconds(for: activeDevice.id)
     }
@@ -958,6 +962,8 @@ struct DeviceDetailView: View {
                         .font(AppTypography.style(.title3, weight: .semibold))
                         .foregroundColor(.white)
                 }
+                .disabled(isAutomationMutationLocked)
+                .opacity(isAutomationMutationLocked ? 0.45 : 1.0)
                 .accessibilityLabel("Add shortcut")
             }
             
@@ -999,6 +1005,8 @@ struct DeviceDetailView: View {
                     .foregroundStyle(Color.white, Color.white.opacity(0.6))
             }
             .buttonStyle(.plain)
+            .disabled(isAutomationMutationLocked)
+            .opacity(isAutomationMutationLocked ? 0.45 : 1.0)
             .accessibilityLabel("Add automation")
         }
         .padding(.top, 6)
@@ -1194,6 +1202,7 @@ struct DeviceDetailView: View {
     }
     
     private func startAutomationCreation(using template: AutomationTemplate? = nil) {
+        guard !isAutomationMutationLocked else { return }
         pendingAutomationTemplate = template
         editingAutomation = nil
         automationEditorDefaultName = template?.name ?? defaultAutomationName

@@ -11,6 +11,17 @@ actor PresetSyncManager {
     private let saveBaseDelayNanos: UInt64 = 400_000_000
     private let verifyBaseDelayNanos: UInt64 = 500_000_000
 
+    enum PresetSyncManagerError: LocalizedError {
+        case blockedByAutomationDeletion
+
+        var errorDescription: String? {
+            switch self {
+            case .blockedByAutomationDeletion:
+                return "Please wait for automation deletion to finish before saving a new preset."
+            }
+        }
+    }
+
     private func enqueue<T>(deviceId: String, operation: @escaping () async throws -> T) async throws -> T {
         let previous = deviceQueues[deviceId]
         let token = (deviceQueueTokens[deviceId] ?? 0) + 1
@@ -31,8 +42,19 @@ actor PresetSyncManager {
         return try await task.value
     }
 
+    private func assertPresetCreationAllowed() async throws {
+        let deletionInProgress = await MainActor.run {
+            AutomationStore.shared.hasAnyDeletionInProgress
+        }
+        if deletionInProgress {
+            throw PresetSyncManagerError.blockedByAutomationDeletion
+        }
+    }
+
     func saveColorPreset(_ preset: ColorPreset, to device: WLEDDevice) async throws -> Int {
-        try await enqueue(deviceId: device.id) {
+        try await assertPresetCreationAllowed()
+        return try await enqueue(deviceId: device.id) {
+            try await self.assertPresetCreationAllowed()
             let existingId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId
             let presetId = try await self.resolvePresetId(for: preset, device: device, existingId: existingId)
             #if DEBUG
@@ -50,7 +72,9 @@ actor PresetSyncManager {
     }
 
     func saveEffectPreset(_ preset: WLEDEffectPreset, to device: WLEDDevice) async throws -> Int {
-        try await enqueue(deviceId: device.id) {
+        try await assertPresetCreationAllowed()
+        return try await enqueue(deviceId: device.id) {
+            try await self.assertPresetCreationAllowed()
             let existingId = preset.wledPresetId
             let presetId = try await self.resolvePresetId(for: preset, device: device, existingId: existingId)
             #if DEBUG
@@ -73,7 +97,9 @@ actor PresetSyncManager {
         print("transition_preset.legacy_save_path_blocked device=\(device.id)")
         assertionFailure("Use DeviceControlViewModel.saveTransitionPresetToDevice/createTransitionPlaylist for transition presets")
         #endif
+        try await assertPresetCreationAllowed()
         return try await enqueue(deviceId: device.id) {
+            try await self.assertPresetCreationAllowed()
             let existingId = preset.wledPlaylistId
             let existingStepIds = preset.wledStepPresetIds ?? []
             let playlistId = try await self.resolvePlaylistId(for: preset, device: device, existingId: existingId)

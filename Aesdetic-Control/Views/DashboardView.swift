@@ -1317,6 +1317,7 @@ struct AddAutomationButton: View {
     @State private var showAddAutomation = false
     @State private var builderDevice: WLEDDevice?
     @State private var pendingTemplate: AutomationTemplate?
+    @ObservedObject private var automationStore = AutomationStore.shared
     var compact: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     private var actionTextColor: Color {
@@ -1338,6 +1339,8 @@ struct AddAutomationButton: View {
         .buttonStyle(SnappyTapButtonStyle(pressedScale: 0.96, response: 0.16, damping: 0.8))
         .accessibilityLabel("Add Automation")
         .appLiquidGlass(role: .control)
+        .disabled(automationStore.hasAnyDeletionInProgress)
+        .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
         .sheet(isPresented: $showAddAutomation, onDismiss: {
             builderDevice = nil
             pendingTemplate = nil
