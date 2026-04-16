@@ -19,9 +19,21 @@
                             <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="LaunchBackground_03C" translatesAutoresizingMaskIntoConstraints="NO" id="bgd-03-cim">
                                 <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                             </imageView>
-                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" misplaced="YES" image="aesdetic_logo_wordmark" translatesAutoresizingMaskIntoConstraints="NO" id="lg0-mid-ogo">
-                                <rect key="frame" x="41" y="155" width="311" height="542"/>
-                            </imageView>
+                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="lg0-gls-cnt">
+                                <rect key="frame" x="56.5" y="382" width="280" height="88"/>
+                                <subviews>
+                                    <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="aesdetic_logo_wordmark" translatesAutoresizingMaskIntoConstraints="NO" id="lg0-mid-ogo">
+                                        <rect key="frame" x="20" y="14" width="240" height="60"/>
+                                    </imageView>
+                                </subviews>
+                                <color key="backgroundColor" red="1" green="1" blue="1" alpha="0.12999999999999998" colorSpace="custom" customColorSpace="sRGB"/>
+                                <constraints>
+                                    <constraint firstItem="lg0-mid-ogo" firstAttribute="centerX" secondItem="lg0-gls-cnt" secondAttribute="centerX" id="c07-logo-center-x"/>
+                                    <constraint firstItem="lg0-mid-ogo" firstAttribute="centerY" secondItem="lg0-gls-cnt" secondAttribute="centerY" id="c07-logo-center-y"/>
+                                    <constraint firstItem="lg0-mid-ogo" firstAttribute="width" constant="240" id="c07-logo-width"/>
+                                    <constraint firstItem="lg0-mid-ogo" firstAttribute="height" constant="60" id="c07-logo-height"/>
+                                </constraints>
+                            </view>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="Bcu-3y-fUS"/>
                         <color key="backgroundColor" name="LaunchBackground"/>
@@ -30,12 +42,13 @@
                             <constraint firstAttribute="trailing" secondItem="bgd-03-cim" secondAttribute="trailing" id="c02-trailing"/>
                             <constraint firstItem="bgd-03-cim" firstAttribute="leading" secondItem="Ze5-6b-2t3" secondAttribute="leading" id="c03-leading"/>
                             <constraint firstAttribute="bottom" secondItem="bgd-03-cim" secondAttribute="bottom" id="c04-bottom"/>
-                            <constraint firstItem="lg0-mid-ogo" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="c05-logo-center-x"/>
-                            <constraint firstItem="lg0-mid-ogo" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="c06-logo-center-y"/>
-                            <constraint firstItem="lg0-mid-ogo" firstAttribute="width" relation="lessThanOrEqual" constant="260" id="c08-logo-width"/>
-                            <constraint firstItem="lg0-mid-ogo" firstAttribute="width" relation="greaterThanOrEqual" constant="220" id="c08b-logo-min-width"/>
-                            <constraint firstItem="lg0-mid-ogo" firstAttribute="leading" relation="greaterThanOrEqual" secondItem="Ze5-6b-2t3" secondAttribute="leading" constant="28" id="c09-logo-leading"/>
-                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="lg0-mid-ogo" secondAttribute="trailing" constant="28" id="c10-logo-trailing"/>
+                            <constraint firstItem="lg0-gls-cnt" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="c05-logo-center-x"/>
+                            <constraint firstItem="lg0-gls-cnt" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="c06-logo-center-y"/>
+                            <constraint firstItem="lg0-gls-cnt" firstAttribute="width" relation="lessThanOrEqual" constant="300" id="c08-logo-width"/>
+                            <constraint firstItem="lg0-gls-cnt" firstAttribute="width" relation="greaterThanOrEqual" constant="240" id="c08b-logo-min-width"/>
+                            <constraint firstItem="lg0-gls-cnt" firstAttribute="height" constant="88" id="c08c-logo-height"/>
+                            <constraint firstItem="lg0-gls-cnt" firstAttribute="leading" relation="greaterThanOrEqual" secondItem="Ze5-6b-2t3" secondAttribute="leading" constant="28" id="c09-logo-leading"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="lg0-gls-cnt" secondAttribute="trailing" constant="28" id="c10-logo-trailing"/>
                         </constraints>
                     </view>
                 </viewController>

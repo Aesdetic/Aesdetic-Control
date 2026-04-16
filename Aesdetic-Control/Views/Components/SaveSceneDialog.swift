@@ -18,11 +18,11 @@ struct SaveSceneDialog: View {
                     // Header
                     VStack(spacing: 8) {
                         Text("Save Scene")
-                            .font(.title2.weight(.bold))
+                            .font(AppTypography.style(.title2, weight: .bold))
                             .foregroundColor(.white)
                         
                         Text("Save current device state as a scene")
-                            .font(.body)
+                            .font(AppTypography.style(.body))
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
                     }
@@ -30,7 +30,7 @@ struct SaveSceneDialog: View {
                     // Scene Name Input
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Scene Name")
-                            .font(.headline)
+                            .font(AppTypography.style(.headline))
                             .foregroundColor(.white)
                         
                         TextField("Enter scene name", text: $sceneName)
@@ -45,7 +45,7 @@ struct SaveSceneDialog: View {
                     // Current State Preview
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Current State")
-                            .font(.headline)
+                            .font(AppTypography.style(.headline))
                             .foregroundColor(.white)
                         
                         VStack(spacing: 8) {
@@ -140,7 +140,7 @@ struct SaveSceneDialog: View {
 struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline)
+            .font(AppTypography.style(.headline))
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
@@ -154,7 +154,7 @@ struct PrimaryButtonStyle: ButtonStyle {
 struct SecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline)
+            .font(AppTypography.style(.headline))
             .foregroundColor(.blue)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)

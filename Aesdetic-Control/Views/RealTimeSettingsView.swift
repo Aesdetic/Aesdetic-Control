@@ -29,9 +29,9 @@ struct RealTimeSettingsView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Real-Time Updates")
-                                .font(.headline)
+                                .font(AppTypography.style(.headline))
                             Text("Instantly sync device changes across all apps")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.secondary)
                         }
                         
@@ -48,13 +48,13 @@ struct RealTimeSettingsView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Connection Status")
-                                    .font(.subheadline)
+                                    .font(AppTypography.style(.subheadline))
                                     .fontWeight(.medium)
                                 
                                 HStack(spacing: 6) {
                                     connectionStatusIndicator
                                     Text(connectionStatusText)
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(.secondary)
                                 }
                             }
@@ -191,11 +191,11 @@ struct RealTimeSettingsView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name)
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .fontWeight(.medium)
                 
                 Text(device.ipAddress)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.secondary)
             }
             
@@ -208,7 +208,7 @@ struct RealTimeSettingsView: View {
                         .frame(width: 6, height: 6)
                     
                     Text(device.isOnline ? "Online" : "Offline")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .fontWeight(.medium)
                         .foregroundColor(device.isOnline ? .green : .red)
                 }
@@ -220,7 +220,7 @@ struct RealTimeSettingsView: View {
                         }
                     } label: {
                         Text("Reconnect")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.blue)
                     }
                 }
@@ -233,17 +233,17 @@ struct RealTimeSettingsView: View {
     private func informationRow(icon: String, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
-                .font(.title3)
+                .font(AppTypography.style(.title3))
                 .foregroundColor(.blue)
                 .frame(width: 24)
             
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .fontWeight(.medium)
                 
                 Text(description)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

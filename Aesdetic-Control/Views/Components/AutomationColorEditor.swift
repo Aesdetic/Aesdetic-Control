@@ -37,13 +37,17 @@ struct AutomationColorEditor: View {
         VStack(spacing: 16) {
             headerRow
             powerSection
-            brightnessSection
-            blendSelector
-            gradientSection
-            presetSelector
-            colorWheel
-            if showFadeControls {
-                fadeSection
+            if powerOn {
+                brightnessSection
+                blendSelector
+                gradientSection
+                presetSelector
+                colorWheel
+                if showFadeControls {
+                    fadeSection
+                }
+            } else {
+                powerOffSummary
             }
         }
         .frame(maxWidth: .infinity)
@@ -68,6 +72,9 @@ struct AutomationColorEditor: View {
             }
         }
         .onChange(of: powerOn) { _, isOn in
+            if !isOn {
+                showWheel = false
+            }
             if previewEnabled {
                 if isOn {
                     scheduleGradientPreview(gradient)
@@ -106,7 +113,7 @@ struct AutomationColorEditor: View {
         if !presetsStore.colorPresets.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Saved Colors")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.7))
                 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -152,7 +159,7 @@ struct AutomationColorEditor: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 
                 Text(preset.name)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
             }
@@ -169,7 +176,7 @@ struct AutomationColorEditor: View {
     private var headerRow: some View {
         HStack {
             Label("Colors", systemImage: "paintbrush.fill")
-                .font(.headline)
+                .font(AppTypography.style(.headline))
                 .foregroundColor(.white)
             Spacer()
 
@@ -177,9 +184,9 @@ struct AutomationColorEditor: View {
                 Toggle(isOn: $previewEnabled) {
                     HStack(spacing: 4) {
                         Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
-                            .font(.caption2)
+                            .font(AppTypography.style(.caption2))
                         Text("Preview")
-                            .font(.caption.weight(.medium))
+                            .font(AppTypography.style(.caption, weight: .medium))
                     }
                 }
                 .toggleStyle(.button)
@@ -187,38 +194,40 @@ struct AutomationColorEditor: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
             }
-            
-            Button(action: {
-                Task {
-                    await saveColorPreset()
-                }
-            }) {
-                HStack(spacing: 6) {
-                    if isSavingPreset {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .tint(.white)
-                    } else if showSaveSuccess {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    } else {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.caption)
+
+            if powerOn {
+                Button(action: {
+                    Task {
+                        await saveColorPreset()
                     }
-                    Text("Preset")
-                        .font(.caption.weight(.medium))
+                }) {
+                    HStack(spacing: 6) {
+                        if isSavingPreset {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(.white)
+                        } else if showSaveSuccess {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(AppTypography.style(.caption))
+                                .foregroundColor(.green)
+                        } else {
+                            Image(systemName: "plus.circle.fill")
+                                .font(AppTypography.style(.caption))
+                        }
+                        Text("Preset")
+                            .font(AppTypography.style(.caption, weight: .medium))
+                    }
+                    .foregroundColor(.white.opacity(0.8))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.1))
+                    )
                 }
-                .foregroundColor(.white.opacity(0.8))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.white.opacity(0.1))
-                )
+                .buttonStyle(.plain)
+                .disabled(isSavingPreset)
             }
-            .buttonStyle(.plain)
-            .disabled(isSavingPreset)
         }
         .padding(.horizontal, 16)
     }
@@ -233,9 +242,9 @@ struct AutomationColorEditor: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "power")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                     Text(powerOn ? "ON" : "OFF")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                 }
                 .foregroundColor(powerOn ? .black : .white)
                 .padding(.horizontal, 12)
@@ -270,6 +279,22 @@ struct AutomationColorEditor: View {
                         scheduleBrightnessPreview(Int(newValue))
                     }
                 }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var powerOffSummary: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "poweroff")
+                .font(AppTypography.style(.subheadline, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+
+            Text("This automation is set to turn the device off. Turn Power on to edit colors.")
+                .font(AppTypography.style(.footnote))
+                .foregroundColor(.white.opacity(0.75))
+                .multilineTextAlignment(.leading)
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
     }
@@ -308,7 +333,7 @@ struct AutomationColorEditor: View {
             }
         }) {
             Text(mode.displayName)
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
                 .foregroundColor(interpolation == mode ? .black : .white.opacity(0.8))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)

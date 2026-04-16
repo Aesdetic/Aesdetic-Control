@@ -46,15 +46,15 @@ struct SaveColorPresetDialog: View {
                     
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(Int(round(Double(currentBrightness)/255.0*100)))%")
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.style(.subheadline, weight: .medium))
                             .foregroundColor(.white)
                         if let temp = currentTemperature {
                             Text("CCT \(Int(temp * 100))%")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                         } else if let white = currentWhiteLevel {
                             Text("White \(Int(white * 100))%")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                         }
                     }
@@ -67,12 +67,12 @@ struct SaveColorPresetDialog: View {
                 // Preset Name Input (Primary Focus)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Preset Name")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                     
                     TextField("Enter preset name", text: $presetName)
                         .textFieldStyle(.plain)
-                        .font(.body)
+                        .font(AppTypography.style(.body))
                         .foregroundColor(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
@@ -91,7 +91,7 @@ struct SaveColorPresetDialog: View {
                 if advancedUIEnabled {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Save Options")
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.style(.subheadline, weight: .medium))
                             .foregroundColor(.white.opacity(0.8))
                         
                         Toggle("Include brightness", isOn: $includeBrightness)
@@ -105,11 +105,11 @@ struct SaveColorPresetDialog: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Quick Load Tag (optional)")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                             TextField("Example: 1", text: $quickLoadTag)
                                 .textFieldStyle(.plain)
-                                .font(.body)
+                                .font(AppTypography.style(.body))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
@@ -118,13 +118,13 @@ struct SaveColorPresetDialog: View {
                         }
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Custom API Command (optional)")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                             Text("JSON object or HTTP API string. If set, this is saved instead of current state.")
-                                .font(.caption2)
+                                .font(AppTypography.style(.caption2))
                                 .foregroundColor(.white.opacity(0.55))
                             TextEditor(text: $customAPICommand)
-                                .font(.system(size: 13, design: .monospaced))
+                                .font(AppTypography.text(size: 13, weight: .regular, relativeTo: .footnote))
                                 .foregroundColor(.white)
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 84)
@@ -135,7 +135,7 @@ struct SaveColorPresetDialog: View {
                         }
                         .padding(.top, 4)
                     }
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(.white.opacity(0.75))
                     .padding(.horizontal, 16)
                 }
@@ -162,7 +162,7 @@ struct SaveColorPresetDialog: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Save Color Preset")
-                        .font(.headline)
+                        .font(AppTypography.style(.headline))
                         .foregroundColor(.white)
                 }
             }

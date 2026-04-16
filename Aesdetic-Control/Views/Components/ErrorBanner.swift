@@ -17,12 +17,12 @@ struct ErrorBanner: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: icon)
-                .font(.headline)
+                .font(AppTypography.style(.headline))
                 .foregroundColor(.white)
                 .accessibilityHidden(true)
             
             Text(message)
-                .font(.subheadline.weight(.medium))
+                .font(AppTypography.style(.subheadline, weight: .medium))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.leading)
                 .lineLimit(3)
@@ -45,7 +45,7 @@ struct ErrorBanner: View {
             
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(closeIconOpacity))
                     .padding(8)
                     .background(

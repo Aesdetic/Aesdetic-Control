@@ -406,6 +406,18 @@ final class AutomationModelTests: XCTestCase {
         for stepId in stepPresetIds {
             XCTAssertTrue(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: stepId))
         }
+        let managedCleanupEntries = cleanup.pendingDeletes.filter {
+            $0.deviceId == deviceId
+                && $0.source == .automation
+                && $0.deadLetteredAt == nil
+                && (
+                    ($0.type == .timer && $0.ids.contains(timerSlot))
+                        || ($0.type == .playlist && $0.ids.contains(playlistId))
+                        || ($0.type == .preset && !$0.ids.filter { stepPresetIds.contains($0) }.isEmpty)
+                )
+        }
+        XCTAssertFalse(managedCleanupEntries.isEmpty)
+        XCTAssertTrue(managedCleanupEntries.allSatisfy(\.verificationRequired))
     }
 
     @MainActor
@@ -520,6 +532,18 @@ final class AutomationModelTests: XCTestCase {
         for stepId in stepPresetIds {
             XCTAssertTrue(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: stepId))
         }
+        let importedManagedCleanupEntries = cleanup.pendingDeletes.filter {
+            $0.deviceId == deviceId
+                && $0.source == .automation
+                && $0.deadLetteredAt == nil
+                && (
+                    ($0.type == .timer && $0.ids.contains(timerSlot))
+                        || ($0.type == .playlist && $0.ids.contains(playlistId))
+                        || ($0.type == .preset && !$0.ids.filter { stepPresetIds.contains($0) }.isEmpty)
+                )
+        }
+        XCTAssertFalse(importedManagedCleanupEntries.isEmpty)
+        XCTAssertTrue(importedManagedCleanupEntries.allSatisfy(\.verificationRequired))
     }
 
     @MainActor
@@ -618,6 +642,42 @@ final class AutomationModelTests: XCTestCase {
 
         XCTAssertEqual(selection?.slot, 0)
         XCTAssertEqual(selection?.reason, "existing")
+    }
+
+    func testReservedTimerSlotsIgnoreImportedRows() {
+        let deviceId = "reserve-device"
+
+        var authored = makeOnDeviceAutomation(
+            name: "Authored A",
+            trigger: .specificTime(TimeTrigger(time: "11:00", weekdays: [true, true, true, true, true, true, true], timezoneIdentifier: TimeZone.current.identifier)),
+            deviceId: deviceId
+        )
+        authored.metadata.wledTimerSlotsByDevice = [deviceId: 2]
+
+        var authoredPeer = makeOnDeviceAutomation(
+            name: "Authored B",
+            trigger: .specificTime(TimeTrigger(time: "12:00", weekdays: [true, true, true, true, true, true, true], timezoneIdentifier: TimeZone.current.identifier)),
+            deviceId: deviceId
+        )
+        authoredPeer.metadata.wledTimerSlotsByDevice = [deviceId: 3]
+
+        var imported = makeOnDeviceAutomation(
+            name: "Imported shadow",
+            trigger: .specificTime(TimeTrigger(time: "11:00", weekdays: [true, true, true, true, true, true, true], timezoneIdentifier: TimeZone.current.identifier)),
+            deviceId: deviceId
+        )
+        imported.metadata.templateId = "wled.timer.\(deviceId).4"
+        imported.metadata.wledTimerSlotsByDevice = [deviceId: 4]
+        imported.metadata.wledTimerSlot = 4
+
+        let slots = AutomationStore._reservedTimerSlotsForTesting(
+            automations: [authored, authoredPeer, imported],
+            excludingAutomationId: authored.id,
+            deviceId: deviceId
+        )
+
+        XCTAssertTrue(slots.contains(3))
+        XCTAssertFalse(slots.contains(4))
     }
 
     private func makeOnDeviceAutomation(

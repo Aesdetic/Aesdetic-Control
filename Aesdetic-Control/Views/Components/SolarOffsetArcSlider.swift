@@ -7,6 +7,7 @@ struct SolarOffsetArcSlider: View {
     let device: WLEDDevice
     var disableClipping: Bool = false
     var useExternalGradient: Bool = false
+    var maintainAspectRatio: Bool = true
     
     private let range: ClosedRange<Double> = Double(SolarTrigger.minOnDeviceOffsetMinutes)...Double(SolarTrigger.maxOnDeviceOffsetMinutes)
     
@@ -146,26 +147,26 @@ struct SolarOffsetArcSlider: View {
                         // Top left: Offset description above event name
                         VStack(alignment: .leading, spacing: 4) {
                             Text(offsetDescription)
-                                .font(.subheadline)
+                                .font(AppTypography.style(.subheadline))
                                 .foregroundColor(.white.opacity(0.9))
                             Text(eventType.eventName)
-                                .font(.title2.weight(.bold))
+                                .font(AppTypography.style(.title2, weight: .bold))
                                 .foregroundColor(.white)
                         }
                         Spacer()
                         // Top right: Actual onset time
                         if let nextTime = nextEventTime {
                             Text(nextTime.formatted(date: .omitted, time: .shortened))
-                                .font(.title3.weight(.semibold))
+                                .font(AppTypography.style(.title3, weight: .semibold))
                                 .foregroundColor(.white)
                         } else {
                             Text(estimatedTime)
-                                .font(.title3.weight(.semibold))
+                                .font(AppTypography.style(.title3, weight: .semibold))
                                 .foregroundColor(.white.opacity(0.7))
                         }
                     }
                     .padding(.horizontal, 20)
-                    .offset(y: -8)
+                    .padding(.top, 8)
                     
                     Spacer()
                     
@@ -174,33 +175,33 @@ struct SolarOffsetArcSlider: View {
                         Spacer()
                         VStack(alignment: .center, spacing: 2) {
                             Text(eventType.eventName)
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                             if eventType == .sunrise {
                                 if let sunrise = sunriseTime {
                                     Text(sunrise.formatted(date: .omitted, time: .shortened))
-                                        .font(.headline.weight(.semibold))
+                                        .font(AppTypography.style(.headline, weight: .semibold))
                                         .foregroundColor(.white)
                                 } else {
                                     Text(estimatedSunriseTime)
-                                        .font(.headline.weight(.semibold))
+                                        .font(AppTypography.style(.headline, weight: .semibold))
                                         .foregroundColor(.white.opacity(0.8))
                                 }
                             } else {
                                 if let sunset = sunsetTime {
                                     Text(sunset.formatted(date: .omitted, time: .shortened))
-                                        .font(.headline.weight(.semibold))
+                                        .font(AppTypography.style(.headline, weight: .semibold))
                                         .foregroundColor(.white)
                                 } else {
                                     Text(estimatedSunsetTime)
-                                        .font(.headline.weight(.semibold))
+                                        .font(AppTypography.style(.headline, weight: .semibold))
                                         .foregroundColor(.white.opacity(0.8))
                                 }
                             }
                         }
                         Spacer()
                     }
-                    .padding(.bottom, 0)
+                    .padding(.bottom, 2)
                 }
                 .frame(width: width, height: height)
                 .allowsHitTesting(false) // Text overlays shouldn't block gestures
@@ -219,8 +220,7 @@ struct SolarOffsetArcSlider: View {
                     }
             )
         }
-        .aspectRatio(2.42, contentMode: .fit)
-        .frame(maxHeight: 200)
+        .modifier(SolarOffsetLayoutModifier(maintainAspectRatio: maintainAspectRatio))
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .onAppear {
             loadCoordinate()
@@ -541,6 +541,21 @@ extension SolarEvent {
         switch self {
         case .sunrise: return "Sunrise"
         case .sunset: return "Sunset"
+        }
+    }
+}
+
+private struct SolarOffsetLayoutModifier: ViewModifier {
+    let maintainAspectRatio: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if maintainAspectRatio {
+            content
+                .aspectRatio(2.42, contentMode: .fit)
+                .frame(maxHeight: 200)
+        } else {
+            content
         }
     }
 }

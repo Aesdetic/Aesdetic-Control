@@ -21,6 +21,13 @@ struct WLEDDevice: Identifiable, Hashable {
     var temperature: Double? // Color temperature (0.0-1.0, from CCT 0-255)
     var autoWhiteMode: AutoWhiteMode?
     var productType: ProductType
+    var setupState: DeviceProfileSetupState
+    var profileId: String?
+    var lookId: String?
+    var profileVersionApplied: Int
+    var managedPresetIds: [Int]
+    var backupSnapshotId: String?
+    var lastProfileAppliedAt: Date?
     var location: DeviceLocation
     var lastSeen: Date
     var state: WLEDState?
@@ -82,6 +89,13 @@ struct WLEDDevice: Identifiable, Hashable {
         temperature: Double? = nil,
         autoWhiteMode: AutoWhiteMode? = nil,
         productType: ProductType = .generic,
+        setupState: DeviceProfileSetupState = .legacy,
+        profileId: String? = nil,
+        lookId: String? = nil,
+        profileVersionApplied: Int = 0,
+        managedPresetIds: [Int] = [],
+        backupSnapshotId: String? = nil,
+        lastProfileAppliedAt: Date? = nil,
         location: DeviceLocation = .all,
         lastSeen: Date = Date(),
         state: WLEDState? = nil,
@@ -97,6 +111,13 @@ struct WLEDDevice: Identifiable, Hashable {
         self.temperature = temperature
         self.autoWhiteMode = autoWhiteMode
         self.productType = productType
+        self.setupState = setupState
+        self.profileId = profileId
+        self.lookId = lookId
+        self.profileVersionApplied = profileVersionApplied
+        self.managedPresetIds = managedPresetIds
+        self.backupSnapshotId = backupSnapshotId
+        self.lastProfileAppliedAt = lastProfileAppliedAt
         self.location = location
         self.lastSeen = lastSeen
         self.state = state

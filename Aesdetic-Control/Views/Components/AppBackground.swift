@@ -3,6 +3,7 @@ import UIKit
 
 struct AppBackground: View {
     private static let alpineImage = UIImage(named: "AlpinePhotoBackground")
+    var includePhoto: Bool = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -14,7 +15,7 @@ struct AppBackground: View {
                 // an opaque system/window color during transient layout passes.
                 neutralGlassLayer(width: width, height: height)
 
-                if let alpineImage = Self.alpineImage {
+                if includePhoto, let alpineImage = Self.alpineImage {
                     photoLayer(image: alpineImage, width: width, height: height)
                 }
             }
@@ -33,6 +34,12 @@ struct AppBackground: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .saturation(0.92)
                 .contrast(1.02)
+                .ignoresSafeArea()
+
+            // Subtle global backdrop blur over the photo (less intense than setup overlay)
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.16)
                 .ignoresSafeArea()
 
             LinearGradient(

@@ -4,6 +4,7 @@ struct DeviceListView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
     @Binding var selectedDevice: WLEDDevice?
     var devices: [WLEDDevice]?  // Optional devices array for custom filtering
+    var onSelectDevice: ((WLEDDevice) -> Void)? = nil
     
     private var displayDevices: [WLEDDevice] {
         devices ?? viewModel.filteredDevices
@@ -13,12 +14,19 @@ struct DeviceListView: View {
         LazyVStack(spacing: 12) {
             ForEach(displayDevices) { device in
                 EnhancedDeviceCard(device: device, viewModel: viewModel) {
-                    // Handle device selection for modal presentation
-                    selectedDevice = device
+                    if let onSelectDevice {
+                        onSelectDevice(device)
+                    } else {
+                        selectedDevice = device
+                    }
                 }
                 .id(device.id) // Stable identity for better performance
                 .onTapGesture {
-                    selectedDevice = device
+                    if let onSelectDevice {
+                        onSelectDevice(device)
+                    } else {
+                        selectedDevice = device
+                    }
                 }
                 .contextMenu {
                     Button(role: .destructive) {
@@ -32,10 +40,6 @@ struct DeviceListView: View {
                         Label("Remove Device", systemImage: "trash")
                     }
                 }
-                .transition(PerformanceConfig.enableTransitions ? .asymmetric(
-                    insertion: .scale.combined(with: .opacity),
-                    removal: .scale.combined(with: .opacity)
-                ) : .identity)
             }
         }
         .padding(.horizontal, 16)
@@ -43,4 +47,4 @@ struct DeviceListView: View {
         .padding(.bottom, 16)
         .background(Color.clear)
     }
-} 
+}

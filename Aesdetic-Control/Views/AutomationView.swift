@@ -65,10 +65,10 @@ struct AutomationView: View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Automations")
-                    .font(.largeTitle.bold())
+                    .font(AppTypography.style(.largeTitle, weight: .bold))
                     .foregroundColor(theme.textPrimary)
                 Text("Schedule sunrise lamps, bedtime fades, and more.")
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .foregroundColor(theme.textSecondary)
             }
             Spacer()
@@ -89,7 +89,7 @@ struct AutomationView: View {
     private var presetsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Quick Starters")
-                .font(.title3.weight(.semibold))
+                .font(AppTypography.style(.title3, weight: .semibold))
                 .foregroundColor(theme.textPrimary)
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 12),
@@ -113,7 +113,7 @@ struct AutomationView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("My Automations")
-                    .font(.title3.weight(.semibold))
+                    .font(AppTypography.style(.title3, weight: .semibold))
                     .foregroundColor(theme.textPrimary)
                 Spacer()
                 AppGlassPillButton(

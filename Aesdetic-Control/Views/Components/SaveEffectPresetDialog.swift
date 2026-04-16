@@ -37,7 +37,7 @@ struct SaveEffectPresetDialog: View {
                 // Compact preview
                 HStack(spacing: 12) {
                     Image(systemName: "sparkles")
-                        .font(.title3)
+                        .font(AppTypography.style(.title3))
                         .foregroundColor(.yellow)
                         .frame(width: 40, height: 40)
                         .background(Color.yellow.opacity(0.15))
@@ -45,22 +45,22 @@ struct SaveEffectPresetDialog: View {
                     
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Effect \(currentEffectId)")
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.style(.subheadline, weight: .medium))
                             .foregroundColor(.white)
                         
                         HStack(spacing: 12) {
                             if let speed = currentSpeed {
                                 Label("\(speed)", systemImage: "speedometer")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.white.opacity(0.7))
                             }
                             if let intensity = currentIntensity {
                                 Label("\(intensity)", systemImage: "slider.horizontal.3")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.white.opacity(0.7))
                             }
                             Label("\(Int(round(Double(currentBrightness)/255.0*100)))%", systemImage: "sun.max")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                         }
                     }
@@ -75,12 +75,12 @@ struct SaveEffectPresetDialog: View {
                 // Preset Name Input (Primary Focus)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Preset Name")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                     
                     TextField("Enter preset name", text: $presetName)
                         .textFieldStyle(.plain)
-                        .font(.body)
+                        .font(AppTypography.style(.body))
                         .foregroundColor(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
@@ -99,7 +99,7 @@ struct SaveEffectPresetDialog: View {
                 if advancedUIEnabled {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Save Options")
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.style(.subheadline, weight: .medium))
                             .foregroundColor(.white.opacity(0.8))
                         
                         Toggle("Include brightness", isOn: $includeBrightness)
@@ -113,11 +113,11 @@ struct SaveEffectPresetDialog: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Quick Load Tag (optional)")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                             TextField("Example: 1", text: $quickLoadTag)
                                 .textFieldStyle(.plain)
-                                .font(.body)
+                                .font(AppTypography.style(.body))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
@@ -126,13 +126,13 @@ struct SaveEffectPresetDialog: View {
                         }
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Custom API Command (optional)")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.7))
                             Text("JSON object or HTTP API string. If set, this is saved instead of current effect state.")
-                                .font(.caption2)
+                                .font(AppTypography.style(.caption2))
                                 .foregroundColor(.white.opacity(0.55))
                             TextEditor(text: $customAPICommand)
-                                .font(.system(size: 13, design: .monospaced))
+                                .font(AppTypography.text(size: 13, weight: .regular, relativeTo: .footnote))
                                 .foregroundColor(.white)
                                 .scrollContentBackground(.hidden)
                                 .frame(minHeight: 84)
@@ -143,7 +143,7 @@ struct SaveEffectPresetDialog: View {
                         }
                         .padding(.top, 4)
                     }
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(.white.opacity(0.75))
                     .padding(.horizontal, 16)
                 }
@@ -170,7 +170,7 @@ struct SaveEffectPresetDialog: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Save Effect Preset")
-                        .font(.headline)
+                        .font(AppTypography.style(.headline))
                         .foregroundColor(.white)
                 }
             }

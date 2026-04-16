@@ -49,10 +49,10 @@ struct ScenesDashboardView: View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Scenes")
-                    .font(.largeTitle.bold())
+                    .font(AppTypography.style(.largeTitle, weight: .bold))
                     .foregroundColor(theme.textPrimary)
                 Text("Run multiple devices together with one tap.")
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .foregroundColor(theme.textSecondary)
             }
             Spacer()
@@ -74,7 +74,7 @@ struct ScenesDashboardView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("My Scenes")
-                    .font(.title3.weight(.semibold))
+                    .font(AppTypography.style(.title3, weight: .semibold))
                     .foregroundColor(theme.textPrimary)
                 Spacer()
                 AppGlassPillButton(
@@ -222,11 +222,11 @@ private struct SceneGroupCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     Text(scene.name)
-                        .font(.title3.weight(.semibold))
+                        .font(AppTypography.style(.title3, weight: .semibold))
                         .foregroundColor(theme.textPrimary)
                     Spacer()
                     Image(systemName: "play.fill")
-                        .font(.body.weight(.semibold))
+                        .font(AppTypography.style(.body, weight: .semibold))
                         .foregroundColor(theme.textPrimary)
                         .frame(width: 36, height: 36)
                         .background(
@@ -267,9 +267,9 @@ private struct SceneGroupCard: View {
     private func sceneChip(title: String, iconName: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: iconName)
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
             Text(title)
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
                 .lineLimit(1)
         }
         .foregroundColor(theme.textSecondary)
@@ -295,10 +295,10 @@ private struct EmptyScenesCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("No scenes yet")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(theme.textPrimary)
             Text("Save the current settings across devices and launch them with a single tap.")
-                .font(.subheadline)
+                .font(AppTypography.style(.subheadline))
                 .foregroundColor(theme.textSecondary)
             AppGlassPillButton(
                 title: "Create Scene",
@@ -334,10 +334,10 @@ private struct SceneUndoBanner: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(theme.textPrimary)
                 Text(subtitle)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(theme.textSecondary)
             }
             Spacer()
@@ -365,6 +365,7 @@ struct SceneEditorSheet: View {
     @State private var selectedDeviceIds: Set<String>
     @State private var applyFromDeviceId: String? = nil
     @State private var editingDevice: WLEDDevice? = nil
+    @State private var editingSetupDevice: WLEDDevice? = nil
 
     init(existingScene: SceneGroup? = nil) {
         self.existingScene = existingScene
@@ -414,12 +415,37 @@ struct SceneEditorSheet: View {
         .sheet(item: $editingDevice) { device in
             DeviceDetailView(device: device, viewModel: deviceViewModel)
         }
+        .overlay { setupOverlay }
+    }
+
+    @ViewBuilder
+    private var setupOverlay: some View {
+        if let editingSetupDevice {
+            GeometryReader { proxy in
+                let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
+                ZStack(alignment: .top) {
+                    SetupBackdropBlur()
+
+                    ProductSetupFlowView(
+                        device: editingSetupDevice,
+                        onClose: { self.editingSetupDevice = nil },
+                        allowsManualClose: false
+                    )
+                    .environmentObject(deviceViewModel)
+                    .frame(maxHeight: maxPopupHeight, alignment: .top)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 26)
+                }
+            }
+            .transition(.identity)
+            .zIndex(3)
+        }
     }
 
     private var sceneNameSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Scene name")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(theme.textPrimary)
             TextField("Evening Chill", text: $name)
                 .textInputAutocapitalization(.words)
@@ -429,7 +455,7 @@ struct SceneEditorSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .foregroundColor(theme.textPrimary)
             Text("We will capture the current settings from each device.")
-                .font(.footnote)
+                .font(AppTypography.style(.footnote))
                 .foregroundColor(theme.textSecondary)
         }
         .padding(18)
@@ -462,7 +488,7 @@ struct SceneEditorSheet: View {
     private var applyFromSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Use settings from")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
             Menu {
                 Button("Use each device's current settings") {
@@ -476,11 +502,11 @@ struct SceneEditorSheet: View {
             } label: {
                 HStack {
                     Text(applyFromLabel)
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(theme.textPrimary)
                     Spacer()
                     Image(systemName: "chevron.down")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(theme.textSecondary)
                 }
                 .padding(.horizontal, 14)
@@ -503,11 +529,11 @@ struct SceneEditorSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Devices")
-                    .font(.headline.weight(.semibold))
+                    .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(theme.textPrimary)
                 Spacer()
                 Text("\(selectedDeviceIds.count) selected")
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(theme.textSecondary)
             }
             LazyVGrid(columns: [
@@ -520,13 +546,17 @@ struct SceneEditorSheet: View {
                         isSelected: selectedDeviceIds.contains(device.id),
                         onToggle: { toggleDevice(device) },
                         onConfigure: {
-                            editingDevice = device
+                            if deviceViewModel.requiresProfileSetup(device) {
+                                editingSetupDevice = device
+                            } else {
+                                editingDevice = device
+                            }
                         }
                     )
                 }
             }
             Text("Tap a device to tweak its settings before saving.")
-                .font(.footnote)
+                .font(AppTypography.style(.footnote))
                 .foregroundColor(theme.textSecondary)
         }
         .padding(18)
@@ -647,7 +677,7 @@ private struct SceneDeviceCard: View {
 
             Button(action: onToggle) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3.weight(.semibold))
+                    .font(AppTypography.style(.title3, weight: .semibold))
                     .foregroundColor(isSelected ? theme.textPrimary : theme.textSecondary)
                     .padding(6)
                     .background(

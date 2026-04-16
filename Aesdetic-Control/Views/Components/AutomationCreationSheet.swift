@@ -12,7 +12,7 @@ struct AutomationCreationSheet: View {
         if deviceViewModel.devices.isEmpty {
             VStack(spacing: 16) {
                 Image(systemName: "lightbulb.slash")
-                    .font(.largeTitle)
+                    .font(AppTypography.style(.largeTitle))
                     .foregroundColor(.gray)
                 Text("Add a device to create automations.")
                     .foregroundColor(.gray)
@@ -80,11 +80,11 @@ struct DevicePickerSheet: View {
                                 Spacer()
                                 if device.isOnline {
                                     Text("Online")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(.green)
                                 } else {
                                     Text("Offline")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(.orange)
                                 }
                             }

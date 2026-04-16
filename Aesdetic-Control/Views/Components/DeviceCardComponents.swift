@@ -66,6 +66,9 @@ struct EnhancedDeviceCard: View {
     private var activeRunStatus: ActiveRunStatus? {
         viewModel.activeRunStatus[device.id]
     }
+    private var requiresSetup: Bool {
+        device.setupState == .pendingSelection
+    }
     
     private let cardHeight: CGFloat = 193
     private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
@@ -102,6 +105,16 @@ struct EnhancedDeviceCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)
         .appLiquidGlass(role: .card, cornerRadius: 16)
+        .overlay {
+            if requiresSetup {
+                Button(action: onTap) {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.clear)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Complete setup for \(device.name)")
+            }
+        }
         .contentShape(Rectangle())
         // .onTapGesture removed - NavigationLink in DeviceListView handles navigation
         // This allows the card's interactive controls (power, brightness) to work independently
@@ -166,12 +179,24 @@ struct EnhancedDeviceCard: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.name)
-                    .font(.headline.weight(.semibold))
+                    .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(glassText.pagePrimaryText)
                 
                 Text(device.ipAddress)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(glassText.pageSecondaryText)
+
+                if requiresSetup {
+                    Text("Setup Required")
+                        .font(AppTypography.style(.caption2, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.16))
+                        )
+                }
 
                 if let run = activeRunStatus {
                     runStatusChip(run)
@@ -187,7 +212,7 @@ struct EnhancedDeviceCard: View {
                     .frame(width: 8, height: 8)
                 
                 Text(device.isOnline ? "Online" : "Offline")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .fontWeight(.medium)
                     .foregroundColor(device.isOnline ? .green : .red)
             }
@@ -197,7 +222,7 @@ struct EnhancedDeviceCard: View {
     @ViewBuilder
     private func runStatusChip(_ run: ActiveRunStatus) -> some View {
         Text(runStatusText(run))
-            .font(.caption2)
+            .font(AppTypography.style(.caption2))
             .foregroundColor(.white.opacity(0.85))
             .lineLimit(1)
             .padding(.horizontal, 8)
@@ -234,6 +259,10 @@ struct EnhancedDeviceCard: View {
     private var powerButtonSection: some View {
         HStack {
             Button(action: {
+                if requiresSetup {
+                    onTap()
+                    return
+                }
                 // Calculate target state BEFORE any state changes
                 let targetState = !currentPowerState
                 
@@ -279,7 +308,7 @@ struct EnhancedDeviceCard: View {
             }) {
                 ZStack {
                     Image(systemName: "power")
-                        .font(.headline.weight(.medium))
+                        .font(AppTypography.style(.headline, weight: .medium))
                         .foregroundColor(powerIconColor)
                         .opacity(isToggling ? 0.7 : 1.0)
                     
@@ -321,7 +350,7 @@ struct EnhancedDeviceCard: View {
             .accessibilityValue(currentPowerState ? "On" : "Off")
             .accessibilityHint(currentPowerState ? "Double tap to turn the device off." : "Double tap to turn the device on.")
             .sensorySelection(trigger: isToggling)
-            .disabled(!device.isOnline || isToggling)
+            .disabled(!device.isOnline || isToggling || requiresSetup)
             
             Spacer()
         }
@@ -333,7 +362,7 @@ struct EnhancedDeviceCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Brightness")
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .fontWeight(.medium)
                     .foregroundColor(glassText.pagePrimaryText)
                 
@@ -344,7 +373,7 @@ struct EnhancedDeviceCard: View {
                     showImagePicker = true
                 }) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(glassText.pageSecondaryText)
                         .frame(width: 28, height: 28)
                         .background(
@@ -356,6 +385,7 @@ struct EnhancedDeviceCard: View {
                 .accessibilityLabel("Change device image")
                 .accessibilityHint("Choose a different product image for this device.")
                 .sensorySelection(trigger: showImagePicker)
+                .disabled(requiresSetup)
             }
             
             brightnessBar
@@ -379,7 +409,7 @@ struct EnhancedDeviceCard: View {
                 // Brightness percentage text
                 HStack {
                     Text("\(Int(localBrightness / 255.0 * 100))%")
-                        .font(.caption.weight(.medium))
+                        .font(AppTypography.style(.caption, weight: .medium))
                         .foregroundColor(progressLabelColor)
                         .padding(.leading, 8)
                     Spacer()
@@ -411,7 +441,7 @@ struct EnhancedDeviceCard: View {
                     }
                 }
             )
-            .disabled(!device.isOnline || !currentPowerState)
+            .disabled(!device.isOnline || !currentPowerState || requiresSetup)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Brightness")
             .accessibilityValue("\(Int(round(localBrightness / 255.0 * 100))) percent")
@@ -429,7 +459,7 @@ struct EnhancedDeviceCard: View {
                 brightnessUpdateTimer?.invalidate()
                 Task { await updateBrightness() }
             }
-            .accessibilityHidden(!device.isOnline || !currentPowerState)
+            .accessibilityHidden(!device.isOnline || !currentPowerState || requiresSetup)
         }
         .frame(height: 25)
         .onDisappear {
@@ -658,8 +688,8 @@ struct ProductImageWithBrightness: View {
         if !isOnline || !isOn {
             return .clear
         } else {
-            // Warm glow that gets stronger with brightness
-            return .yellow.opacity(brightnessEffect * 0.6)
+            // Neutral white glow so the halo reads as brightness, not device color.
+            return .white.opacity(brightnessEffect * 0.6)
         }
     }
     
@@ -710,7 +740,7 @@ struct ImagePickerSheet: View {
                     // Custom Upload Section
                     VStack(spacing: 16) {
                         Text("Upload Custom Image")
-                            .font(.headline)
+                            .font(AppTypography.style(.headline))
                             .fontWeight(.semibold)
                         
                         Button(action: {
@@ -718,16 +748,16 @@ struct ImagePickerSheet: View {
                         }) {
                             VStack(spacing: 12) {
                                 Image(systemName: "plus.circle.fill")
-                                    .font(.largeTitle)
+                                    .font(AppTypography.style(.largeTitle))
                                     .foregroundColor(.accentColor)
                                 
                                     Text("Choose from Photos")
-                                        .font(.subheadline)
+                                        .font(AppTypography.style(.subheadline))
                                         .fontWeight(.medium)
                                         .foregroundColor(.primary)
                                     
                                     Text("Upload a PNG image for your device")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(.secondary)
                                         .multilineTextAlignment(.center)
                             }
@@ -752,7 +782,7 @@ struct ImagePickerSheet: View {
                     // Aesdetic Products Section
                     VStack(spacing: 16) {
                         Text("Aesdetic Products")
-                            .font(.headline)
+                            .font(AppTypography.style(.headline))
                             .fontWeight(.semibold)
                         
                         LazyVGrid(columns: [
@@ -781,7 +811,7 @@ struct ImagePickerSheet: View {
                         // Uploads Section
                         VStack(spacing: 16) {
                             Text("Uploads")
-                                .font(.headline)
+                                .font(AppTypography.style(.headline))
                                 .fontWeight(.semibold)
                             
                             LazyVGrid(columns: [
@@ -810,7 +840,7 @@ struct ImagePickerSheet: View {
                     // Others Section
                     VStack(spacing: 16) {
                         Text("Others")
-                            .font(.headline)
+                            .font(AppTypography.style(.headline))
                             .fontWeight(.semibold)
                         
                         LazyVGrid(columns: [
@@ -959,7 +989,7 @@ struct ImageSelectionCard: View {
             
             // Image name
             Text(displayName)
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .fontWeight(.medium)
                 .foregroundColor(.primary)
                 .multilineTextAlignment(.center)

@@ -49,7 +49,7 @@ struct SaveTransitionPresetDialog: View {
                         .disabled(true)
                         
                         Image(systemName: "arrow.right")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.blue.opacity(0.8))
                         
                         GradientBar(
@@ -65,13 +65,13 @@ struct SaveTransitionPresetDialog: View {
                     
                     HStack(spacing: 16) {
                         Label(formatDuration(currentDurationSec), systemImage: "clock")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                         Label("A: \(Int(round(Double(currentBrightnessA)/255.0*100)))%", systemImage: "sun.max")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                         Label("B: \(Int(round(Double(currentBrightnessB)/255.0*100)))%", systemImage: "sun.max")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                     }
                 }
@@ -83,12 +83,12 @@ struct SaveTransitionPresetDialog: View {
                 // Preset Name Input (Primary Focus)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Preset Name")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                     
                     TextField("Enter preset name", text: $presetName)
                         .textFieldStyle(.plain)
-                        .font(.body)
+                        .font(AppTypography.style(.body))
                         .foregroundColor(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
@@ -126,7 +126,7 @@ struct SaveTransitionPresetDialog: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Save Transition Preset")
-                        .font(.headline)
+                        .font(AppTypography.style(.headline))
                         .foregroundColor(.white)
                 }
             }

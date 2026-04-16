@@ -316,7 +316,7 @@ struct TransitionPane: View {
             applyPreset(preset, to: target)
         }) {
             Text(preset.name)
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
                 .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.75))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -347,7 +347,7 @@ struct TransitionPane: View {
                     ForEach(GradientInterpolation.allCases, id: \.self) { mode in
                         Button(action: { onSelect(mode) }) {
                             Text(mode.displayName)
-                                .font(.caption.weight(.medium))
+                                .font(AppTypography.style(.caption, weight: .medium))
                                 .foregroundColor(selection == mode ? .black : .white.opacity(0.8))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
@@ -400,7 +400,7 @@ struct TransitionPane: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
 
@@ -417,14 +417,14 @@ struct TransitionPane: View {
                                     .tint(.white)
                             } else if showSaveSuccess {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.green)
                             } else {
                                 Image(systemName: "plus.circle.fill")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                             }
                             Text("Preset")
-                                .font(.caption.weight(.medium))
+                                .font(AppTypography.style(.caption, weight: .medium))
                         }
                         .foregroundColor(.white.opacity(0.8))
                         .padding(.horizontal, 10)
@@ -459,9 +459,9 @@ struct TransitionPane: View {
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: transitionOn ? "power" : "poweroff")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                         Text(transitionOn ? "ON" : "OFF")
-                            .font(.caption.weight(.medium))
+                            .font(AppTypography.style(.caption, weight: .medium))
                     }
                     .foregroundColor(transitionOn ? .white : .white.opacity(0.6))
                     .padding(.horizontal, 10)
@@ -476,7 +476,7 @@ struct TransitionPane: View {
 
             if !transitionOn {
                 Text("Smoothly blend between two color gradients over time")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
             }
         }
@@ -500,7 +500,7 @@ struct TransitionPane: View {
             HStack(spacing: 16) {
                 VStack(spacing: 4) {
                     Text("Minutes")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(.white.opacity(0.6))
                     Picker("Minutes", selection: $durationMinutesPart) {
                         ForEach(0...60, id: \.self) { value in
@@ -516,7 +516,7 @@ struct TransitionPane: View {
 
                 VStack(spacing: 4) {
                     Text("Seconds")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(.white.opacity(0.6))
                     Picker("Seconds", selection: $durationSecondsPart) {
                         ForEach(allowedSecondValues, id: \.self) { value in
@@ -575,12 +575,12 @@ struct TransitionPane: View {
                 Spacer()
                 Text("60:00")
             }
-            .font(.caption2)
+            .font(AppTypography.style(.caption2))
             .foregroundColor(.white.opacity(0.55))
 
             if transitionExceedsRecommendedMax {
                 Text("Above \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) may be less reliable on some devices and use more preset storage.")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.orange.opacity(0.9))
             }
         }
@@ -592,15 +592,15 @@ struct TransitionPane: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 8) {
                 Text("Start")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                     Text("\(brightnessPercent)%")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                 }
             }
@@ -812,15 +812,15 @@ struct TransitionPane: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 8) {
                 Text("End")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                     Text("\(brightnessPercent)%")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                 }
             }
@@ -1039,7 +1039,7 @@ struct TransitionPane: View {
                                 .scaleEffect(0.85)
                         } else {
                             Text("Cancel")
-                                .font(.callout.weight(.semibold))
+                                .font(AppTypography.style(.callout, weight: .semibold))
                         }
                     }
                     .foregroundColor(.white)
@@ -1067,7 +1067,7 @@ struct TransitionPane: View {
                                 .scaleEffect(0.85)
                         } else {
                             Text("Apply")
-                                .font(.callout.weight(.semibold))
+                                .font(AppTypography.style(.callout, weight: .semibold))
                         }
                     }
                     .foregroundColor(.white)
@@ -1088,7 +1088,7 @@ struct TransitionPane: View {
             }
 
             Text("Transitions here are temporary and require the app to keep running. For offline playback, save as Preset or Automation.")
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .foregroundColor(.white.opacity(0.64))
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)

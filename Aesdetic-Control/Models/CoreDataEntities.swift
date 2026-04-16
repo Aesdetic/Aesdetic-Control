@@ -26,6 +26,20 @@ private func decodeNameMap(_ json: String?) -> [Int: String]? {
     return map.isEmpty ? nil : map
 }
 
+private func encodeIntArray(_ array: [Int]) -> String? {
+    guard !array.isEmpty else { return nil }
+    guard let data = try? JSONEncoder().encode(array),
+          let json = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+    return json
+}
+
+private func decodeIntArray(_ json: String?) -> [Int] {
+    guard let json, !json.isEmpty, let data = json.data(using: .utf8) else { return [] }
+    return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
+}
+
 // MARK: - WLEDDeviceEntity
 @objc(WLEDDeviceEntity)
 public class WLEDDeviceEntity: NSManagedObject {
@@ -46,6 +60,13 @@ extension WLEDDeviceEntity {
     @NSManaged public var currentColorHex: String
     @NSManaged public var autoWhiteMode: Int16
     @NSManaged public var productType: String
+    @NSManaged public var setupState: String?
+    @NSManaged public var profileId: String?
+    @NSManaged public var lookId: String?
+    @NSManaged public var profileVersionApplied: Int16
+    @NSManaged public var managedPresetIdsJSON: String?
+    @NSManaged public var backupSnapshotId: String?
+    @NSManaged public var lastProfileAppliedAt: Date?
     @NSManaged public var location: String
     @NSManaged public var lastSeen: Date
     @NSManaged public var presetNamesJSON: String?
@@ -90,6 +111,14 @@ extension WLEDDeviceEntity {
             self.autoWhiteMode = -1
         }
         self.productType = device.productType.rawValue
+        self.setupState = device.setupState.rawValue
+        self.profileId = device.profileId
+        self.lookId = device.lookId
+        let clampedProfileVersion = max(0, min(Int(Int16.max), device.profileVersionApplied))
+        self.profileVersionApplied = Int16(clampedProfileVersion)
+        self.managedPresetIdsJSON = encodeIntArray(device.managedPresetIds)
+        self.backupSnapshotId = device.backupSnapshotId
+        self.lastProfileAppliedAt = device.lastProfileAppliedAt
         self.location = device.location.rawValue
         
         self.lastSeen = device.lastSeen
@@ -486,6 +515,13 @@ extension WLEDDevice {
             self.autoWhiteMode = nil
         }
         self.productType = ProductType(rawValue: entity.productType) ?? .generic
+        self.setupState = DeviceProfileSetupState(rawValue: entity.setupState ?? "") ?? .legacy
+        self.profileId = entity.profileId
+        self.lookId = entity.lookId
+        self.profileVersionApplied = max(0, Int(entity.profileVersionApplied))
+        self.managedPresetIds = decodeIntArray(entity.managedPresetIdsJSON)
+        self.backupSnapshotId = entity.backupSnapshotId
+        self.lastProfileAppliedAt = entity.lastProfileAppliedAt
         self.location = DeviceLocation(rawValue: entity.location)
         self.lastSeen = entity.lastSeen
         self.state = entity.state?.toWLEDState()

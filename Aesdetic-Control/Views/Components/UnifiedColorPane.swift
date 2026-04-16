@@ -71,7 +71,7 @@ struct UnifiedColorPane: View {
             // Header with Preset button (matching Transition/Effects style)
             HStack {
                 Label("Colors", systemImage: "paintbrush.fill")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
                 
@@ -91,14 +91,14 @@ struct UnifiedColorPane: View {
                                 .tint(.white)
                         } else if showSaveSuccess {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.green)
                         } else {
                             Image(systemName: "plus.circle.fill")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                         }
                         Text("Preset")
-                            .font(.caption.weight(.medium))
+                            .font(AppTypography.style(.caption, weight: .medium))
                     }
                     .foregroundColor(.white.opacity(0.8))
                     .padding(.horizontal, 10)
@@ -177,7 +177,7 @@ struct UnifiedColorPane: View {
                                     scheduleImmediateApply(stops: updatedGradient.stops)
                                 }) {
                                     Text(mode.displayName)
-                                        .font(.caption.weight(.medium))
+                                        .font(AppTypography.style(.caption, weight: .medium))
                                         .foregroundColor(interpolationMode == mode ? .black : .white.opacity(0.8))
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 6)
@@ -437,7 +437,7 @@ struct UnifiedColorPane: View {
             }
             .tint(.white)
             Text("Applies gradients per LED when possible. This can be slower on large strips.")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(secondaryLabelColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

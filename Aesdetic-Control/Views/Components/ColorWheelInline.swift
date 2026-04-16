@@ -76,7 +76,7 @@ struct ColorWheelInline: View {
                 // Header
                 HStack {
                 Text("Color Picker")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(primaryLabelColor)
                 
                 Spacer()
@@ -86,10 +86,10 @@ struct ColorWheelInline: View {
                     HStack(spacing: 4) {
                         Text("#")
                             .foregroundColor(secondaryLabelColor)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                         
                         TextField("FF5733", text: $hexInput)
-                            .font(.caption.monospaced())
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(primaryLabelColor)
                             .textFieldStyle(.plain)
                             .padding(.horizontal, 8)
@@ -125,7 +125,7 @@ struct ColorWheelInline: View {
                         isEditingHex = true
                     }) {
                         Text("#\(hexInput)")
-                            .font(.caption.monospaced())
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(tertiaryLabelColor)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -150,7 +150,7 @@ struct ColorWheelInline: View {
                         onDismiss()
                     }) {
                         Text("- Remove")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(inverseButtonForeground)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -171,7 +171,7 @@ struct ColorWheelInline: View {
                 
                 Button(action: { onDismiss() }) {
                     Image(systemName: "xmark")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(inverseButtonForeground)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 4)
@@ -295,7 +295,7 @@ struct ColorWheelInline: View {
                     Spacer()
                     if allowCCTForTemperatureStops && isUsingTemperatureSlider {
                         Text("CCT")
-                            .font(.caption2.weight(.semibold))
+                            .font(AppTypography.style(.caption2, weight: .semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .foregroundColor(.white)
@@ -303,7 +303,7 @@ struct ColorWheelInline: View {
                             .clipShape(Capsule())
                     }
                 }
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 
                 // Custom slider with temperature gradient
                 GeometryReader { geometry in
@@ -365,11 +365,11 @@ struct ColorWheelInline: View {
                 .frame(height: 20)
                 HStack {
                     Text("Warm")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(secondaryLabelColor)
                     Spacer()
                     Text("Cool")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(secondaryLabelColor)
                 }
             }
@@ -406,7 +406,7 @@ struct ColorWheelInline: View {
                     Text(whiteLevelText)
                         .foregroundColor(secondaryLabelColor)
                 }
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 
                 // Custom slider with white gradient
                 GeometryReader { geometry in
@@ -476,7 +476,7 @@ struct ColorWheelInline: View {
         VStack(spacing: 8) {
             HStack {
                 Text("Saved Colors")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(secondaryLabelColor)
                 
                 Spacer()
@@ -525,7 +525,7 @@ struct ColorWheelInline: View {
                                 )
                                 .overlay(
                                     Image(systemName: "plus")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(tertiaryLabelColor)
                                 )
                         }

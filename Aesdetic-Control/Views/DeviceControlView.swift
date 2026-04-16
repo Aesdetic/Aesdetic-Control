@@ -8,14 +8,14 @@
 import SwiftUI
 import Network
 import Foundation
-import Combine
-import UIKit
 
 struct DeviceControlView: View {
     @ObservedObject private var viewModel = DeviceControlViewModel.shared
     @Environment(\.colorScheme) private var colorScheme
     @State private var showRealTimeSettings: Bool = false
     @State private var selectedDevice: WLEDDevice?
+    @State private var setupDevice: WLEDDevice?
+    @State private var detailBackgroundDismissEnabledAt: Date = .distantPast
     @State private var selectedLocation: DeviceLocation = .all
     @State private var showManualEntry: Bool = false
     @State private var manualIP: String = ""
@@ -23,6 +23,7 @@ struct DeviceControlView: View {
     @State private var diagnosticsTapCount: Int = 0
     @State private var diagnosticsResetWorkItem: DispatchWorkItem?
     @AppStorage("DeviceListView.showOfflineDevices") private var showOfflineDevices: Bool = true
+    private let detailDismissGuardDelay: TimeInterval = 0.45
 
     var body: some View {
         NavigationStack {
@@ -38,7 +39,7 @@ struct DeviceControlView: View {
                         // Header - matching Dashboard style exactly
                         HStack(alignment: .lastTextBaseline, spacing: 12) {
                             Text("Devices")
-                                .font(.largeTitle.weight(.bold))
+                                .font(AppTypography.style(.largeTitle, weight: .bold))
                                 .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                                 .lineLimit(1)
                                 .onTapGesture {
@@ -52,7 +53,7 @@ struct DeviceControlView: View {
                                 showRealTimeSettings = true
                             } label: {
                                 Image(systemName: "gear")
-                                    .font(.title2)
+                                    .font(AppTypography.style(.title2))
                                     .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                             }
                             
@@ -63,7 +64,7 @@ struct DeviceControlView: View {
                                 Task { await viewModel.startScanning() }
                             } label: {
                                 Image(systemName: "plus")
-                                    .font(.title2)
+                                    .font(AppTypography.style(.title2))
                                     .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                             }
 
@@ -109,16 +110,16 @@ struct DeviceControlView: View {
                                     ProgressView()
                                         .scaleEffect(0.7)
                                     Text("Discovering devices...")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                                     Spacer()
                                     Text("\(viewModel.devices.count) found")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(.green)
                                 }
                                 
                                 Text("Listening for WLED devices (mDNS).")
-                                    .font(.caption2)
+                                    .font(AppTypography.style(.caption2))
                                     .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                             }
                             .padding(.horizontal, 16)
@@ -133,7 +134,12 @@ struct DeviceControlView: View {
                             manualAddRow
                         }
                         
-                        DeviceListView(viewModel: viewModel, selectedDevice: $selectedDevice, devices: filteredDevicesByLocation)
+                        DeviceListView(
+                            viewModel: viewModel,
+                            selectedDevice: $selectedDevice,
+                            devices: filteredDevicesByLocation,
+                            onSelectDevice: openDeviceDetail
+                        )
                     }
                     
                         // Bottom spacing to prevent tab bar overlap and shadow clipping
@@ -149,9 +155,8 @@ struct DeviceControlView: View {
             .sheet(isPresented: $showDiagnostics) {
                 DiagnosticsView(viewModel: viewModel)
             }
-            .sheet(item: $selectedDevice) { device in
-                DeviceDetailView(device: device, viewModel: viewModel)
-            }
+            .overlay { deviceDetailOverlay }
+            .overlay { productSetupOverlay }
             .navigationBarHidden(true)
             .onReceive(viewModel.$devices) { _ in
                 updateAvailableLocations()
@@ -164,8 +169,100 @@ struct DeviceControlView: View {
                 viewModel.startPassiveDiscovery()
                 viewModel.enableActiveHealthChecksIfNeeded()
             }
+            .onDisappear {
+                // Prevent a stale matched-geometry snapshot when leaving the Devices tab.
+                selectedDevice = nil
+                detailBackgroundDismissEnabledAt = .distantPast
+            }
+            .onChange(of: selectedDevice?.id) { _, newValue in
+                if newValue != nil {
+                    // Ignore accidental backdrop tap dismissal from the same opening tap.
+                    detailBackgroundDismissEnabledAt = Date().addingTimeInterval(detailDismissGuardDelay)
+                } else {
+                    detailBackgroundDismissEnabledAt = .distantPast
+                }
+            }
         }
         .background(Color.clear)
+    }
+
+    @ViewBuilder
+    private var deviceDetailOverlay: some View {
+        if let selectedDevice {
+            GeometryReader { proxy in
+                let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
+                ZStack(alignment: .topTrailing) {
+                    Color.clear
+                        .ignoresSafeArea()
+                        .allowsHitTesting(canDismissDetailFromBackground)
+                        .onTapGesture {
+                            closeDeviceDetail()
+                        }
+
+                    DeviceDetailView(
+                        device: selectedDevice,
+                        viewModel: viewModel,
+                        backgroundStyle: .liquidGlass
+                    )
+                        .frame(maxHeight: maxPopupHeight, alignment: .top)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 26)
+
+                    Button(action: closeDeviceDetail) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(AppTypography.style(.title2))
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(12)
+                    }
+                    .padding(.top, 20)
+                    .padding(.trailing, 20)
+                }
+            }
+            .transition(.identity)
+        }
+    }
+
+    private var canDismissDetailFromBackground: Bool {
+        Date() >= detailBackgroundDismissEnabledAt
+    }
+
+    @ViewBuilder
+    private var productSetupOverlay: some View {
+        if let setupDevice {
+            GeometryReader { proxy in
+                let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
+                ZStack(alignment: .top) {
+                    SetupBackdropBlur()
+
+                    ProductSetupFlowView(
+                        device: setupDevice,
+                        onClose: { self.setupDevice = nil },
+                        allowsManualClose: false
+                    )
+                    .environmentObject(viewModel)
+                    .frame(maxHeight: maxPopupHeight, alignment: .top)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 26)
+                }
+            }
+            .transition(.identity)
+            .zIndex(3)
+        }
+    }
+
+    private func closeDeviceDetail() {
+        selectedDevice = nil
+        detailBackgroundDismissEnabledAt = .distantPast
+    }
+
+    private func openDeviceDetail(_ device: WLEDDevice) {
+        if viewModel.requiresProfileSetup(device) {
+            closeDeviceDetail()
+            setupDevice = device
+            return
+        }
+        detailBackgroundDismissEnabledAt = Date().addingTimeInterval(detailDismissGuardDelay)
+        selectedDevice = device
     }
 
     // MARK: - Helper Properties
@@ -280,7 +377,7 @@ struct DeviceControlView: View {
         VStack(spacing: 12) {
             HStack {
                 Text("Add device manually")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                 
                 Spacer()
@@ -290,7 +387,7 @@ struct DeviceControlView: View {
                         showManualEntry.toggle()
                     }
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.blue)
             }
             
@@ -338,12 +435,12 @@ struct LocationPillButton: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Text(location.displayName)
-                    .font(.subheadline.weight(.medium))
+                    .font(AppTypography.style(.subheadline, weight: .medium))
                     .foregroundColor(DeviceLightPalette.pillText(colorScheme, isSelected: isSelected))
                 
                 if deviceCount > 0 {
                     Text("\(deviceCount)")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(DeviceLightPalette.pillSubtext(colorScheme, isSelected: isSelected))
                 }
             }
@@ -379,18 +476,18 @@ struct EmptyStateView: View {
         VStack(spacing: 24) {
             // Icon
             Image(systemName: "lightbulb.slash")
-                .font(.system(.largeTitle, design: .rounded))
+                .font(AppTypography.style(.largeTitle))
                 .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
             
             // Title and Description
             VStack(spacing: 8) {
                 Text("No WLED Devices Found")
-                    .font(.title2)
+                    .font(AppTypography.style(.title2))
                     .fontWeight(.semibold)
                     .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                 
                 Text("Make sure your WLED devices are powered on and connected to the same WiFi network.")
-                    .font(.body)
+                    .font(AppTypography.style(.body))
                     .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
@@ -447,7 +544,7 @@ struct ScanningStateView: View {
                     
                     // Inner icon
                     Image(systemName: "wifi")
-                        .font(.title.weight(.medium))
+                        .font(AppTypography.style(.title, weight: .medium))
                         .foregroundColor(.blue)
                 }
             }
@@ -455,12 +552,12 @@ struct ScanningStateView: View {
             // Progress text and status
             VStack(spacing: 16) {
                 Text("Discovering WLED Devices")
-                    .font(.title2)
+                    .font(AppTypography.style(.title2))
                     .fontWeight(.semibold)
                     .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                 
                 Text(progress)
-                    .font(.body)
+                    .font(AppTypography.style(.body))
                     .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                     .multilineTextAlignment(.center)
                     .animation(.easeInOut(duration: 0.3), value: progress)
@@ -472,7 +569,7 @@ struct ScanningStateView: View {
                             .foregroundColor(.green)
                         
                         Text("Found \(devicesFound) device\(devicesFound == 1 ? "" : "s")")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .fontWeight(.medium)
                             .foregroundColor(.green)
                     }
@@ -483,7 +580,7 @@ struct ScanningStateView: View {
             // Discovery methods info
             VStack(spacing: 12) {
                 Text("Using multiple discovery methods:")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                 
                 HStack(spacing: 20) {
@@ -511,7 +608,7 @@ struct ScanningStateView: View {
             // Last discovery time
             if let lastTime = lastDiscoveryTime {
                 Text("Last scan: \(formatRelativeTime(lastTime))")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                     .padding(.top, 16)
             }
@@ -538,16 +635,16 @@ struct DiscoveryMethodBadge: View {
     var body: some View {
         VStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.blue)
             
             Text(title)
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .fontWeight(.medium)
                 .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
             
             Text(description)
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
         }
         .frame(maxWidth: .infinity)
@@ -602,12 +699,12 @@ struct AddDeviceSheet: View {
                         // Auto Discovery Section
                         VStack(spacing: 16) {
                             Text("Auto Discovery")
-                                .font(.title2)
+                                .font(AppTypography.style(.title2))
                                 .fontWeight(.semibold)
                                 .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                                 
                             Text("Automatically scan your network for WLED devices using mDNS, UDP broadcasts, and IP scanning")
-                                .font(.body)
+                                .font(AppTypography.style(.body))
                                 .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                                 .multilineTextAlignment(.center)
                             
@@ -627,7 +724,7 @@ struct AddDeviceSheet: View {
                                 .frame(height: 1)
                             
                             Text("OR")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                                 .padding(.horizontal, 16)
                             
@@ -639,12 +736,12 @@ struct AddDeviceSheet: View {
                         // Manual Entry Section
                         VStack(spacing: 16) {
                             Text("Manual Entry")
-                                .font(.title2)
+                                .font(AppTypography.style(.title2))
                                 .fontWeight(.semibold)
                                 .foregroundColor(DeviceLightPalette.textPrimary(colorScheme))
                             
                             Text("Enter the IP address of your WLED device if auto-discovery doesn't find it")
-                                .font(.body)
+                                .font(AppTypography.style(.body))
                                 .foregroundColor(DeviceLightPalette.textSecondary(colorScheme))
                                 .multilineTextAlignment(.center)
                             
@@ -673,12 +770,12 @@ struct AddDeviceSheet: View {
                         // Tips section
                         VStack(spacing: 8) {
                             Text("💡 Tips for finding your WLED device:")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .fontWeight(.medium)
                                 .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                             
                             Text("• Check your router's device list\n• Look for devices named 'WLED' or 'ESP'\n• Try accessing the WLED web interface\n• Use a network scanner app")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(DeviceLightPalette.textTertiary(colorScheme))
                                 .multilineTextAlignment(.leading)
                         }

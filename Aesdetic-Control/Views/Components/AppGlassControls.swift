@@ -1,5 +1,15 @@
 import SwiftUI
 
+private struct AppGlassSnappyTapStyle: ButtonStyle {
+    var pressedScale: CGFloat = 0.96
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? pressedScale : 1.0)
+            .animation(.spring(response: 0.16, dampingFraction: 0.8), value: configuration.isPressed)
+    }
+}
+
 struct AppGlassIconButton: View {
     let systemName: String
     var isProminent: Bool = true
@@ -19,7 +29,7 @@ struct AppGlassIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.title3.weight(.semibold))
+                .font(AppTypography.style(.title3, weight: .semibold))
                 .foregroundColor(foregroundColor)
                 .frame(width: size, height: size)
                 .background(
@@ -115,7 +125,7 @@ struct AppGlassIconButton: View {
                     y: theme.controlShadowKey.y
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppGlassSnappyTapStyle(pressedScale: 0.93))
     }
 }
 
@@ -130,6 +140,8 @@ struct AppGlassPillButton: View {
     var iconName: String? = nil
     var trailingText: String? = nil
     var size: Size = .regular
+    var useControlGlassRecipe: Bool = false
+    var useAppleSelectedStyle: Bool = false
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -139,36 +151,62 @@ struct AppGlassPillButton: View {
     private var strokeColor: Color { AppTheme.pillStroke(for: colorScheme, isSelected: isSelected) }
     private var textColor: Color { AppTheme.pillText(for: colorScheme, isSelected: isSelected) }
     private var secondaryTextColor: Color { AppTheme.pillSecondaryText(for: colorScheme, isSelected: isSelected) }
+    private var cornerRadius: CGFloat { size == .compact ? 14 : 18 }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: size == .compact ? 6 : 8) {
                 if let iconName {
                     Image(systemName: iconName)
-                        .font(size == .compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                        .font(
+                            size == .compact
+                                ? AppTypography.style(.caption, weight: .semibold)
+                                : AppTypography.style(.subheadline, weight: .semibold)
+                        )
                         .foregroundColor(textColor)
                 }
 
                 Text(title)
-                    .font(size == .compact ? .caption.weight(.semibold) : .subheadline.weight(.medium))
+                    .font(
+                        size == .compact
+                            ? AppTypography.style(.caption, weight: .semibold)
+                            : AppTypography.style(.subheadline, weight: .medium)
+                    )
                     .foregroundColor(textColor)
                     .lineLimit(1)
 
                 if let trailingText {
                     Text(trailingText)
-                        .font(size == .compact ? .caption2.weight(.semibold) : .caption.weight(.semibold))
+                        .font(
+                            size == .compact
+                                ? AppTypography.style(.caption2, weight: .semibold)
+                                : AppTypography.style(.caption, weight: .semibold)
+                        )
                         .foregroundColor(secondaryTextColor)
                 }
             }
             .padding(.horizontal, size == .compact ? 12 : 16)
             .padding(.vertical, size == .compact ? 6 : 8)
             .background(
-                RoundedRectangle(cornerRadius: size == .compact ? 14 : 18, style: .continuous)
-                    .fill(fillColor)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(useControlGlassRecipe ? Color.clear : fillColor)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: size == .compact ? 14 : 18, style: .continuous)
-                    .stroke(strokeColor, lineWidth: 1)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(useControlGlassRecipe ? .clear : strokeColor, lineWidth: 1)
+            )
+            .overlay(
+                Group {
+                    if useControlGlassRecipe && isSelected && useAppleSelectedStyle {
+                        // Selected treatment that keeps the glass base while increasing visual affordance.
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Color.white.opacity(colorScheme == .dark ? 0.24 : 0.18))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.34 : 0.26), lineWidth: 1)
+                            )
+                    }
+                }
             )
             .shadow(
                 color: theme.controlShadowAmbient.color,
@@ -183,7 +221,21 @@ struct AppGlassPillButton: View {
                 y: theme.controlShadowKey.y
             )
         }
-        .buttonStyle(.plain)
+        .if(useControlGlassRecipe) { view in
+            view.appLiquidGlass(role: .control, cornerRadius: cornerRadius)
+        }
+        .buttonStyle(AppGlassSnappyTapStyle(pressedScale: size == .compact ? 0.97 : 0.96))
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func `if`<Transformed: View>(_ condition: Bool, transform: (Self) -> Transformed) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
     }
 }
 
@@ -205,16 +257,27 @@ struct AppOverviewCard: View {
     var style: Style = .systemGlass(tint: nil, interactive: false)
     var cornerRadius: CGFloat = 20
     var enableInnerShine: Bool = false
+    var valueColorOverride: Color? = nil
+    var labelColorOverride: Color? = nil
+    var dividerColorOverride: Color? = nil
+    var valueFontOverride: Font? = nil
+    var labelFontOverride: Font? = nil
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let cardContent = HStack(spacing: 0) {
             ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
-                AppOverviewMetricItem(metric: metric)
+                AppOverviewMetricItem(
+                    metric: metric,
+                    valueColorOverride: valueColorOverride,
+                    labelColorOverride: labelColorOverride,
+                    valueFontOverride: valueFontOverride,
+                    labelFontOverride: labelFontOverride
+                )
 
                 if index < metrics.count - 1 {
-                    AppOverviewDivider()
+                    AppOverviewDivider(colorOverride: dividerColorOverride)
                 }
             }
         }
@@ -396,18 +459,24 @@ struct AppOverviewCard: View {
 
 private struct AppOverviewMetricItem: View {
     let metric: AppOverviewMetric
+    let valueColorOverride: Color?
+    let labelColorOverride: Color?
+    let valueFontOverride: Font?
+    let labelFontOverride: Font?
+    @Environment(\.colorScheme) private var colorScheme
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
 
     var body: some View {
         HStack(spacing: 12) {
             Text(metric.value)
-                .font(.title.bold())
-                .foregroundColor(Color.white.opacity(0.92))
+                .font(valueFontOverride ?? AppTypography.display(size: 28, weight: .semibold, relativeTo: .title2))
+                .foregroundColor((valueColorOverride ?? theme.textPrimary).opacity(0.96))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
             Text(metric.label)
-                .font(.caption.weight(.medium))
-                .foregroundColor(Color.white.opacity(0.76))
+                .font(labelFontOverride ?? AppTypography.text(size: 12, weight: .semibold, relativeTo: .caption))
+                .foregroundColor((labelColorOverride ?? theme.textSecondary).opacity(0.94))
                 .multilineTextAlignment(.leading)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -419,11 +488,14 @@ private struct AppOverviewMetricItem: View {
 }
 
 private struct AppOverviewDivider: View {
+    let colorOverride: Color?
+    @Environment(\.colorScheme) private var colorScheme
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+
     var body: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.16))
+            .fill((colorOverride ?? theme.divider).opacity(0.72))
             .frame(width: 1)
             .padding(.vertical, 16)
     }
 }
-

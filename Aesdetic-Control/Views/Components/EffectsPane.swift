@@ -410,7 +410,7 @@ struct EffectsPane: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Label("Animations", systemImage: "sparkles")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
                 if isExpanded {
@@ -428,14 +428,14 @@ struct EffectsPane: View {
                                     .tint(.white)
                             } else if showSaveSuccess {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.green)
                             } else {
                                 Image(systemName: "plus.circle.fill")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                             }
                             Text("Preset")
-                                .font(.caption.weight(.medium))
+                                .font(AppTypography.style(.caption, weight: .medium))
                         }
                         .foregroundColor(.white.opacity(0.8))
                         .padding(.horizontal, 10)
@@ -457,10 +457,10 @@ struct EffectsPane: View {
                                 .scaleEffect(0.8)
                         } else {
                             Image(systemName: isEffectEnabled ? "power" : "poweroff")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                         }
                         Text(isEffectEnabled ? "ON" : "OFF")
-                            .font(.caption.weight(.medium))
+                            .font(AppTypography.style(.caption, weight: .medium))
                     }
                     .foregroundColor(isEffectEnabled ? .white : .white.opacity(0.6))
                     .padding(.horizontal, 10)
@@ -476,11 +476,11 @@ struct EffectsPane: View {
             
             if !effectOptions.isEmpty && !isEffectEnabled {
                 Text("Animated patterns that respect your color choices")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
             } else if effectOptions.isEmpty {
                 Text(isLoadingMetadata ? "Loading effects…" : "No color-safe effects available")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
             }
 
@@ -489,7 +489,7 @@ struct EffectsPane: View {
                 let sourceLabel = usesFallback ? "Fallback list" : "WLED fxdata"
                 let mappingName = activeEffectMetadata?.name ?? "Unknown"
                 Text("Effect ID \(effectSelectionId) · \(mappingName) · \(sourceLabel)")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.55))
             }
         }
@@ -534,7 +534,7 @@ struct EffectsPane: View {
     private var effectPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Animation")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
             
             Picker("Animation", selection: $effectSelectionId) {
@@ -554,7 +554,7 @@ struct EffectsPane: View {
     private var colorSourceToggle: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Color Source")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
             Picker("Color Source", selection: $colorSource) {
                 Text("Gradient").tag(EffectColorSource.gradient)
@@ -573,7 +573,7 @@ struct EffectsPane: View {
     private var gradientEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Gradient")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
             GradientBar(
                 gradient: Binding(
@@ -654,7 +654,7 @@ struct EffectsPane: View {
     private var solidColorEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Color")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
             Button(action: {
                 selectedStopId = effectGradient.stops.first?.id ?? UUID()
@@ -680,11 +680,11 @@ struct EffectsPane: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Segment Brightness")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
                 Spacer()
                 Text("\(Int(round(segmentBrightness / 255.0 * 100)))%")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
             }
             Slider(
@@ -715,11 +715,11 @@ struct EffectsPane: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(speedLabel)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
                 Spacer()
                 Text("\(Int(currentSpeedSliderValue))")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
             }
             Slider(
@@ -748,11 +748,11 @@ struct EffectsPane: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(intensityLabel)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
                 Spacer()
                 Text("\(Int(currentIntensitySliderValue))")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
             }
             Slider(
@@ -782,31 +782,31 @@ struct EffectsPane: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Audio Reactive")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
                 Spacer()
                 if status == true {
                     Text("Enabled")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTypography.style(.caption2, weight: .semibold))
                         .foregroundColor(.green)
                 } else if status == false {
                     Text("Disabled")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTypography.style(.caption2, weight: .semibold))
                         .foregroundColor(.orange)
                 } else {
                     Text("Unknown")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTypography.style(.caption2, weight: .semibold))
                         .foregroundColor(.white.opacity(0.6))
                 }
             }
             Text("Audio effects require the WLED audio usermod to be enabled.")
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .foregroundColor(.white.opacity(0.6))
             HStack(spacing: 10) {
                 Button("Check Status") {
                     Task { await viewModel.refreshAudioReactiveStatus(for: device) }
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -820,7 +820,7 @@ struct EffectsPane: View {
                         openURL(url)
                     }
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -844,7 +844,7 @@ struct EffectsPane: View {
         )
         return VStack(alignment: .leading, spacing: 6) {
             Text("Palette")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
             Picker("Palette", selection: selectionBinding) {
                 ForEach(paletteOptions) { palette in
@@ -884,11 +884,11 @@ struct EffectsPane: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text(param.label)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                         Spacer()
                         Text("\(Int(currentCustomSliderValue(for: param.index)))")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                     }
                     Slider(
@@ -967,7 +967,7 @@ private struct PalettePreviewCard: View {
                         .stroke(isSelected ? Color.white : Color.white.opacity(0.3), lineWidth: isSelected ? 2 : 1)
                 )
             Text(name)
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.7))
                 .lineLimit(1)
         }
@@ -1238,7 +1238,7 @@ private extension EffectsPane {
             applyColorPreset(preset)
         }) {
             Text(preset.name)
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
                 .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.75))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)

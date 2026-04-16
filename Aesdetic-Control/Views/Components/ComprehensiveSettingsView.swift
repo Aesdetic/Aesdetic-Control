@@ -20,6 +20,7 @@ struct ComprehensiveSettingsView: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
     let device: WLEDDevice
+    let initialCategory: SettingsCategory
     
     @State private var isOn: Bool = false
     @State private var brightnessDouble: Double = 50
@@ -61,6 +62,8 @@ struct ComprehensiveSettingsView: View {
     @State private var showWebConfig: Bool = false
     @State private var showFirmwareUpdate: Bool = false
     @State private var showAutomaticFirmwareUpdate: Bool = false
+    @State private var showProductSetup: Bool = false
+    @State private var showPostRenameWiFiPrompt: Bool = false
     @State private var updateCheckStatus: UpdateCheckStatus = .idle
     @State private var latestStableVersion: String?
     @State private var lastUpdateCheck: Date?
@@ -123,6 +126,12 @@ struct ComprehensiveSettingsView: View {
             return matchedByIP
         }
         return device
+    }
+
+    init(device: WLEDDevice, initialCategory: SettingsCategory = .info) {
+        self.device = device
+        self.initialCategory = initialCategory
+        _selectedSettingsCategory = State(initialValue: initialCategory)
     }
     
     var body: some View {
@@ -217,6 +226,53 @@ struct ComprehensiveSettingsView: View {
         .sheet(isPresented: $showFirmwareUpdate) {
             WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/update")!)
         }
+        .overlay {
+            if showProductSetup {
+                productSetupOverlay
+            }
+        }
+        .confirmationDialog(
+            "Check WiFi After Renaming?",
+            isPresented: $showPostRenameWiFiPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Review WiFi Now") {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedSettingsCategory = .wifi
+                }
+            }
+            Button("Done", role: .cancel) {}
+        } message: {
+            Text("Confirm this device is on the correct network or switch WiFi now.")
+        }
+    }
+
+    @ViewBuilder
+    private var productSetupOverlay: some View {
+        GeometryReader { proxy in
+            let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
+            ZStack(alignment: .top) {
+                Rectangle()
+                    .fill(Color.black.opacity(0.08))
+                    .background(.ultraThinMaterial)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        showProductSetup = false
+                    }
+
+                ProductSetupFlowView(
+                    device: activeDevice,
+                    onClose: { self.showProductSetup = false }
+                )
+                .environmentObject(viewModel)
+                .frame(maxHeight: maxPopupHeight, alignment: .top)
+                .padding(.horizontal, 16)
+                .padding(.top, 26)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .transition(.identity)
+        .zIndex(4)
     }
 
     private var rebootWaitOverlay: some View {
@@ -238,10 +294,10 @@ struct ComprehensiveSettingsView: View {
                         .tint(.white)
                         .scaleEffect(1.2)
                     Text("Rebooting Device")
-                        .font(.headline.weight(.semibold))
+                        .font(AppTypography.style(.headline, weight: .semibold))
                         .foregroundColor(.white)
                     Text("Reconnecting... \(max(0, rebootWaitRemainingSeconds))s")
-                        .font(.subheadline)
+                        .font(AppTypography.style(.subheadline))
                         .foregroundColor(.white.opacity(0.8))
                 }
                 .frame(maxWidth: maxCardWidth)
@@ -273,24 +329,23 @@ struct ComprehensiveSettingsView: View {
                         TextField("Device Name", text: $editingName)
                             .textFieldStyle(.plain)
                             .foregroundColor(.white)
-                            .font(.title2.weight(.semibold))
+                            .font(AppTypography.style(.title2, weight: .semibold))
                             .onSubmit {
                                 Task {
-                                    await viewModel.renameDevice(device, to: editingName)
-                                    isEditingName = false
+                                    await commitDeviceRenameFromHeader()
                                 }
                             }
                             .onAppear {
-                                editingName = device.name
+                                editingName = activeDevice.name
                             }
                     } else {
-                        Text(device.name)
-                            .font(.title2.weight(.semibold))
+                        Text(activeDevice.name)
+                            .font(AppTypography.style(.title2, weight: .semibold))
                             .foregroundColor(.white)
                     }
                     
-                    Text(device.ipAddress)
-                        .font(.caption)
+                    Text(activeDevice.ipAddress)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.6))
                 }
                 
@@ -300,20 +355,21 @@ struct ComprehensiveSettingsView: View {
                     Button(action: {
                         if isEditingName {
                             isEditingName = false
+                            editingName = activeDevice.name
                         } else {
                             isEditingName = true
-                            editingName = device.name
+                            editingName = activeDevice.name
                         }
                     }) {
                         Image(systemName: isEditingName ? "xmark" : "pencil")
                             .foregroundColor(.white.opacity(0.7))
-                            .font(.headline.weight(.medium))
+                            .font(AppTypography.style(.headline, weight: .medium))
                     }
                     
                     Button(action: { Task { await loadState() } }) {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(.white.opacity(0.7))
-                            .font(.headline.weight(.medium))
+                            .font(AppTypography.style(.headline, weight: .medium))
                     }
                 }
             }
@@ -333,9 +389,9 @@ struct ComprehensiveSettingsView: View {
                     }) {
                         HStack(spacing: 8) {
                             Image(systemName: category.icon)
-                                .font(.subheadline.weight(.medium))
+                                .font(AppTypography.style(.subheadline, weight: .medium))
                             Text(category.rawValue)
-                                .font(.subheadline.weight(.medium))
+                                .font(AppTypography.style(.subheadline, weight: .medium))
                         }
                         .foregroundColor(selectedSettingsCategory == category ? .black : .white)
                         .padding(.horizontal, 16)
@@ -361,10 +417,48 @@ struct ComprehensiveSettingsView: View {
     
     private var infoSection: some View {
         VStack(spacing: 12) {
+            SettingsCard(title: "Aesdetic Profile") {
+                VStack(spacing: 12) {
+                    InfoRow(label: "Setup", value: activeDevice.setupState.displayName)
+                    InfoRow(label: "Product", value: activeDevice.productType.displayName)
+                    InfoRow(label: "Variant", value: activeDevice.lookId ?? "Default")
+                    if activeDevice.profileVersionApplied > 0 {
+                        InfoRow(label: "Profile Version", value: "v\(activeDevice.profileVersionApplied)")
+                    }
+
+                    Button(action: { showProductSetup = true }) {
+                        SettingsButton(
+                            title: activeDevice.setupState == .pendingSelection ? "Complete Setup" : "Change Product",
+                            icon: "sparkles"
+                        )
+                    }
+
+                    if activeDevice.productType != .generic {
+                        Button(action: {
+                            Task {
+                                _ = await viewModel.reapplyCurrentProfile(activeDevice)
+                            }
+                        }) {
+                            SettingsButton(title: "Reapply Recommended Setup", icon: "arrow.triangle.2.circlepath")
+                        }
+                    }
+
+                    if activeDevice.backupSnapshotId != nil {
+                        Button(action: {
+                            Task {
+                                _ = await viewModel.revertLastProfileInstall(activeDevice)
+                            }
+                        }) {
+                            SettingsButton(title: "Revert Last Install", icon: "arrow.uturn.backward")
+                        }
+                    }
+                }
+            }
+
             SettingsCard(title: "Device Information") {
                 VStack(spacing: 12) {
-                    InfoRow(label: "IP Address", value: device.ipAddress)
-                    InfoRow(label: "MAC Address", value: device.id)
+                    InfoRow(label: "IP Address", value: activeDevice.ipAddress)
+                    InfoRow(label: "MAC Address", value: activeDevice.id)
                     if let ver = info?.ver {
                         InfoRow(label: "Firmware", value: ver)
                     }
@@ -394,11 +488,11 @@ struct ComprehensiveSettingsView: View {
 
                     HStack {
                         Text("Update Channel")
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.style(.subheadline, weight: .medium))
                             .foregroundColor(.white.opacity(0.9))
                         Spacer()
                         Text("Stable")
-                            .font(.subheadline.weight(.semibold))
+                            .font(AppTypography.style(.subheadline, weight: .semibold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
@@ -468,7 +562,7 @@ struct ComprehensiveSettingsView: View {
 
                         // Helpful note about WiFi disconnection
                         Text("💡 To disconnect from WiFi, connect to a different network below")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 4)
@@ -477,7 +571,7 @@ struct ComprehensiveSettingsView: View {
                             ProgressView()
                                 .scaleEffect(0.8)
                             Text("Loading WiFi information...")
-                                .font(.subheadline)
+                                .font(AppTypography.style(.subheadline))
                                 .foregroundColor(.white.opacity(0.7))
                         }
                         .padding(.vertical, 8)
@@ -491,7 +585,7 @@ struct ComprehensiveSettingsView: View {
                             scanForNetworks()
                         }
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.black)
                     .padding(.vertical, 6)
                     .padding(.horizontal, 12)
@@ -505,7 +599,7 @@ struct ComprehensiveSettingsView: View {
                 VStack(spacing: 12) {
                     if availableNetworks.isEmpty && !isScanning {
                         Text("No networks found. Tap 'Scan' to search.")
-                            .font(.subheadline)
+                            .font(AppTypography.style(.subheadline))
                             .foregroundColor(.white.opacity(0.7))
                             .padding(.vertical, 8)
                     } else if !showAllNetworks && !availableNetworks.isEmpty {
@@ -522,17 +616,17 @@ struct ComprehensiveSettingsView: View {
                                 if showConnectedMessage {
                                     HStack(spacing: 6) {
                                         Image(systemName: "checkmark")
-                                            .font(.subheadline.weight(.medium))
+                                            .font(AppTypography.style(.subheadline, weight: .medium))
                                             .foregroundColor(.green)
                                         
                                         Text("Connected")
-                                            .font(.subheadline.weight(.medium))
+                                            .font(AppTypography.style(.subheadline, weight: .medium))
                                             .foregroundColor(.green)
                                     }
                                 }
                                 
                                 Text("Tap 'Scan' to see all available networks")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.white.opacity(0.7))
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -565,11 +659,11 @@ struct ComprehensiveSettingsView: View {
                                     if network.security == "Open" {
                                         VStack(alignment: .leading, spacing: 8) {
                                             Text("Open Network")
-                                                .font(.subheadline.weight(.medium))
+                                                .font(AppTypography.style(.subheadline, weight: .medium))
                                                 .foregroundColor(.white)
                                             
                                             Text("No password required for \(network.ssid)")
-                                                .font(.caption)
+                                                .font(AppTypography.style(.caption))
                                                 .foregroundColor(.white.opacity(0.7))
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -580,12 +674,12 @@ struct ComprehensiveSettingsView: View {
                                     } else {
                                         VStack(alignment: .leading, spacing: 8) {
                                             Text("Password Required")
-                                                .font(.subheadline.weight(.medium))
+                                                .font(AppTypography.style(.subheadline, weight: .medium))
                                                 .foregroundColor(.white)
                                             
                                             SecureField("Enter password", text: $password)
                                                 .textFieldStyle(RoundedBorderTextFieldStyle())
-                                                .font(.subheadline)
+                                                .font(AppTypography.style(.subheadline))
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.vertical, 8)
@@ -597,7 +691,7 @@ struct ComprehensiveSettingsView: View {
                                     Button("Connect to \(network.ssid)") {
                                         connectToNetwork()
                                     }
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(AppTypography.style(.subheadline, weight: .semibold))
                                     .foregroundColor(.black)
                                     .padding(.vertical, 10)
                                     .padding(.horizontal, 14)
@@ -610,7 +704,7 @@ struct ComprehensiveSettingsView: View {
                                             ProgressView()
                                                 .scaleEffect(0.8)
                                             Text("Connecting...")
-                                                .font(.caption)
+                                                .font(AppTypography.style(.caption))
                                                 .foregroundColor(.white.opacity(0.7))
                                         }
                                     }
@@ -624,7 +718,7 @@ struct ComprehensiveSettingsView: View {
                                                     ProgressView()
                                                         .scaleEffect(0.8)
                                                     Text("Connecting to \(selectedNetwork?.ssid ?? "network")...")
-                                                        .font(.caption)
+                                                        .font(AppTypography.style(.caption))
                                                         .foregroundColor(.white.opacity(0.8))
                                                 }
                                             case .connected:
@@ -632,7 +726,7 @@ struct ComprehensiveSettingsView: View {
                                                     Image(systemName: "checkmark.circle.fill")
                                                         .foregroundColor(.green)
                                                     Text("Successfully connected!")
-                                                        .font(.caption)
+                                                        .font(AppTypography.style(.caption))
                                                         .foregroundColor(.green)
                                                 }
                                             case .failed(let message):
@@ -640,7 +734,7 @@ struct ComprehensiveSettingsView: View {
                                                     Image(systemName: "exclamationmark.triangle.fill")
                                                         .foregroundColor(.red)
                                                     Text("Failed: \(message)")
-                                                        .font(.caption)
+                                                        .font(AppTypography.style(.caption))
                                                         .foregroundColor(.red)
                                                 }
                                             default:
@@ -660,7 +754,7 @@ struct ComprehensiveSettingsView: View {
                         Button("Scan") {
                             scanForNetworks()
                         }
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(.black)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 12)
@@ -713,7 +807,7 @@ struct ComprehensiveSettingsView: View {
                                 viewModel.setTemperatureStopsUseCCT(value, for: device)
                             }
                         Text("Enabled: temperature-only stops send CCT per segment. Disabled: temperature maps to RGB.")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                     }
                 }
@@ -784,7 +878,7 @@ struct ComprehensiveSettingsView: View {
                     InfoRow(label: "Max Usable (LED Count Cap)", value: "\(maxUsableSegments)")
                     InfoRow(label: "Recommended Active", value: "\(recommendedSegmentCount)")
                     Text("Recommended targets high visual quality (~75% of max usable) while avoiding heavy update load.")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -808,7 +902,7 @@ struct ComprehensiveSettingsView: View {
                     .tint(.white)
 
                     Text("This controls segment density used by app-managed gradients and effects for this device.")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
 
                     Button(action: applyActiveSegmentCountSetting) {
@@ -819,7 +913,7 @@ struct ComprehensiveSettingsView: View {
                                     .tint(.black)
                             }
                             Text("Apply Segment Count")
-                                .font(.subheadline.weight(.semibold))
+                                .font(AppTypography.style(.subheadline, weight: .semibold))
                                 .foregroundColor(.black)
                         }
                         .frame(maxWidth: .infinity)
@@ -835,7 +929,7 @@ struct ComprehensiveSettingsView: View {
 
                     if let segmentSettingsMessage {
                         Text(segmentSettingsMessage)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(segmentSettingsMessageIsError ? .orange : .green)
                     }
                 }
@@ -844,23 +938,23 @@ struct ComprehensiveSettingsView: View {
             SettingsCard(title: "3) Segment Detail Edit (Temporary Override)") {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Manual segment color edits are temporary overrides. Applying color/gradient from the Colors tab will replace them.")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
 
                     if editableSegments.isEmpty {
                         Text("No segments detected yet. Refresh device state and try again.")
-                            .font(.footnote)
+                            .font(AppTypography.style(.footnote))
                             .foregroundColor(.white.opacity(0.7))
                     } else {
                         ForEach(editableSegments, id: \.id) { segment in
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Text("Segment \(segment.id + 1)")
-                                        .font(.subheadline.weight(.semibold))
+                                        .font(AppTypography.style(.subheadline, weight: .semibold))
                                         .foregroundColor(.white)
                                     Spacer()
                                     Text("LED \(segment.start)-\(segment.stop)")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(.white.opacity(0.7))
                                 }
 
@@ -892,7 +986,7 @@ struct ComprehensiveSettingsView: View {
                                                     .tint(.black)
                                             }
                                             Text("Apply")
-                                                .font(.caption.weight(.semibold))
+                                                .font(AppTypography.style(.caption, weight: .semibold))
                                                 .foregroundColor(.black)
                                         }
                                         .padding(.vertical, 6)
@@ -924,7 +1018,7 @@ struct ComprehensiveSettingsView: View {
                         .tint(.white)
                         .foregroundColor(.white)
                         Text("Manual layout preserves custom segment bounds. Auto layout is used by app-managed gradient rendering.")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
 
                         if viewModel.isManualSegmentationEnabled(for: device.id) {
@@ -1016,12 +1110,12 @@ struct ComprehensiveSettingsView: View {
                                     .tint(.black)
                             } else {
                                 Image(systemName: "iphone.gen3.radiowaves.left.and.right")
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(AppTypography.style(.subheadline, weight: .semibold))
                                     .foregroundColor(.black)
                             }
 
                             Text("Sync Device Time/Timezone from Phone")
-                                .font(.subheadline.weight(.semibold))
+                                .font(AppTypography.style(.subheadline, weight: .semibold))
                                 .foregroundColor(.black)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.9)
@@ -1036,7 +1130,7 @@ struct ComprehensiveSettingsView: View {
 
                     if let deviceTimeSyncMessage {
                         Text(deviceTimeSyncMessage)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(deviceTimeSyncMessageIsError ? .orange : .green)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -1046,7 +1140,7 @@ struct ComprehensiveSettingsView: View {
             SettingsCard(title: "Native Timers") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Timer slots 1-8 are available here for basic preset scheduling. Sunrise and sunset remain managed by the app's automation flow and WLED solar slots.")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
 
                     if isLoadingTimers {
@@ -1054,7 +1148,7 @@ struct ComprehensiveSettingsView: View {
                             ProgressView()
                                 .scaleEffect(0.8)
                             Text("Loading timers...")
-                                .font(.subheadline)
+                                .font(AppTypography.style(.subheadline))
                                 .foregroundColor(.white.opacity(0.75))
                         }
                     } else {
@@ -1076,7 +1170,7 @@ struct ComprehensiveSettingsView: View {
                         Task { await loadTimersAndMacros() }
                     }) {
                         Text("Refresh Timers & Macros")
-                            .font(.subheadline.weight(.semibold))
+                            .font(AppTypography.style(.subheadline, weight: .semibold))
                             .foregroundColor(.black)
                             .padding(.vertical, 10)
                             .padding(.horizontal, 14)
@@ -1114,7 +1208,7 @@ struct ComprehensiveSettingsView: View {
                     )
                     
                     Button("Apply Night Light") { commitNightLight() }
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(.black)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
@@ -1126,7 +1220,7 @@ struct ComprehensiveSettingsView: View {
             SettingsCard(title: "Macro Triggers") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("0 disables the trigger. These are native WLED hardware and Alexa hooks, not app automations.")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
 
                     IntStepperRow(title: "Button Press", value: $macroButtonPress, range: 0...250, onEnd: commitMacroBindings)
@@ -1144,7 +1238,7 @@ struct ComprehensiveSettingsView: View {
                                     .tint(.black)
                             }
                             Text("Apply Macro Triggers")
-                                .font(.subheadline.weight(.semibold))
+                                .font(AppTypography.style(.subheadline, weight: .semibold))
                                 .foregroundColor(.black)
                         }
                         .padding(.vertical, 10)
@@ -1193,7 +1287,7 @@ struct ComprehensiveSettingsView: View {
                 VStack(spacing: 12) {
                     HStack {
                         Text("Realtime Updates")
-                            .font(.headline.weight(.semibold))
+                            .font(AppTypography.style(.headline, weight: .semibold))
                             .foregroundColor(.white)
                         Spacer()
                         Toggle("", isOn: Binding(get: { viewModel.isRealTimeEnabled }, set: { v in
@@ -1206,7 +1300,7 @@ struct ComprehensiveSettingsView: View {
                     HStack(spacing: 12) {
                         Button(action: { Task { await viewModel.forceReconnection(device) } }) {
                             Text("Reconnect")
-                                .font(.subheadline.weight(.semibold))
+                                .font(AppTypography.style(.subheadline, weight: .semibold))
                                 .foregroundColor(.black)
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 14)
@@ -1216,7 +1310,7 @@ struct ComprehensiveSettingsView: View {
                         
                         Button(action: { Task { await WLEDAPIService.shared.clearCache() } }) {
                             Text("Clear Cache")
-                                .font(.subheadline.weight(.semibold))
+                                .font(AppTypography.style(.subheadline, weight: .semibold))
                                 .foregroundColor(.black)
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 14)
@@ -1538,39 +1632,39 @@ struct ComprehensiveSettingsView: View {
             switch updateCheckStatus {
             case .idle:
                 Text("Check for updates on the stable channel.")
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .foregroundColor(.white.opacity(0.7))
             case .checking:
                 HStack(spacing: 8) {
                     ProgressView()
                         .scaleEffect(0.8)
                     Text("Checking for updates...")
-                        .font(.subheadline)
+                        .font(AppTypography.style(.subheadline))
                         .foregroundColor(.white.opacity(0.8))
                 }
             case .upToDate(let current, let latest):
                 Text("Your device is up to date.")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                 Text("Version \(current) (latest \(latest))")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
             case .updateAvailable(let current, let latest):
                 Text("Update available.")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                 Text("Current \(current) → Latest \(latest)")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
             case .error(let message):
                 Text(message)
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .foregroundColor(.white.opacity(0.75))
             }
 
             if let lastUpdateCheck {
                 Text("Last checked \(lastUpdateCheck.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.5))
             }
         }
@@ -1617,7 +1711,20 @@ struct ComprehensiveSettingsView: View {
         do {
             let wifiInfo = try await WLEDWiFiService.shared.getCurrentWiFiInfo(device: device)
             await MainActor.run {
-                self.currentWiFiInfo = wifiInfo
+                if let previous = self.currentWiFiInfo,
+                   isUnknownWiFiValue(wifiInfo.ssid),
+                   !isUnknownWiFiValue(previous.ssid) {
+                    self.currentWiFiInfo = WiFiInfo(
+                        ssid: previous.ssid,
+                        signalStrength: wifiInfo.signalStrength,
+                        channel: wifiInfo.channel,
+                        security: isUnknownWiFiValue(wifiInfo.security) ? previous.security : wifiInfo.security,
+                        ipAddress: wifiInfo.ipAddress ?? previous.ipAddress,
+                        macAddress: wifiInfo.macAddress ?? previous.macAddress
+                    )
+                } else {
+                    self.currentWiFiInfo = wifiInfo
+                }
             }
         } catch {
             #if DEBUG
@@ -1648,11 +1755,44 @@ struct ComprehensiveSettingsView: View {
             }
         }
     }
+
+    private func isUnknownWiFiValue(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.caseInsensitiveCompare("unknown") == .orderedSame
+    }
     
     private func selectNetwork(_ network: WiFiNetwork) {
         selectedNetwork = network
         password = ""
         connectionStatus = .idle
+    }
+
+    @MainActor
+    private func commitDeviceRenameFromHeader() async {
+        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmed.isEmpty else {
+            editingName = activeDevice.name
+            isEditingName = false
+            return
+        }
+
+        guard trimmed != activeDevice.name else {
+            editingName = activeDevice.name
+            isEditingName = false
+            return
+        }
+
+        await viewModel.renameDevice(activeDevice, to: trimmed)
+
+        if viewModel.currentError == nil {
+            editingName = trimmed
+            isEditingName = false
+            showPostRenameWiFiPrompt = true
+            return
+        }
+
+        isEditingName = false
     }
     
     private func connectToNetwork() {
@@ -1732,7 +1872,7 @@ struct SettingsCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(title)
-                    .font(.headline.weight(.semibold))
+                    .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(.white)
                 
                 Spacer()
@@ -1777,18 +1917,18 @@ struct SettingsButton: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .foregroundColor(.white.opacity(0.7))
-                .font(.headline.weight(.medium))
+                .font(AppTypography.style(.headline, weight: .medium))
                 .frame(width: 20)
             
             Text(title)
                 .foregroundColor(.white)
-                .font(.headline.weight(.medium))
+                .font(AppTypography.style(.headline, weight: .medium))
             
             Spacer()
             
             Image(systemName: "chevron.right")
                 .foregroundColor(.white.opacity(0.4))
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 16)
@@ -1811,7 +1951,7 @@ fileprivate struct PowerToggleRow: View {
     var body: some View {
         HStack {
             Text("Power")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
             Spacer()
             Toggle("", isOn: $isOn)
@@ -1954,11 +2094,11 @@ private struct TimerSlotEditorCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Timer \(draft.id + 1)")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
                 Text(draft.timeLabel)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white.opacity(0.8))
                 Toggle("", isOn: $draft.enabled)
                     .labelsHidden()
@@ -1973,7 +2113,7 @@ private struct TimerSlotEditorCard: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Days")
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTypography.style(.caption2, weight: .semibold))
                     .foregroundColor(.white.opacity(0.72))
                 HStack(spacing: 6) {
                     ForEach(0..<7, id: \.self) { dayIndex in
@@ -1982,7 +2122,7 @@ private struct TimerSlotEditorCard: View {
                             draft.weekdays[dayIndex].toggle()
                         } label: {
                             Text(labels[dayIndex])
-                                .font(.caption.weight(.semibold))
+                                .font(AppTypography.style(.caption, weight: .semibold))
                                 .foregroundColor(draft.weekdays[dayIndex] ? .black : .white.opacity(0.8))
                                 .frame(width: 28, height: 28)
                                 .background(
@@ -1997,7 +2137,7 @@ private struct TimerSlotEditorCard: View {
 
             HStack {
                 Text(draft.enabled ? "Runs preset \(draft.macroId) on \(draft.weekdaySummary)" : "Disabled")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.65))
                 Spacer()
                 Button(action: onSave) {
@@ -2008,7 +2148,7 @@ private struct TimerSlotEditorCard: View {
                                 .tint(.black)
                         }
                         Text(draft.enabled ? "Save" : "Apply Disabled")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.black)
                     }
                     .padding(.horizontal, 12)
@@ -2037,20 +2177,20 @@ private struct IntStepperMini: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption2.weight(.semibold))
+                .font(AppTypography.style(.caption2, weight: .semibold))
                 .foregroundColor(.white.opacity(0.72))
             HStack(spacing: 8) {
                 Button {
                     value = max(range.lowerBound, value - 1)
                 } label: {
                     Image(systemName: "minus")
-                        .font(.caption.weight(.bold))
+                        .font(AppTypography.style(.caption, weight: .bold))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
 
                 Text("\(value)")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white)
                     .frame(minWidth: 28)
 
@@ -2058,7 +2198,7 @@ private struct IntStepperMini: View {
                     value = min(range.upperBound, value + 1)
                 } label: {
                     Image(systemName: "plus")
-                        .font(.caption.weight(.bold))
+                        .font(AppTypography.style(.caption, weight: .bold))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)

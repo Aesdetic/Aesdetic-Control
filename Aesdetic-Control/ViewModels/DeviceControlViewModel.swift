@@ -145,6 +145,14 @@ struct TransitionDraftSession: Equatable {
     var updatedAt: Date
 }
 
+struct DeviceProfileInstallProgress: Equatable {
+    let step: Int
+    let totalSteps: Int
+    let message: String
+    let isCompleted: Bool
+    let isSuccess: Bool
+}
+
 @MainActor
 class DeviceControlViewModel: ObservableObject {
     static let shared = DeviceControlViewModel()
@@ -665,7 +673,11 @@ class DeviceControlViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var discoveryErrorMessage: String?
     @Published var isNetworkAvailable: Bool = true
+    @Published var isMandatorySetupFlowActive: Bool = false
     @Published var diagnosticsLog: [DiagnosticsEntry] = []
+    @Published private(set) var profileInstallProgressByDeviceId: [String: DeviceProfileInstallProgress] = [:]
+    @Published private(set) var profileInstallInFlight: Set<String> = []
+    @Published private(set) var profileInstallErrorByDeviceId: [String: String] = [:]
     @Published private(set) var presetSlotStatus: [String: PresetSlotAvailability] = [:]
     @Published var currentError: WLEDError?
     @Published var reconnectionStatus: [String: String] = [:]
@@ -684,6 +696,7 @@ class DeviceControlViewModel: ObservableObject {
     private lazy var webSocketManager = WLEDWebSocketManager.shared
     private lazy var connectionMonitor = WLEDConnectionMonitor.shared
     private lazy var deviceSyncManager = DeviceSyncManager.shared
+    private let profileCatalog = DeviceProfileCatalog.shared
     
     // Combine cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
@@ -775,6 +788,7 @@ class DeviceControlViewModel: ObservableObject {
     private let pendingPlaylistRenameQueueKey = "aesdetic_pending_playlist_renames_v1"
     private let pendingPlaylistRenameRetryLimit = 10
     private let firstDiscoveryTimeSyncKeyPrefix = "aesdetic_first_discovery_time_sync_v1."
+    private let profileBackupDefaultsPrefix = "aesdetic_profile_backup_v1."
     private var pendingPlaylistRenames: [PendingPlaylistRename] = []
     private var temporaryPlaylistIds: [String: Int] = [:]
     private var temporaryPresetIds: [String: [Int]] = [:]
@@ -3049,7 +3063,6 @@ class DeviceControlViewModel: ObservableObject {
                     updatedDevice.name = discoveredDevice.name
                 }
                 updatedDevice.ipAddress = discoveredDevice.ipAddress
-                updatedDevice.productType = discoveredDevice.productType
                 updatedDevice.isOnline = discoveredDevice.isOnline  // CRITICAL: Update online status
                 updatedDevice.brightness = discoveredDevice.brightness
                 updatedDevice.isOn = discoveredDevice.isOn
@@ -3078,6 +3091,14 @@ class DeviceControlViewModel: ObservableObject {
             } else {
                 // Add new device
                 var newDevice = discoveredDevice
+                newDevice.setupState = .pendingSelection
+                newDevice.productType = .generic
+                newDevice.profileId = nil
+                newDevice.lookId = nil
+                newDevice.profileVersionApplied = 0
+                newDevice.managedPresetIds = []
+                newDevice.backupSnapshotId = nil
+                newDevice.lastProfileAppliedAt = nil
                 newDevice.lastSeen = Date()
                 devices.append(newDevice)
                 if !isPlaceholderDevice(newDevice) {
@@ -10144,6 +10165,309 @@ class DeviceControlViewModel: ObservableObject {
         let b = Int(rgb & 0x0000FF)
         
         return (r, g, b)
+    }
+
+    // MARK: - Product Profile Setup
+
+    func productProfiles() -> [DeviceProductProfileDefinition] {
+        profileCatalog.profiles
+    }
+
+    func looks(for productType: ProductType) -> [DeviceLookProfileDefinition] {
+        profileCatalog.profile(for: productType)?.looks ?? []
+    }
+
+    func requiresProfileSetup(_ device: WLEDDevice) -> Bool {
+        let live = devices.first(where: { $0.id == device.id }) ?? device
+        return live.setupState == .pendingSelection
+    }
+
+    func profileInstallProgress(for deviceId: String) -> DeviceProfileInstallProgress? {
+        profileInstallProgressByDeviceId[deviceId]
+    }
+
+    func isProfileInstallRunning(for deviceId: String) -> Bool {
+        profileInstallInFlight.contains(deviceId)
+    }
+
+    func profileInstallError(for deviceId: String) -> String? {
+        profileInstallErrorByDeviceId[deviceId]
+    }
+
+    func setDeviceSetupMode(_ device: WLEDDevice, generic: Bool) async {
+        guard let updated = mutateDevice(device.id, mutate: { value in
+            if generic {
+                value.productType = .generic
+                value.setupState = .genericManual
+                value.profileId = nil
+                value.lookId = nil
+                value.profileVersionApplied = 0
+                value.managedPresetIds = []
+                value.backupSnapshotId = nil
+                value.lastProfileAppliedAt = nil
+            } else {
+                value.setupState = .pendingSelection
+            }
+        }) else {
+            return
+        }
+        await coreDataManager.saveDevice(updated)
+    }
+
+    func completeAesdeticOnboardingSetup(
+        _ device: WLEDDevice,
+        productType: ProductType,
+        variantId: String
+    ) async {
+        guard let updated = mutateDevice(device.id, mutate: { value in
+            value.productType = productType
+            value.setupState = .completed
+            value.profileId = "onboarding_v2_\(productType.rawValue)"
+            value.lookId = variantId
+            value.profileVersionApplied = max(value.profileVersionApplied, 2)
+            value.managedPresetIds = []
+            value.backupSnapshotId = nil
+            value.lastProfileAppliedAt = Date()
+        }) else {
+            return
+        }
+        await coreDataManager.saveDevice(updated)
+    }
+
+    func installProductProfile(
+        _ device: WLEDDevice,
+        productType: ProductType,
+        lookId: String? = nil
+    ) async -> Bool {
+        guard !profileInstallInFlight.contains(device.id) else { return false }
+        guard let profile = profileCatalog.profile(for: productType) else { return false }
+        guard let target = devices.first(where: { $0.id == device.id }) ?? devices.first(where: { $0.ipAddress == device.ipAddress }) ?? Optional(device) else {
+            return false
+        }
+
+        let selectedLookId = lookId ?? profile.defaultLookId
+        guard let look = profile.looks.first(where: { $0.id == selectedLookId }) else { return false }
+
+        profileInstallInFlight.insert(target.id)
+        profileInstallErrorByDeviceId.removeValue(forKey: target.id)
+        setProfileInstallProgress(deviceId: target.id, step: 1, total: 6, message: "Capturing backup…")
+
+        var backupSnapshot: DeviceProfileBackupSnapshot?
+        var backupSnapshotId: String?
+
+        defer {
+            profileInstallInFlight.remove(target.id)
+        }
+
+        do {
+            let initialResponse = try await apiService.getState(for: target)
+            backupSnapshot = DeviceProfileBackupSnapshot(
+                capturedAt: Date(),
+                state: initialResponse.state,
+                presetId: initialResponse.state.presetId,
+                playlistId: initialResponse.state.playlistId
+            )
+            backupSnapshotId = storeProfileBackup(backupSnapshot!, for: target.id)
+
+            setProfileInstallProgress(deviceId: target.id, step: 2, total: 6, message: "Applying base profile…")
+            let baseState = DeviceProfileCatalog.baseState(for: profile)
+            _ = try await apiService.updateState(for: target, state: baseState)
+
+            setProfileInstallProgress(deviceId: target.id, step: 3, total: 6, message: "Saving Aesdetic preset…")
+            let presets = try await apiService.fetchPresets(for: target)
+            let allocatedPresetId = allocateManagedPresetId(
+                existingPresets: presets,
+                existingManagedPresetIds: target.managedPresetIds
+            )
+
+            let lookState = DeviceProfileCatalog.state(for: look)
+            let presetRequest = WLEDPresetSaveRequest(
+                id: allocatedPresetId,
+                name: "Aesdetic • \(look.name)",
+                quickLoad: nil,
+                state: lookState,
+                saveOnly: true,
+                includeBrightness: true,
+                saveSegmentBounds: false,
+                selectedSegmentsOnly: false,
+                transitionDeciseconds: nil,
+                applyAtBoot: false,
+                customAPICommand: nil
+            )
+            try await apiService.savePreset(presetRequest, to: target)
+
+            setProfileInstallProgress(deviceId: target.id, step: 4, total: 6, message: "Applying selected look…")
+            _ = try await apiService.applyPreset(allocatedPresetId, to: target, transitionDeciseconds: 6)
+
+            setProfileInstallProgress(deviceId: target.id, step: 5, total: 6, message: "Verifying setup…")
+            let verifiedResponse = try await apiService.getState(for: target)
+            let activePresetId = verifiedResponse.state.presetId
+            if activePresetId == nil || activePresetId != allocatedPresetId {
+                // Soft verify failure: force one more apply attempt.
+                _ = try await apiService.applyPreset(allocatedPresetId, to: target, transitionDeciseconds: 0)
+            }
+
+            guard let updatedDevice = mutateDevice(target.id, mutate: { value in
+                value.productType = productType
+                value.setupState = .completed
+                value.profileId = profile.id
+                value.lookId = look.id
+                value.profileVersionApplied = profile.version
+                value.managedPresetIds = [allocatedPresetId]
+                value.backupSnapshotId = backupSnapshotId
+                value.lastProfileAppliedAt = Date()
+            }) else {
+                throw WLEDAPIError.invalidResponse
+            }
+            await coreDataManager.saveDevice(updatedDevice)
+
+            setProfileInstallProgress(deviceId: target.id, step: 6, total: 6, message: "Setup complete", isCompleted: true, isSuccess: true)
+            Task {
+                await refreshDeviceState(updatedDevice)
+            }
+            return true
+        } catch {
+            if let backupSnapshot, let targetLive = devices.first(where: { $0.id == target.id }) {
+                _ = try? await apiService.setState(backupSnapshot.state, for: targetLive)
+            }
+            profileInstallErrorByDeviceId[target.id] = error.localizedDescription
+            setProfileInstallProgress(
+                deviceId: target.id,
+                step: 6,
+                total: 6,
+                message: "Setup failed",
+                isCompleted: true,
+                isSuccess: false
+            )
+            return false
+        }
+    }
+
+    func reapplyCurrentProfile(_ device: WLEDDevice) async -> Bool {
+        let live = devices.first(where: { $0.id == device.id }) ?? device
+        let targetType = live.productType
+        guard targetType != .generic else { return false }
+        return await installProductProfile(live, productType: targetType, lookId: live.lookId)
+    }
+
+    func revertLastProfileInstall(_ device: WLEDDevice) async -> Bool {
+        guard !profileInstallInFlight.contains(device.id) else { return false }
+        let live = devices.first(where: { $0.id == device.id }) ?? device
+        guard let backupId = live.backupSnapshotId,
+              let backup = loadProfileBackup(deviceId: live.id, backupId: backupId) else {
+            return false
+        }
+
+        profileInstallInFlight.insert(live.id)
+        defer { profileInstallInFlight.remove(live.id) }
+
+        setProfileInstallProgress(deviceId: live.id, step: 1, total: 2, message: "Restoring previous state…")
+        do {
+            _ = try await apiService.setState(backup.state, for: live)
+            guard let updatedDevice = mutateDevice(live.id, mutate: { value in
+                value.setupState = .legacy
+                value.profileId = nil
+                value.lookId = nil
+                value.profileVersionApplied = 0
+                value.managedPresetIds = []
+                value.backupSnapshotId = nil
+            }) else {
+                throw WLEDAPIError.invalidResponse
+            }
+            await coreDataManager.saveDevice(updatedDevice)
+            removeProfileBackup(deviceId: live.id, backupId: backupId)
+            setProfileInstallProgress(deviceId: live.id, step: 2, total: 2, message: "Previous state restored", isCompleted: true, isSuccess: true)
+            return true
+        } catch {
+            profileInstallErrorByDeviceId[live.id] = error.localizedDescription
+            setProfileInstallProgress(deviceId: live.id, step: 2, total: 2, message: "Restore failed", isCompleted: true, isSuccess: false)
+            return false
+        }
+    }
+
+    private func mutateDevice(_ deviceId: String, mutate: (inout WLEDDevice) -> Void) -> WLEDDevice? {
+        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else { return nil }
+        var updated = devices[index]
+        mutate(&updated)
+        updated.lastSeen = Date()
+        devices[index] = updated
+        return updated
+    }
+
+    private func setProfileInstallProgress(
+        deviceId: String,
+        step: Int,
+        total: Int,
+        message: String,
+        isCompleted: Bool = false,
+        isSuccess: Bool = false
+    ) {
+        profileInstallProgressByDeviceId[deviceId] = DeviceProfileInstallProgress(
+            step: step,
+            totalSteps: total,
+            message: message,
+            isCompleted: isCompleted,
+            isSuccess: isSuccess
+        )
+    }
+
+    private func allocateManagedPresetId(existingPresets: [WLEDPreset], existingManagedPresetIds: [Int]) -> Int {
+        let used = Set(existingPresets.map(\.id))
+        for candidate in existingManagedPresetIds where !used.contains(candidate) {
+            if (1...250).contains(candidate) {
+                return candidate
+            }
+        }
+        for candidate in stride(from: 250, through: 181, by: -1) {
+            if !used.contains(candidate) {
+                return candidate
+            }
+        }
+        for candidate in 1...250 where !used.contains(candidate) {
+            return candidate
+        }
+        return 250
+    }
+
+    private func profileBackupDefaultsKey(for deviceId: String) -> String {
+        profileBackupDefaultsPrefix + deviceId
+    }
+
+    private func storeProfileBackup(_ backup: DeviceProfileBackupSnapshot, for deviceId: String) -> String {
+        let backupId = UUID().uuidString
+        let key = profileBackupDefaultsKey(for: deviceId)
+        var backups = loadAllProfileBackups(deviceId: deviceId)
+        backups[backupId] = backup
+        if let data = try? JSONEncoder().encode(backups) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+        return backupId
+    }
+
+    private func loadProfileBackup(deviceId: String, backupId: String) -> DeviceProfileBackupSnapshot? {
+        loadAllProfileBackups(deviceId: deviceId)[backupId]
+    }
+
+    private func removeProfileBackup(deviceId: String, backupId: String) {
+        let key = profileBackupDefaultsKey(for: deviceId)
+        var backups = loadAllProfileBackups(deviceId: deviceId)
+        backups.removeValue(forKey: backupId)
+        if backups.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+            return
+        }
+        if let data = try? JSONEncoder().encode(backups) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    private func loadAllProfileBackups(deviceId: String) -> [String: DeviceProfileBackupSnapshot] {
+        let key = profileBackupDefaultsKey(for: deviceId)
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let backups = try? JSONDecoder().decode([String: DeviceProfileBackupSnapshot].self, from: data) else {
+            return [:]
+        }
+        return backups
     }
     
     // MARK: - Device Rename

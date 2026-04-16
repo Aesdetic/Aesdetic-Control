@@ -37,6 +37,7 @@ class AutomationStore: ObservableObject {
     private let onDeviceSyncRetryInterval: TimeInterval = 30
     private let syncedValidationInterval: TimeInterval = 120
     private var onDeviceSyncInFlightAutomationIds: Set<UUID> = []
+    private var onDeviceSyncReplayAutomationIds: Set<UUID> = []
     private var onDeviceSyncInFlightDeviceIds: Set<String> = []
     private var lastSyncedValidationAt: Date = .distantPast
     private var lastKnownGoodTimerSignatureByAutomationDevice: [String: String] = [:]
@@ -524,16 +525,32 @@ class AutomationStore: ObservableObject {
             deviceId: device.id,
             includeDeadLetter: false
         )
+        let pendingAutomationTimerDeletes = Set(
+            DeviceCleanupManager.shared.pendingDeletes
+                .filter {
+                    $0.type == .timer
+                        && $0.deviceId == device.id
+                        && $0.deadLetteredAt == nil
+                        && $0.source == .automation
+                }
+                .flatMap(\.ids)
+        )
         let deadLetterTimerDeletes = DeviceCleanupManager.shared
             .activeDeleteIds(type: .timer, deviceId: device.id, includeDeadLetter: true)
             .subtracting(pendingTimerDeletes)
         let configuredTimers = timers.filter {
             $0.macroId > 0
                 && (0...9).contains($0.id)
+                && !pendingAutomationTimerDeletes.contains($0.id)
         }
-        if !pendingTimerDeletes.isEmpty {
+        if !pendingAutomationTimerDeletes.isEmpty {
             logger.info(
-                "Pending timer-delete slots present during import on \(device.name, privacy: .public): \(Array(pendingTimerDeletes).sorted()) (not suppressing device-visible timers)"
+                "Suppressing automation-owned pending timer-delete slots during import on \(device.name, privacy: .public): \(Array(pendingAutomationTimerDeletes).sorted())"
+            )
+        }
+        if !pendingTimerDeletes.subtracting(pendingAutomationTimerDeletes).isEmpty {
+            logger.info(
+                "Pending non-automation timer-delete slots present during import on \(device.name, privacy: .public): \(Array(pendingTimerDeletes.subtracting(pendingAutomationTimerDeletes)).sorted())"
             )
         }
         if !deadLetterTimerDeletes.isEmpty {
@@ -542,7 +559,7 @@ class AutomationStore: ObservableObject {
             )
         }
         print(
-            "automation.import.reported device=\(device.id) configuredTimers=\(configuredTimers.count) pendingTimerDeletes=\(Array(pendingTimerDeletes).sorted())"
+            "automation.import.reported device=\(device.id) configuredTimers=\(configuredTimers.count) pendingTimerDeletes=\(Array(pendingTimerDeletes).sorted()) suppressedPendingAutomationDeletes=\(Array(pendingAutomationTimerDeletes).sorted())"
         )
         let configuredSlots = Set(configuredTimers.map(\.id))
 
@@ -576,6 +593,8 @@ class AutomationStore: ObservableObject {
 
         var updatedAutomations = automations
         var changed = false
+        var matchedAuthoredAutomationIds: Set<UUID> = []
+        var duplicateAuthoredSlotsForCleanup: Set<Int> = []
 
         for timer in configuredTimers {
             let templateId = importedTemplateId(deviceId: device.id, slot: timer.id)
@@ -594,7 +613,7 @@ class AutomationStore: ObservableObject {
                 )
             }
 
-            let existingIndex = updatedAutomations.firstIndex { automation in
+            var existingIndex = updatedAutomations.firstIndex { automation in
                 if automation.metadata.templateId == templateId {
                     return true
                 }
@@ -604,6 +623,23 @@ class AutomationStore: ObservableObject {
                 }
                 let slot = automation.metadata.wledTimerSlotsByDevice?[device.id] ?? automation.metadata.wledTimerSlot
                 return slot == timer.id
+            }
+            if existingIndex == nil,
+               let authoredMatchIndex = await authoredAutomationMatchIndexForImportedTimer(
+                timer,
+                device: device,
+                in: updatedAutomations,
+                referenceDate: now
+               ) {
+                let authoredMatchId = updatedAutomations[authoredMatchIndex].id
+                if matchedAuthoredAutomationIds.contains(authoredMatchId) {
+                    duplicateAuthoredSlotsForCleanup.insert(timer.id)
+                    logger.warning(
+                        "automation.import.duplicate_authored_slot device=\(device.id, privacy: .public) slot=\(timer.id, privacy: .public) macro=\(timer.macroId, privacy: .public)"
+                    )
+                    continue
+                }
+                existingIndex = authoredMatchIndex
             }
             let existingAutomation = existingIndex.map { updatedAutomations[$0] }
 
@@ -671,8 +707,11 @@ class AutomationStore: ObservableObject {
             if let index = existingIndex {
                 var existing = updatedAutomations[index]
                 signatureAutomationId = existing.id
+                if !isImportedTemplateId(existing.metadata.templateId) {
+                    matchedAuthoredAutomationIds.insert(existing.id)
+                }
                 let isImportedTemplateRow =
-                    existing.metadata.templateId?.hasPrefix(importedAutomationTemplatePrefix) == true
+                    isImportedTemplateId(existing.metadata.templateId)
                 let preserveAuthoredAction = !isImportedTemplateRow
                 let existingPlaylistId = existing.metadata.wledPlaylistIdsByDevice?[device.id] ?? existing.metadata.wledPlaylistId
                 let existingPresetId = existing.metadata.wledPresetIdsByDevice?[device.id]
@@ -844,13 +883,27 @@ class AutomationStore: ObservableObject {
             }
             let slot = automation.metadata.wledTimerSlotsByDevice?[device.id] ?? automation.metadata.wledTimerSlot
             guard let slot else { return true }
-            return !configuredSlots.contains(slot)
+            return !configuredSlots.contains(slot) || duplicateAuthoredSlotsForCleanup.contains(slot)
         }
         if !staleImportedIndexes.isEmpty {
             for index in staleImportedIndexes.sorted(by: >) {
                 updatedAutomations.remove(at: index)
             }
             changed = true
+        }
+
+        if !duplicateAuthoredSlotsForCleanup.isEmpty {
+            let slots = Array(duplicateAuthoredSlotsForCleanup).sorted()
+            await DeviceCleanupManager.shared.requestDelete(
+                type: .timer,
+                device: device,
+                ids: slots,
+                source: .automation,
+                verificationRequired: true
+            )
+            logger.warning(
+                "automation.import.duplicate_authored_slot_cleanup_requested device=\(device.id, privacy: .public) slots=\(slots, privacy: .public)"
+            )
         }
 
         if changed {
@@ -865,6 +918,60 @@ class AutomationStore: ObservableObject {
 
     private func importedTemplateId(deviceId: String, slot: Int) -> String {
         "\(importedAutomationTemplatePrefix)\(deviceId).\(slot)"
+    }
+
+    private func isImportedTemplateId(_ templateId: String?) -> Bool {
+        guard let templateId else { return false }
+        return templateId.hasPrefix(importedAutomationTemplatePrefix)
+    }
+
+    private func authoredAutomationMatchIndexForImportedTimer(
+        _ timer: WLEDTimer,
+        device: WLEDDevice,
+        in records: [Automation],
+        referenceDate: Date
+    ) async -> Int? {
+        let importedWindow = normalizedTimerDateWindow(
+            startMonth: timer.startMonth,
+            startDay: timer.startDay,
+            endMonth: timer.endMonth,
+            endDay: timer.endDay
+        )
+
+        for (index, record) in records.enumerated() {
+            guard record.metadata.runOnDevice else { continue }
+            guard record.targets.deviceIds.contains(device.id) else { continue }
+            guard !isImportedTemplateId(record.metadata.templateId) else { continue }
+            guard let macroId = expectedMacroId(for: record, deviceId: device.id),
+                  macroId == timer.macroId else {
+                continue
+            }
+            guard let config = await wledTimerConfig(for: record, device: device, referenceDate: referenceDate) else {
+                continue
+            }
+            guard config.hour == timer.hour,
+                  config.minute == timer.minute,
+                  config.days == timer.days else {
+                continue
+            }
+
+            let expectedWindow = normalizedTimerDateWindow(
+                startMonth: config.startMonth,
+                startDay: config.startDay,
+                endMonth: config.endMonth,
+                endDay: config.endDay
+            )
+            guard expectedWindow.startMonth == importedWindow.startMonth,
+                  expectedWindow.startDay == importedWindow.startDay,
+                  expectedWindow.endMonth == importedWindow.endMonth,
+                  expectedWindow.endDay == importedWindow.endDay else {
+                continue
+            }
+
+            return index
+        }
+
+        return nil
     }
 
     private func runCleanupOrphanedPresetsIfNeeded(device: WLEDDevice? = nil) async {
@@ -2674,11 +2781,22 @@ class AutomationStore: ObservableObject {
         guard automation.metadata.runOnDevice else { return }
         guard automations.contains(where: { $0.id == automation.id }) else { return }
         if onDeviceSyncInFlightAutomationIds.contains(automation.id) {
+            onDeviceSyncReplayAutomationIds.insert(automation.id)
             return
         }
         onDeviceSyncInFlightAutomationIds.insert(automation.id)
         defer {
             onDeviceSyncInFlightAutomationIds.remove(automation.id)
+            if onDeviceSyncReplayAutomationIds.remove(automation.id) != nil,
+               let latest = automations.first(where: { $0.id == automation.id }),
+               latest.metadata.runOnDevice {
+                Task { @MainActor [weak self] in
+                    await self?.syncOnDeviceScheduleIfNeeded(
+                        for: latest,
+                        deviceFilter: deviceFilter
+                    )
+                }
+            }
         }
         let devices = viewModel.devices.filter {
             automation.targets.deviceIds.contains($0.id)
@@ -2982,7 +3100,7 @@ class AutomationStore: ObservableObject {
             }
             updated = metadataCandidate
             let expectedTimerSignature = timerSignature(
-                enabled: automation.enabled,
+                enabled: updated.enabled,
                 hour: timeConfig.hour,
                 minute: timeConfig.minute,
                 days: timeConfig.days,
@@ -3011,7 +3129,7 @@ class AutomationStore: ObservableObject {
 
             let updatePayload = WLEDTimerUpdate(
                 id: timerSlot,
-                enabled: automation.enabled,
+                enabled: updated.enabled,
                 hour: timeConfig.hour,
                 minute: timeConfig.minute,
                 days: timeConfig.days,
@@ -3032,7 +3150,7 @@ class AutomationStore: ObservableObject {
                 DeviceCleanupManager.shared.removeIds(type: .timer, deviceId: device.id, ids: [timerSlot])
                 // Fail-closed arming path: for new/unsynced schedules, write disabled first
                 // and only arm after final verification succeeds.
-                if automation.enabled && previousSyncState != .synced {
+                if updated.enabled && previousSyncState != .synced {
                     let stagedPayload = WLEDTimerUpdate(
                         id: timerSlot,
                         enabled: false,
@@ -3066,16 +3184,19 @@ class AutomationStore: ObservableObject {
                     initialDelayMs: 200
                 )
                 guard verified else {
-                    if automation.enabled && previousSyncState != .synced {
+                    if updated.enabled && previousSyncState != .synced {
                         await disarmTimerSlotFailClosed(
                             slot: timerSlot,
                             device: device,
-                            automation: automation,
+                            automation: updated,
                             reason: "timer_verification_mismatch"
                         )
                     }
                     lastKnownGoodTimerSignatureByAutomationDevice.removeValue(forKey: signatureKey)
-                    updated = clearTimerSlotMetadata(updated, deviceId: device.id)
+                    // Keep a sticky slot assignment for retries to avoid slot-hopping
+                    // when read-after-write verification is transiently unstable.
+                    let stickySlot = previousTimerSlot ?? timerSlot
+                    updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: stickySlot)
                     updated = updateAutomationSyncMetadata(
                         updated,
                         deviceId: device.id,
@@ -3137,17 +3258,16 @@ class AutomationStore: ObservableObject {
                     logger.warning("On-device schedule transient sync error without signature proof; marking not ready for \(automation.name, privacy: .public) on \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
                 if isTransientOnDeviceSyncError(error) {
-                    if automation.enabled && previousSyncState != .synced {
+                    if updated.enabled && previousSyncState != .synced {
                         await disarmTimerSlotFailClosed(
                             slot: timerSlot,
                             device: device,
-                            automation: automation,
+                            automation: updated,
                             reason: "transient_sync_error"
                         )
                     }
-                    if let preservedSlot = previousTimerSlot {
-                        updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: preservedSlot)
-                    }
+                    let stickySlot = previousTimerSlot ?? timerSlot
+                    updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: stickySlot)
                     updated = updateAutomationSyncMetadata(
                         updated,
                         deviceId: device.id,
@@ -3159,16 +3279,17 @@ class AutomationStore: ObservableObject {
                     logger.warning("On-device schedule deferred due to transient sync error for \(automation.name, privacy: .public) on \(device.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
                     continue
                 }
-                if automation.enabled && previousSyncState != .synced {
+                if updated.enabled && previousSyncState != .synced {
                     await disarmTimerSlotFailClosed(
                         slot: timerSlot,
                         device: device,
-                        automation: automation,
+                        automation: updated,
                         reason: "non_transient_sync_error"
                     )
                 }
                 lastKnownGoodTimerSignatureByAutomationDevice.removeValue(forKey: signatureKey)
-                updated = clearTimerSlotMetadata(updated, deviceId: device.id)
+                let stickySlot = previousTimerSlot ?? timerSlot
+                updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: stickySlot)
                 updated = updateAutomationSyncMetadata(
                     updated,
                     deviceId: device.id,
@@ -3329,6 +3450,20 @@ class AutomationStore: ObservableObject {
         automation: Automation,
         reason: String
     ) async {
+        func enqueueFallbackCleanup(_ detail: String) {
+            DeviceCleanupManager.shared.enqueue(
+                type: .timer,
+                deviceId: device.id,
+                ids: [slot],
+                source: .automation,
+                verificationRequired: true,
+                notBefore: Date().addingTimeInterval(0.8)
+            )
+            logger.warning(
+                "automation.slot.disarm_queue_cleanup device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public) detail=\(detail, privacy: .public)"
+            )
+        }
+
         do {
             let clearPayload = WLEDTimerUpdate(
                 id: slot,
@@ -3353,14 +3488,22 @@ class AutomationStore: ObservableObject {
                 DeviceCleanupManager.shared.removeIds(type: .timer, deviceId: device.id, ids: [slot])
                 logger.info("automation.slot.disarmed_cleared device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public)")
             } else {
-                let disabled = try await apiService.disableTimer(slot: slot, device: device)
-                if disabled {
-                    logger.warning("automation.slot.disarmed_without_clear device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public)")
-                } else {
-                    logger.warning("automation.slot.disarm_failed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public)")
+                do {
+                    let disabled = try await apiService.disableTimer(slot: slot, device: device)
+                    if disabled {
+                        DeviceCleanupManager.shared.removeIds(type: .timer, deviceId: device.id, ids: [slot])
+                        logger.warning("automation.slot.disarmed_without_clear device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public)")
+                    } else {
+                        enqueueFallbackCleanup("disable_returned_false")
+                        logger.warning("automation.slot.disarm_failed device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public)")
+                    }
+                } catch {
+                    enqueueFallbackCleanup("disable_error")
+                    logger.warning("automation.slot.disarm_error device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
                 }
             }
         } catch {
+            enqueueFallbackCleanup("clear_update_or_verify_error")
             logger.warning("automation.slot.disarm_error device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(slot) reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
@@ -3724,11 +3867,22 @@ class AutomationStore: ObservableObject {
     }
 #endif
 
-    private func reservedTimerSlots(excluding automation: Automation, deviceId: String) -> Set<Int> {
+    private nonisolated static func computeReservedTimerSlots(
+        from records: [Automation],
+        excludingAutomationId: UUID,
+        deviceId: String,
+        importedTemplatePrefix: String
+    ) -> Set<Int> {
         var reserved = Set<Int>()
-        for record in automations where record.id != automation.id {
+        for record in records where record.id != excludingAutomationId {
             guard record.metadata.runOnDevice else { continue }
             guard record.targets.deviceIds.contains(deviceId) else { continue }
+            // Imported rows mirror device state and can be stale while cleanup catches up.
+            // Do not let them reserve slots for authored automation sync.
+            if let templateId = record.metadata.templateId,
+               templateId.hasPrefix(importedTemplatePrefix) {
+                continue
+            }
             if let slot = record.metadata.wledTimerSlotsByDevice?[deviceId] {
                 reserved.insert(slot)
             } else if record.targets.deviceIds.count == 1,
@@ -3738,6 +3892,30 @@ class AutomationStore: ObservableObject {
         }
         return reserved
     }
+
+    private func reservedTimerSlots(excluding automation: Automation, deviceId: String) -> Set<Int> {
+        Self.computeReservedTimerSlots(
+            from: automations,
+            excludingAutomationId: automation.id,
+            deviceId: deviceId,
+            importedTemplatePrefix: importedAutomationTemplatePrefix
+        )
+    }
+
+#if DEBUG
+    nonisolated static func _reservedTimerSlotsForTesting(
+        automations: [Automation],
+        excludingAutomationId: UUID,
+        deviceId: String
+    ) -> Set<Int> {
+        computeReservedTimerSlots(
+            from: automations,
+            excludingAutomationId: excludingAutomationId,
+            deviceId: deviceId,
+            importedTemplatePrefix: "wled.timer."
+        )
+    }
+#endif
 
     private func timerSlotClaimedByAnotherAutomation(
         _ slot: Int,
@@ -3889,7 +4067,8 @@ class AutomationStore: ObservableObject {
                             type: .timer,
                             deviceId: deviceId,
                             ids: [timerSlot],
-                            source: .automation
+                            source: .automation,
+                            verificationRequired: true
                         )
                     } else {
                         // Another automation still owns this slot; do not clear it.
@@ -3905,7 +4084,8 @@ class AutomationStore: ObservableObject {
                         type: .playlist,
                         deviceId: deviceId,
                         ids: [playlistId],
-                        source: .automation
+                        source: .automation,
+                        verificationRequired: true
                     )
                 }
             }
@@ -3923,7 +4103,8 @@ class AutomationStore: ObservableObject {
                     type: .preset,
                     deviceId: deviceId,
                     ids: Array(presetDeleteIds).sorted(),
-                    source: .automation
+                    source: .automation,
+                    verificationRequired: true
                 )
             }
 
@@ -3965,7 +4146,8 @@ class AutomationStore: ObservableObject {
                     type: .preset,
                     deviceId: deviceId,
                     ids: fetchedStepIds,
-                    source: .automation
+                    source: .automation,
+                    verificationRequired: true
                 )
             }
         }
@@ -3976,7 +4158,8 @@ class AutomationStore: ObservableObject {
                 type: .playlist,
                 device: device,
                 ids: [playlistId],
-                source: .automation
+                source: .automation,
+                verificationRequired: true
             )
         }
         if !runtimePresetDeleteIds.isEmpty {
@@ -3985,7 +4168,8 @@ class AutomationStore: ObservableObject {
                 type: .preset,
                 device: device,
                 ids: Array(runtimePresetDeleteIds).sorted(),
-                source: .automation
+                source: .automation,
+                verificationRequired: true
             )
         }
 
@@ -4003,7 +4187,8 @@ class AutomationStore: ObservableObject {
                         type: .timer,
                         device: device,
                         ids: [timerSlot],
-                        source: .automation
+                        source: .automation,
+                        verificationRequired: true
                     )
                 case .notOwned:
                     DeviceCleanupManager.shared.removeIds(
@@ -4019,7 +4204,8 @@ class AutomationStore: ObservableObject {
                         type: .timer,
                         deviceId: device.id,
                         ids: [timerSlot],
-                        source: .automation
+                        source: .automation,
+                        verificationRequired: true
                     )
                     logger.warning(
                         "automation.delete.timer.defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"
@@ -4059,7 +4245,8 @@ class AutomationStore: ObservableObject {
                                 type: .timer,
                                 deviceId: device.id,
                                 ids: [timerSlot],
-                                source: .automation
+                                source: .automation,
+                                verificationRequired: true
                             )
                             logger.warning(
                                 "automation.delete.timer.postcheck_requeue device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot)"
@@ -4078,7 +4265,8 @@ class AutomationStore: ObservableObject {
                                 type: .timer,
                                 deviceId: device.id,
                                 ids: [timerSlot],
-                                source: .automation
+                                source: .automation,
+                                verificationRequired: true
                             )
                             logger.warning(
                                 "automation.delete.timer.postcheck_defer_unknown device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) slot=\(timerSlot) reason=\(reason, privacy: .public)"

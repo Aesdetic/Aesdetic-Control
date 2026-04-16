@@ -79,7 +79,7 @@ struct DockBar: View {
         }
         .padding(.vertical, dockPadding)
         .padding(.horizontal, dockPadding)
-        .appLiquidGlass(role: .panel, cornerRadius: dockCornerRadius)
+        .appLiquidGlass(role: .highContrast, cornerRadius: dockCornerRadius)
     }
 }
 
@@ -93,10 +93,10 @@ private struct DockItemView: View {
     var body: some View {
         VStack(spacing: 4) {
             Image(systemName: tab.systemImage)
-                .font(.system(size: 18, weight: .semibold))
+                .font(AppTypography.display(size: 18, weight: .semibold, relativeTo: .headline))
                 .symbolRenderingMode(.hierarchical)
             Text(tab.title)
-                .font(.caption2.weight(.semibold))
+                .font(AppTypography.style(.caption2, weight: .semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
@@ -107,11 +107,8 @@ private struct DockItemView: View {
             if isActive {
                 let shape = RoundedRectangle(cornerRadius: pillCornerRadius, style: .continuous)
                 shape
-                    .fill(.ultraThinMaterial.opacity(0.5))
-                    .overlay(
-                        shape.fill(Color.white.opacity(0.14))
-                    )
-                    .clipShape(shape)
+                    .fill(Color.clear)
+                    .appLiquidGlass(role: .highContrast, cornerRadius: pillCornerRadius)
                     .matchedGeometryEffect(id: "dock-active-pill", in: namespace)
             }
         }

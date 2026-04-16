@@ -53,41 +53,41 @@ struct DiagnosticsView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {
                                     Text(device.name)
-                                        .font(.headline)
+                                        .font(AppTypography.style(.headline))
                                     Spacer()
                                     Text(device.isOnline ? "Online" : "Offline")
-                                        .font(.caption)
+                                        .font(AppTypography.style(.caption))
                                         .foregroundColor(device.isOnline ? .green : .red)
                                 }
 
                                 Text("IP: \(device.ipAddress)")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.secondary)
 
                                 Text("ID: \(device.id)")
-                                    .font(.caption2)
+                                    .font(AppTypography.style(.caption2))
                                     .foregroundColor(.secondary)
 
                                 if let source = viewModel.wledService.lastDiscoverySourceByDevice[device.id]
                                     ?? viewModel.wledService.lastDiscoverySourceByIP[device.ipAddress] {
                                     Text("Source: \(source)")
-                                        .font(.caption2)
+                                        .font(AppTypography.style(.caption2))
                                         .foregroundColor(.secondary)
                                 }
 
                                 if viewModel.isRealTimeEnabled {
                                     let status = viewModel.getConnectionStatus(for: device)?.status
                                     Text("WebSocket: \(webSocketLabel(status))")
-                                        .font(.caption2)
+                                        .font(AppTypography.style(.caption2))
                                         .foregroundColor(.secondary)
                                 } else if let status = viewModel.reconnectionStatus[device.id], !status.isEmpty {
                                     Text("Connection: \(status)")
-                                        .font(.caption2)
+                                        .font(AppTypography.style(.caption2))
                                         .foregroundColor(.secondary)
                                 }
 
                                 Text("Last seen: \(dateFormatter.string(from: device.lastSeen))")
-                                    .font(.caption2)
+                                    .font(AppTypography.style(.caption2))
                                     .foregroundColor(.secondary)
                             }
                             .padding(.vertical, 4)
@@ -104,10 +104,10 @@ struct DiagnosticsView: View {
                         ForEach(Array(events)) { entry in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(timeFormatter.string(from: entry.timestamp))
-                                    .font(.caption2)
+                                    .font(AppTypography.style(.caption2))
                                     .foregroundColor(.secondary)
                                 Text(entry.message)
-                                    .font(.footnote)
+                                    .font(AppTypography.style(.footnote))
                             }
                             .padding(.vertical, 2)
                         }

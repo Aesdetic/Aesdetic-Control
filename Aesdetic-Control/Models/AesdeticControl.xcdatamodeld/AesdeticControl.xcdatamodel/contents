@@ -13,6 +13,13 @@
         <attribute name="playlistNamesJSON" optional="YES" attributeType="String"/>
         <attribute name="presetNamesJSON" optional="YES" attributeType="String"/>
         <attribute name="productType" optional="YES" attributeType="String"/>
+        <attribute name="setupState" optional="YES" attributeType="String"/>
+        <attribute name="profileId" optional="YES" attributeType="String"/>
+        <attribute name="lookId" optional="YES" attributeType="String"/>
+        <attribute name="profileVersionApplied" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="managedPresetIdsJSON" optional="YES" attributeType="String"/>
+        <attribute name="backupSnapshotId" optional="YES" attributeType="String"/>
+        <attribute name="lastProfileAppliedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="state" optional="YES" maxCount="1" deletionRule="Cascade" destinationEntity="WLEDStateEntity" inverseName="device" inverseEntity="WLEDStateEntity"/>
     </entity>
     <entity name="WLEDSegmentEntity" representedClassName="WLEDSegmentEntity" syncable="YES">

@@ -491,7 +491,7 @@ struct AddAutomationDialog: View {
                     TextField("Automation name", text: $automationName)
                         .textFieldStyle(.plain)
                         .foregroundColor(.white)
-                        .font(.headline.weight(.semibold))
+                        .font(AppTypography.style(.headline, weight: .semibold))
                         .focused($isNameFieldFocused)
                         .onSubmit {
                             isEditingName = false
@@ -500,7 +500,7 @@ struct AddAutomationDialog: View {
                         .frame(minWidth: 200)
                 } else {
                     Text(automationName.isEmpty ? (isEditing ? "Edit Automation" : "Add Automation") : automationName)
-                        .font(.headline.weight(.semibold))
+                        .font(AppTypography.style(.headline, weight: .semibold))
                         .foregroundColor(.white)
                         .lineLimit(1)
                 }
@@ -510,7 +510,7 @@ struct AddAutomationDialog: View {
                 } label: {
                     Image(systemName: isEditingName ? "checkmark" : "pencil")
                         .foregroundColor(.white.opacity(0.7))
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                 }
             }
         }
@@ -559,7 +559,7 @@ struct AddAutomationDialog: View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: saveAndDismiss) {
                 Text(isValidatingOnDeviceSchedule ? "Validating..." : primaryButtonTitle)
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .padding(.vertical, 14)
                     .frame(maxWidth: .infinity)
                     .background((canSave && !isValidatingOnDeviceSchedule) ? Color.white : Color.white.opacity(0.2))
@@ -570,31 +570,31 @@ struct AddAutomationDialog: View {
 
             if let message = onDeviceScheduleValidationMessage {
                 Text(message)
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(onDeviceScheduleValidationIsWarning ? .yellow : .orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = timerSlotLimitPromptMessage {
                 Text(message)
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = dateWindowValidationMessage {
                 Text(message)
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = presetCapacityMessage {
                 Text(message)
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(presetCapacitySatisfied ? .white.opacity(0.7) : .orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = transitionDurationRecommendationMessage {
                 Text(message)
-                    .font(.footnote)
+                    .font(AppTypography.style(.footnote))
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -649,13 +649,13 @@ struct AddAutomationDialog: View {
             // Header row with summary on the right
             HStack {
                 Text("Sync to devices")
-                    .font(.callout.weight(.semibold))
+                    .font(AppTypography.style(.callout, weight: .semibold))
                     .foregroundColor(.white.opacity(0.7))
                 
                 Spacer()
                 
                 Text(deviceSyncSummary)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
             }
             
@@ -684,13 +684,13 @@ struct AddAutomationDialog: View {
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(isSelected ? .black : .white.opacity(0.9))
                     .lineLimit(1)
                 
                 HStack(spacing: 4) {
                     Text(isOnline ? "Online" : "Offline")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(isSelected ? .black.opacity(0.7) : .white.opacity(0.5))
                     
                     // Status dot on the right
@@ -764,7 +764,7 @@ struct AddAutomationDialog: View {
     private var automationSettingsSection: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Automation Settings")
-                .font(.callout.weight(.semibold))
+                .font(AppTypography.style(.callout, weight: .semibold))
                 .foregroundColor(.white.opacity(0.7))
             
             triggerSelectionCard
@@ -786,7 +786,7 @@ struct AddAutomationDialog: View {
     private var solarParityHint: some View {
         if triggerSelection == .sunrise || triggerSelection == .sunset {
             Text("WLED solar parity: Sunrise uses timer slot 8, Sunset uses slot 9. Offset range is -59...+59 minutes and uses device timezone/location.")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
         }
     }
@@ -806,11 +806,11 @@ struct AddAutomationDialog: View {
                     dateWindowStepper(title: "End Day", value: $endDay, range: 1...31)
                 }
                 Text("When enabled, WLED will only run this timer between the selected start/end dates each year.")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
                 if let validationMessage = dateWindowValidationMessage {
                     Text(validationMessage)
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.orange)
                 }
             }
@@ -824,20 +824,20 @@ struct AddAutomationDialog: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption2.weight(.semibold))
+                .font(AppTypography.style(.caption2, weight: .semibold))
                 .foregroundColor(.white.opacity(0.72))
             HStack(spacing: 10) {
                 Button {
                     value.wrappedValue = max(range.lowerBound, value.wrappedValue - 1)
                 } label: {
                     Image(systemName: "minus")
-                        .font(.caption.weight(.bold))
+                        .font(AppTypography.style(.caption, weight: .bold))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
 
                 Text("\(value.wrappedValue)")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white)
                     .frame(minWidth: 24)
 
@@ -845,7 +845,7 @@ struct AddAutomationDialog: View {
                     value.wrappedValue = min(range.upperBound, value.wrappedValue + 1)
                 } label: {
                     Image(systemName: "plus")
-                        .font(.caption.weight(.bold))
+                        .font(AppTypography.style(.caption, weight: .bold))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
@@ -872,7 +872,7 @@ struct AddAutomationDialog: View {
             // Title row with "Every day" toggle
             HStack {
             Text("Repeat Schedule")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                 .foregroundColor(.white.opacity(0.7))
             
                 Spacer()
@@ -886,9 +886,9 @@ struct AddAutomationDialog: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: allDaysSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.caption2)
+                            .font(AppTypography.style(.caption2))
                         Text("Every day")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                     }
                     .foregroundColor(.white.opacity(0.9))
                     .padding(.horizontal, 10)
@@ -917,7 +917,7 @@ struct AddAutomationDialog: View {
                             }
                         }) {
                             Text(weekdayNames[idx].uppercased())
-                                .font(.caption2.weight(.semibold))
+                                .font(AppTypography.style(.caption2, weight: .semibold))
                                 .tracking(0.3)
                                 .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.7))
                             .frame(maxWidth: .infinity)
@@ -1054,7 +1054,7 @@ struct AddAutomationDialog: View {
                         Task { await handleTriggerSelectionTap(option) }
                     } label: {
                         Text(option == .time ? "Time of Day" : option.rawValue)
-                            .font(.footnote.weight(.semibold))
+                            .font(AppTypography.style(.footnote, weight: .semibold))
                             .foregroundColor(.white.opacity(isAvailable ? 0.9 : 0.45))
                             .frame(maxWidth: .infinity, minHeight: 34)
                             .padding(.horizontal, 12)
@@ -1203,7 +1203,7 @@ struct AddAutomationDialog: View {
     private var automationActionSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Action")
-                .font(.callout.weight(.semibold))
+                .font(AppTypography.style(.callout, weight: .semibold))
                 .foregroundColor(.white.opacity(0.7))
             
             Picker("Action", selection: $actionSelection) {
@@ -1272,7 +1272,7 @@ struct AddAutomationDialog: View {
 
         if choices.isEmpty {
             Text("No saved scenes for this device yet. Save a scene first, then schedule it.")
-                .font(.footnote)
+                .font(AppTypography.style(.footnote))
                 .foregroundColor(.white.opacity(0.7))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
@@ -1291,7 +1291,7 @@ struct AddAutomationDialog: View {
 
             if let scene = selectedScene {
                 Text("Runs on \(deviceName(for: scene.deviceId)) at the scheduled time.")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.65))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1308,16 +1308,16 @@ struct AddAutomationDialog: View {
                     .foregroundColor(selected ? .white : .white.opacity(0.45))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(scene.name)
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(.white.opacity(0.95))
                         .lineLimit(1)
                     Text(deviceName(for: scene.deviceId))
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.6))
                 }
                 Spacer(minLength: 8)
                 Text(sceneTypeLabel(for: scene))
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTypography.style(.caption2, weight: .semibold))
                     .foregroundColor(.white.opacity(0.65))
             }
             .padding(.horizontal, 12)

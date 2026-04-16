@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AppStatusColors {
     let positive: Color
@@ -124,5 +125,135 @@ enum AppTheme {
             return isActive ? .clear : .white
         }
         return isActive ? Color.white.opacity(0.34) : Color.white.opacity(0.2)
+    }
+}
+
+enum AppTypography {
+    enum Family {
+        case display
+        case text
+    }
+
+    static func style(_ textStyle: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
+        let family: Family = usesDisplayFamily(for: textStyle) ? .display : .text
+        return customFont(family: family, size: preferredPointSize(for: textStyle), weight: weight, relativeTo: textStyle)
+    }
+
+    static func display(size: CGFloat, weight: Font.Weight = .semibold, relativeTo textStyle: Font.TextStyle = .headline) -> Font {
+        customFont(family: .display, size: size, weight: weight, relativeTo: textStyle)
+    }
+
+    static func text(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        customFont(family: .text, size: size, weight: weight, relativeTo: textStyle)
+    }
+
+    private static func usesDisplayFamily(for textStyle: Font.TextStyle) -> Bool {
+        switch textStyle {
+        case .largeTitle, .title, .title2, .title3, .headline:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func preferredPointSize(for textStyle: Font.TextStyle) -> CGFloat {
+        UIFont.preferredFont(forTextStyle: uiTextStyle(for: textStyle)).pointSize
+    }
+
+    private static func uiTextStyle(for textStyle: Font.TextStyle) -> UIFont.TextStyle {
+        switch textStyle {
+        case .largeTitle:
+            return .largeTitle
+        case .title:
+            return .title1
+        case .title2:
+            return .title2
+        case .title3:
+            return .title3
+        case .headline:
+            return .headline
+        case .subheadline:
+            return .subheadline
+        case .callout:
+            return .callout
+        case .caption:
+            return .caption1
+        case .caption2:
+            return .caption2
+        case .footnote:
+            return .footnote
+        default:
+            return .body
+        }
+    }
+
+    private static func customFont(
+        family: Family,
+        size: CGFloat,
+        weight: Font.Weight,
+        relativeTo textStyle: Font.TextStyle
+    ) -> Font {
+        for name in candidateNames(for: family, weight: weight) where UIFont(name: name, size: size) != nil {
+            return .custom(name, size: size, relativeTo: textStyle)
+        }
+        return .system(size: size, weight: weight, design: .default)
+    }
+
+    private static func candidateNames(for family: Family, weight: Font.Weight) -> [String] {
+        let compactFamily = family == .display ? "SFProDisplay" : "SFProText"
+        let spacedFamily = family == .display ? "SF Pro Display" : "SF Pro Text"
+        var names: [String] = []
+        for suffix in suffixes(for: weight) {
+            names.append("\(compactFamily)-\(suffix)")
+            names.append("\(spacedFamily) \(suffix)")
+        }
+        names.append(compactFamily)
+        names.append(spacedFamily)
+        return names
+    }
+
+    private static func suffixes(for weight: Font.Weight) -> [String] {
+        if weight == .ultraLight {
+            return ["Ultralight", "UltraLight"]
+        }
+        if weight == .thin {
+            return ["Thin"]
+        }
+        if weight == .light {
+            return ["Light"]
+        }
+        if weight == .regular {
+            return ["Regular"]
+        }
+        if weight == .medium {
+            return ["Medium"]
+        }
+        if weight == .semibold {
+            return ["Semibold", "SemiBold"]
+        }
+        if weight == .bold {
+            return ["Bold"]
+        }
+        if weight == .heavy {
+            return ["Heavy"]
+        }
+        if weight == .black {
+            return ["Black"]
+        }
+        return ["Regular"]
+    }
+}
+
+extension View {
+    func appFont(_ textStyle: Font.TextStyle, weight: Font.Weight = .regular) -> some View {
+        font(AppTypography.style(textStyle, weight: weight))
+    }
+
+    func appDisplayFont(size: CGFloat, weight: Font.Weight = .semibold, relativeTo textStyle: Font.TextStyle = .headline) -> some View {
+        font(AppTypography.display(size: size, weight: weight, relativeTo: textStyle))
+    }
+
+    func appTextFont(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle = .body) -> some View {
+        font(AppTypography.text(size: size, weight: weight, relativeTo: textStyle))
     }
 }

@@ -9,9 +9,8 @@ import SwiftUI
 import UIKit
 
 struct ContentView: View {
-    // Use the shared ViewModels to ensure proper state management
-    @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     @State private var selectedTab: DockTab = .dashboard
+    @StateObject private var deviceControlViewModel = DeviceControlViewModel.shared
     private let dockHorizontalPadding: CGFloat = 16
     private let dockTopInsetPadding: CGFloat = 0
     private let dockBottomInsetOffset: CGFloat = -8
@@ -20,8 +19,12 @@ struct ContentView: View {
     }
 
     var body: some View {
+        liveAppBody
+    }
+
+    private var liveAppBody: some View {
         TabView(selection: $selectedTab) {
-            DashboardView()
+            DashboardView(activeTab: selectedTab)
                 .tag(DockTab.dashboard)
                 .tabItem {
                     Label("Dashboard", systemImage: "square.grid.2x2")
@@ -52,20 +55,35 @@ struct ContentView: View {
                 .padding(.horizontal, dockHorizontalPadding)
                 .padding(.top, dockTopInsetPadding)
                 .padding(.bottom, dockBottomInsetOffset)
+                .allowsHitTesting(!deviceControlViewModel.isMandatorySetupFlowActive)
+                .opacity(deviceControlViewModel.isMandatorySetupFlowActive ? 0.55 : 1.0)
         }
         .onAppear {
             UITabBar.appearance().isHidden = true
-            guard !isRunningForPreviews else { return }
-            // Passive discovery at launch (UDP/mDNS only)
-            deviceViewModel.startPassiveDiscovery()
+            if !isRunningForPreviews {
+                // Passive discovery at launch (UDP/mDNS only)
+                DeviceControlViewModel.shared.startPassiveDiscovery()
+            }
         }
     }
 }
 
 struct ContentView_Previews: PreviewProvider {
+    @MainActor
+    private static let deviceControlViewModel = DeviceControlViewModel.shared
+    @MainActor
+    private static let automationViewModel = AutomationViewModel.shared
+    @MainActor
+    private static let dashboardViewModel = DashboardViewModel.shared
+    @MainActor
+    private static let wellnessViewModel = WellnessViewModel()
+
     static var previews: some View {
         ContentView()
-            .environmentObject(WellnessViewModel())
+            .environmentObject(deviceControlViewModel)
+            .environmentObject(automationViewModel)
+            .environmentObject(dashboardViewModel)
+            .environmentObject(wellnessViewModel)
+            .environment(\.managedObjectContext, CoreDataManager.shared.viewContext)
     }
 }
-

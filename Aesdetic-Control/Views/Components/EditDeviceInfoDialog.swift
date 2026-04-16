@@ -25,6 +25,8 @@ struct EditDeviceInfoDialog: View {
     @State private var newLocationIcon: String = "house"
     @State private var isAddingCustomLocation: Bool = false
     @State private var showIconPicker: Bool = false
+    @State private var showPostRenameWiFiPrompt: Bool = false
+    @State private var showWiFiSettingsFlow: Bool = false
     @FocusState private var isNameFieldFocused: Bool
     @FocusState private var isLocationFieldFocused: Bool
     
@@ -33,6 +35,16 @@ struct EditDeviceInfoDialog: View {
         _deviceName = State(initialValue: device.name)
         _selectedLocation = State(initialValue: device.location)
         _customLocations = State(initialValue: []) // Load lazily to avoid blocking init
+    }
+
+    private var activeDevice: WLEDDevice {
+        if let matchedById = viewModel.devices.first(where: { $0.id == device.id }) {
+            return matchedById
+        }
+        if let matchedByIP = viewModel.devices.first(where: { $0.ipAddress == device.ipAddress }) {
+            return matchedByIP
+        }
+        return device
     }
     
             var body: some View {
@@ -46,12 +58,12 @@ struct EditDeviceInfoDialog: View {
                     // Device Name Section
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Device Name")
-                            .font(.headline.weight(.semibold))
+                            .font(AppTypography.style(.headline, weight: .semibold))
                             .foregroundColor(.white)
                         
                         TextField("Device Name", text: $deviceName)
                             .textFieldStyle(.plain)
-                            .font(.title3)
+                            .font(AppTypography.style(.title3))
                             .foregroundColor(.white)
                             .padding(16)
                             .background(
@@ -68,7 +80,7 @@ struct EditDeviceInfoDialog: View {
                     // Location Section
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Location")
-                            .font(.headline.weight(.semibold))
+                            .font(AppTypography.style(.headline, weight: .semibold))
                             .foregroundColor(.white)
                         
                         // Default locations (Bedroom and Living Room only)
@@ -112,7 +124,7 @@ struct EditDeviceInfoDialog: View {
                             VStack(spacing: 12) {
                                 TextField("New Location", text: $newLocationName)
                                     .textFieldStyle(.plain)
-                                    .font(.body)
+                                    .font(AppTypography.style(.body))
                                     .foregroundColor(.white)
                                     .padding(16)
                                     .background(
@@ -128,7 +140,7 @@ struct EditDeviceInfoDialog: View {
                                 // Icon selection
                                 HStack {
                                     Text("Icon:")
-                                        .font(.subheadline.weight(.medium))
+                                        .font(AppTypography.style(.subheadline, weight: .medium))
                                         .foregroundColor(.white)
                                     
                                     Spacer()
@@ -137,11 +149,11 @@ struct EditDeviceInfoDialog: View {
                                         Group {
                                             if isSFSymbol(newLocationIcon) {
                                                 Image(systemName: newLocationIcon)
-                                                    .font(.title2)
+                                                    .font(AppTypography.style(.title2))
                                                     .foregroundColor(.white)
                                             } else {
                                                 Text(newLocationIcon)
-                                                    .font(.title2)
+                                                    .font(AppTypography.style(.title2))
                                                     .foregroundColor(.white)
                                             }
                                         }
@@ -190,7 +202,7 @@ struct EditDeviceInfoDialog: View {
                                     Image(systemName: "plus")
                                     Text("Add Custom Location")
                                 }
-                                .font(.body.weight(.medium))
+                                .font(AppTypography.style(.body, weight: .medium))
                                 .foregroundColor(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 16)
@@ -263,6 +275,31 @@ struct EditDeviceInfoDialog: View {
         .sheet(isPresented: $showIconPicker) {
             IconPickerView(selectedIcon: $newLocationIcon)
         }
+        .sheet(isPresented: $showWiFiSettingsFlow, onDismiss: {
+            dismiss()
+        }) {
+            NavigationStack {
+                ComprehensiveSettingsView(device: activeDevice, initialCategory: .wifi)
+                    .environmentObject(viewModel)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.ultraThinMaterial)
+        }
+        .confirmationDialog(
+            "Check WiFi After Renaming?",
+            isPresented: $showPostRenameWiFiPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Review WiFi Now") {
+                showWiFiSettingsFlow = true
+            }
+            Button("Done", role: .cancel) {
+                dismiss()
+            }
+        } message: {
+            Text("Confirm this device is on the correct network or switch WiFi now.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeleteCustomLocation"))) { notification in
             if let locationName = notification.object as? String {
                 deleteCustomLocation(locationName)
@@ -279,9 +316,12 @@ struct EditDeviceInfoDialog: View {
             return
         }
         
+        var didRename = false
+
         // Save name if changed
         if newName != device.name {
             await viewModel.renameDevice(device, to: newName)
+            didRename = viewModel.currentError == nil
         }
         
         // Save location if changed
@@ -289,7 +329,11 @@ struct EditDeviceInfoDialog: View {
             await viewModel.updateDeviceLocation(device, location: selectedLocation)
         }
         
-        dismiss()
+        if didRename {
+            showPostRenameWiFiPrompt = true
+        } else {
+            dismiss()
+        }
     }
     
     private func loadCustomLocations() -> [CustomLocation] {
@@ -389,17 +433,17 @@ struct IconPickerView: View {
                     // Current selection
                     VStack(spacing: 12) {
                         Text("Selected Icon")
-                            .font(.headline.weight(.semibold))
+                            .font(AppTypography.style(.headline, weight: .semibold))
                             .foregroundColor(.white)
                         
                         Group {
                             if sfSymbolIcons.contains(selectedIcon) {
                                 Image(systemName: selectedIcon)
-                                    .font(.system(.largeTitle, design: .rounded))
+                                    .font(AppTypography.style(.largeTitle))
                                     .foregroundColor(.white)
                             } else {
                                 Text(selectedIcon)
-                                    .font(.system(.largeTitle, design: .rounded))
+                                    .font(AppTypography.style(.largeTitle))
                             }
                         }
                         .frame(width: 100, height: 100)
@@ -429,7 +473,7 @@ struct IconPickerView: View {
                                 dismiss()
                             }) {
                                 Image(systemName: icon)
-                                    .font(.title2)
+                                    .font(AppTypography.style(.title2))
                                     .foregroundColor(.white)
                                     .frame(width: 50, height: 50)
                                     .background(
@@ -450,12 +494,12 @@ struct IconPickerView: View {
                 // Custom emoji input
                 VStack(spacing: 12) {
                     Text("Or enter custom emoji:")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white)
                     
                     TextField("Enter emoji", text: $selectedIcon)
                         .textFieldStyle(.plain)
-                        .font(.title)
+                        .font(AppTypography.style(.title))
                         .multilineTextAlignment(.center)
                         .padding(16)
                         .background(
@@ -503,12 +547,12 @@ struct LocationButton: View {
             VStack(spacing: 8) {
                 // Icon - Use SF Symbols for default locations
                 Image(systemName: iconName)
-                    .font(.title2)
+                    .font(AppTypography.style(.title2))
                     .foregroundColor(isSelected ? .black : .white)
                 
                 // Label
                 Text(location.displayName)
-                    .font(.caption.weight(.medium))
+                    .font(AppTypography.style(.caption, weight: .medium))
                     .foregroundColor(isSelected ? .black : .white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -567,18 +611,18 @@ struct CustomLocationButton: View {
                 Group {
                     if isSFSymbol(location.icon) {
                         Image(systemName: location.icon)
-                            .font(.title2)
+                            .font(AppTypography.style(.title2))
                             .foregroundColor(isSelected ? .black : .white)
                     } else {
                         Text(location.icon)
-                            .font(.title2)
+                            .font(AppTypography.style(.title2))
                             .foregroundColor(isSelected ? .black : .white)
                     }
                 }
                 
                 // Label
                 Text(location.name)
-                    .font(.caption.weight(.medium))
+                    .font(AppTypography.style(.caption, weight: .medium))
                     .foregroundColor(isSelected ? .black : .white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -625,4 +669,3 @@ struct CustomLocationButton: View {
         )
     }
 }
-

@@ -90,6 +90,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let timerDeleteVerifyRetryAttempts = 4
     private let timerDeleteVerifyInitialDelayMs: UInt64 = 180
     private let timerDeleteVerifyMaxDelayMs: UInt64 = 1_200
+    private let presetStoreDeleteVerifyRetryAttempts = 4
+    private let presetStoreDeleteVerifyInitialDelayMs: UInt64 = 220
+    private let presetStoreDeleteVerifyMaxDelayMs: UInt64 = 1_500
     
     // Performance optimization: Request batching and caching
     private var requestCache: [String: (response: WLEDResponse, timestamp: Date)] = [:]
@@ -1627,18 +1630,33 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         let queueKey = presetStoreQueueKey(for: device)
         return try await enqueuePresetOperation(deviceId: queueKey, label: "preset.delete") {
+            let postAccepted: Bool
             do {
                 _ = try await self.postState(device, body: ["pdel": id])
-                return true
+                postAccepted = true
             } catch {
                 if let apiError = error as? WLEDAPIError,
                    case .httpError(let statusCode) = apiError,
                    statusCode == 404 {
-                    return true
+                    postAccepted = false
+                } else {
+                    self.logger.warning("Preset deletion failed for \(id) on device \(device.id), will retry later")
+                    return false
                 }
-                self.logger.warning("Preset deletion failed for \(id) on device \(device.id), will retry later")
-                return false
             }
+            let deleted = await self.verifyPresetStoreRecordDeletedWithBackoff(
+                id: id,
+                device: device,
+                attempts: self.presetStoreDeleteVerifyRetryAttempts,
+                initialDelayMs: self.presetStoreDeleteVerifyInitialDelayMs,
+                context: "preset.delete"
+            )
+            if !deleted {
+                self.logger.warning(
+                    "preset.delete.verify_failed device=\(device.id, privacy: .public) id=\(id, privacy: .public) postAccepted=\(postAccepted, privacy: .public)"
+                )
+            }
+            return deleted
         }
     }
 
@@ -1714,17 +1732,121 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         let queueKey = presetStoreQueueKey(for: device)
         return try await enqueuePresetOperation(deviceId: queueKey, label: "playlist.delete") {
+            let postAccepted: Bool
             do {
                 _ = try await self.postState(device, body: ["pdel": id])
-                return true
+                postAccepted = true
             } catch {
                 if let apiError = error as? WLEDAPIError,
                    case .httpError(let statusCode) = apiError,
                    statusCode == 404 {
-                    return true
+                    postAccepted = false
+                } else {
+                    self.logger.warning("Playlist deletion failed for \(id) on device \(device.id), will retry later")
+                    return false
                 }
-                self.logger.warning("Playlist deletion failed for \(id) on device \(device.id), will retry later")
-                return false
+            }
+            let deleted = await self.verifyPresetStoreRecordDeletedWithBackoff(
+                id: id,
+                device: device,
+                attempts: self.presetStoreDeleteVerifyRetryAttempts,
+                initialDelayMs: self.presetStoreDeleteVerifyInitialDelayMs,
+                context: "playlist.delete"
+            )
+            if !deleted {
+                self.logger.warning(
+                    "playlist.delete.verify_failed device=\(device.id, privacy: .public) id=\(id, privacy: .public) postAccepted=\(postAccepted, privacy: .public)"
+                )
+            }
+            return deleted
+        }
+    }
+
+    private enum PresetStoreDeleteVerificationResult {
+        case deleted
+        case stillPresent
+        case unreadable(String)
+    }
+
+    private func verifyPresetStoreRecordDeletedWithBackoff(
+        id: Int,
+        device: WLEDDevice,
+        attempts: Int,
+        initialDelayMs: UInt64,
+        context: String
+    ) async -> Bool {
+        let totalAttempts = max(1, attempts)
+        var delayMs = max(UInt64(1), initialDelayMs)
+        var lastUnreadable: String?
+
+        for attempt in 1...totalAttempts {
+            let verification = await verifyPresetStoreRecordDeleted(id: id, device: device)
+            switch verification {
+            case .deleted:
+                return true
+            case .stillPresent:
+                if attempt < totalAttempts {
+                    logger.debug(
+                        "\(context, privacy: .public).verify_transient_mismatch device=\(device.id, privacy: .public) id=\(id, privacy: .public) attempt=\(attempt, privacy: .public)/\(totalAttempts, privacy: .public)"
+                    )
+                }
+            case .unreadable(let reason):
+                lastUnreadable = reason
+                if attempt < totalAttempts {
+                    logger.debug(
+                        "\(context, privacy: .public).verify_transient_unreadable device=\(device.id, privacy: .public) id=\(id, privacy: .public) attempt=\(attempt, privacy: .public)/\(totalAttempts, privacy: .public) reason=\(reason, privacy: .public)"
+                    )
+                }
+            }
+
+            if attempt < totalAttempts {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                delayMs = min(delayMs * 2, presetStoreDeleteVerifyMaxDelayMs)
+            }
+        }
+
+        if let lastUnreadable {
+            logger.warning(
+                "\(context, privacy: .public).verify_unreadable device=\(device.id, privacy: .public) id=\(id, privacy: .public) reason=\(lastUnreadable, privacy: .public)"
+            )
+        }
+        return false
+    }
+
+    private func verifyPresetStoreRecordDeleted(id: Int, device: WLEDDevice) async -> PresetStoreDeleteVerificationResult {
+        do {
+            guard let fileURL = URL(string: "http://\(device.ipAddress)/presets.json") else {
+                return .unreadable("invalid URL")
+            }
+            let (data, response) = try await urlSession.data(for: URLRequest(url: fileURL))
+            try validateHTTPResponse(response, device: device)
+            if let errorCode = wledErrorCode(from: data) {
+                if errorCode == 4 {
+                    throw WLEDAPIError.httpError(501)
+                }
+                throw WLEDAPIError.invalidResponse
+            }
+            cachePresetRecordPayloads(from: data, device: device)
+            let records = try parsePresetPayloadMapById(data: data)
+            return records[id] == nil ? .deleted : .stillPresent
+        } catch {
+            do {
+                guard let jsonURL = URL(string: "http://\(device.ipAddress)/json/presets") else {
+                    return .unreadable("invalid URL")
+                }
+                let (data, response) = try await urlSession.data(for: URLRequest(url: jsonURL))
+                try validateHTTPResponse(response, device: device)
+                if let errorCode = wledErrorCode(from: data) {
+                    if errorCode == 4 {
+                        throw WLEDAPIError.httpError(501)
+                    }
+                    throw WLEDAPIError.invalidResponse
+                }
+                cachePresetRecordPayloads(from: data, device: device)
+                let records = try parsePresetPayloadMapById(data: data)
+                return records[id] == nil ? .deleted : .stillPresent
+            } catch {
+                return .unreadable(error.localizedDescription)
             }
         }
     }

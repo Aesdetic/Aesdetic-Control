@@ -1,14 +1,21 @@
 import SwiftUI
 import Combine
 
+enum DeviceDetailBackgroundStyle {
+    case frosted
+    case liquidGlass
+}
+
 struct DeviceDetailView: View {
     let device: WLEDDevice
+    private let backgroundStyle: DeviceDetailBackgroundStyle
     @ObservedObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
     @State private var selectedTab: String = "Colors"
     
     // State variables for new features
     @State private var showSettings: Bool = false
+    @State private var showProductSetup: Bool = false
     @State private var showSaveSceneDialog: Bool = false
     @State private var showAddAutomation: Bool = false
     @State private var pendingAutomationTemplate: AutomationTemplate? = nil
@@ -34,6 +41,19 @@ struct DeviceDetailView: View {
     @State private var armedCancelRunId: UUID? = nil
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     @AppStorage("showSegmentControlsInColorTabAdvanced") private var showSegmentControlsInColorTabAdvanced: Bool = true
+    private let detailCardCornerRadius: CGFloat = 30
+
+    init(
+        device: WLEDDevice,
+        viewModel: DeviceControlViewModel,
+        initialTab: String = "Colors",
+        backgroundStyle: DeviceDetailBackgroundStyle = .frosted
+    ) {
+        self.device = device
+        self.backgroundStyle = backgroundStyle
+        self.viewModel = viewModel
+        _selectedTab = State(initialValue: initialTab)
+    }
     
     // Use coordinated power state from ViewModel
     private var currentPowerState: Bool {
@@ -79,30 +99,47 @@ struct DeviceDetailView: View {
         viewModel.activeRunStatus[activeDevice.id]?.id
     }
 
+    private var requiresProductSetup: Bool {
+        viewModel.requiresProfileSetup(activeDevice)
+    }
+
     private var isRunningInPreview: Bool {
         ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
     }
     
     var body: some View {
+        fullDetailBody
+    }
+
+    private var fullDetailBody: some View {
         GeometryReader { proxy in
             let topInset = proxy.safeAreaInsets.top
             ZStack(alignment: .top) {
                 backgroundLayer
                 contentLayer
-                    .disabled(isRebootWaitActive)
-                    .padding(.top, viewModel.currentError == nil ? 0 : topInset + 72)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.8, blendDuration: 0.2), value: viewModel.currentError)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                    .background(detailContainerBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: detailCardCornerRadius, style: .continuous))
+                    .disabled(isRebootWaitActive || requiresProductSetup)
                 bannerOverlay(topInset: topInset)
+                if requiresProductSetup {
+                    setupLockOverlay
+                }
             }
-            .presentationDetents([.large])
-            .presentationDragIndicator(.hidden)
-            .presentationBackground(.clear)
-            .navigationBarHidden(true)
+            .modifier(DeviceDetailPresentationModifier(isRunningInPreview: isRunningInPreview))
             .onAppear {
                 guard !isRunningInPreview else { return }
                 viewModel.setActiveDevice(activeDevice)
                 Task {
                     await viewModel.prefetchDeviceDetailData(for: activeDevice)
+                }
+                if requiresProductSetup {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        if !showProductSetup {
+                            showProductSetup = true
+                        }
+                    }
                 }
             }
             .onChange(of: activeDevice.id) { _, _ in
@@ -159,6 +196,11 @@ struct DeviceDetailView: View {
                     rebootWaitOverlay
                 }
             }
+            .overlay {
+                if showProductSetup {
+                    productSetupOverlay
+                }
+            }
             .onChange(of: dismissColorPicker) { _, newValue in
                 if newValue {
                     dismissColorPicker = false
@@ -172,6 +214,11 @@ struct DeviceDetailView: View {
             .onChange(of: advancedUIEnabled) { _, newValue in
                 if !newValue {
                     viewModel.resetManualSegmentationForAllDevices()
+                }
+            }
+            .onChange(of: activeDevice.setupState) { _, newValue in
+                if newValue == .pendingSelection && !showProductSetup {
+                    showProductSetup = true
                 }
             }
             .alert("Reboot Device?", isPresented: $showRebootConfirm) {
@@ -256,10 +303,8 @@ struct DeviceDetailView: View {
     }
     
     private var backgroundLayer: some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .overlay(Color.black.opacity(0.16))
-            .ignoresSafeArea()
+        Color.clear
+        .ignoresSafeArea()
     }
     
     private var contentLayer: some View {
@@ -325,10 +370,10 @@ struct DeviceDetailView: View {
                         .tint(.white)
                         .scaleEffect(1.2)
                     Text("Rebooting Device")
-                        .font(.headline.weight(.semibold))
+                        .font(AppTypography.style(.headline, weight: .semibold))
                         .foregroundColor(.white)
                     Text("Reconnecting... \(max(0, rebootWaitRemainingSeconds))s")
-                        .font(.subheadline)
+                        .font(AppTypography.style(.subheadline))
                         .foregroundColor(.white.opacity(0.8))
                 }
                 .frame(maxWidth: maxCardWidth)
@@ -348,6 +393,86 @@ struct DeviceDetailView: View {
         .transition(.opacity)
         .animation(.easeInOut(duration: 0.2), value: isRebootWaitActive)
         .zIndex(3)
+    }
+
+    private var setupLockOverlay: some View {
+        GeometryReader { proxy in
+            let maxCardWidth = min(proxy.size.width - 56, 420)
+            ZStack {
+                Rectangle()
+                    .fill(Color.black.opacity(0.10))
+                    .background(.ultraThinMaterial)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        showProductSetup = true
+                    }
+
+                VStack(spacing: 12) {
+                    Text("Setup Required")
+                        .font(AppTypography.style(.headline, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text("Complete setup to unlock device controls.")
+                        .font(AppTypography.style(.subheadline))
+                        .foregroundColor(.white.opacity(0.82))
+                    AppGlassPillButton(
+                        title: "Continue Setup",
+                        isSelected: true,
+                        iconName: "arrow.right",
+                        size: .regular,
+                        useControlGlassRecipe: true
+                    ) {
+                        showProductSetup = true
+                    }
+                }
+                .frame(maxWidth: maxCardWidth)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.black.opacity(0.24))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.25), lineWidth: 1)
+                        )
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.2), value: requiresProductSetup)
+        .zIndex(2)
+    }
+
+    @ViewBuilder
+    private var productSetupOverlay: some View {
+        GeometryReader { proxy in
+            let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
+            ZStack(alignment: .top) {
+                Rectangle()
+                    .fill(Color.black.opacity(0.08))
+                    .background(.ultraThinMaterial)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(!requiresProductSetup)
+                    .onTapGesture {
+                        if !requiresProductSetup {
+                            showProductSetup = false
+                        }
+                    }
+
+                ProductSetupFlowView(
+                    device: activeDevice,
+                    onClose: { self.showProductSetup = false },
+                    allowsManualClose: !requiresProductSetup
+                )
+                .environmentObject(viewModel)
+                .frame(maxHeight: maxPopupHeight, alignment: .top)
+                .padding(.horizontal, 16)
+                .padding(.top, 26)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .transition(.identity)
+        .zIndex(4)
     }
     
     private func errorAction(for error: DeviceControlViewModel.WLEDError) -> (() -> Void)? {
@@ -372,26 +497,25 @@ struct DeviceDetailView: View {
             .disabled(isToggling || isRebootWaitActive)
             .accessibilityLabel("Power")
             .accessibilityHint(currentPowerState ? "Turns the device off." : "Turns the device on.")
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(activeDevice.name)
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .font(AppTypography.style(.title3, weight: .semibold))
                     .foregroundColor(.white)
-                
+
                 HStack(spacing: 8) {
                     statusDot
                     Text(viewModel.isDeviceOnline(activeDevice) || isToggling ? "Online" : "Offline")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
-                    
-                    // Active run status chip
+
                     if let activeRun = viewModel.activeRunStatus[activeDevice.id] {
                         activeRunStatusChip(activeRun)
                     }
 
                     if let activePresetLabel {
                         Text(activePresetLabel)
-                            .font(.caption2.weight(.semibold))
+                            .font(AppTypography.style(.caption2, weight: .semibold))
                             .foregroundColor(.white.opacity(0.7))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -400,17 +524,32 @@ struct DeviceDetailView: View {
                                     .fill(Color.white.opacity(0.12))
                             )
                     }
+
+                    if requiresProductSetup {
+                        Text("Setup Required")
+                            .font(AppTypography.style(.caption2, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.white.opacity(0.16))
+                            )
+                    }
                 }
             }
-            
+
             Spacer()
-            
+
             Menu {
                 Button(action: startRename) {
                     Label("Rename Device", systemImage: "pencil")
                 }
                 Button(action: { showSettings.toggle() }) {
                     Label("Settings", systemImage: "gearshape")
+                }
+                Button(action: { showProductSetup = true }) {
+                    Label("Aesdetic Profile", systemImage: "sparkles")
                 }
                 Button(action: { advancedUIEnabled.toggle() }) {
                     Label(
@@ -433,10 +572,63 @@ struct DeviceDetailView: View {
                 .disabled(isRebootWaitActive)
             } label: {
                 Image(systemName: "ellipsis.circle")
-                    .font(.title2.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.9))
+                    .font(AppTypography.style(.title2, weight: .semibold))
+                    .foregroundColor(.white)
             }
         }
+    }
+
+    @ViewBuilder
+    private var detailContainerBackground: some View {
+        switch backgroundStyle {
+        case .frosted:
+            detailFrostedBackground
+        case .liquidGlass:
+            detailLiquidGlassBackground
+        }
+    }
+
+    @ViewBuilder
+    private var detailLiquidGlassBackground: some View {
+        Color.clear
+            .appLiquidGlass(role: .highContrast, cornerRadius: detailCardCornerRadius)
+    }
+
+    private var detailFrostedBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: detailCardCornerRadius, style: .continuous)
+
+        return shape
+            .fill(.ultraThinMaterial.opacity(0.62))
+            .overlay(
+                shape.fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.62, green: 0.90, blue: 1.0).opacity(0.12),
+                            Color(red: 0.18, green: 0.82, blue: 1.0).opacity(0.28)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+            )
+            .overlay(
+                Circle()
+                    .fill(Color.white.opacity(0.25))
+                    .blur(radius: 50)
+                    .offset(x: -90, y: -10)
+                    .mask(shape)
+            )
+            .overlay(
+                shape.stroke(Color.white.opacity(0.20), lineWidth: 0.9)
+            )
+            .overlay(
+                LinearGradient(
+                    colors: [Color.white.opacity(0.28), .clear],
+                    startPoint: .topLeading,
+                    endPoint: .center
+                )
+                .clipShape(shape)
+            )
     }
     
     private var statusDot: some View {
@@ -493,20 +685,20 @@ struct DeviceDetailView: View {
                     Text(statusLabel)
                         .opacity(0)
                     Text("CANCEL")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTypography.style(.caption2, weight: .semibold))
                         .foregroundColor(.white.opacity(0.9))
                         .transition(.opacity)
                 }
             } else {
                 HStack(spacing: 6) {
                     Text(statusLabel)
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(.white.opacity(0.85))
 
                     if run.isCancellable {
                         Button(action: armCancel) {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.caption2)
+                                .font(AppTypography.style(.caption2))
                                 .foregroundColor(.white.opacity(0.7))
                         }
                         .buttonStyle(.plain)
@@ -535,7 +727,7 @@ struct DeviceDetailView: View {
     private var powerButtonContent: some View {
         ZStack {
             Image(systemName: "power")
-                .font(.title3)
+                .font(AppTypography.style(.title3))
                 .foregroundColor(currentPowerState ? .black : .white)
                 .opacity(isToggling ? 0.7 : 1.0)
             
@@ -580,11 +772,11 @@ struct DeviceDetailView: View {
                     }) {
                         VStack(spacing: 6) {
                             Image(systemName: tabItem.icon)
-                                .font(.title3)
+                                .font(AppTypography.style(.title3))
                                 .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(0.4))
                             
                             Text(tabItem.title)
-                                .font(.footnote.weight(.medium))
+                                .font(AppTypography.style(.footnote, weight: .medium))
                                 .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(0.4))
                         }
                         .frame(maxWidth: .infinity)
@@ -661,8 +853,8 @@ struct DeviceDetailView: View {
         VStack(spacing: 8) {
             HStack {
                 Text("Segment")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(.white.opacity(0.7))
                 Spacer()
             }
             
@@ -744,11 +936,11 @@ struct DeviceDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Shortcuts")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white.opacity(0.7))
                 if !shortcutAutomations.isEmpty {
                     Text("\(shortcutAutomations.count)")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.5))
                 }
                 Spacer()
@@ -763,16 +955,16 @@ struct DeviceDetailView: View {
                     }
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .font(.title3.weight(.semibold))
-                        .foregroundColor(.white.opacity(0.9))
+                        .font(AppTypography.style(.title3, weight: .semibold))
+                        .foregroundColor(.white)
                 }
                 .accessibilityLabel("Add shortcut")
             }
             
             if shortcutAutomations.isEmpty {
                 Text("Pin an automation with the heart icon to surface it here for quick toggles.")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.6))
+                    .font(AppTypography.style(.footnote))
+                    .foregroundColor(.white.opacity(0.7))
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
@@ -796,14 +988,14 @@ struct DeviceDetailView: View {
     private var automationsHeader: some View {
         HStack(alignment: .center) {
             Text("Automations")
-                .font(.callout.weight(.semibold))
-                .foregroundColor(.white.opacity(0.8))
+                .font(AppTypography.style(.callout, weight: .semibold))
+                .foregroundColor(.white)
             Spacer()
             Button {
                 startAutomationCreation()
             } label: {
                 Image(systemName: "plus.circle.fill")
-                    .font(.title3.weight(.semibold))
+                    .font(AppTypography.style(.title3, weight: .semibold))
                     .foregroundStyle(Color.white, Color.white.opacity(0.6))
             }
             .buttonStyle(.plain)
@@ -815,13 +1007,13 @@ struct DeviceDetailView: View {
     private var automationEmptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "clock")
-                .font(.title2.weight(.light))
-                .foregroundColor(.white.opacity(0.6))
+                .font(AppTypography.style(.title2, weight: .light))
+                .foregroundColor(.white.opacity(0.7))
             Text("No automations for this device yet.")
-                .font(.headline)
+                .font(AppTypography.style(.headline))
                 .foregroundColor(.white)
             Text("Create a shortcut to wake up with sunrise colors or wind down at night.")
-                .font(.footnote)
+                .font(AppTypography.style(.footnote))
                 .foregroundColor(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
         }
@@ -1036,18 +1228,18 @@ struct DeviceDetailView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Sync Targets")
-                    .font(.callout.weight(.semibold))
+                    .font(AppTypography.style(.callout, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
                 Text(syncStatusLine)
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.65))
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(.white.opacity(0.7))
             }
 
             if syncTargetDevices.isEmpty {
                 Text("No other devices available. Add more devices to sync.")
-                    .font(.footnote)
-                    .foregroundColor(.white.opacity(0.65))
+                    .font(AppTypography.style(.footnote))
+                    .foregroundColor(.white.opacity(0.7))
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 124), spacing: 10)], spacing: 10) {
                     ForEach(syncTargetDevices) { target in
@@ -1061,7 +1253,7 @@ struct DeviceDetailView: View {
                                         .fill(target.isOnline ? Color.green : Color.orange)
                                         .frame(width: 6, height: 6)
                                     Text(target.name)
-                                        .font(.caption.weight(.semibold))
+                                        .font(AppTypography.style(.caption, weight: .semibold))
                                         .foregroundColor(isSelected ? .black : .white)
                                         .lineLimit(1)
                                 }
@@ -1073,7 +1265,7 @@ struct DeviceDetailView: View {
                                 }
 
                                 Text("Seg \(viewModel.getSegmentCount(for: target))")
-                                    .font(.caption2)
+                                    .font(AppTypography.style(.caption2))
                                     .foregroundColor(isSelected ? .black.opacity(0.7) : .white.opacity(0.6))
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1098,9 +1290,9 @@ struct DeviceDetailView: View {
                     Button {
                         Task { await viewModel.copyNowFromSource(activeDevice) }
                     } label: {
-                        Label("Copy Now", systemImage: "doc.on.doc")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.white)
+                            Label("Copy Now", systemImage: "doc.on.doc")
+                                .font(AppTypography.style(.caption, weight: .semibold))
+                                .foregroundColor(.white)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(
@@ -1117,7 +1309,7 @@ struct DeviceDetailView: View {
                     viewModel.clearSyncTargets(sourceId: activeDevice.id)
                 } label: {
                     Label("Stop Sync", systemImage: "xmark.circle")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
@@ -1127,8 +1319,8 @@ struct DeviceDetailView: View {
 
             if let summary = viewModel.syncDispatchMessage(for: activeDevice.id), syncTargetCount > 0 {
                 Text(summary)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.62))
+                    .font(AppTypography.style(.caption2))
+                    .foregroundColor(.white.opacity(0.7))
             }
 
             if advancedUIEnabled {
@@ -1146,7 +1338,7 @@ struct DeviceDetailView: View {
     @ViewBuilder
     private func capabilityChip(_ title: String, enabled: Bool) -> some View {
         Text(title)
-            .font(.caption2.weight(.semibold))
+            .font(AppTypography.style(.caption2, weight: .semibold))
             .foregroundColor(enabled ? .white : .white.opacity(0.35))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
@@ -1159,8 +1351,8 @@ struct DeviceDetailView: View {
     private var nativeWLEDSyncSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Native WLED Sync")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(.white.opacity(0.8))
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .foregroundColor(.white)
 
             HStack {
                 Text("Send UDP Sync")
@@ -1196,8 +1388,8 @@ struct DeviceDetailView: View {
                 }
             } label: {
                 Label("Open Full Sync Settings", systemImage: "arrow.up.right.square")
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(.white.opacity(0.86))
+                    .font(AppTypography.style(.caption, weight: .medium))
+                    .foregroundColor(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
                     .background(
@@ -1332,7 +1524,7 @@ struct DeviceDetailView: View {
                     .foregroundColor(.white)
                 Spacer()
                 Text("\(Int(round(Double(activeDevice.brightness)/255.0*100)))%")
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(.white.opacity(0.7))
             }
             Slider(value: Binding(
                 get: { Double(activeDevice.brightness) },
@@ -1376,7 +1568,7 @@ struct DeviceDetailView: View {
                     .foregroundColor(.white)
                 Spacer()
                 Text("\(Int(round(Double(activeDevice.brightness)/255.0*100)))%")
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(.white.opacity(0.7))
             }
             Slider(value: Binding(
                 get: { Double(activeDevice.brightness) },
@@ -1393,6 +1585,7 @@ struct DeviceDetailView: View {
     
     private var gradientAEditor: some View {
         UnifiedColorPane(device: activeDevice, dismissColorPicker: $dismissColorPicker, segmentId: effectiveSegmentId)
+            .environmentObject(viewModel)
     }
     
     private var effectsSection: some View {
@@ -1429,6 +1622,25 @@ struct DeviceDetailView: View {
         .environmentObject(viewModel)
     }
     
+}
+
+private struct DeviceDetailPresentationModifier: ViewModifier {
+    let isRunningInPreview: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isRunningInPreview {
+            content
+                .navigationBarHidden(true)
+        } else {
+            content
+                .presentationDetents([.fraction(0.86)])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(40)
+                .presentationBackground(.clear)
+                .navigationBarHidden(true)
+        }
+    }
 }
 
 @MainActor
@@ -1498,9 +1710,18 @@ struct DeviceDetailView_Previews: PreviewProvider {
     static var previews: some View {
         DeviceDetailView(
             device: previewDevice,
-            viewModel: DeviceControlViewModel.shared
+            viewModel: previewViewModel,
+            initialTab: "Presets"
         )
         .preferredColorScheme(.dark)
+    }
+
+    @MainActor
+    private static var previewViewModel: DeviceControlViewModel {
+        let viewModel = DeviceControlViewModel.shared
+        viewModel.devices = [previewDevice]
+        viewModel.dismissError()
+        return viewModel
     }
 
     private static var previewDevice: WLEDDevice {
@@ -1510,9 +1731,33 @@ struct DeviceDetailView_Previews: PreviewProvider {
             ipAddress: "192.168.1.120",
             isOnline: true,
             brightness: 180,
-            currentColor: .blue,
+            currentColor: Color(red: 1.0, green: 0.62, blue: 0.12),
             location: .livingRoom,
-            state: nil
+            state: WLEDState(
+                brightness: 180,
+                isOn: true,
+                segments: [
+                    Segment(
+                        id: 0,
+                        start: 0,
+                        stop: 60,
+                        len: 60,
+                        on: true,
+                        bri: 180,
+                        colors: [[255, 160, 0], [255, 60, 0], [255, 20, 0]],
+                        cct: 128,
+                        fx: 0,
+                        sx: 128,
+                        ix: 128,
+                        pal: 0,
+                        sel: true
+                    )
+                ],
+                transitionDeciseconds: 7,
+                presetId: nil,
+                playlistId: nil,
+                mainSegment: 0
+            )
         )
     }
 }
@@ -1544,24 +1789,24 @@ private struct ShortcutAutomationChip: View {
                     HStack(spacing: 6) {
                         if let icon = automation.metadata.iconName {
                             Image(systemName: icon)
-                                .font(.caption.weight(.semibold))
+                                .font(AppTypography.style(.caption, weight: .semibold))
                                 .foregroundColor(automation.enabled ? .black : .white)
                         }
                         Text(automation.name)
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(titleColor)
                             .lineLimit(1)
                     }
 
                     if let subtitle {
                         Text(subtitle)
-                            .font(.caption2)
+                            .font(AppTypography.style(.caption2))
                             .foregroundColor(textColor)
                             .lineLimit(1)
                     }
 
                     Text(automation.trigger.displayName)
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(textColor)
                         .lineLimit(1)
                 }
@@ -1595,7 +1840,7 @@ private struct ShortcutAutomationChip: View {
 
     private var nextBadge: some View {
         Text("Next")
-            .font(.caption2.weight(.semibold))
+            .font(AppTypography.style(.caption2, weight: .semibold))
             .foregroundColor(.white.opacity(0.96))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

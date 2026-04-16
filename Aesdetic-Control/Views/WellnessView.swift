@@ -146,16 +146,16 @@ struct WellnessView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(dayTitle)
-                        .font(.system(size: 40, weight: .bold))
+                        .font(AppTypography.display(size: 40, weight: .bold, relativeTo: .largeTitle))
                         .foregroundColor(WellnessTheme.textPrimary)
                     Text(dateSubtitle)
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(WellnessTheme.textSecondary)
                 }
                 Spacer()
                 Button(action: { isDatePickerPresented = true }) {
                     Image(systemName: "calendar")
-                        .font(.title3.weight(.semibold))
+                        .font(AppTypography.style(.title3, weight: .semibold))
                         .foregroundColor(WellnessTheme.textPrimary)
                 }
                 .buttonStyle(.plain)
@@ -176,7 +176,7 @@ struct WellnessView: View {
                                     selectedDate = day
                                 }) {
                                     Text("\(dayNumber)")
-                                        .font(.footnote.weight(.semibold))
+                                        .font(AppTypography.style(.footnote, weight: .semibold))
                                         .foregroundColor(isSelected(day) ? WellnessTheme.textPrimary : WellnessTheme.textSecondary)
                                         .frame(width: 30, height: 24)
                                         .padding(.vertical, 6)
@@ -196,7 +196,7 @@ struct WellnessView: View {
                                     }
                                 }) {
                                     Image(systemName: "chart.bar")
-                                        .font(.caption.weight(.semibold))
+                                        .font(AppTypography.style(.caption, weight: .semibold))
                                         .foregroundColor(WellnessTheme.textSecondary)
                                         .frame(width: 28, height: 28)
                                         .background(WellnessTheme.surfaceStrong)
@@ -212,7 +212,7 @@ struct WellnessView: View {
                                     }
                                 }) {
                                     Image(systemName: "calendar")
-                                        .font(.caption.weight(.semibold))
+                                        .font(AppTypography.style(.caption, weight: .semibold))
                                         .foregroundColor(WellnessTheme.textSecondary)
                                         .frame(width: 28, height: 28)
                                         .background(WellnessTheme.surfaceStrong)
@@ -245,12 +245,12 @@ struct WellnessView: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sleep time")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 HStack {
                     Button(action: { isSleepTimePickerPresented = true }) {
                         Text(entry.sleepTime.map { Self.timeFormatter.string(from: $0) } ?? "Not set")
-                            .font(.footnote.weight(.semibold))
+                            .font(AppTypography.style(.footnote, weight: .semibold))
                             .foregroundColor(WellnessTheme.textPrimary)
                     }
                     .buttonStyle(.plain)
@@ -261,12 +261,12 @@ struct WellnessView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Wake time")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 HStack {
                     Button(action: { isWakeTimePickerPresented = true }) {
                         Text(entry.wakeTime.map { Self.timeFormatter.string(from: $0) } ?? "Not set")
-                            .font(.footnote.weight(.semibold))
+                            .font(AppTypography.style(.footnote, weight: .semibold))
                             .foregroundColor(WellnessTheme.textPrimary)
                     }
                     .buttonStyle(.plain)
@@ -275,7 +275,7 @@ struct WellnessView: View {
                     Button("Use Health") {
                         Task { await hydrateWakeTime(force: true) }
                     }
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(WellnessTheme.textPrimary)
                     .overlay(alignment: .bottom) {
                         Rectangle()
@@ -287,14 +287,14 @@ struct WellnessView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sleep quality")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 RatingDots(rating: $entry.sleepQuality, maxRating: 10, isLocked: entry.isLocked)
             }
 
             HStack {
                 Text("Woke on time")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 Spacer()
                 Button(action: { entry.wokeOnTime.toggle() }) {
@@ -306,7 +306,7 @@ struct WellnessView: View {
 
             HStack {
                 Text("Sunrise lamp used")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 Spacer()
                 CheckDot(isOn: entry.sunriseLampUsed)
@@ -322,7 +322,7 @@ struct WellnessView: View {
             WellnessLineTextField(text: $entry.smallestNextStepText, placeholder: "Smallest next step", isLocked: entry.isLocked)
 
             Text("Brain dump")
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(WellnessTheme.textSecondary)
 
             WellnessTextEditor(
@@ -336,7 +336,7 @@ struct WellnessView: View {
     private var prioritiesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Most important task")
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(WellnessTheme.textSecondary)
             TaskRow(
                 index: 1,
@@ -348,7 +348,7 @@ struct WellnessView: View {
             )
 
             Text("Secondary tasks")
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(WellnessTheme.textSecondary)
             TaskRow(
                 index: 2,
@@ -373,14 +373,14 @@ struct WellnessView: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Productivity")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 RatingDots(rating: $entry.productivityRating, maxRating: 10, isLocked: entry.isLocked)
             }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("How did your day go?")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 RatingDots(rating: $entry.dayMoodRating, maxRating: 10, isLocked: entry.isLocked)
             }
@@ -512,18 +512,18 @@ struct WellnessView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.headline.weight(.semibold))
+                            .font(AppTypography.style(.headline, weight: .semibold))
                             .foregroundColor(WellnessTheme.textPrimary)
 
                         Text(subtitle)
-                            .font(.footnote)
+                            .font(AppTypography.style(.footnote))
                             .foregroundColor(subtitleColor)
                             .lineSpacing(1.5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(WellnessTheme.textSecondary)
                         .padding(.top, 3)
                 }
@@ -589,12 +589,12 @@ struct WellnessView: View {
 
         return VStack(alignment: .leading, spacing: 16) {
             Text(range)
-                .font(.footnote.weight(.semibold))
+                .font(AppTypography.style(.footnote, weight: .semibold))
                 .foregroundColor(WellnessTheme.textSecondary)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(title)
-                    .font(.headline.weight(.semibold))
+                    .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(WellnessTheme.textPrimary)
 
                 if let stats = overviewStats {
@@ -608,11 +608,11 @@ struct WellnessView: View {
                         Text("Woke on time \(stats.wokeOnTimeCount)")
                         Text("Sunrise used \(stats.sunriseUsedCount)")
                     }
-                    .font(.caption.weight(.medium))
+                    .font(AppTypography.style(.caption, weight: .medium))
                     .foregroundColor(WellnessTheme.textPrimary)
                 } else {
                     Text("Not enough data yet.")
-                        .font(.caption.weight(.medium))
+                        .font(AppTypography.style(.caption, weight: .medium))
                         .foregroundColor(WellnessTheme.textSecondary)
                 }
             }
@@ -620,7 +620,7 @@ struct WellnessView: View {
             Button("Back to daily") {
                 contentMode = .daily
             }
-            .font(.footnote.weight(.semibold))
+            .font(AppTypography.style(.footnote, weight: .semibold))
             .foregroundColor(WellnessTheme.textPrimary)
             .overlay(alignment: .bottom) {
                 Rectangle()
@@ -1209,7 +1209,7 @@ private struct CheckDot: View {
             )
             .overlay(
                 Image(systemName: "checkmark")
-                    .font(.caption2.weight(.bold))
+                    .font(AppTypography.style(.caption2, weight: .bold))
                     .foregroundColor(.white)
                     .opacity(isOn ? 1 : 0)
             )
@@ -1226,7 +1226,7 @@ private struct CapsulePicker<Option: Identifiable & Hashable & CustomStringConve
             ForEach(options) { option in
                 Button(action: { selection = option }) {
                     Text(option.description)
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(selection == option ? WellnessTheme.textPrimary : WellnessTheme.textSecondary)
                         .padding(.vertical, 4)
                         .overlay(alignment: .bottom) {
@@ -1253,7 +1253,7 @@ private struct WellnessTextEditor: View {
                 .fill(WellnessTheme.surface.opacity(0.55))
                 .frame(minHeight: 110)
             TextEditor(text: $text)
-                .font(.footnote.weight(.medium))
+                .font(AppTypography.style(.footnote, weight: .medium))
                 .foregroundColor(WellnessTheme.textPrimary)
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 10)
@@ -1261,7 +1261,7 @@ private struct WellnessTextEditor: View {
                 .disabled(isLocked)
             if text.isEmpty {
                 Text(placeholder)
-                    .font(.footnote.weight(.medium))
+                    .font(AppTypography.style(.footnote, weight: .medium))
                     .foregroundColor(WellnessTheme.textSecondary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 14)
@@ -1277,7 +1277,7 @@ private struct WellnessLineTextField: View {
 
     var body: some View {
         TextField(placeholder, text: $text)
-            .font(.footnote.weight(.medium))
+            .font(AppTypography.style(.footnote, weight: .medium))
             .foregroundColor(WellnessTheme.textPrimary)
             .padding(.vertical, 6)
             .overlay(alignment: .bottom) {
@@ -1300,12 +1300,12 @@ private struct TaskRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Text("\(index).")
-                .font(.footnote.weight(.semibold))
+                .font(AppTypography.style(.footnote, weight: .semibold))
                 .foregroundColor(WellnessTheme.textSecondary)
                 .frame(width: 20, alignment: .leading)
 
             TextField(isPrimary ? "Most important task" : "Secondary task", text: $text)
-                .font(.footnote.weight(isPrimary ? .semibold : .medium))
+                .font(AppTypography.style(.footnote, weight: isPrimary ? .semibold : .medium))
                 .foregroundColor(WellnessTheme.textPrimary)
                 .padding(.vertical, 6)
                 .overlay(alignment: .bottom) {
@@ -1335,12 +1335,12 @@ private struct PlanTaskRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Text("\(index).")
-                .font(.footnote.weight(.semibold))
+                .font(AppTypography.style(.footnote, weight: .semibold))
                 .foregroundColor(WellnessTheme.textSecondary)
                 .frame(width: 20, alignment: .leading)
 
             TextField("Tomorrow task", text: $text)
-                .font(.footnote.weight(.medium))
+                .font(AppTypography.style(.footnote, weight: .medium))
                 .foregroundColor(WellnessTheme.textPrimary)
                 .padding(.vertical, 6)
                 .overlay(alignment: .bottom) {
@@ -1372,7 +1372,7 @@ private struct DurationMenu: View {
                 bumpArrowVisibility()
             }) {
                 Image(systemName: "chevron.left")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
             }
             .buttonStyle(.plain)
@@ -1380,7 +1380,7 @@ private struct DurationMenu: View {
             .disabled(isLocked)
 
             Text(label(for: durationMinutes))
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(WellnessTheme.textPrimary)
                 .frame(width: 78, alignment: .center)
                 .contentShape(Rectangle())
@@ -1403,7 +1403,7 @@ private struct DurationMenu: View {
                 bumpArrowVisibility()
             }) {
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
             }
             .buttonStyle(.plain)
@@ -1468,7 +1468,7 @@ private struct WellnessDatePickerSheet: View {
                     selectedDate = tempDate
                     dismiss()
                 }
-                .font(.body.weight(.semibold))
+                .font(AppTypography.style(.body, weight: .semibold))
                 .foregroundColor(WellnessTheme.textPrimary)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 16)
@@ -1528,7 +1528,7 @@ private struct WellnessTimePickerSheet: View {
                     selectedTime = tempTime
                     dismiss()
                 }
-                .font(.body.weight(.semibold))
+                .font(AppTypography.style(.body, weight: .semibold))
                 .foregroundColor(WellnessTheme.textPrimary)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 16)
@@ -1605,10 +1605,10 @@ private struct HistoryRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(Self.dateFormatter.string(from: item.date))
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textPrimary)
                 Text(item.summary)
-                    .font(.caption.weight(.medium))
+                    .font(AppTypography.style(.caption, weight: .medium))
                     .foregroundColor(WellnessTheme.textSecondary)
                     .lineLimit(2)
             }

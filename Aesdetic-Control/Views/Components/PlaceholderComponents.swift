@@ -15,7 +15,7 @@ struct DailyGreetingCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(greeting)
-                .font(.title3)
+                .font(AppTypography.style(.title3))
                 .fontWeight(.medium)
                 .multilineTextAlignment(.leading)
         }
@@ -42,11 +42,11 @@ struct DeviceOverviewCard: View {
             }
             
             Text(device.name)
-                .font(.headline)
+                .font(AppTypography.style(.headline))
                 .lineLimit(1)
             
             Text("\(device.brightness)% brightness")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.secondary)
         }
         .padding()
@@ -71,9 +71,9 @@ struct AutomationOverviewCard: View {
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(automation.name)
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                 Text(triggerDescription(for: automation))
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.secondary)
             }
             
@@ -97,17 +97,17 @@ struct DeviceControlCard: View {
     var body: some View {
         HStack {
             Image(systemName: device.productType.systemImage)
-                .font(.title2)
+                .font(AppTypography.style(.title2))
                 .foregroundColor(device.isOnline ? device.currentColor : .gray)
                 .frame(width: 40)
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.name)
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.primary)
                 
                 Text(device.isOnline ? "Online" : "Offline")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(device.isOnline ? .green : .red)
             }
             
@@ -115,7 +115,7 @@ struct DeviceControlCard: View {
             
             VStack(alignment: .trailing, spacing: 4) {
                 Text("\(device.brightness)%")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .fontWeight(.medium)
                 
                 Rectangle()
@@ -137,7 +137,7 @@ struct DiscoveryStatusView: View {
             ProgressView()
                 .scaleEffect(0.8)
             Text("Scanning for devices...")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.secondary)
         }
         .padding()
@@ -150,15 +150,15 @@ struct EmptyDevicesView: View {
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "lightbulb.slash")
-                .font(.largeTitle)
+                .font(AppTypography.style(.largeTitle))
                 .foregroundColor(.gray)
             
             Text("No devices found")
-                .font(.title3)
+                .font(AppTypography.style(.title3))
                 .fontWeight(.medium)
             
             Text("Make sure your WLED devices are connected to the same WiFi network.")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -184,18 +184,18 @@ struct QuickPresetCard: View {
         }) {
             VStack(spacing: 10) {
                 Image(systemName: template.iconName)
-                    .font(.title2.weight(.medium))
+                    .font(AppTypography.style(.title2, weight: .medium))
                     .foregroundColor(theme.textPrimary)
                 
                 VStack(spacing: 2) {
                     Text(template.name)
-                        .font(.footnote.weight(.semibold))
+                        .font(AppTypography.style(.footnote, weight: .semibold))
                         .foregroundColor(theme.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     
                     Text(template.subtitle)
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(theme.textSecondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
@@ -227,7 +227,7 @@ struct AutomationCard: View {
         HStack(spacing: 16) {
             // Icon section
             Image(systemName: "clock")
-                .font(.title3.weight(.medium))
+                .font(AppTypography.style(.title3, weight: .medium))
                 .foregroundColor(automation.enabled ? .white : .white.opacity(0.6))
                 .frame(width: 32, height: 32)
                 .background(
@@ -238,12 +238,12 @@ struct AutomationCard: View {
             // Content section
             VStack(alignment: .leading, spacing: 4) {
                 Text(automation.name)
-                    .font(.headline.weight(.semibold))
+                    .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
                 Text(triggerDescription(for: automation))
-                    .font(.caption.weight(.medium))
+                    .font(AppTypography.style(.caption, weight: .medium))
                     .foregroundColor(.white.opacity(0.7))
             }
             
@@ -301,16 +301,16 @@ struct EmptyAutomationsView: View {
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: "clock")
-                .font(.largeTitle.weight(.light))
+                .font(AppTypography.style(.largeTitle, weight: .light))
                 .foregroundColor(theme.textTertiary)
             
             VStack(spacing: 8) {
                 Text("No automations yet")
-                    .font(.title3.weight(.semibold))
+                    .font(AppTypography.style(.title3, weight: .semibold))
                     .foregroundColor(theme.textPrimary)
                 
                 Text("Create your first automation to schedule lighting routines and make your home smarter.")
-                    .font(.footnote.weight(.medium))
+                    .font(AppTypography.style(.footnote, weight: .medium))
                     .foregroundColor(theme.textSecondary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
@@ -335,19 +335,19 @@ struct TodaysFocusCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: "target")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(.white)
                     .frame(width: 24, height: 24)
                 
                 Text("Focus")
-                    .font(.body.weight(.semibold))
+                    .font(AppTypography.style(.body, weight: .semibold))
                     .foregroundColor(.white)
                 
                 Spacer()
             }
             
             Text(focus)
-                .font(.footnote.weight(.medium))
+                .font(AppTypography.style(.footnote, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
                 .lineLimit(3)
                 .multilineTextAlignment(.leading)
@@ -373,19 +373,19 @@ struct MorningCheckinCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Image(systemName: "sun.max")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(.white)
                     .frame(width: 24, height: 24)
                 
                 Text("Check-in")
-                    .font(.body.weight(.semibold))
+                    .font(AppTypography.style(.body, weight: .semibold))
                     .foregroundColor(.white)
                 
                 Spacer()
             }
             
             Text("How are you feeling this morning?")
-                .font(.footnote.weight(.medium))
+                .font(AppTypography.style(.footnote, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
             
             HStack(spacing: 12) {
@@ -397,7 +397,7 @@ struct MorningCheckinCard: View {
                         // Mood selection functionality not yet implemented
                     }) {
                         Text(mood.emoji)
-                            .font(.title)
+                            .font(AppTypography.style(.title))
                             .frame(width: 44, height: 44)
                             .background(
                                 Circle()
@@ -434,12 +434,12 @@ struct HabitTrackerCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Image(systemName: "checkmark.circle")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(.white)
                     .frame(width: 24, height: 24)
                 
                 Text("Habits")
-                    .font(.body.weight(.semibold))
+                    .font(AppTypography.style(.body, weight: .semibold))
                     .foregroundColor(.white)
                 
                 Spacer()
@@ -447,7 +447,7 @@ struct HabitTrackerCard: View {
                 // Progress indicator
                 let completedCount = habits.filter { getCompletionState(for: $0) }.count
                 Text("\(completedCount)/\(habits.count)")
-                    .font(.caption.weight(.medium))
+                    .font(AppTypography.style(.caption, weight: .medium))
                     .foregroundColor(.white.opacity(0.7))
             }
             
@@ -461,14 +461,14 @@ struct HabitTrackerCard: View {
                             // Habit completion functionality not yet implemented
                         }) {
                             Image(systemName: getCompletionState(for: habit) ? "checkmark.circle.fill" : "circle")
-                                .font(.title3.weight(.medium))
+                                .font(AppTypography.style(.title3, weight: .medium))
                                 .foregroundColor(getCompletionState(for: habit) ? .green : .white.opacity(0.5))
                                 .frame(width: 24, height: 24)
                         }
                         .buttonStyle(PlainButtonStyle())
                         
                         Text(habit.name)
-                            .font(.footnote.weight(.medium))
+                            .font(AppTypography.style(.footnote, weight: .medium))
                             .foregroundColor(.white.opacity(getCompletionState(for: habit) ? 0.7 : 0.9))
                             .strikethrough(getCompletionState(for: habit))
                         
@@ -506,12 +506,12 @@ struct DailyJournalCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Image(systemName: "book")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(.white)
                     .frame(width: 24, height: 24)
                 
                 Text("Journal")
-                    .font(.body.weight(.semibold))
+                    .font(AppTypography.style(.body, weight: .semibold))
                     .foregroundColor(.white)
                 
                 Spacer()
@@ -519,7 +519,7 @@ struct DailyJournalCard: View {
                 // Word count
                 let wordCount = journalText.split(separator: " ").count
                 Text("\(wordCount) words")
-                    .font(.caption.weight(.medium))
+                    .font(AppTypography.style(.caption, weight: .medium))
                     .foregroundColor(.white.opacity(0.7))
             }
             
@@ -536,7 +536,7 @@ struct DailyJournalCard: View {
                     .frame(minHeight: 100)
                 
                 TextEditor(text: $journalText)
-                    .font(.footnote.weight(.medium))
+                    .font(AppTypography.style(.footnote, weight: .medium))
                     .foregroundColor(.white.opacity(0.9))
                     .background(Color.clear)
                     .scrollContentBackground(.hidden)
@@ -548,7 +548,7 @@ struct DailyJournalCard: View {
                 
                 if journalText.isEmpty && !isEditing {
                     Text("How was your day? What are you grateful for?")
-                        .font(.footnote.weight(.medium))
+                        .font(AppTypography.style(.footnote, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 16)
@@ -559,7 +559,7 @@ struct DailyJournalCard: View {
 
             Button(action: { wellnessVM.upsertTodayJournal(content: journalText, mood: selectedMood) }) {
                 Text("Save Journal")
-                    .font(.body.weight(.semibold))
+                    .font(AppTypography.style(.body, weight: .semibold))
                     .foregroundColor(.black)
                     .padding(.vertical, 10)
                     .padding(.horizontal, 14)
@@ -593,19 +593,19 @@ struct EveningReflectionCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Image(systemName: "moon.stars")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(.white)
                     .frame(width: 24, height: 24)
                 
                 Text("Reflection")
-                    .font(.body.weight(.semibold))
+                    .font(AppTypography.style(.body, weight: .semibold))
                     .foregroundColor(.white)
                 
                 Spacer()
             }
             
             Text("What are you grateful for today?")
-                .font(.footnote.weight(.medium))
+                .font(AppTypography.style(.footnote, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
             
             ZStack(alignment: .topLeading) {
@@ -614,7 +614,7 @@ struct EveningReflectionCard: View {
                     .frame(minHeight: 80)
                 
                 TextEditor(text: $reflectionText)
-                    .font(.footnote.weight(.medium))
+                    .font(AppTypography.style(.footnote, weight: .medium))
                     .foregroundColor(.white.opacity(0.9))
                     .background(Color.clear)
                     .scrollContentBackground(.hidden)
@@ -626,7 +626,7 @@ struct EveningReflectionCard: View {
                 
                 if reflectionText.isEmpty && !isEditing {
                     Text("Three things I'm grateful for...")
-                        .font(.footnote.weight(.medium))
+                        .font(AppTypography.style(.footnote, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 16)
@@ -664,12 +664,12 @@ struct LightingWellnessTipsCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Image(systemName: "lightbulb")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(.white)
                     .frame(width: 24, height: 24)
                 
                 Text("Wellness Tip")
-                    .font(.body.weight(.semibold))
+                    .font(AppTypography.style(.body, weight: .semibold))
                     .foregroundColor(.white)
                 
                 Spacer()
@@ -680,7 +680,7 @@ struct LightingWellnessTipsCard: View {
                     }
                 }) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.footnote.weight(.medium))
+                        .font(AppTypography.style(.footnote, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 20, height: 20)
                 }
@@ -688,7 +688,7 @@ struct LightingWellnessTipsCard: View {
             }
             
             Text(tips[currentTipIndex])
-                .font(.footnote.weight(.medium))
+                .font(AppTypography.style(.footnote, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
                 .lineLimit(4)
                 .multilineTextAlignment(.leading)

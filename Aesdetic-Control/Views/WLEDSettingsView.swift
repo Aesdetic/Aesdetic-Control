@@ -4,7 +4,7 @@ fileprivate struct SettingsSectionHeader: View {
     let title: String
     var body: some View {
         Text(title)
-            .font(.headline)
+            .font(AppTypography.style(.headline))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 8)
     }
@@ -23,7 +23,7 @@ fileprivate struct LabeledSlider: View {
                 Text(title)
                 Spacer()
                 Text(String(format: format, value))
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.secondary)
             }
             Slider(value: $value, in: range, step: step)
@@ -128,7 +128,7 @@ fileprivate struct PowerToggleRow: View {
     var body: some View {
         HStack {
             Text("Power")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
             Spacer()
             Toggle("", isOn: $isOn)
@@ -242,7 +242,7 @@ struct WLEDSettingsView: View {
             // Device Name Section
             VStack(alignment: .leading, spacing: 8) {
                 Text("Device Name")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(.white.opacity(0.8))
                 
                 HStack(spacing: 12) {
@@ -250,7 +250,7 @@ struct WLEDSettingsView: View {
                         TextField("Device Name", text: $editingName)
                             .textFieldStyle(.plain)
                             .foregroundColor(.white)
-                            .font(.title3.weight(.semibold))
+                            .font(AppTypography.style(.title3, weight: .semibold))
                             .onSubmit {
                                 Task {
                                     await commitDeviceRename()
@@ -261,7 +261,7 @@ struct WLEDSettingsView: View {
                             }
                     } else {
                         Text(currentName)
-                            .font(.title3.weight(.semibold))
+                            .font(AppTypography.style(.title3, weight: .semibold))
                             .foregroundColor(.white)
                     }
                     
@@ -274,7 +274,7 @@ struct WLEDSettingsView: View {
                             }) {
                                 Image(systemName: "checkmark")
                                     .foregroundColor(.white)
-                                    .font(.subheadline.weight(.medium))
+                                    .font(AppTypography.style(.subheadline, weight: .medium))
                                     .frame(width: 32, height: 32)
                                     .background(Color.white.opacity(0.2))
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -288,7 +288,7 @@ struct WLEDSettingsView: View {
                             }) {
                                 Image(systemName: "xmark")
                                     .foregroundColor(.white.opacity(0.7))
-                                    .font(.subheadline.weight(.medium))
+                                    .font(AppTypography.style(.subheadline, weight: .medium))
                                     .frame(width: 32, height: 32)
                                     .background(Color.white.opacity(0.1))
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -302,7 +302,7 @@ struct WLEDSettingsView: View {
                         }) {
                             Image(systemName: "pencil")
                                 .foregroundColor(.white.opacity(0.7))
-                                .font(.subheadline.weight(.medium))
+                                .font(AppTypography.style(.subheadline, weight: .medium))
                         }
                     }
                 }
@@ -315,10 +315,10 @@ struct WLEDSettingsView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(.white)
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.style(.subheadline, weight: .medium))
                         Text("Refresh")
                             .foregroundColor(.white)
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.style(.subheadline, weight: .medium))
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -347,7 +347,7 @@ struct WLEDSettingsView: View {
                         viewModel.setTemperatureStopsUseCCT(value, for: device)
                     }
                 Text("Enabled: temperature-only stops send CCT per segment. Disabled: temperature maps to RGB.")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
             }
         }
@@ -371,7 +371,7 @@ struct WLEDSettingsView: View {
     private var syncSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Sync Interfaces")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
             UDPTogglesRow(udpSend: $udpSend, udpRecv: $udpRecv, device: device)
                 .environmentObject(viewModel)
@@ -423,7 +423,7 @@ struct WLEDSettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Realtime Updates")
-                    .font(.headline.weight(.semibold))
+                    .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
                 Toggle("", isOn: Binding(get: { viewModel.isRealTimeEnabled }, set: { v in
@@ -435,7 +435,7 @@ struct WLEDSettingsView: View {
             HStack(spacing: 12) {
                 Button(action: { Task { await viewModel.forceReconnection(device) } }) {
                     Text("Reconnect")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(.black)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
@@ -445,7 +445,7 @@ struct WLEDSettingsView: View {
                 .sensorySuccess(trigger: UUID())
                 Button(action: { Task { await WLEDAPIService.shared.clearCache() } }) {
                     Text("Clear Cache")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(.black)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
@@ -465,7 +465,7 @@ struct WLEDSettingsView: View {
     private var nightLightSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Night Light")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
             Toggle("Enabled", isOn: $nightLightOn)
                 .tint(.white)
@@ -492,7 +492,7 @@ struct WLEDSettingsView: View {
             )
             .sensorySelection(trigger: nightLightTargetBri)
             Button("Apply Night Light") { commitNightLight() }
-                .font(.subheadline.weight(.semibold))
+                .font(AppTypography.style(.subheadline, weight: .semibold))
                 .foregroundColor(.black)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
@@ -521,13 +521,13 @@ struct WLEDSettingsView: View {
     private var macroTriggersSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Macro Triggers (WLED)")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
             Text("0 disables. Set preset/playlist IDs for native WLED triggers.")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
             Text("Button fields map to the controller's physical button. Voice fields map to WLED Alexa hooks (not Siri). Night Light End runs when night light completes.")
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .foregroundColor(.white.opacity(0.62))
 
             IntStepperRow(title: "Button Press", value: $macroButtonPress, range: 0...250, onEnd: commitMacroBindings)
@@ -538,7 +538,7 @@ struct WLEDSettingsView: View {
             IntStepperRow(title: "Night Light End", value: $macroNightLight, range: 0...250, onEnd: commitMacroBindings)
 
             Button("Apply Macro Triggers") { commitMacroBindings() }
-                .font(.subheadline.weight(.semibold))
+                .font(AppTypography.style(.subheadline, weight: .semibold))
                 .foregroundColor(.black)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
@@ -571,7 +571,7 @@ struct WLEDSettingsView: View {
     private var actionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Device Actions")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
             Button(action: { openURL(URL(string: "http://\(device.ipAddress)/update")!) }) {
                 settingsButton("Firmware Update")
@@ -619,7 +619,7 @@ struct WLEDSettingsView: View {
 
     private func settingsButton(_ title: String) -> some View {
         Text(title)
-            .font(.headline.weight(.semibold))
+            .font(AppTypography.style(.headline, weight: .semibold))
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)

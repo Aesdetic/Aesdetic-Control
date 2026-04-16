@@ -151,7 +151,7 @@ struct PresetsListView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Color Presets", systemImage: "paintbrush.fill")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
             }
@@ -220,7 +220,7 @@ struct PresetsListView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Effect Presets", systemImage: "sparkles")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
             }
@@ -229,7 +229,7 @@ struct PresetsListView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Transitions")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                     Spacer()
                 }
@@ -270,7 +270,7 @@ struct PresetsListView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Animations")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                     Spacer()
                 }
@@ -342,7 +342,7 @@ struct PresetsListView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Automation Assets (Advanced)", systemImage: "folder")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
             }
@@ -406,7 +406,7 @@ struct PresetsListView: View {
                                     let stepIds = playlist.presets.filter { $0 > 0 }
                                     if !stepIds.isEmpty {
                                         Text("Step presets: \(stepIds.map(String.init).joined(separator: ", "))")
-                                            .font(.caption2)
+                                            .font(AppTypography.style(.caption2))
                                             .foregroundColor(.white.opacity(0.55))
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
@@ -446,17 +446,17 @@ struct PresetsListView: View {
                                 Image(systemName: "folder.fill")
                                     .foregroundColor(.white.opacity(0.85))
                                 Text(folder.automationName)
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(AppTypography.style(.subheadline, weight: .semibold))
                                     .foregroundColor(.white)
                                     .lineLimit(1)
                                 Spacer()
                                 if folder.playlistId != nil {
                                     Text("Playlist")
-                                        .font(.caption2)
+                                        .font(AppTypography.style(.caption2))
                                         .foregroundColor(.white.opacity(0.65))
                                 } else if folder.presetId != nil {
                                     Text("Preset")
-                                        .font(.caption2)
+                                        .font(AppTypography.style(.caption2))
                                         .foregroundColor(.white.opacity(0.65))
                                 }
                             }
@@ -479,16 +479,16 @@ struct PresetsListView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Device Presets & Playlists", systemImage: "list.bullet.rectangle")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
             }
 
             Text("Device preset and playlist controls are available in Advanced mode.")
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.75))
             Text("Enable Advanced mode to view, run, rename, and delete WLED preset/playlist records.")
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .foregroundColor(.white.opacity(0.55))
 
             Button {
@@ -499,7 +499,7 @@ struct PresetsListView: View {
                 }
             } label: {
                 Label("Enable Advanced Mode", systemImage: "slider.horizontal.3")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
             }
             .buttonStyle(PrimaryButtonStyle())
         }
@@ -509,13 +509,13 @@ struct PresetsListView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Device Presets", systemImage: "square.stack.3d.down.forward")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
                 Button("Refresh") {
                     Task { await viewModel.refreshPresets(for: device) }
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -538,10 +538,10 @@ struct PresetsListView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(preset.name)
-                                    .font(.subheadline.weight(.medium))
+                                    .font(AppTypography.style(.subheadline, weight: .medium))
                                     .foregroundColor(.white)
                                 Text("Preset \(preset.id)")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.white.opacity(0.6))
                             }
                             Spacer()
@@ -555,7 +555,7 @@ struct PresetsListView: View {
                                     )
                                 }
                             }
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
@@ -580,7 +580,7 @@ struct PresetsListView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Device Playlists", systemImage: "list.bullet.rectangle")
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
                 Button("New") {
@@ -588,7 +588,7 @@ struct PresetsListView: View {
                     playlistEditorDraft = PlaylistEditorDraft.defaultDraft
                     isPlaylistEditorPresented = true
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -599,7 +599,7 @@ struct PresetsListView: View {
                 Button("Stop") {
                     Task { _ = await viewModel.stopPlaylist(for: device) }
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -610,7 +610,7 @@ struct PresetsListView: View {
                 Button("Refresh") {
                     Task { await viewModel.refreshPlaylists(for: device) }
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -633,17 +633,17 @@ struct PresetsListView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(playlist.name)
-                                    .font(.subheadline.weight(.medium))
+                                    .font(AppTypography.style(.subheadline, weight: .medium))
                                     .foregroundColor(.white)
                                 Text("Steps: \(playlist.presets.count)")
-                                    .font(.caption)
+                                    .font(AppTypography.style(.caption))
                                     .foregroundColor(.white.opacity(0.6))
                                 Text(playlistSummary(playlist))
-                                    .font(.caption2)
+                                    .font(AppTypography.style(.caption2))
                                     .foregroundColor(.white.opacity(0.55))
                                 if viewModel.isPlaylistRenamePending(playlist.id, for: device) {
                                     Text("Rename pending sync")
-                                        .font(.caption2.weight(.semibold))
+                                        .font(AppTypography.style(.caption2, weight: .semibold))
                                         .foregroundColor(.yellow.opacity(0.9))
                                 }
                             }
@@ -661,7 +661,7 @@ struct PresetsListView: View {
                                     )
                                 }
                             }
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
@@ -675,7 +675,7 @@ struct PresetsListView: View {
                                 playlistEditorDraft = PlaylistEditorDraft(playlist: playlist)
                                 isPlaylistEditorPresented = true
                             }
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
@@ -689,7 +689,7 @@ struct PresetsListView: View {
                                     _ = await viewModel.duplicatePlaylist(playlist, for: device)
                                 }
                             }
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
@@ -701,7 +701,7 @@ struct PresetsListView: View {
                             Button("Delete") {
                                 Task { await viewModel.deletePlaylist(playlist, for: device) }
                             }
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
@@ -920,13 +920,13 @@ struct PresetsListView: View {
     private func emptyStateView(icon: String, message: String, hint: String) -> some View {
         VStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.title2)
+                .font(AppTypography.style(.title2))
                 .foregroundColor(.white.opacity(0.4))
             Text(message)
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.6))
             Text(hint)
-                .font(.caption2)
+                .font(AppTypography.style(.caption2))
                 .foregroundColor(.white.opacity(0.5))
         }
         .frame(maxWidth: .infinity)
@@ -975,7 +975,7 @@ struct ColorPresetRow: View {
             // Header row: Name + Edit icon
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
@@ -985,7 +985,7 @@ struct ColorPresetRow: View {
                     onDelete()
                 }) {
                     Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -997,7 +997,7 @@ struct ColorPresetRow: View {
                     onEdit()
                 }) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1024,9 +1024,9 @@ struct ColorPresetRow: View {
                 // Brightness indicator inside preview (bottom right)
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.system(size: 10))
+                        .font(AppTypography.text(size: 10, weight: .regular, relativeTo: .caption2))
                     Text(brightnessString)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(AppTypography.text(size: 11, weight: .medium, relativeTo: .caption2))
                 }
                 .foregroundColor(brightnessLabelColor)
                 .opacity(0.7)
@@ -1102,17 +1102,17 @@ struct TransitionPresetRow: View {
             // Header row aligning with color preset styling
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
                 Text(formattedDuration)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
 
                 if let status = statusBadgeText {
                     Text(status)
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTypography.style(.caption2, weight: .semibold))
                         .foregroundColor(.white.opacity(0.9))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
@@ -1128,7 +1128,7 @@ struct TransitionPresetRow: View {
                     onDelete()
                 }) {
                     Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1140,7 +1140,7 @@ struct TransitionPresetRow: View {
                     onEdit()
                 }) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1192,9 +1192,9 @@ struct TransitionPresetRow: View {
             
             HStack(spacing: 4) {
                 Image(systemName: "sun.max.fill")
-                    .font(.system(size: 10))
+                    .font(AppTypography.text(size: 10, weight: .regular, relativeTo: .caption2))
                 Text(brightnessString(for: brightness))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(AppTypography.text(size: 11, weight: .medium, relativeTo: .caption2))
             }
             .foregroundColor(brightnessLabelColor(for: gradient))
             .opacity(0.7)
@@ -1272,19 +1272,19 @@ struct DevicePresetRecordRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
 
                 Text("Preset \(preset.id)")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
 
                 Spacer()
 
                 Button(action: onDelete) {
                     Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1294,7 +1294,7 @@ struct DevicePresetRecordRow: View {
 
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1319,9 +1319,9 @@ struct DevicePresetRecordRow: View {
 
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.system(size: 10))
+                        .font(AppTypography.text(size: 10, weight: .regular, relativeTo: .caption2))
                     Text(brightnessString)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(AppTypography.text(size: 11, weight: .medium, relativeTo: .caption2))
                 }
                 .foregroundColor(brightnessLabelColor(for: previewGradient))
                 .opacity(0.7)
@@ -1396,23 +1396,23 @@ struct DeviceEffectRecordRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
 
                 Text("FX \(effectId ?? 0)")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
 
                 Text("Preset \(preset.id)")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.5))
 
                 Spacer()
 
                 Button(action: onDelete) {
                     Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1422,7 +1422,7 @@ struct DeviceEffectRecordRow: View {
 
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1447,9 +1447,9 @@ struct DeviceEffectRecordRow: View {
 
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.system(size: 10))
+                        .font(AppTypography.text(size: 10, weight: .regular, relativeTo: .caption2))
                     Text(brightnessString)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(AppTypography.text(size: 11, weight: .medium, relativeTo: .caption2))
                 }
                 .foregroundColor(brightnessLabelColor(for: previewGradient))
                 .opacity(0.7)
@@ -1518,23 +1518,23 @@ struct DevicePlaylistRecordRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(playlist.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
 
                 Text(TransitionDurationPicker.summaryString(seconds: preview.durationSec))
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
 
                 Text("Playlist \(playlist.id)")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.55))
 
                 Spacer()
 
                 Button(action: onDelete) {
                     Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1544,7 +1544,7 @@ struct DevicePlaylistRecordRow: View {
 
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1595,9 +1595,9 @@ struct DevicePlaylistRecordRow: View {
 
             HStack(spacing: 4) {
                 Image(systemName: "sun.max.fill")
-                    .font(.system(size: 10))
+                    .font(AppTypography.text(size: 10, weight: .regular, relativeTo: .caption2))
                 Text(brightnessString(for: brightness))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(AppTypography.text(size: 11, weight: .medium, relativeTo: .caption2))
             }
             .foregroundColor(brightnessLabelColor(for: gradient))
             .opacity(0.7)
@@ -1648,17 +1648,17 @@ struct EffectPresetRow: View {
             // Header row
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
                 Text("FX \(preset.effectId)")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
                 
                 if let palette = preset.paletteId {
                     Text("Pal \(palette)")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.5))
                 }
                 
@@ -1668,7 +1668,7 @@ struct EffectPresetRow: View {
                     onDelete()
                 }) {
                     Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1680,7 +1680,7 @@ struct EffectPresetRow: View {
                     onEdit()
                 }) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.1))
@@ -1704,9 +1704,9 @@ struct EffectPresetRow: View {
                 
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.system(size: 10))
+                        .font(AppTypography.text(size: 10, weight: .regular, relativeTo: .caption2))
                     Text(brightnessString)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(AppTypography.text(size: 11, weight: .medium, relativeTo: .caption2))
                 }
                 .foregroundColor(brightnessLabelColor)
                 .opacity(0.7)
@@ -1720,19 +1720,19 @@ struct EffectPresetRow: View {
             HStack(spacing: 12) {
                 if let speed = preset.speed {
                     Label("Speed \(speed)", systemImage: "gauge")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                 }
                 
                 if let intensity = preset.intensity {
                     Label("Intensity \(intensity)", systemImage: "wave.3.backward")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                 }
                 
                 if preset.brightness < 255 {
                     Label("\(Int(round(Double(preset.brightness) / 255.0 * 100.0)))%", systemImage: "sun.max")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                 }
                 
@@ -1953,12 +1953,12 @@ private struct PlaylistEditorSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Device: \(device.name)")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.secondary)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Playlist Name")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.secondary)
                         TextField("Playlist name", text: $draft.name)
                             .textFieldStyle(.roundedBorder)
@@ -1994,7 +1994,7 @@ private struct PlaylistEditorSheet: View {
 
                     HStack {
                         Text("Steps")
-                            .font(.headline)
+                            .font(AppTypography.style(.headline))
                         Spacer()
                         Button {
                             let seed = draft.steps.last ?? PlaylistStepDraft(presetId: 1, durationDs: 100, transitionDs: 7)
@@ -2007,7 +2007,7 @@ private struct PlaylistEditorSheet: View {
                             )
                         } label: {
                             Label("Add Step", systemImage: "plus")
-                                .font(.caption.weight(.semibold))
+                                .font(AppTypography.style(.caption, weight: .semibold))
                         }
                     }
 
@@ -2015,7 +2015,7 @@ private struct PlaylistEditorSheet: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Step \(index + 1)")
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(AppTypography.style(.subheadline, weight: .semibold))
                                 Spacer()
                                 if draft.steps.count > 1 {
                                     Button {
@@ -2122,18 +2122,18 @@ struct EditPresetNamePopup: View {
     var body: some View {
         VStack(spacing: 20) {
             Text("Edit Preset Name")
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(.top, 4)
             
             VStack(alignment: .leading, spacing: 8) {
                 Text("Preset Name")
-                    .font(.subheadline.weight(.medium))
+                    .font(AppTypography.style(.subheadline, weight: .medium))
                     .foregroundColor(.white.opacity(0.9))
                 
                 TextField("Enter preset name", text: $editedName)
                     .textFieldStyle(.plain)
-                    .font(.body)
+                    .font(AppTypography.style(.body))
                     .foregroundColor(.white)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
@@ -2159,7 +2159,7 @@ struct EditPresetNamePopup: View {
                     onCancel()
                 }) {
                     Text("Cancel")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white.opacity(0.9))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -2175,7 +2175,7 @@ struct EditPresetNamePopup: View {
                     }
                 }) {
                     Text("Save")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)

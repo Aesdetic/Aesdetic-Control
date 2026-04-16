@@ -10,8 +10,8 @@ struct ScenesListView: View {
             ForEach(store.scenes.filter { $0.deviceId == device.id }) { scene in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text(scene.name).font(.headline)
-                        Text("Saved: \(scene.createdAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundColor(.secondary)
+                        Text(scene.name).font(AppTypography.style(.headline))
+                        Text("Saved: \(scene.createdAt.formatted(date: .abbreviated, time: .shortened))").font(AppTypography.style(.caption)).foregroundColor(.secondary)
                     }
                     Spacer()
                     Button("Apply") {

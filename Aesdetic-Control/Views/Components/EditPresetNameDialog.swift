@@ -23,12 +23,12 @@ struct EditPresetNameDialog: View {
                 // Preset Name Input
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Preset Name")
-                        .font(.subheadline.weight(.medium))
+                        .font(AppTypography.style(.subheadline, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                     
                     TextField("Enter preset name", text: $editedName)
                         .textFieldStyle(.plain)
-                        .font(.body)
+                        .font(AppTypography.style(.body))
                         .foregroundColor(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
@@ -71,7 +71,7 @@ struct EditPresetNameDialog: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Edit Preset")
-                        .font(.headline)
+                        .font(AppTypography.style(.headline))
                         .foregroundColor(.white)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -112,7 +112,7 @@ struct EditPresetNameDialog: View {
 struct DeleteButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline)
+            .font(AppTypography.style(.headline))
             .foregroundColor(.red)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)

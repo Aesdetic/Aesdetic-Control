@@ -117,10 +117,10 @@ struct WiFiSetupView: View {
                     // Helpful note about WiFi disconnection
                     VStack(alignment: .leading, spacing: 4) {
                         Text("💡 To disconnect from WiFi:")
-                            .font(.caption.weight(.medium))
+                            .font(AppTypography.style(.caption, weight: .medium))
                             .foregroundColor(.white.opacity(0.8))
                         Text("Connect to a different network below")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.6))
                     }
                     .padding(.top, 4)
@@ -132,7 +132,7 @@ struct WiFiSetupView: View {
                             scanForNetworks()
                         }
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
                     .foregroundColor(.black)
                     .padding(.vertical, 10)
                     .padding(.horizontal, 14)
@@ -166,12 +166,12 @@ struct WiFiSetupView: View {
                 } else if availableNetworks.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "wifi.slash")
-                            .font(.title.weight(.medium))
+                            .font(AppTypography.style(.title, weight: .medium))
                             .foregroundColor(.white.opacity(0.5))
                         Text("No networks found")
                             .foregroundColor(.white.opacity(0.7))
                         Text("Tap 'Scan' to search for WiFi networks")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.5))
                     }
                     .padding(.vertical, 20)
@@ -193,17 +193,17 @@ struct WiFiSetupView: View {
                                     if network.security == "Open" {
                                         VStack(alignment: .leading, spacing: 8) {
                                             Text("Open Network")
-                                                .font(.subheadline.weight(.medium))
+                                                .font(AppTypography.style(.subheadline, weight: .medium))
                                                 .foregroundColor(.white)
                                             
                                             Text("No password required for \(network.ssid)")
-                                                .font(.caption)
+                                                .font(AppTypography.style(.caption))
                                                 .foregroundColor(.white.opacity(0.7))
                                         }
                                     } else {
                                         VStack(alignment: .leading, spacing: 8) {
                                             Text("Password for \(network.ssid)")
-                                                .font(.subheadline.weight(.medium))
+                                                .font(AppTypography.style(.subheadline, weight: .medium))
                                                 .foregroundColor(.white)
                                             
                                             SecureField("Enter WiFi password", text: $password)
@@ -230,7 +230,7 @@ struct WiFiSetupView: View {
                                                     .foregroundColor(.black)
                                             }
                                             Text(isConnecting ? "Connecting..." : "Connect")
-                                                .font(.headline.weight(.semibold))
+                                                .font(AppTypography.style(.headline, weight: .semibold))
                                                 .foregroundColor(.black)
                                         }
                                         .frame(maxWidth: .infinity)
@@ -291,7 +291,7 @@ struct WiFiSetupView: View {
                                 .foregroundColor(.white)
                         }
                         Text(error)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.7))
                             .multilineTextAlignment(.center)
                     }
@@ -380,13 +380,29 @@ struct WiFiSetupView: View {
         do {
             let wifiInfo = try await WLEDWiFiService.shared.getCurrentWiFiInfo(device: device)
             await MainActor.run {
-                self.currentWiFiInfo = wifiInfo
+                if let previous = self.currentWiFiInfo,
+                   isUnknownSSID(wifiInfo.ssid),
+                   !isUnknownSSID(previous.ssid) {
+                    self.currentWiFiInfo = WiFiInfo(
+                        ssid: previous.ssid,
+                        signalStrength: wifiInfo.signalStrength,
+                        channel: wifiInfo.channel,
+                        security: isUnknownSSID(wifiInfo.security) ? previous.security : wifiInfo.security,
+                        ipAddress: wifiInfo.ipAddress ?? previous.ipAddress,
+                        macAddress: wifiInfo.macAddress ?? previous.macAddress
+                    )
+                } else {
+                    self.currentWiFiInfo = wifiInfo
+                }
             }
         } catch {
-            await MainActor.run {
-                self.currentWiFiInfo = nil
-            }
+            // Preserve last known value during transient connectivity changes.
         }
+    }
+
+    private func isUnknownSSID(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.caseInsensitiveCompare("unknown") == .orderedSame
     }
 }
 
@@ -403,26 +419,26 @@ struct WiFiNetworkRow: View {
                 // Signal strength icon
                 Image(systemName: signalStrengthIcon)
                     .foregroundColor(signalStrengthColor)
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .frame(width: 20)
                 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(network.ssid)
                         .foregroundColor(.white)
-                        .font(.headline)
+                        .font(AppTypography.style(.headline))
                     
                     HStack(spacing: 8) {
                         Text(network.security)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.6))
                         
                         Text("\(network.signalStrength) dBm")
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(.white.opacity(0.6))
                         
                         if network.channel > 0 {
                             Text("Ch \(network.channel)")
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(.white.opacity(0.6))
                         }
                     }
@@ -433,7 +449,7 @@ struct WiFiNetworkRow: View {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.white)
-                        .font(.headline)
+                        .font(AppTypography.style(.headline))
                 }
             }
             .padding(.vertical, 12)
@@ -537,52 +553,21 @@ class WLEDWiFiService {
     private init() {}
     
     func scanForNetworks(device: WLEDDevice) async throws -> [WiFiNetwork] {
-        // Make real API call to WLED device to scan for networks
-        guard let url = URL(string: "http://\(device.ipAddress)/json/net") else {
-            throw WiFiError.invalidURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 10.0
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw WiFiError.networkError("Failed to scan networks")
-        }
-        
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let networksArray = json?["networks"] as? [[String: Any]] else {
-            throw WiFiError.invalidResponse
-        }
-        
-        var wifiNetworks: [WiFiNetwork] = []
-        
-        for networkData in networksArray {
-            guard let ssid = networkData["ssid"] as? String,
-                  let rssi = networkData["rssi"] as? Int,
-                  let bssid = networkData["bssid"] as? String,
-                  let channel = networkData["channel"] as? Int,
-                  let enc = networkData["enc"] as? Int else {
-                continue
+        // WLED scans can return an empty list on the first poll.
+        // Retry briefly before surfacing "no networks".
+        let maxAttempts = 5
+        for attempt in 0..<maxAttempts {
+            let networks = try await fetchNetworksOnce(device: device)
+            if !networks.isEmpty {
+                return networks
             }
-            
-            // Convert encryption type to readable string
-            let security = getSecurityString(from: enc)
-            
-            wifiNetworks.append(WiFiNetwork(
-                ssid: ssid,
-                signalStrength: rssi,
-                security: security,
-                channel: channel,
-                bssid: bssid
-            ))
+
+            if attempt < maxAttempts - 1 {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
         }
-        
-        // Sort by signal strength (strongest first)
-        return wifiNetworks.sorted { $0.signalStrength > $1.signalStrength }
+
+        return []
     }
     
     func getCurrentWiFiInfo(device: WLEDDevice) async throws -> WiFiInfo {
@@ -606,25 +591,50 @@ class WLEDWiFiService {
         
         // Extract WiFi info from the response - WLED /json/info doesn't include SSID
         let wifiInfo = json?["wifi"] as? [String: Any]
-        let signalStrength = wifiInfo?["rssi"] as? Int ?? -100
-        let channel = wifiInfo?["channel"] as? Int ?? 0
-        let bssid = wifiInfo?["bssid"] as? String ?? ""
+        let signalStrength = parseInt(wifiInfo?["rssi"]) ?? -100
+        let channel = parseInt(wifiInfo?["channel"]) ?? 0
+        let bssid = (wifiInfo?["bssid"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let ipAddress = json?["ip"] as? String ?? device.ipAddress
         let macAddress = json?["mac"] as? String ?? device.id
+
+        let directSSID = parseString(wifiInfo?["ssid"]) ?? parseString(json?["ssid"])
         
-        // Try to get SSID from the network scan by matching BSSID
-        var ssid = "Unknown"
+        // Prefer BSSID match from scan results when available.
+        var ssid = directSSID?.isEmpty == false ? directSSID! : "Unknown"
         var security = "Unknown"
-        
-        do {
-            let networks = try await scanForNetworks(device: device)
-            if let currentNetwork = networks.first(where: { $0.bssid == bssid }) {
-                ssid = currentNetwork.ssid
-                security = currentNetwork.security
+
+        let normalizedCurrentBSSID = normalizeBSSID(bssid)
+        var networks: [WiFiNetwork] = []
+        let shouldScan = !normalizedCurrentBSSID.isEmpty || isUnknownSSID(ssid)
+        if shouldScan {
+            do {
+                networks = try await scanForNetworks(device: device)
+                if !normalizedCurrentBSSID.isEmpty,
+                   let currentNetwork = networks.first(where: { normalizeBSSID($0.bssid ?? "") == normalizedCurrentBSSID }) {
+                    ssid = currentNetwork.ssid
+                    security = currentNetwork.security
+                } else if !isUnknownSSID(ssid),
+                          let matchedBySSID = networks.first(where: {
+                              $0.ssid.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(ssid) == .orderedSame
+                          }) {
+                    security = matchedBySSID.security
+                }
+            } catch {
+                networks = []
             }
-        } catch {
-            // If scan fails, use device name as fallback
-            ssid = device.name
+        }
+
+        // If BSSID lookup fails (or scanner returns none), use configured SSID.
+        if isUnknownSSID(ssid) {
+            let configuredSSID = (try? await fetchConfiguredSSID(device: device))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !configuredSSID.isEmpty {
+                ssid = configuredSSID
+                if let configuredNetwork = networks.first(where: {
+                    $0.ssid.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(configuredSSID) == .orderedSame
+                }) {
+                    security = configuredNetwork.security
+                }
+            }
         }
         
         return WiFiInfo(
@@ -640,7 +650,7 @@ class WLEDWiFiService {
     func connectToNetwork(device: WLEDDevice, ssid: String, password: String?) async throws {
         // Follow WLED's proper /json/cfg read-modify-write pattern
         // 1. GET /json/cfg → parse JSON
-        // 2. Modify only the Wi-Fi fields you need (SSID/PSK, etc.)
+        // 2. Modify only the Wi-Fi fields you need (nw.ins[0].ssid / nw.ins[0].psk)
         // 3. POST the full, edited object back to /json/cfg
         
         guard let configUrl = URL(string: "http://\(device.ipAddress)/json/cfg") else {
@@ -660,16 +670,9 @@ class WLEDWiFiService {
             throw WiFiError.invalidResponse
         }
         
-        // Step 2: Modify only the WiFi fields, preserving the full schema
-        var wifiConfig = config["wifi"] as? [String: Any] ?? [:]
-        wifiConfig["ssid"] = ssid
-        if let password = password {
-            wifiConfig["password"] = password
-        } else {
-            // For open networks, ensure password is empty
-            wifiConfig["password"] = ""
-        }
-        config["wifi"] = wifiConfig
+        // Step 2: Update WiFi credentials in WLED-native config paths.
+        // WLED stores station credentials under `nw.ins[]`.
+        applyWiFiCredentials(to: &config, ssid: ssid, password: password)
         
         // Step 3: POST the full, edited object back to /json/cfg
         var request = URLRequest(url: configUrl)
@@ -693,6 +696,177 @@ class WLEDWiFiService {
         // Wait for device to process configuration and potentially reboot
         // Some builds may require a reboot to apply WiFi changes
         try await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+    }
+
+    private func fetchConfiguredSSID(device: WLEDDevice) async throws -> String? {
+        guard let configURL = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WiFiError.invalidURL
+        }
+        let (data, response) = try await URLSession.shared.data(from: configURL)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200,
+              let config = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return extractConfiguredSSID(from: config)
+    }
+
+    private func applyWiFiCredentials(to config: inout [String: Any], ssid: String, password: String?) {
+        // Some firmware responses are wrapped under "cfg", others are flat.
+        applyWiFiCredentialsInRoot(&config, ssid: ssid, password: password)
+        if var wrapped = config["cfg"] as? [String: Any] {
+            applyWiFiCredentialsInRoot(&wrapped, ssid: ssid, password: password)
+            config["cfg"] = wrapped
+        }
+    }
+
+    private func applyWiFiCredentialsInRoot(_ root: inout [String: Any], ssid: String, password: String?) {
+        var nw = root["nw"] as? [String: Any] ?? [:]
+        var wifiInputs = nw["ins"] as? [[String: Any]] ?? []
+        if wifiInputs.isEmpty {
+            wifiInputs.append([:])
+        }
+
+        var primary = wifiInputs[0]
+        primary["ssid"] = ssid
+        // WLED expects `psk` for incoming config writes.
+        primary["psk"] = password ?? ""
+        // pskl is read-only metadata in serialized config; remove stale value before write.
+        primary.removeValue(forKey: "pskl")
+        wifiInputs[0] = primary
+
+        nw["ins"] = wifiInputs
+        root["nw"] = nw
+    }
+
+    private func extractConfiguredSSID(from config: [String: Any]) -> String? {
+        if let ssid = extractConfiguredSSID(fromRoot: config) {
+            return ssid
+        }
+        if let wrapped = config["cfg"] as? [String: Any] {
+            return extractConfiguredSSID(fromRoot: wrapped)
+        }
+        return nil
+    }
+
+    private func extractConfiguredSSID(fromRoot root: [String: Any]) -> String? {
+        guard let nw = root["nw"] as? [String: Any],
+              let wifiInputs = nw["ins"] as? [[String: Any]] else {
+            return nil
+        }
+        for entry in wifiInputs {
+            if let ssid = entry["ssid"] as? String {
+                let trimmed = ssid.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+        }
+        return nil
+    }
+
+    private func fetchNetworksOnce(device: WLEDDevice) async throws -> [WiFiNetwork] {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/net") else {
+            throw WiFiError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10.0
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw WiFiError.networkError("Failed to scan networks")
+        }
+
+        let parsed = try JSONSerialization.jsonObject(with: data)
+        let networksArray: [[String: Any]]
+        if let root = parsed as? [String: Any],
+           let networks = root["networks"] as? [[String: Any]] {
+            networksArray = networks
+        } else if let root = parsed as? [[String: Any]] {
+            networksArray = root
+        } else {
+            throw WiFiError.invalidResponse
+        }
+
+        var wifiNetworks: [WiFiNetwork] = []
+        for networkData in networksArray {
+            guard let rawSSID = networkData["ssid"] as? String else { continue }
+            let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !ssid.isEmpty else { continue }
+
+            let rssi = parseInt(networkData["rssi"]) ?? -100
+            let bssid = (networkData["bssid"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let channel = parseInt(networkData["channel"]) ?? 0
+            let enc = parseInt(networkData["enc"])
+            let securityString = (networkData["security"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let security = (securityString?.isEmpty == false) ? securityString! : getSecurityString(from: enc ?? 0)
+
+            wifiNetworks.append(
+                WiFiNetwork(
+                    ssid: ssid,
+                    signalStrength: rssi,
+                    security: security,
+                    channel: channel,
+                    bssid: bssid
+                )
+            )
+        }
+
+        let deduplicated = Dictionary(
+            wifiNetworks.map { network in
+                (
+                    (normalizeBSSID(network.bssid ?? "").isEmpty
+                        ? network.ssid.lowercased()
+                        : normalizeBSSID(network.bssid ?? "")),
+                    network
+                )
+            },
+            uniquingKeysWith: { lhs, rhs in
+                lhs.signalStrength >= rhs.signalStrength ? lhs : rhs
+            }
+        ).values
+
+        return deduplicated.sorted { $0.signalStrength > $1.signalStrength }
+    }
+
+    private func normalizeBSSID(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: ":", with: "")
+    }
+
+    private func isUnknownSSID(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.caseInsensitiveCompare("unknown") == .orderedSame
+    }
+
+    private func parseString(_ value: Any?) -> String? {
+        if let stringValue = value as? String {
+            return stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let numberValue = value as? NSNumber {
+            return numberValue.stringValue
+        }
+        return nil
+    }
+
+    private func parseInt(_ value: Any?) -> Int? {
+        if let intValue = value as? Int {
+            return intValue
+        }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let stringValue = value as? String {
+            return Int(stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
     }
     
     

@@ -103,11 +103,11 @@ struct AutomationRow: View {
                         .progressViewStyle(.circular)
                         .tint(theme.textPrimary)
                     Text(isDeleting ? "Deleting on device..." : "Getting ready...")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTypography.style(.caption, weight: .semibold))
                         .foregroundColor(theme.textPrimary)
                     if isDeleting {
                         Text("Keep app open")
-                            .font(.caption2)
+                            .font(AppTypography.style(.caption2))
                             .foregroundColor(theme.textSecondary)
                     }
                 }
@@ -122,11 +122,11 @@ struct AutomationRow: View {
                 titleRow
                 if let subtitle {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(theme.textSecondary)
                 }
                 Text(actionDescription)
-                    .font(.subheadline)
+                    .font(AppTypography.style(.subheadline))
                     .foregroundColor(theme.textSecondary)
             }
             Spacer()
@@ -145,7 +145,7 @@ struct AutomationRow: View {
                     .fill(theme.surfaceMuted)
                     .overlay(
                         Text(devicesLabel)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(theme.textSecondary)
                             .padding(.horizontal, 10)
                     )
@@ -155,7 +155,7 @@ struct AutomationRow: View {
                     .fill(theme.surfaceMuted)
                     .overlay(
                         Text(runningChipText)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(theme.status.positive)
                             .padding(.horizontal, 10)
                     )
@@ -165,7 +165,7 @@ struct AutomationRow: View {
                     .fill(theme.surfaceMuted)
                     .overlay(
                         Text(deviceTimerStatus.text)
-                            .font(.caption)
+                            .font(AppTypography.style(.caption))
                             .foregroundColor(deviceTimerStatus.color)
                             .padding(.horizontal, 10)
                     )
@@ -176,7 +176,7 @@ struct AutomationRow: View {
                 Button("Retry") {
                     onRetrySync()
                 }
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(theme.status.warning)
                 .buttonStyle(.plain)
             }
@@ -186,7 +186,7 @@ struct AutomationRow: View {
                         .fill(theme.surfaceMuted)
                         .overlay(
                             Text(triggerText)
-                                .font(.caption)
+                                .font(AppTypography.style(.caption))
                                 .foregroundColor(theme.status.info)
                                 .padding(.horizontal, 10)
                         )
@@ -195,7 +195,7 @@ struct AutomationRow: View {
             Spacer()
             if let nextTriggerDescription {
                 Text(nextTriggerDescription)
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(theme.textSecondary)
             }
         }
@@ -205,7 +205,7 @@ struct AutomationRow: View {
     private var iconBadge: some View {
         if let iconName = automation.metadata.iconName {
             Image(systemName: iconName)
-                .font(.body.weight(.semibold))
+                .font(AppTypography.style(.body, weight: .semibold))
                 .foregroundColor(accentColor.opacity(0.9))
                 .padding(10)
                 .background(theme.surfaceMuted)
@@ -216,11 +216,11 @@ struct AutomationRow: View {
     private var titleRow: some View {
         HStack(spacing: 8) {
             Text(automation.name)
-                .font(.headline.weight(.semibold))
+                .font(AppTypography.style(.headline, weight: .semibold))
                 .foregroundColor(theme.textPrimary)
             if isNext {
                 Text("Next")
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTypography.style(.caption2, weight: .semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(theme.status.warning.opacity(0.18))
@@ -269,11 +269,11 @@ struct AutomationRow: View {
     private var triggerRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "clock")
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
                 .foregroundColor(accentColor)
             
             Text(automation.trigger.displayName)
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
                 .foregroundColor(theme.textPrimary)
         }
     }
@@ -347,10 +347,10 @@ struct AutomationRow: View {
     private func actionLabel(icon: String, text: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.caption.weight(.medium))
+                .font(AppTypography.style(.caption, weight: .medium))
                 .foregroundColor(accentColor)
             Text(text)
-                .font(.caption)
+                .font(AppTypography.style(.caption))
                 .foregroundColor(theme.textSecondary)
         }
     }

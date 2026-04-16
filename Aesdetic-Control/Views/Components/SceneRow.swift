@@ -14,15 +14,15 @@ struct SceneRow: View {
                 
                 if scene.transitionEnabled {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.title3)
+                        .font(AppTypography.style(.title3))
                         .foregroundColor(.blue)
                 } else if scene.effectsEnabled {
                     Image(systemName: "sparkles")
-                        .font(.title3)
+                        .font(AppTypography.style(.title3))
                         .foregroundColor(.yellow)
                 } else {
                     Image(systemName: "paintbrush")
-                        .font(.title3)
+                        .font(AppTypography.style(.title3))
                         .foregroundColor(.white)
                 }
             }
@@ -30,23 +30,23 @@ struct SceneRow: View {
             // Scene Info
             VStack(alignment: .leading, spacing: 4) {
                 Text(scene.name)
-                    .font(.headline)
+                    .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 
                 HStack(spacing: 8) {
                     // Brightness
                     Label("\(Int(round(Double(scene.brightness)/255.0*100)))%", systemImage: "sun.max")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.8))
                     
                     // Scene Type
                     Text(sceneTypeText)
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.blue)
                     
                     // Created Date
                     Text(createdDateText)
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.gray)
                 }
             }
@@ -57,7 +57,7 @@ struct SceneRow: View {
             Button("Apply") {
                 onApply()
             }
-            .font(.subheadline.weight(.medium))
+            .font(AppTypography.style(.subheadline, weight: .medium))
             .foregroundColor(.white)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)

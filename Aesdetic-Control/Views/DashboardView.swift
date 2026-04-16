@@ -6,8 +6,63 @@
 //
 
 import SwiftUI
+import UIKit
+
+private enum DashboardPalette {
+    // All-white text hierarchy
+    static let primaryText = Color.white
+    static let secondaryText = Color.white.opacity(0.82)
+    static let tertiaryText = Color.white.opacity(0.62)
+}
+
+private enum DashboardTypography {
+    // SF Pro Display for headings, SF Pro Text for body/meta.
+    static let greeting = AppTypography.display(size: 30, weight: .semibold, relativeTo: .largeTitle)
+    static let sectionTitle = AppTypography.display(size: 21, weight: .semibold, relativeTo: .title3)
+    static let cardTitle = AppTypography.display(size: 17, weight: .semibold, relativeTo: .headline)
+    static let body = AppTypography.text(size: 14, weight: .regular, relativeTo: .body)
+    static let bodyStrong = AppTypography.text(size: 14, weight: .medium, relativeTo: .body)
+    static let meta = AppTypography.text(size: 12, weight: .regular, relativeTo: .caption)
+    static let micro = AppTypography.text(size: 11, weight: .regular, relativeTo: .caption2)
+    static let countBadge = AppTypography.text(size: 12, weight: .medium, relativeTo: .caption)
+    static let metricValue = AppTypography.display(size: 26, weight: .semibold, relativeTo: .title2)
+    static let metricLabel = AppTypography.text(size: 11, weight: .medium, relativeTo: .caption2)
+    static let buttonCompact = AppTypography.text(size: 12, weight: .semibold, relativeTo: .caption)
+    static let buttonRegular = AppTypography.text(size: 14, weight: .semibold, relativeTo: .subheadline)
+}
+
+private struct SnappyTapButtonStyle: ButtonStyle {
+    var pressedScale: CGFloat = 0.95
+    var response: CGFloat = 0.2
+    var damping: CGFloat = 0.82
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? pressedScale : 1.0)
+            .animation(
+                .spring(response: response, dampingFraction: damping),
+                value: configuration.isPressed
+            )
+    }
+}
+
+private struct DashboardSectionEntranceModifier: ViewModifier {
+    let active: Bool
+    let index: Int
+
+    func body(content: Content) -> some View {
+        content
+    }
+}
+
+private extension View {
+    func dashboardSectionEntrance(active: Bool, index: Int) -> some View {
+        modifier(DashboardSectionEntranceModifier(active: active, index: index))
+    }
+}
 
 struct DashboardView: View {
+    var activeTab: DockTab? = nil
     @StateObject private var dashboardViewModel = DashboardViewModel.shared
     @StateObject private var deviceControlViewModel = DeviceControlViewModel.shared
     @StateObject private var automationViewModel = AutomationViewModel.shared
@@ -15,6 +70,8 @@ struct DashboardView: View {
     @Environment(\.colorScheme) var colorScheme
     @State private var navigationPath = NavigationPath()
     @State private var selectedDevice: WLEDDevice?
+    @State private var setupDevice: WLEDDevice?
+    @State private var detailBackgroundDismissEnabledAt: Date = .distantPast
     
     // MARK: - Performance Optimization Properties
     
@@ -25,8 +82,12 @@ struct DashboardView: View {
     private let deviceUpdateThrottle: TimeInterval = 0.5 // 500ms throttle window
     @State private var lastDerivedUpdate: Date = .distantPast
     @State private var derivedUpdateWorkItem: DispatchWorkItem?
+    @State private var hasAnimatedSections = false
     
     private let fastAnimation: Animation = .easeInOut(duration: 0.15)
+    private let contentHorizontalPadding: CGFloat = 20
+    private let sectionSpacing: CGFloat = 20
+    private let detailDismissGuardDelay: TimeInterval = 0.45
     private let debugHideGreeting = false
     private let debugHideQuote = false
     private let debugHideScenes = false
@@ -40,8 +101,12 @@ struct DashboardView: View {
     private var filteredDevices: [WLEDDevice] { memoizedFilteredDevices }
 
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
-    private var primaryTextColor: Color { theme.textPrimary }
-    private var secondaryTextColor: Color { theme.textSecondary }
+    private var primaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.94) : DashboardPalette.primaryText
+    }
+    private var secondaryTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.78) : DashboardPalette.secondaryText
+    }
     
     private func updateMemoizedStats() {
         let devices = deviceControlViewModel.devices
@@ -96,48 +161,21 @@ struct DashboardView: View {
                 AppBackground()
 
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 18) {
-                        HStack(alignment: .top, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                if !debugHideGreeting {
-                                    Text(dashboardViewModel.currentGreeting)
-                                        .font(.system(.largeTitle, design: .rounded).weight(.semibold))
-                                        .foregroundColor(primaryTextColor)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.85)
-                                        .id(dashboardViewModel.currentGreeting)
-                                }
+                    VStack(alignment: .leading, spacing: sectionSpacing) {
+                        headerIntroSection
+                            .padding(.horizontal, contentHorizontalPadding)
+                            .padding(.top, 14)
+                            .dashboardSectionEntrance(active: hasAnimatedSections, index: 0)
 
-                                if !debugHideQuote {
-                                    Text(dashboardViewModel.currentQuote)
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundColor(secondaryTextColor.opacity(0.94))
-                                        .lineLimit(2)
-                                        .lineSpacing(2)
-                                        .multilineTextAlignment(.leading)
-                                        .id(dashboardViewModel.currentQuote)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                            if !debugHideLogo {
-                                Group {
-                                    if let logoImage = UIImage(named: "aesdetic_logo") {
-                                        Image(uiImage: logoImage)
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fit)
-                                    } else {
-                                        Image(systemName: "sparkles")
-                                            .font(.title3.weight(.medium))
-                                            .foregroundColor(primaryTextColor)
-                                    }
-                                }
-                                .frame(width: 40, height: 40)
-                                .padding(.top, 2)
-                            }
+                        if !debugHideStats {
+                            DeviceStatsSection(
+                                totalDevices: deviceStatistics.total,
+                                activeDevices: deviceStatistics.online,
+                                activeAutomations: automationViewModel.automations.filter { $0.enabled }.count
+                            )
+                            .padding(.horizontal, contentHorizontalPadding)
+                            .dashboardSectionEntrance(active: hasAnimatedSections, index: 1)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 14)
 
                         if !debugHideScenes {
                             ScenesAutomationsSection(
@@ -150,30 +188,42 @@ struct DashboardView: View {
                             .onReceive(automationViewModel.$automations) { _ in
                                 DispatchQueue.main.async { recomputeDerivedIfNeeded() }
                             }
+                            .dashboardSectionEntrance(active: hasAnimatedSections, index: 2)
                         }
 
-                        if !debugHideStats {
-                            DeviceStatsSection(
-                                totalDevices: deviceStatistics.total,
-                                activeDevices: deviceStatistics.online,
-                                activeAutomations: automationViewModel.automations.filter { $0.enabled }.count
-                            )
-                            .padding(.horizontal, 16)
-                        }
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("Devices")
+                                    .font(DashboardTypography.sectionTitle)
+                                    .foregroundColor(primaryTextColor)
 
-                        LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 18)],
-                            spacing: 18
-                        ) {
-                            ForEach(filteredDevices, id: \.id) { device in
-                                MiniDeviceCard(device: device, onTap: {
-                                    selectedDevice = device
-                                })
-                                .id(device.id)
+                                Text("\(filteredDevices.count)")
+                                    .font(DashboardTypography.countBadge)
+                                    .foregroundColor(secondaryTextColor)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        Capsule()
+                                            .fill(theme.surfaceMuted)
+                                    )
+
+                                Spacer()
+                            }
+
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 14)],
+                                spacing: 14
+                            ) {
+                                ForEach(filteredDevices, id: \.id) { device in
+                                    MiniDeviceCard(device: device, onTap: {
+                                        openDeviceDetail(device)
+                                    })
+                                    .id(device.id)
+                                }
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
+                        .padding(.horizontal, contentHorizontalPadding)
+                        .dashboardSectionEntrance(active: hasAnimatedSections, index: 3)
                     }
                     .padding(.bottom, 104)
                     .onChange(of: deviceControlViewModel.devices) { _, _ in
@@ -190,17 +240,139 @@ struct DashboardView: View {
             .onAppear {
                 updateMemoizedStats()
                 updateMemoizedFilteredDevices()
+                if !hasAnimatedSections {
+                    hasAnimatedSections = true
+                }
             }
-            .sheet(item: $selectedDevice) { device in
-                DeviceDetailView(device: device, viewModel: deviceControlViewModel)
+            .onChange(of: activeTab) { _, newValue in
+                if newValue != .dashboard {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        closeDeviceDetail()
+                    }
+                }
             }
+            .overlay { dashboardDeviceDetailOverlay }
+            .overlay { setupOverlay }
             .navigationBarHidden(true)
         }
         .background(Color.clear)
     }
+
+    @ViewBuilder
+    private var dashboardDeviceDetailOverlay: some View {
+        if let selectedDevice {
+            GeometryReader { proxy in
+                let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
+                ZStack(alignment: .topTrailing) {
+                    Color.clear
+                        .ignoresSafeArea()
+                        .allowsHitTesting(canDismissDetailFromBackground)
+                        .onTapGesture {
+                            closeDeviceDetail()
+                        }
+
+                    DeviceDetailView(
+                        device: selectedDevice,
+                        viewModel: deviceControlViewModel,
+                        backgroundStyle: .liquidGlass
+                    )
+                    .frame(maxHeight: maxPopupHeight, alignment: .top)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 26)
+
+                    Button(action: closeDeviceDetail) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(AppTypography.style(.title2))
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(12)
+                    }
+                    .padding(.top, 20)
+                    .padding(.trailing, 20)
+                }
+            }
+            .transition(.identity)
+        }
+    }
+
+    private var canDismissDetailFromBackground: Bool {
+        Date() >= detailBackgroundDismissEnabledAt
+    }
+
+    @ViewBuilder
+    private var setupOverlay: some View {
+        if let setupDevice {
+            GeometryReader { proxy in
+                let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
+                ZStack(alignment: .top) {
+                    SetupBackdropBlur()
+
+                    ProductSetupFlowView(
+                        device: setupDevice,
+                        onClose: { self.setupDevice = nil },
+                        allowsManualClose: false
+                    )
+                    .environmentObject(deviceControlViewModel)
+                    .frame(maxHeight: maxPopupHeight, alignment: .top)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 26)
+                }
+            }
+            .transition(.identity)
+            .zIndex(3)
+        }
+    }
     
     // MARK: - Optimized Components
-    
+
+    @ViewBuilder
+    private var headerIntroSection: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                if !debugHideGreeting {
+                    Text(dashboardViewModel.currentGreeting)
+                        .font(DashboardTypography.greeting)
+                        .foregroundColor(primaryTextColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .id(dashboardViewModel.currentGreeting)
+                }
+
+                if !debugHideQuote {
+                    Text(dashboardViewModel.currentQuote)
+                        .font(DashboardTypography.body)
+                        .foregroundColor(secondaryTextColor.opacity(0.94))
+                        .lineLimit(2)
+                        .lineSpacing(2)
+                        .multilineTextAlignment(.leading)
+                        .id(dashboardViewModel.currentQuote)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !debugHideLogo {
+                Group {
+                    if let logoImage = UIImage(named: "aesdetic_logo") {
+                        LiquidGlassLogoGlyph(logoImage: logoImage)
+                    } else {
+                        Image(systemName: "sparkles")
+                            .font(AppTypography.style(.title3, weight: .medium))
+                            .foregroundColor(primaryTextColor)
+                            .padding(6)
+                            .frame(width: 44, height: 44)
+                            .background(
+                                Color.clear
+                                    .appLiquidGlass(role: .highContrast, cornerRadius: 14)
+                            )
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .padding(.top, 2)
+            }
+        }
+    }
+
     @ViewBuilder
     private func headerSection(geometry: GeometryProxy) -> some View {
         HStack {
@@ -215,7 +387,7 @@ struct DashboardView: View {
                 } else {
                     // Fallback sparkles icon
                     Image(systemName: "sparkles")
-                        .font(.title3.weight(.medium))
+                        .font(AppTypography.style(.title3, weight: .medium))
                         .foregroundColor(primaryTextColor)
                 }
             }
@@ -230,7 +402,7 @@ struct DashboardView: View {
     private func greetingSection(geometry: GeometryProxy) -> some View {
         HStack {
             Text(dashboardViewModel.currentGreeting)
-                .font(.largeTitle.bold())
+                .font(AppTypography.style(.largeTitle, weight: .bold))
                 .foregroundColor(primaryTextColor)
                 .id(dashboardViewModel.currentGreeting)
                 .animation(fastAnimation, value: dashboardViewModel.currentGreeting)
@@ -245,7 +417,7 @@ struct DashboardView: View {
     private func motivationalSection(geometry: GeometryProxy) -> some View {
         HStack {
             Text(dashboardViewModel.currentQuote)
-                .font(.title2)
+                .font(AppTypography.style(.title2))
                 .foregroundColor(.gray)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
@@ -295,7 +467,7 @@ struct DashboardView: View {
             // Use memoized filtered devices
             ForEach(filteredDevices, id: \.id) { device in
                 MiniDeviceCard(device: device, onTap: {
-                    selectedDevice = device
+                    openDeviceDetail(device)
                 })
                     .id(device.id) // Stable identity for animations
                     .transition(.asymmetric(
@@ -307,6 +479,21 @@ struct DashboardView: View {
         .padding(.horizontal, 18)
         .padding(.top, 20)
         .animation(.easeInOut(duration: 0.2), value: filteredDevices.count)
+    }
+
+    private func openDeviceDetail(_ device: WLEDDevice) {
+        if deviceControlViewModel.requiresProfileSetup(device) {
+            closeDeviceDetail()
+            setupDevice = device
+            return
+        }
+        detailBackgroundDismissEnabledAt = Date().addingTimeInterval(detailDismissGuardDelay)
+        selectedDevice = device
+    }
+
+    private func closeDeviceDetail() {
+        selectedDevice = nil
+        detailBackgroundDismissEnabledAt = .distantPast
     }
     
     // MARK: - Performance Optimized Data Refresh
@@ -324,7 +511,6 @@ struct DashboardView: View {
     }
 }
 
-
 // MARK: - Scenes & Automations Section
 
 struct ScenesAutomationsSection: View {
@@ -338,20 +524,23 @@ struct ScenesAutomationsSection: View {
     @StateObject private var favoritesStore = SceneFavoritesStore.shared
     @StateObject private var presetFavoritesStore = PresetFavoritesStore.shared
     private let pillRowHeight: CGFloat = 44
+    private let sectionHorizontalPadding: CGFloat = 20
+    private var headingTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.94) : DashboardPalette.primaryText
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Scenes")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .foregroundColor(AppTheme.tokens(for: colorScheme).textPrimary)
+                    .font(DashboardTypography.sectionTitle)
+                    .foregroundColor(headingTextColor)
 
                 Spacer()
 
                 AddSceneButton(compact: true)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, sectionHorizontalPadding)
             
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
@@ -359,6 +548,9 @@ struct ScenesAutomationsSection: View {
                         AppGlassPillButton(
                             title: item.title,
                             isSelected: false,
+                            size: .compact,
+                            useControlGlassRecipe: true,
+                            useAppleSelectedStyle: true,
                             action: {
                                 usageStore.increment(key: item.usageKey)
                                 handleSceneShortcut(item)
@@ -371,7 +563,7 @@ struct ScenesAutomationsSection: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, sectionHorizontalPadding)
             }
             .frame(height: pillRowHeight)
             .scrollIndicators(.hidden)
@@ -381,15 +573,14 @@ struct ScenesAutomationsSection: View {
             
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Automations")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .foregroundColor(AppTheme.tokens(for: colorScheme).textPrimary)
+                    .font(DashboardTypography.sectionTitle)
+                    .foregroundColor(headingTextColor)
 
                 Spacer()
 
                 AddAutomationButton(compact: true)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, sectionHorizontalPadding)
             
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
@@ -397,6 +588,9 @@ struct ScenesAutomationsSection: View {
                         AppGlassPillButton(
                             title: automation.name,
                             isSelected: automation.enabled,
+                            size: .compact,
+                            useControlGlassRecipe: true,
+                            useAppleSelectedStyle: true,
                             action: {
                                 usageStore.increment(key: "automation:\(automation.id.uuidString)")
                                 onToggle(automation)
@@ -413,7 +607,7 @@ struct ScenesAutomationsSection: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, sectionHorizontalPadding)
             }
             .frame(height: pillRowHeight)
             .scrollIndicators(.hidden)
@@ -673,22 +867,39 @@ struct DeviceStatsSection: View {
     let activeAutomations: Int
     @Environment(\.colorScheme) private var colorScheme
 
+    private var headingColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.94) : DashboardPalette.primaryText
+    }
+    private var valueColor: Color {
+        colorScheme == .dark ? Color.white : DashboardPalette.primaryText
+    }
+    private var labelColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.78) : DashboardPalette.secondaryText
+    }
+    private var dividerColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.24) : DashboardPalette.tertiaryText
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Devices")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(Color.white.opacity(0.92))
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Overview")
+                .font(DashboardTypography.sectionTitle)
+                .foregroundColor(headingColor)
             
             // Unified Statistics Card with Vertical Dividers
             AppOverviewCard(
                 metrics: [
                     AppOverviewMetric(value: "\(totalDevices)", label: "Total\nDevices"),
                     AppOverviewMetric(value: "\(activeDevices)", label: "Active\nDevices"),
-                    AppOverviewMetric(value: "\(activeAutomations)", label: "Scenes\nOn")
+                    AppOverviewMetric(value: "\(activeAutomations)", label: "Automations\nOn")
                 ],
                 style: .systemGlass(tint: nil, interactive: false),
-                cornerRadius: 20
+                cornerRadius: 20,
+                valueColorOverride: valueColor,
+                labelColorOverride: labelColor,
+                dividerColorOverride: dividerColor,
+                valueFontOverride: DashboardTypography.metricValue,
+                labelFontOverride: DashboardTypography.metricLabel
             )
         }
     }
@@ -746,17 +957,24 @@ struct MiniDeviceCard: View {
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
     private var isReferenceLightMode: Bool { colorScheme == .light }
     private var primaryTextColor: Color {
-        Color.white.opacity(0.92)
+        colorScheme == .dark ? Color.white.opacity(0.92) : DashboardPalette.primaryText.opacity(0.96)
     }
     private var secondaryTextColor: Color {
-        Color.white.opacity(0.74)
+        colorScheme == .dark ? Color.white.opacity(0.74) : DashboardPalette.secondaryText.opacity(0.94)
     }
     private let miniCardCornerRadius: CGFloat = 20
     private var activeRunStatus: ActiveRunStatus? { viewModel.activeRunStatus[device.id] }
+    private var requiresSetup: Bool { device.setupState == .pendingSelection }
     
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomLeading) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onTap()
+                    }
+
                 // Product image positioned to peek out from bottom (contained within card)
                 VStack {
                     Spacer()
@@ -776,16 +994,37 @@ struct MiniDeviceCard: View {
                         // Device info on the left
                         VStack(alignment: .leading, spacing: 4) {
                             Text(device.name)
-                                .font(.headline.weight(.semibold))
+                                .font(DashboardTypography.cardTitle)
                                 .foregroundColor(primaryTextColor)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             
                             Text(device.location.displayName)
-                                .font(.subheadline.weight(.medium))
+                                .font(DashboardTypography.bodyStrong)
                                 .foregroundColor(secondaryTextColor)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                            if device.setupState == .pendingSelection {
+                                profileStatusChip(
+                                    title: "Setup Required",
+                                    icon: "sparkles",
+                                    foreground: .white,
+                                    highlight: Color.white.opacity(colorScheme == .dark ? 0.22 : 0.14)
+                                )
+                            } else if device.setupState == .completed, device.productType != .generic {
+                                profileStatusChip(
+                                    title: device.productType.displayName,
+                                    icon: device.productType.systemImage,
+                                    foreground: colorScheme == .dark ? Color.white.opacity(0.86) : DashboardPalette.secondaryText.opacity(0.95)
+                                )
+                            } else if device.setupState == .genericManual {
+                                profileStatusChip(
+                                    title: "Custom WLED",
+                                    icon: "slider.horizontal.3",
+                                    foreground: colorScheme == .dark ? Color.white.opacity(0.78) : DashboardPalette.secondaryText.opacity(0.9)
+                                )
+                            }
 
                             if let run = activeRunStatus {
                                 runStatusChip(run)
@@ -813,8 +1052,15 @@ struct MiniDeviceCard: View {
             miniCardBackground
         )
         .clipShape(RoundedRectangle(cornerRadius: miniCardCornerRadius, style: .continuous))
-        .onTapGesture {
-            onTap()
+        .overlay {
+            if requiresSetup {
+                Button(action: onTap) {
+                    RoundedRectangle(cornerRadius: miniCardCornerRadius, style: .continuous)
+                        .fill(Color.clear)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Complete setup for \(device.name)")
+            }
         }
         .onAppear {
             // Clear any UI optimistic state on appear
@@ -862,6 +1108,10 @@ struct MiniDeviceCard: View {
     // MARK: - Enhanced Power Toggle Button with Coordinated State Management
     private var powerToggleButton: some View {
         Button(action: {
+            if requiresSetup {
+                onTap()
+                return
+            }
             // Calculate target state BEFORE any state changes
             let targetState = !currentPowerState
             
@@ -906,7 +1156,7 @@ struct MiniDeviceCard: View {
         }) {
             ZStack {
                 Image(systemName: "power")
-                    .font(.headline.weight(.medium))
+                    .font(AppTypography.style(.headline, weight: .medium))
                     .foregroundColor(
                         isReferenceLightMode
                             ? Color.white.opacity(currentPowerState ? 0.90 : 0.72)
@@ -957,22 +1207,54 @@ struct MiniDeviceCard: View {
             .animation(.easeInOut(duration: 0.1), value: isToggling)
             .animation(.easeInOut(duration: 0.2), value: currentPowerState)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SnappyTapButtonStyle(pressedScale: 0.9, response: 0.16, damping: 0.78))
         .sensorySelection(trigger: isToggling)
-        .disabled(!device.isOnline || isToggling)
+        .disabled(!device.isOnline || isToggling || requiresSetup)
     }
 
     @ViewBuilder
     private func runStatusChip(_ run: ActiveRunStatus) -> some View {
         Text(runStatusText(run))
-        .font(.caption2)
-        .foregroundColor(theme.textPrimary.opacity(0.84))
+        .font(DashboardTypography.micro)
+        .foregroundColor(colorScheme == .dark ? Color.white.opacity(0.84) : DashboardPalette.secondaryText.opacity(0.9))
         .lineLimit(1)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
             Capsule()
                 .fill(theme.surfaceMuted)
+                .overlay(
+                    Capsule()
+                        .stroke(theme.divider.opacity(0.85), lineWidth: 1)
+                )
+        )
+        .padding(.top, 1)
+    }
+
+    private func profileStatusChip(
+        title: String,
+        icon: String,
+        foreground: Color,
+        highlight: Color = .clear
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(DashboardTypography.micro.weight(.semibold))
+            Text(title)
+                .font(DashboardTypography.micro)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .foregroundColor(foreground)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(theme.surfaceMuted)
+                .overlay(
+                    Capsule()
+                        .fill(highlight)
+                )
                 .overlay(
                     Capsule()
                         .stroke(theme.divider.opacity(0.85), lineWidth: 1)
@@ -1004,20 +1286,25 @@ struct MiniDeviceCard: View {
 struct AddSceneButton: View {
     @State private var showAddScene = false
     var compact: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
+    private var actionTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.92) : DashboardPalette.primaryText.opacity(0.92)
+    }
     
     var body: some View {
         Button(action: { showAddScene = true }) {
             HStack(spacing: compact ? 6 : 8) {
                 Image(systemName: "plus.circle")
-                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
-                Text("Add Scene")
-                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.medium))
+                    .font(compact ? DashboardTypography.buttonCompact : DashboardTypography.buttonRegular)
+                Text("Add")
+                    .font(compact ? DashboardTypography.buttonCompact : DashboardTypography.buttonRegular)
             }
-            .foregroundColor(Color.white.opacity(0.9))
+            .foregroundColor(actionTextColor)
             .padding(.horizontal, compact ? 12 : 16)
             .padding(.vertical, compact ? 6 : 8)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SnappyTapButtonStyle(pressedScale: 0.96, response: 0.16, damping: 0.8))
+        .accessibilityLabel("Add Scene")
         .appLiquidGlass(role: .control)
         .sheet(isPresented: $showAddScene) {
             SceneEditorSheet()
@@ -1031,20 +1318,25 @@ struct AddAutomationButton: View {
     @State private var builderDevice: WLEDDevice?
     @State private var pendingTemplate: AutomationTemplate?
     var compact: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
+    private var actionTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.92) : DashboardPalette.primaryText.opacity(0.92)
+    }
     
     var body: some View {
         Button(action: { showAddAutomation = true }) {
             HStack(spacing: compact ? 6 : 8) {
                 Image(systemName: "plus.circle")
-                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
-                Text("Add Automation")
-                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.medium))
+                    .font(compact ? DashboardTypography.buttonCompact : DashboardTypography.buttonRegular)
+                Text("Add")
+                    .font(compact ? DashboardTypography.buttonCompact : DashboardTypography.buttonRegular)
             }
-            .foregroundColor(Color.white.opacity(0.9))
+            .foregroundColor(actionTextColor)
             .padding(.horizontal, compact ? 12 : 16)
             .padding(.vertical, compact ? 6 : 8)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SnappyTapButtonStyle(pressedScale: 0.96, response: 0.16, damping: 0.8))
+        .accessibilityLabel("Add Automation")
         .appLiquidGlass(role: .control)
         .sheet(isPresented: $showAddAutomation, onDismiss: {
             builderDevice = nil
@@ -1056,6 +1348,22 @@ struct AddAutomationButton: View {
                 isPresented: $showAddAutomation
             )
         }
+    }
+}
+
+private struct LiquidGlassLogoGlyph: View {
+    let logoImage: UIImage
+
+    var body: some View {
+        let glyphMask = Image(uiImage: logoImage)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .padding(4)
+
+        Color.clear
+            .appLiquidGlass(role: .control, cornerRadius: 14)
+            .mask(glyphMask)
+        .frame(width: 44, height: 44)
     }
 }
 

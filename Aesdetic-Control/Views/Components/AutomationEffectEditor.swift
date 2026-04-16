@@ -103,16 +103,16 @@ struct AutomationEffectEditor: View {
     private var headerRow: some View {
         HStack {
             Label("Animations", systemImage: "sparkles")
-                .font(.headline)
+                .font(AppTypography.style(.headline))
                 .foregroundColor(.white)
             Spacer()
             
             Toggle(isOn: $previewEnabled) {
                 HStack(spacing: 4) {
                     Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                     Text("Preview")
-                        .font(.caption.weight(.medium))
+                        .font(AppTypography.style(.caption, weight: .medium))
                 }
             }
             .toggleStyle(.button)
@@ -128,7 +128,7 @@ struct AutomationEffectEditor: View {
         if !effectPresets.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Saved Effects")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.7))
                 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -167,12 +167,12 @@ struct AutomationEffectEditor: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(preset.name)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
                 Text("Effect \(preset.effectId)")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.6))
             }
             .padding(8)
@@ -188,12 +188,12 @@ struct AutomationEffectEditor: View {
     private var effectPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Animation")
-                .font(.footnote.weight(.semibold))
+                .font(AppTypography.style(.footnote, weight: .semibold))
                 .foregroundColor(.white.opacity(0.85))
             
             if effectOptions.isEmpty {
                 Text("No gradient-friendly animations available for this device.")
-                    .font(.caption)
+                    .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
             } else {
                 Picker("Animation", selection: $effectId) {
@@ -217,7 +217,7 @@ struct AutomationEffectEditor: View {
         if canEditGradient {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Gradient")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                 
                 GradientBar(
@@ -271,7 +271,7 @@ struct AutomationEffectEditor: View {
             // Single color mode
             VStack(alignment: .leading, spacing: 8) {
                 Text("Color")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                 
                 Button(action: {
@@ -500,7 +500,7 @@ struct AutomationEffectEditor: View {
         if previewEnabled && isApplyingEffect {
             Button(action: stopPreview) {
                 Text("Stop Preview")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)

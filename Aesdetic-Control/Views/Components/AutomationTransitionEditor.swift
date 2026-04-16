@@ -19,6 +19,8 @@ struct AutomationTransitionEditor: View {
     @Binding var endWhiteLevel: Double?
     let transitionProfile: TransitionStepProfile?
     let automationGuaranteeCount: Int
+    let maxDurationMinutes: Int
+    let showsDurationRecommendationGuide: Bool
     
     // Preview state
     @State private var previewEnabled: Bool = true
@@ -55,7 +57,9 @@ struct AutomationTransitionEditor: View {
         endTemperature: Binding<Double?>,
         endWhiteLevel: Binding<Double?>,
         transitionProfile: TransitionStepProfile? = nil,
-        automationGuaranteeCount: Int = 5
+        automationGuaranteeCount: Int = 5,
+        maxDurationMinutes: Int = TransitionDurationPicker.maxMinutes,
+        showsDurationRecommendationGuide: Bool = true
     ) {
         self.viewModel = viewModel
         self.device = device
@@ -70,18 +74,24 @@ struct AutomationTransitionEditor: View {
         self._endWhiteLevel = endWhiteLevel
         self.transitionProfile = transitionProfile
         self.automationGuaranteeCount = automationGuaranteeCount
+        self.maxDurationMinutes = max(0, maxDurationMinutes)
+        self.showsDurationRecommendationGuide = showsDurationRecommendationGuide
     }
     
     private var allowedSecondValues: [Int] {
-        durationMinutesPart >= 60 ? [0] : Array(0...59)
+        durationMinutesPart >= maxDurationMinutes ? [0] : Array(0...59)
     }
 
     private var selectedDurationSeconds: Int {
-        TransitionDurationPicker.totalSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart)
+        totalDurationSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart)
     }
 
     private var transitionExceedsRecommendedMax: Bool {
         TransitionDurationPicker.exceedsRecommendedMax(Double(selectedDurationSeconds))
+    }
+
+    private var maxDurationSeconds: Int {
+        max(0, maxDurationMinutes) * 60
     }
     
     private var colorPresets: [ColorPreset] {
@@ -144,7 +154,7 @@ struct AutomationTransitionEditor: View {
     private var headerRow: some View {
         HStack {
             Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
-                .font(.headline)
+                .font(AppTypography.style(.headline))
                 .foregroundColor(.white)
             Spacer()
 
@@ -152,9 +162,9 @@ struct AutomationTransitionEditor: View {
                 Toggle(isOn: $previewEnabled) {
                     HStack(spacing: 4) {
                         Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
-                            .font(.caption2)
+                            .font(AppTypography.style(.caption2))
                         Text("Preview")
-                            .font(.caption.weight(.medium))
+                            .font(AppTypography.style(.caption, weight: .medium))
                     }
                 }
                 .toggleStyle(.button)
@@ -171,7 +181,7 @@ struct AutomationTransitionEditor: View {
         if !transitionPresets.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Saved Transitions")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.7))
                 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -229,7 +239,7 @@ struct AutomationTransitionEditor: View {
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                     
                     Image(systemName: "arrow.right")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(.white.opacity(0.6))
                     
                     // End gradient preview
@@ -243,12 +253,12 @@ struct AutomationTransitionEditor: View {
                 }
                 
                 Text(preset.name)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
                 Text(formatDuration(preset.durationSec))
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.6))
             }
             .padding(8)
@@ -264,16 +274,16 @@ struct AutomationTransitionEditor: View {
     private var durationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Duration")
-                .font(.footnote.weight(.semibold))
+                .font(AppTypography.style(.footnote, weight: .semibold))
                 .foregroundColor(.white.opacity(0.85))
             
             HStack(spacing: 12) {
                 VStack(spacing: 4) {
                     Text("Minutes")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(.white.opacity(0.6))
                     Picker("Minutes", selection: $durationMinutesPart) {
-                        ForEach(0...60, id: \.self) { value in
+                        ForEach(0...maxDurationMinutes, id: \.self) { value in
                             Text(String(format: "%02d", value))
                                 .tag(value)
                         }
@@ -289,7 +299,7 @@ struct AutomationTransitionEditor: View {
                 
                 VStack(spacing: 4) {
                     Text("Seconds")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(.white.opacity(0.6))
                     Picker("Seconds", selection: $durationSecondsPart) {
                         ForEach(allowedSecondValues, id: \.self) { value in
@@ -308,7 +318,9 @@ struct AutomationTransitionEditor: View {
             }
             .frame(maxWidth: .infinity)
 
-            durationRecommendationGuide
+            if showsDurationRecommendationGuide {
+                durationRecommendationGuide
+            }
             transitionPlanningSummary
         }
         .padding(.horizontal, 16)
@@ -320,9 +332,13 @@ struct AutomationTransitionEditor: View {
                 let width = max(1, geo.size.width)
                 let progress = min(
                     1.0,
-                    Double(selectedDurationSeconds) / Double(TransitionDurationPicker.maxSeconds)
+                    Double(selectedDurationSeconds) / Double(max(1, maxDurationSeconds))
                 )
-                let markerX = width * TransitionDurationPicker.recommendedMaxRatio
+                let recommendedRatio = min(
+                    1.0,
+                    Double(TransitionDurationPicker.recommendedMaxSeconds) / Double(max(1, maxDurationSeconds))
+                )
+                let markerX = width * recommendedRatio
 
                 ZStack(alignment: .leading) {
                     Capsule()
@@ -348,14 +364,14 @@ struct AutomationTransitionEditor: View {
                 Text("\(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) recommended")
                     .foregroundColor(.orange.opacity(0.9))
                 Spacer()
-                Text("60:00")
+                Text(formatDuration(Double(maxDurationSeconds)))
             }
-            .font(.caption2)
+            .font(AppTypography.style(.caption2))
             .foregroundColor(.white.opacity(0.55))
 
             if transitionExceedsRecommendedMax {
                 Text("Above \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) may reduce automation reliability and increase preset storage use.")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.orange.opacity(0.9))
             }
         }
@@ -368,21 +384,21 @@ struct AutomationTransitionEditor: View {
                 let budgetText = profile.perAutomationBudget.map { "\($0) slots / automation" } ?? "No budget limit"
                 let quality = profile.qualityLabel.displayName
                 Text("Estimated storage: \(profile.slotsRequired) slots")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white.opacity(0.88))
                 Text("Quality: \(quality) (\(Int(profile.legSeconds))s legs)")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.7))
                 Text("\(automationGuaranteeCount)-automation budget: \(budgetText)")
-                    .font(.caption2)
+                    .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.65))
                 if profile.wasCoarsened {
                     Text("Auto-adjusted from \(Int(profile.baseLegSeconds))s to \(Int(profile.legSeconds))s legs to fit storage budget.")
-                        .font(.caption2)
+                        .font(AppTypography.style(.caption2))
                         .foregroundColor(.orange.opacity(0.92))
                 }
                 Text(profile.fitsBudget ? "Fits guaranteed storage budget." : "Exceeds guaranteed storage budget. Reduce duration or free preset slots.")
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTypography.style(.caption2, weight: .semibold))
                     .foregroundColor(profile.fitsBudget ? .green.opacity(0.9) : .orange.opacity(0.95))
             }
             .padding(10)
@@ -398,15 +414,15 @@ struct AutomationTransitionEditor: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 8) {
                 Text("Start")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                     Text("\(Int(round(startBrightness/255.0*100)))%")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                 }
             }
@@ -510,15 +526,15 @@ struct AutomationTransitionEditor: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 8) {
                 Text("End")
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                     Text("\(Int(round(endBrightness/255.0*100)))%")
-                        .font(.caption)
+                        .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                 }
             }
@@ -801,7 +817,7 @@ struct AutomationTransitionEditor: View {
         if previewEnabled && isApplyingTransition {
             Button(action: cancelPreview) {
                 Text("Stop Preview")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.style(.caption, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
@@ -818,27 +834,43 @@ struct AutomationTransitionEditor: View {
     // MARK: - Helper Functions
     
     private func updateDurationFromSeconds(_ seconds: Double) {
-        let components = TransitionDurationPicker.components(from: seconds)
-        durationMinutesPart = components.minutes
-        durationSecondsPart = components.seconds
+        let total = clampedDurationTotalSeconds(seconds)
+        durationMinutesPart = total / 60
+        durationSecondsPart = total % 60
+        if Double(total) != seconds {
+            durationSeconds = Double(total)
+        }
     }
     
     private func updateDurationToSeconds() {
-        if durationMinutesPart > 60 {
-            durationMinutesPart = 60
+        if durationMinutesPart > maxDurationMinutes {
+            durationMinutesPart = maxDurationMinutes
         }
         if durationMinutesPart < 0 {
             durationMinutesPart = 0
         }
-        if durationMinutesPart == 60 {
+        if durationMinutesPart == maxDurationMinutes {
             durationSecondsPart = 0
         }
         durationSecondsPart = max(0, min(durationSecondsPart, 59))
-        durationSeconds = Double(TransitionDurationPicker.totalSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart))
+        durationSeconds = Double(totalDurationSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart))
     }
 
     private func formatDuration(_ seconds: Double) -> String {
         TransitionDurationPicker.clockString(seconds: seconds)
+    }
+
+    private func clampedDurationTotalSeconds(_ seconds: Double) -> Int {
+        max(0, min(Int(seconds.rounded()), maxDurationSeconds))
+    }
+
+    private func totalDurationSeconds(minutes: Int, seconds: Int) -> Int {
+        let clampedMinutes = max(0, min(minutes, maxDurationMinutes))
+        if clampedMinutes == maxDurationMinutes {
+            return maxDurationSeconds
+        }
+        let clampedSeconds = max(0, min(seconds, 59))
+        return clampedMinutes * 60 + clampedSeconds
     }
 
     private func hydrateStopMapsIfNeeded() {
