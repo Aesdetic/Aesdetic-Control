@@ -205,8 +205,12 @@ struct PresetsListView: View {
                     }, onEdit: {
                         onRequestRename(.color(preset))
                     }, onDelete: {
-                        Task { await requestColorPresetDeletion(preset, on: device) }
-                        store.removeColorPreset(preset.id)
+                        Task {
+                            let deleted = await requestColorPresetDeletion(preset, on: device)
+                            if deleted {
+                                store.removeColorPreset(preset.id)
+                            }
+                        }
                     })
                     }
                 }
@@ -255,8 +259,12 @@ struct PresetsListView: View {
                             }, onEdit: {
                                 onRequestRename(.transition(preset))
                             }, onDelete: {
-                                Task { await requestTransitionPresetDeletion(preset, on: device) }
-                                store.removeTransitionPreset(preset.id)
+                                Task {
+                                    let deleted = await requestTransitionPresetDeletion(preset, on: device)
+                                    if deleted {
+                                        store.removeTransitionPreset(preset.id)
+                                    }
+                                }
                             })
                         }
                     }
@@ -328,8 +336,12 @@ struct PresetsListView: View {
                         }, onEdit: {
                             onRequestRename(.effect(preset))
                         }, onDelete: {
-                            Task { await requestEffectPresetDeletion(preset, on: device) }
-                            store.removeEffectPreset(preset.id)
+                            Task {
+                                let deleted = await requestEffectPresetDeletion(preset, on: device)
+                                if deleted {
+                                    store.removeEffectPreset(preset.id)
+                                }
+                            }
                         })
                         }
                     }
@@ -933,7 +945,8 @@ struct PresetsListView: View {
         .padding(.vertical, 20)
     }
 
-    private func requestColorPresetDeletion(_ preset: ColorPreset, on device: WLEDDevice) async {
+    private func requestColorPresetDeletion(_ preset: ColorPreset, on device: WLEDDevice) async -> Bool {
+        var allResolved = true
         if let idsByDevice = preset.wledPresetIds, !idsByDevice.isEmpty {
             for (deviceId, presetId) in idsByDevice {
                 if let target = viewModel.devices.first(where: { $0.id == deviceId }) {
@@ -941,25 +954,41 @@ struct PresetsListView: View {
                 } else {
                     DeviceCleanupManager.shared.enqueue(type: .preset, deviceId: deviceId, ids: [presetId])
                 }
+                if DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: deviceId, id: presetId) {
+                    allResolved = false
+                }
             }
-            return
+            return allResolved
         }
         if let legacyId = preset.wledPresetId {
             await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [legacyId])
+            if DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: device.id, id: legacyId) {
+                allResolved = false
+            }
         }
+        return allResolved
     }
 
-    private func requestTransitionPresetDeletion(_ preset: TransitionPreset, on device: WLEDDevice) async {
-        guard let playlistId = preset.wledPlaylistId else { return }
+    private func requestTransitionPresetDeletion(_ preset: TransitionPreset, on device: WLEDDevice) async -> Bool {
+        guard let playlistId = preset.wledPlaylistId else { return true }
+        var allResolved = true
         await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [playlistId])
+        if DeviceCleanupManager.shared.hasActiveDelete(type: .playlist, deviceId: device.id, id: playlistId) {
+            allResolved = false
+        }
         if let stepIds = preset.wledStepPresetIds, !stepIds.isEmpty {
             await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: stepIds)
+            for stepId in stepIds where DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: device.id, id: stepId) {
+                allResolved = false
+            }
         }
+        return allResolved
     }
 
-    private func requestEffectPresetDeletion(_ preset: WLEDEffectPreset, on device: WLEDDevice) async {
-        guard let presetId = preset.wledPresetId else { return }
+    private func requestEffectPresetDeletion(_ preset: WLEDEffectPreset, on device: WLEDDevice) async -> Bool {
+        guard let presetId = preset.wledPresetId else { return true }
         await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [presetId])
+        return !DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: device.id, id: presetId)
     }
 }
 

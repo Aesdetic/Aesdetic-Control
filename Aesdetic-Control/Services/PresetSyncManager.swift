@@ -42,9 +42,9 @@ actor PresetSyncManager {
         return try await task.value
     }
 
-    private func assertPresetCreationAllowed() async throws {
+    private func assertPresetCreationAllowed(deviceId: String) async throws {
         let deletionInProgress = await MainActor.run {
-            AutomationStore.shared.hasAnyDeletionInProgress
+            AutomationStore.shared.isDeletionInProgress(for: deviceId)
         }
         if deletionInProgress {
             throw PresetSyncManagerError.blockedByAutomationDeletion
@@ -52,9 +52,9 @@ actor PresetSyncManager {
     }
 
     func saveColorPreset(_ preset: ColorPreset, to device: WLEDDevice) async throws -> Int {
-        try await assertPresetCreationAllowed()
+        try await assertPresetCreationAllowed(deviceId: device.id)
         return try await enqueue(deviceId: device.id) {
-            try await self.assertPresetCreationAllowed()
+            try await self.assertPresetCreationAllowed(deviceId: device.id)
             let existingId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId
             let presetId = try await self.resolvePresetId(for: preset, device: device, existingId: existingId)
             #if DEBUG
@@ -65,16 +65,22 @@ actor PresetSyncManager {
             }
             try await self.verifyPresetExists(id: presetId, device: device)
             if let existingId, existingId != presetId {
-                _ = try? await self.apiService.deletePreset(id: existingId, device: device)
+                await DeviceCleanupManager.shared.requestDelete(
+                    type: .preset,
+                    device: device,
+                    ids: [existingId],
+                    source: .presetRenameSync,
+                    verificationRequired: true
+                )
             }
             return presetId
         }
     }
 
     func saveEffectPreset(_ preset: WLEDEffectPreset, to device: WLEDDevice) async throws -> Int {
-        try await assertPresetCreationAllowed()
+        try await assertPresetCreationAllowed(deviceId: device.id)
         return try await enqueue(deviceId: device.id) {
-            try await self.assertPresetCreationAllowed()
+            try await self.assertPresetCreationAllowed(deviceId: device.id)
             let existingId = preset.wledPresetId
             let presetId = try await self.resolvePresetId(for: preset, device: device, existingId: existingId)
             #if DEBUG
@@ -85,7 +91,13 @@ actor PresetSyncManager {
             }
             try await self.verifyPresetExists(id: presetId, device: device)
             if let existingId, existingId != presetId {
-                _ = try? await self.apiService.deletePreset(id: existingId, device: device)
+                await DeviceCleanupManager.shared.requestDelete(
+                    type: .preset,
+                    device: device,
+                    ids: [existingId],
+                    source: .presetRenameSync,
+                    verificationRequired: true
+                )
             }
             return presetId
         }
@@ -97,9 +109,9 @@ actor PresetSyncManager {
         print("transition_preset.legacy_save_path_blocked device=\(device.id)")
         assertionFailure("Use DeviceControlViewModel.saveTransitionPresetToDevice/createTransitionPlaylist for transition presets")
         #endif
-        try await assertPresetCreationAllowed()
+        try await assertPresetCreationAllowed(deviceId: device.id)
         return try await enqueue(deviceId: device.id) {
-            try await self.assertPresetCreationAllowed()
+            try await self.assertPresetCreationAllowed(deviceId: device.id)
             let existingId = preset.wledPlaylistId
             let existingStepIds = preset.wledStepPresetIds ?? []
             let playlistId = try await self.resolvePlaylistId(for: preset, device: device, existingId: existingId)
@@ -111,15 +123,27 @@ actor PresetSyncManager {
             }
             try await self.verifyPlaylistExists(id: playlistId, device: device)
             if let existingId, existingId != playlistId {
-                _ = try? await self.apiService.deletePlaylist(id: existingId, device: device)
+                await DeviceCleanupManager.shared.requestDelete(
+                    type: .playlist,
+                    device: device,
+                    ids: [existingId],
+                    source: .playlistRenameSync,
+                    verificationRequired: true
+                )
             }
             if !existingStepIds.isEmpty,
                let playlists = try? await self.apiService.fetchPlaylists(for: device),
                let playlist = playlists.first(where: { $0.id == playlistId }) {
                 let newStepIds = Set(playlist.presets)
                 let staleStepIds = existingStepIds.filter { !newStepIds.contains($0) }
-                for presetId in staleStepIds {
-                    _ = try? await self.apiService.deletePreset(id: presetId, device: device)
+                if !staleStepIds.isEmpty {
+                    await DeviceCleanupManager.shared.requestDelete(
+                        type: .preset,
+                        device: device,
+                        ids: staleStepIds,
+                        source: .presetRenameSync,
+                        verificationRequired: true
+                    )
                 }
             }
             return playlistId

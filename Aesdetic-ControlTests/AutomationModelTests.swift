@@ -150,6 +150,27 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertEqual(decoded.managedPresetSignature(for: "d1"), "preset-signature")
     }
 
+    func testAutomationMetadataManagedCheckpointRoundTripCodable() throws {
+        let checkpoint = ManagedAutomationAssetCheckpoint(
+            capturedAt: Date(timeIntervalSince1970: 1_234_567),
+            playlistId: 121,
+            presetId: nil,
+            stepPresetIds: [122, 123, 123],
+            playlistSignature: "playlist-sig",
+            presetSignature: nil
+        )
+        let original = AutomationMetadata(
+            wledManagedAssetCheckpointByDevice: ["d1": checkpoint]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AutomationMetadata.self, from: data)
+        let restored = decoded.managedAssetCheckpoint(for: "d1")
+        XCTAssertNotNil(restored)
+        XCTAssertEqual(restored?.playlistId, 121)
+        XCTAssertEqual(restored?.stepPresetIds, [122, 123])
+        XCTAssertEqual(restored?.playlistSignature, "playlist-sig")
+    }
+
     func testClearWLEDMacroMetadataResetsTargetedDeviceState() {
         var metadata = AutomationMetadata(
             wledPlaylistId: 42,
@@ -157,6 +178,10 @@ final class AutomationModelTests: XCTestCase {
             wledPresetIdsByDevice: ["d1": 11, "d2": 12],
             wledManagedPlaylistSignatureByDevice: ["d1": "playlist", "d2": "other"],
             wledManagedPresetSignatureByDevice: ["d1": "preset", "d2": "other"],
+            wledManagedAssetCheckpointByDevice: [
+                "d1": ManagedAutomationAssetCheckpoint(playlistId: 42, stepPresetIds: [11, 12]),
+                "d2": ManagedAutomationAssetCheckpoint(presetId: 12, presetSignature: "other")
+            ],
             wledSyncStateByDevice: ["d1": .synced, "d2": .synced],
             wledLastSyncErrorByDevice: ["d1": "error"],
             wledLastSyncAtByDevice: ["d1": Date()]
@@ -173,6 +198,8 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertNil(metadata.lastSyncAt(for: "d1"))
         XCTAssertNil(metadata.managedPlaylistSignature(for: "d1"))
         XCTAssertNil(metadata.managedPresetSignature(for: "d1"))
+        XCTAssertNil(metadata.managedAssetCheckpoint(for: "d1"))
+        XCTAssertNotNil(metadata.managedAssetCheckpoint(for: "d2"))
     }
 
     func testNormalizeWLEDScalarFallbacksClearsMultiTargetScalars() {
@@ -405,6 +432,42 @@ final class AutomationModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCleanupDeadLetterPresetStoreDeletesScopesIds() {
+        let cleanup = DeviceCleanupManager.shared
+        let deviceId = "cleanup-deadletter-\(UUID().uuidString)"
+        let presetIds = [41, 42]
+        defer {
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: presetIds)
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: presetIds,
+            source: .automation,
+            verificationRequired: true
+        )
+
+        let deadLettered = cleanup.deadLetterPresetStoreDeletes(
+            deviceId: deviceId,
+            source: .automation,
+            presetIds: Set([41]),
+            reason: "test-unreadable"
+        )
+        XCTAssertEqual(deadLettered, 1)
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: 42))
+        XCTAssertFalse(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: 41))
+
+        let deadLetterEntry = cleanup.pendingDeletes.first {
+            $0.deviceId == deviceId
+                && $0.type == .preset
+                && $0.deadLetteredAt != nil
+                && $0.ids == [41]
+        }
+        XCTAssertNotNil(deadLetterEntry)
+    }
+
+    @MainActor
     func testDeleteManagedTransitionAutomationEnqueuesPlaylistAndStepPresetCleanup() async {
         let store = AutomationStore.shared
         let cleanup = DeviceCleanupManager.shared
@@ -454,7 +517,17 @@ final class AutomationModelTests: XCTestCase {
         let deleteFinished = await waitForCondition {
             !store.isDeletionInProgress(for: automation.id)
         }
-        XCTAssertTrue(deleteFinished, "Expected managed transition delete to finish")
+        XCTAssertTrue(deleteFinished, "Expected managed transition delete to finish after timer phase")
+        XCTAssertFalse(
+            store.automations.contains(where: { $0.id == automation.id }),
+            "Expected automation row to be removed while remote asset cleanup continues in background"
+        )
+        let managedDeletesQueued = await waitForCondition(timeoutNanoseconds: 2_000_000_000) {
+            cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot)
+                && cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: playlistId)
+                && stepPresetIds.allSatisfy { cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: $0) }
+        }
+        XCTAssertTrue(managedDeletesQueued, "Expected managed delete IDs to be queued")
 
         XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
         XCTAssertTrue(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: playlistId))
@@ -473,6 +546,25 @@ final class AutomationModelTests: XCTestCase {
         }
         XCTAssertFalse(managedCleanupEntries.isEmpty)
         XCTAssertTrue(managedCleanupEntries.allSatisfy(\.verificationRequired))
+        let timerCreatedAt = managedCleanupEntries
+            .filter { $0.type == .timer }
+            .map(\.createdAt)
+            .min()
+        let playlistCreatedAt = managedCleanupEntries
+            .filter { $0.type == .playlist }
+            .map(\.createdAt)
+            .min()
+        let presetCreatedAt = managedCleanupEntries
+            .filter { $0.type == .preset }
+            .map(\.createdAt)
+            .min()
+        XCTAssertNotNil(timerCreatedAt)
+        XCTAssertNotNil(playlistCreatedAt)
+        XCTAssertNotNil(presetCreatedAt)
+        if let timerCreatedAt, let playlistCreatedAt, let presetCreatedAt {
+            XCTAssertLessThanOrEqual(timerCreatedAt, playlistCreatedAt)
+            XCTAssertLessThanOrEqual(playlistCreatedAt, presetCreatedAt)
+        }
     }
 
     @MainActor
@@ -525,7 +617,15 @@ final class AutomationModelTests: XCTestCase {
         let playlistDeleteFinished = await waitForCondition {
             !store.isDeletionInProgress(for: playlistAutomation.id)
         }
-        XCTAssertTrue(playlistDeleteFinished, "Expected playlist automation delete to finish")
+        XCTAssertTrue(playlistDeleteFinished, "Expected playlist automation delete to finish after timer phase")
+        XCTAssertFalse(
+            store.automations.contains(where: { $0.id == playlistAutomation.id }),
+            "Expected playlist automation row to be removed while timer cleanup stays queued"
+        )
+        let playlistTimerQueued = await waitForCondition(timeoutNanoseconds: 2_000_000_000) {
+            cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot)
+        }
+        XCTAssertTrue(playlistTimerQueued, "Expected timer cleanup to be queued for playlist automation")
         XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
         XCTAssertFalse(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: userPlaylistId))
     }
@@ -580,7 +680,17 @@ final class AutomationModelTests: XCTestCase {
         let deleteFinished = await waitForCondition {
             !store.isDeletionInProgress(for: automation.id)
         }
-        XCTAssertTrue(deleteFinished, "Expected imported managed transition delete to finish")
+        XCTAssertTrue(deleteFinished, "Expected imported managed transition delete to finish after timer phase")
+        XCTAssertFalse(
+            store.automations.contains(where: { $0.id == automation.id }),
+            "Expected imported automation row to be removed while remote cleanup continues in background"
+        )
+        let importedDeletesQueued = await waitForCondition(timeoutNanoseconds: 2_000_000_000) {
+            cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot)
+                && cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: playlistId)
+                && stepPresetIds.allSatisfy { cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: $0) }
+        }
+        XCTAssertTrue(importedDeletesQueued, "Expected imported managed delete IDs to be queued")
 
         XCTAssertTrue(cleanup.hasActiveDelete(type: .timer, deviceId: deviceId, id: timerSlot))
         XCTAssertTrue(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: playlistId))
@@ -599,19 +709,38 @@ final class AutomationModelTests: XCTestCase {
         }
         XCTAssertFalse(importedManagedCleanupEntries.isEmpty)
         XCTAssertTrue(importedManagedCleanupEntries.allSatisfy(\.verificationRequired))
+        let importedTimerCreatedAt = importedManagedCleanupEntries
+            .filter { $0.type == .timer }
+            .map(\.createdAt)
+            .min()
+        let importedPlaylistCreatedAt = importedManagedCleanupEntries
+            .filter { $0.type == .playlist }
+            .map(\.createdAt)
+            .min()
+        let importedPresetCreatedAt = importedManagedCleanupEntries
+            .filter { $0.type == .preset }
+            .map(\.createdAt)
+            .min()
+        XCTAssertNotNil(importedTimerCreatedAt)
+        XCTAssertNotNil(importedPlaylistCreatedAt)
+        XCTAssertNotNil(importedPresetCreatedAt)
+        if let importedTimerCreatedAt, let importedPlaylistCreatedAt, let importedPresetCreatedAt {
+            XCTAssertLessThanOrEqual(importedTimerCreatedAt, importedPlaylistCreatedAt)
+            XCTAssertLessThanOrEqual(importedPlaylistCreatedAt, importedPresetCreatedAt)
+        }
     }
 
     @MainActor
-    func testCleanupRequestDeleteDefersPresetMutationWhenIntegrityGuardActive() async {
+    func testCleanupRequestDeleteQueuesPresetStoreDeletesThroughWLEDStyleFlow() async {
         let cleanup = DeviceCleanupManager.shared
         let viewModel = DeviceControlViewModel.shared
-        let deviceId = "cleanup-guard-\(UUID().uuidString)"
+        let deviceId = "cleanup-wled-style-\(UUID().uuidString)"
         let presetId = 199
         let device = WLEDDevice(
             id: deviceId,
-            name: "Guarded Device",
+            name: "Queued Device",
             ipAddress: "192.168.1.201",
-            isOnline: true,
+            isOnline: false,
             brightness: 128,
             currentColor: .blue
         )
@@ -637,8 +766,387 @@ final class AutomationModelTests: XCTestCase {
 
         XCTAssertTrue(
             cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: presetId),
-            "Expected guarded delete to defer and remain queued"
+            "Preset-store deletes should route through the WLED-style queue instead of running immediate app-side logic"
         )
+    }
+
+    @MainActor
+    func testDeleteMutationGuardBlocksRecentUnreadableHealthEvent() async {
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "delete-health-unreadable-\(UUID().uuidString)"
+        defer {
+            viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId)
+        }
+
+        viewModel.debugSetPresetStoreHealthForTests(
+            deviceId: deviceId,
+            health: .degradedReadable,
+            pauseSeconds: nil,
+            lastMessage: "preset.delete: preset store is unreadable",
+            lastEventAt: Date()
+        )
+
+        let allowed = await viewModel.debugShouldAllowPresetStoreDeleteMutationForTests(deviceId: deviceId)
+        XCTAssertFalse(allowed, "Expected recent unreadable health event to block destructive delete mutation")
+    }
+
+    @MainActor
+    func testDeleteMutationGuardAllowsStaleUnreadableHealthEvent() async {
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "delete-health-stale-\(UUID().uuidString)"
+        defer {
+            viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId)
+        }
+
+        viewModel.debugSetPresetStoreHealthForTests(
+            deviceId: deviceId,
+            health: .degradedReadable,
+            pauseSeconds: nil,
+            lastMessage: "preset.delete: preset store is unreadable",
+            lastEventAt: Date().addingTimeInterval(-120)
+        )
+
+        let allowed = await viewModel.debugShouldAllowPresetStoreDeleteMutationForTests(deviceId: deviceId)
+        XCTAssertTrue(allowed, "Expected stale unreadable event to no longer block delete mutation")
+    }
+
+    @MainActor
+    func testCleanupQueuePreservesPresetIdsWhenDeviceIsOffline() async {
+        let cleanup = DeviceCleanupManager.shared
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "cleanup-offline-preserve-\(UUID().uuidString)"
+        let device = WLEDDevice(
+            id: deviceId,
+            name: "Offline Preserve Device",
+            ipAddress: "192.168.1.231",
+            isOnline: false,
+            brightness: 128,
+            currentColor: .blue
+        )
+        let originalDevices = viewModel.devices
+        viewModel.devices = [device]
+        defer {
+            viewModel.devices = originalDevices
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [301, 302])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [301, 302],
+            source: .automation,
+            verificationRequired: true
+        )
+
+        await cleanup.processQueue(for: deviceId)
+
+        guard let entry = cleanup.pendingDeletes.first(where: {
+            $0.deviceId == deviceId && $0.type == .preset && $0.deadLetteredAt == nil
+        }) else {
+            return XCTFail("Expected deferred cleanup entry to remain queued")
+        }
+
+        XCTAssertEqual(entry.ids, [301, 302], "Deferred failures should preserve ID order while waiting for recovery")
+        XCTAssertEqual(entry.retries, 0, "Offline queue checks should not consume retry budget")
+        XCTAssertNil(entry.lastError)
+        XCTAssertNotNil(entry.nextAttemptAt)
+    }
+
+    @MainActor
+    func testCleanupQueueDoesNotSplitOrDeferForCachedRuntimeAttachment() async {
+        let cleanup = DeviceCleanupManager.shared
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "cleanup-runtime-overlap-\(UUID().uuidString)"
+        let targetPresetId = 401
+        let activePlaylistId = 1
+        let runtimeState = WLEDState(
+            brightness: 128,
+            isOn: true,
+            segments: [],
+            transitionDeciseconds: nil,
+            presetId: targetPresetId,
+            playlistId: activePlaylistId,
+            mainSegment: nil
+        )
+        let device = WLEDDevice(
+            id: deviceId,
+            name: "Runtime Overlap Device",
+            ipAddress: " ",
+            isOnline: false,
+            brightness: 128,
+            currentColor: .blue,
+            state: runtimeState
+        )
+        let originalDevices = viewModel.devices
+        viewModel.devices = [device]
+        defer {
+            viewModel.devices = originalDevices
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [targetPresetId])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [targetPresetId],
+            source: .automation,
+            verificationRequired: true
+        )
+
+        await cleanup.processQueue(for: deviceId)
+
+        guard let entry = cleanup.pendingDeletes.first(where: {
+            $0.deviceId == deviceId && $0.type == .preset && $0.deadLetteredAt == nil
+        }) else {
+            return XCTFail("Expected queued delete entry to remain queued while offline")
+        }
+
+        XCTAssertEqual(entry.ids, [targetPresetId])
+        XCTAssertEqual(entry.retries, 0)
+        XCTAssertNil(entry.lastError)
+        XCTAssertNotNil(entry.nextAttemptAt)
+    }
+
+    @MainActor
+    func testCleanupQueueKeepsRuntimeOverlapBatchTogetherUntilWLEDDeleteRuns() async {
+        let cleanup = DeviceCleanupManager.shared
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "cleanup-runtime-split-\(UUID().uuidString)"
+        let activePresetId = 451
+        let otherPresetId = 452
+        let runtimeState = WLEDState(
+            brightness: 128,
+            isOn: true,
+            segments: [],
+            transitionDeciseconds: nil,
+            presetId: activePresetId,
+            playlistId: 1,
+            mainSegment: nil
+        )
+        let device = WLEDDevice(
+            id: deviceId,
+            name: "Runtime Split Device",
+            ipAddress: " ",
+            isOnline: false,
+            brightness: 128,
+            currentColor: .blue,
+            state: runtimeState
+        )
+        let originalDevices = viewModel.devices
+        viewModel.devices = [device]
+        defer {
+            viewModel.devices = originalDevices
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [activePresetId, otherPresetId])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [activePresetId, otherPresetId],
+            source: .automation,
+            verificationRequired: true
+        )
+
+        await cleanup.processQueue(for: deviceId) // split pass
+        await cleanup.processQueue(for: deviceId) // non-overlap attempt pass
+
+        let entries = cleanup.pendingDeletes.filter {
+            $0.deviceId == deviceId && $0.type == .preset && $0.deadLetteredAt == nil
+        }
+        XCTAssertEqual(entries.count, 1, "Runtime state should not split WLED-style preset deletion batches")
+        XCTAssertEqual(entries.first?.ids, [activePresetId, otherPresetId])
+        XCTAssertEqual(entries.first?.retries, 0)
+        XCTAssertNil(entries.first?.lastError)
+    }
+
+    @MainActor
+    func testCleanupQueueRuntimeNonOverlapRemainsQueuedUntilDeviceOnline() async {
+        let cleanup = DeviceCleanupManager.shared
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "cleanup-runtime-nonoverlap-\(UUID().uuidString)"
+        let activePresetId = 499
+        let deletePresetId = 402
+        let runtimeState = WLEDState(
+            brightness: 128,
+            isOn: true,
+            segments: [],
+            transitionDeciseconds: nil,
+            presetId: activePresetId,
+            playlistId: 1,
+            mainSegment: nil
+        )
+        let device = WLEDDevice(
+            id: deviceId,
+            name: "Runtime Non-Overlap Device",
+            ipAddress: " ",
+            isOnline: false,
+            brightness: 128,
+            currentColor: .blue,
+            state: runtimeState
+        )
+        let originalDevices = viewModel.devices
+        viewModel.devices = [device]
+        defer {
+            viewModel.devices = originalDevices
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [deletePresetId])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [deletePresetId],
+            source: .automation,
+            verificationRequired: true
+        )
+
+        await cleanup.processQueue(for: deviceId)
+
+        guard let entry = cleanup.pendingDeletes.first(where: {
+            $0.deviceId == deviceId && $0.type == .preset && $0.deadLetteredAt == nil
+        }) else {
+            return XCTFail("Expected non-overlap delete entry to remain queued while offline")
+        }
+
+        XCTAssertEqual(entry.ids, [deletePresetId])
+        XCTAssertEqual(entry.retries, 0)
+        XCTAssertNil(entry.lastError)
+    }
+
+    @MainActor
+    func testCleanupQueueStalePresetPointerDoesNotCreateAppSideDeferral() async {
+        let cleanup = DeviceCleanupManager.shared
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "cleanup-runtime-stale-ps-\(UUID().uuidString)"
+        let deletePresetId = 403
+        let runtimeState = WLEDState(
+            brightness: 128,
+            isOn: true,
+            segments: [],
+            transitionDeciseconds: nil,
+            presetId: deletePresetId,
+            playlistId: nil,
+            mainSegment: nil
+        )
+        let device = WLEDDevice(
+            id: deviceId,
+            name: "Runtime Stale Preset Device",
+            ipAddress: " ",
+            isOnline: false,
+            brightness: 128,
+            currentColor: .blue,
+            state: runtimeState
+        )
+        let originalDevices = viewModel.devices
+        viewModel.devices = [device]
+        defer {
+            viewModel.devices = originalDevices
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [deletePresetId])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [deletePresetId],
+            source: .automation,
+            verificationRequired: true
+        )
+
+        await cleanup.processQueue(for: deviceId)
+
+        guard let entry = cleanup.pendingDeletes.first(where: {
+            $0.deviceId == deviceId && $0.type == .preset && $0.deadLetteredAt == nil
+        }) else {
+            return XCTFail("Expected stale-pointer delete entry to remain queued while offline")
+        }
+
+        XCTAssertEqual(entry.ids, [deletePresetId])
+        XCTAssertEqual(entry.retries, 0)
+        XCTAssertNil(entry.lastError)
+        XCTAssertNotNil(entry.nextAttemptAt)
+    }
+
+    @MainActor
+    func testCleanupPendingDeleteHelpersFilterBySourceAndDevice() {
+        let cleanup = DeviceCleanupManager.shared
+        let automationDeviceId = "cleanup-helper-automation-\(UUID().uuidString)"
+        let nonAutomationDeviceId = "cleanup-helper-nonautomation-\(UUID().uuidString)"
+
+        defer {
+            cleanup.removeIds(type: .preset, deviceId: automationDeviceId, ids: [241])
+            cleanup.removeIds(type: .playlist, deviceId: nonAutomationDeviceId, ids: [177])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: automationDeviceId,
+            ids: [241],
+            source: .automation,
+            verificationRequired: true
+        )
+        cleanup.enqueue(
+            type: .playlist,
+            deviceId: nonAutomationDeviceId,
+            ids: [177],
+            source: .playlistRenameSync,
+            verificationRequired: true
+        )
+
+        XCTAssertTrue(cleanup.hasPendingDeletes(source: .automation))
+        XCTAssertTrue(cleanup.hasPendingDeletes(source: .automation, deviceId: automationDeviceId))
+        XCTAssertFalse(cleanup.hasPendingDeletes(source: .automation, deviceId: nonAutomationDeviceId))
+        XCTAssertTrue(cleanup.pendingDeleteDeviceIds(source: .automation).contains(automationDeviceId))
+    }
+
+    @MainActor
+    func testAutomationStoreDeletionStateIncludesQueuedAutomationDeletes() {
+        let cleanup = DeviceCleanupManager.shared
+        let store = AutomationStore.shared
+        let deviceId = "cleanup-store-lock-\(UUID().uuidString)"
+        let presetId = 242
+
+        defer {
+            cleanup.removeIds(type: .preset, deviceId: deviceId, ids: [presetId])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [presetId],
+            source: .automation,
+            verificationRequired: true
+        )
+
+        XCTAssertTrue(store.isDeletionInProgress(for: deviceId))
+        XCTAssertTrue(store.hasAnyDeletionInProgress)
+    }
+
+    @MainActor
+    func testAutomationStoreDeletionStateIncludesQueuedPresetStoreDeletesFromUnknownSource() {
+        let cleanup = DeviceCleanupManager.shared
+        let store = AutomationStore.shared
+        let deviceId = "cleanup-store-generic-lock-\(UUID().uuidString)"
+        let playlistId = 219
+
+        defer {
+            cleanup.removeIds(type: .playlist, deviceId: deviceId, ids: [playlistId])
+        }
+
+        cleanup.enqueue(
+            type: .playlist,
+            deviceId: deviceId,
+            ids: [playlistId],
+            source: .unknown,
+            verificationRequired: true
+        )
+
+        XCTAssertTrue(
+            cleanup.hasPendingPresetStoreDeletes(deviceId: deviceId),
+            "Expected generic preset-store pending delete debt to be visible"
+        )
+        XCTAssertTrue(
+            store.isDeletionInProgress(for: deviceId),
+            "Expected device deletion-in-progress lock while any preset-store cleanup is queued"
+        )
+        XCTAssertTrue(store.hasAnyDeletionInProgress)
     }
 
     func testSelectTimerSlotDoesNotReuseActionableMacroWhenDisabled() {

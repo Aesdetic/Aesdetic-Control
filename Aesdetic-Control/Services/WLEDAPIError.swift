@@ -24,6 +24,8 @@ enum WLEDAPIError: LocalizedError {
     case unsupportedOperation(String)
     case deviceBusy(String)
     case invalidConfiguration
+    case presetStoreUnreadable(String)
+    case presetStoreDeleteIncomplete(String)
     
     var errorDescription: String? {
         switch self {
@@ -53,6 +55,10 @@ enum WLEDAPIError: LocalizedError {
             return "Device '\(deviceName)' is busy processing another request"
         case .invalidConfiguration:
             return "Invalid API configuration. Check your settings."
+        case .presetStoreUnreadable(let reason):
+            return "Preset store is unreadable. Delaying destructive changes. \(reason)"
+        case .presetStoreDeleteIncomplete(let reason):
+            return "Preset store delete did not fully complete. \(reason)"
         }
     }
     
@@ -66,6 +72,10 @@ enum WLEDAPIError: LocalizedError {
             return "The device may be experiencing issues. Try restarting the device."
         case .maxRetriesExceeded, .deviceBusy:
             return "Wait a moment and try again. The device may be temporarily busy."
+        case .presetStoreUnreadable:
+            return "Wait for the device to settle, then retry. If this keeps happening, reboot WLED and try again."
+        case .presetStoreDeleteIncomplete:
+            return "Retry delete. The device accepted some delete commands but still reported leftover preset-store records."
         case .invalidURL, .invalidConfiguration:
             return "Check your device settings and network configuration."
         case .unsupportedOperation:
@@ -90,6 +100,8 @@ enum WLEDAPIError: LocalizedError {
         case .unsupportedOperation: return 1010
         case .deviceBusy: return 1011
         case .invalidConfiguration: return 1012
+        case .presetStoreUnreadable: return 1013
+        case .presetStoreDeleteIncomplete: return 1014
         }
     }
     
@@ -97,6 +109,10 @@ enum WLEDAPIError: LocalizedError {
     var isRetryable: Bool {
         switch self {
         case .networkError, .timeout, .deviceBusy:
+            return true
+        case .presetStoreUnreadable:
+            return true
+        case .presetStoreDeleteIncomplete:
             return true
         case .httpError(let statusCode):
             return statusCode >= 500 // Only retry server errors

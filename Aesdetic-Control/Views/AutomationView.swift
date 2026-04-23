@@ -141,6 +141,8 @@ struct AutomationView: View {
                             scenes: scenesStore.scenes,
                             isNext: nextAutomationID == automation.id,
                             isDeleting: AutomationStore.shared.isDeletionInProgress(for: automation.id),
+                            deletionProgress: AutomationStore.shared.deletionProgress(for: automation.id),
+                            deleteDisabledUntil: AutomationStore.shared.deleteDisabledUntil(for: automation),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
                             subtitle: targetName(for: automation),

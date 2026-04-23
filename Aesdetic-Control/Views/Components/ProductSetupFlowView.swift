@@ -56,13 +56,13 @@ struct ProductSetupFlowView: View {
     }
 
     private static let defaultSunriseStartGradient = LEDGradient(stops: [
-        GradientStop(position: 0.0, hexColor: "#C95B3B"),
-        GradientStop(position: 1.0, hexColor: "#E7B181")
+        GradientStop(position: 0.0, hexColor: "#FF3232"),
+        GradientStop(position: 1.0, hexColor: "#FFC92E")
     ])
 
     private static let defaultSunriseEndGradient = LEDGradient(stops: [
-        GradientStop(position: 0.0, hexColor: "#7FB2E5"),
-        GradientStop(position: 1.0, hexColor: "#F3F6F8")
+        GradientStop(position: 0.0, hexColor: "#8EB8FF"),
+        GradientStop(position: 1.0, hexColor: "#FFFFFF")
     ])
 
     private struct LEDRecommendation {
@@ -144,7 +144,6 @@ struct ProductSetupFlowView: View {
         case locationRequired
         case invalidDeviceName
         case noWeekdaysSelected
-        case invalidDeviceLocation(String)
         case invalidOnDeviceSchedule(String)
 
         var errorDescription: String? {
@@ -155,8 +154,6 @@ struct ProductSetupFlowView: View {
                 return "Please enter a valid device name."
             case .noWeekdaysSelected:
                 return "Select at least one day for your wake automation."
-            case .invalidDeviceLocation(let message):
-                return message
             case .invalidOnDeviceSchedule(let message):
                 return message
             }
@@ -187,10 +184,8 @@ struct ProductSetupFlowView: View {
     @State private var isConnectingWiFi: Bool = false
     @State private var wifiConnectionStatus: WiFiSetupView.ConnectionStatus = .idle
     @State private var wifiScanTask: Task<Void, Never>?
-    @State private var deviceLatitudeInput: String = ""
-    @State private var deviceLongitudeInput: String = ""
-    @State private var isLoadingDeviceLocation: Bool = false
-    @State private var isResolvingPhoneLocation: Bool = false
+    @State private var selectedRoomLocation: DeviceLocation = .bedroom
+    @State private var customRoomName: String = ""
 
     @State private var wakeTriggerMode: WakeTriggerMode = .sunrise
     @State private var wakeTime: Date
@@ -229,10 +224,6 @@ struct ProductSetupFlowView: View {
         components.hour = 7
         components.minute = 0
         return Calendar.current.date(from: components) ?? Date()
-    }
-
-    private static func formatCoordinate(_ value: Double) -> String {
-        String(format: "%.6f", value)
     }
 
     private var activeDevice: WLEDDevice {
@@ -291,7 +282,7 @@ struct ProductSetupFlowView: View {
         case .ledPreferences:
             return true
         case .nameAndWiFi:
-            return !trimmedDeviceName.isEmpty && hasConfirmedWiFi && locationInputErrorMessage == nil
+            return !trimmedDeviceName.isEmpty && hasConfirmedWiFi && setupLocationValidationError == nil
         case .automation:
             return !isApplying && wakeWeekdays.contains(true)
         }
@@ -301,32 +292,19 @@ struct ProductSetupFlowView: View {
         deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var trimmedLatitudeInput: String {
-        deviceLatitudeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var trimmedCustomRoomName: String {
+        customRoomName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var trimmedLongitudeInput: String {
-        deviceLongitudeInput.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var locationInputErrorMessage: String? {
-        let latitude = trimmedLatitudeInput
-        let longitude = trimmedLongitudeInput
-
-        if latitude.isEmpty && longitude.isEmpty { return nil }
-        if latitude.isEmpty || longitude.isEmpty {
-            return "Enter both latitude and longitude, or leave both blank."
-        }
-        guard let lat = Double(latitude), let lon = Double(longitude) else {
-            return "Latitude and longitude must be valid numbers."
-        }
-        guard (-90.0...90.0).contains(lat) else {
-            return "Latitude must be between -90 and 90."
-        }
-        guard (-180.0...180.0).contains(lon) else {
-            return "Longitude must be between -180 and 180."
+    private var setupLocationValidationError: String? {
+        if case .custom = selectedRoomLocation, trimmedCustomRoomName.isEmpty {
+            return "Enter a name for Other location."
         }
         return nil
+    }
+
+    private var setupLocationOptions: [DeviceLocation] {
+        [.bedroom, .livingRoom, .kitchen, .office, .hallway, .bathroom, .outdoor, .custom("")]
     }
 
     private var stepProgressValue: Double {
@@ -404,16 +382,12 @@ struct ProductSetupFlowView: View {
             .task {
                 initializeSelectionIfNeeded()
                 await loadCurrentWiFiInfo()
-                await loadCurrentDeviceLocation()
                 scanForWiFiNetworks()
             }
             .onChange(of: step) { _, newStep in
                 guard newStep == .nameAndWiFi else { return }
                 Task {
                     await loadCurrentWiFiInfo()
-                    if trimmedLatitudeInput.isEmpty && trimmedLongitudeInput.isEmpty {
-                        await loadCurrentDeviceLocation()
-                    }
                     scanForWiFiNetworks()
                 }
             }
@@ -641,72 +615,37 @@ struct ProductSetupFlowView: View {
 
             infoPanel(title: "Device Location") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Set latitude/longitude for this lamp so sunrise automations use the correct location.")
+                    Text("Choose where this lamp is placed in your home.")
                         .font(AppTypography.style(.caption))
                         .foregroundStyle(theme.textSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if isLoadingDeviceLocation {
-                        HStack(spacing: 8) {
-                            ProgressView().scaleEffect(0.8)
-                            Text("Loading current device location…")
-                                .font(AppTypography.style(.subheadline))
-                                .foregroundStyle(theme.textSecondary)
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        ForEach(setupLocationOptions, id: \.self) { location in
+                            roomLocationChip(location: location)
                         }
                     }
 
-                    HStack(spacing: 8) {
-                        locationTextField(title: "Latitude", text: $deviceLatitudeInput)
-                        locationTextField(title: "Longitude", text: $deviceLongitudeInput)
-                    }
-
-                    HStack(spacing: 8) {
-                        Button {
-                            fillLocationFromPhone()
-                        } label: {
-                            HStack(spacing: 8) {
-                                if isResolvingPhoneLocation {
-                                    ProgressView().scaleEffect(0.8).tint(.black)
-                                } else {
-                                    Image(systemName: "location.fill")
-                                }
-                                Text(isResolvingPhoneLocation ? "Getting Location…" : "Use Phone Location")
-                            }
-                            .font(AppTypography.style(.subheadline, weight: .semibold))
-                            .foregroundColor(.black)
-                            .padding(.horizontal, 14)
+                    if case .custom = selectedRoomLocation {
+                        TextField("Enter location (e.g., Nursery)", text: $customRoomName)
+                            .textFieldStyle(.plain)
+                            .font(AppTypography.style(.subheadline, weight: .medium))
+                            .foregroundColor(theme.textPrimary)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 10)
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color.white)
+                                    .fill(theme.surfaceMuted)
                             )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isResolvingPhoneLocation)
-
-                        Button {
-                            clearLocationInputs()
-                        } label: {
-                            Text("Clear")
-                                .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundStyle(theme.textSecondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(theme.surfaceMuted)
-                                )
-                        }
-                        .buttonStyle(.plain)
                     }
 
-                    if let locationInputErrorMessage {
-                        Text(locationInputErrorMessage)
+                    if let setupLocationValidationError {
+                        Text(setupLocationValidationError)
                             .font(AppTypography.style(.caption))
                             .foregroundStyle(theme.status.negative)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if !trimmedLatitudeInput.isEmpty && !trimmedLongitudeInput.isEmpty {
-                        Text("This location will be saved to the device in setup.")
+                    } else {
+                        Text("Location helps organize your devices in the app.")
                             .font(AppTypography.style(.caption))
                             .foregroundStyle(theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1181,6 +1120,23 @@ struct ProductSetupFlowView: View {
                 }
             }
 
+            if step == .automation {
+                AppGlassPillButton(
+                    title: "Skip",
+                    isSelected: false,
+                    iconName: "forward.end",
+                    size: .compact,
+                    useControlGlassRecipe: true
+                ) {
+                    Task {
+                        localError = nil
+                        await applySetup(skipAutomationCreation: true)
+                    }
+                }
+                .disabled(isApplying)
+                .opacity(isApplying ? 0.6 : 1.0)
+            }
+
             Spacer(minLength: 0)
 
             AppGlassPillButton(
@@ -1238,7 +1194,7 @@ struct ProductSetupFlowView: View {
         localError = nil
 
         if step == finalStep {
-            await applySetup()
+            await applySetup(skipAutomationCreation: false)
             return
         }
 
@@ -1247,7 +1203,7 @@ struct ProductSetupFlowView: View {
             return
         }
 
-        await applySetup()
+        await applySetup(skipAutomationCreation: false)
     }
 
     private func initializeSelectionIfNeeded() {
@@ -1278,8 +1234,17 @@ struct ProductSetupFlowView: View {
         transitionStartWhiteLevel = nil
         transitionEndTemperature = nil
         transitionEndWhiteLevel = nil
-        deviceLatitudeInput = ""
-        deviceLongitudeInput = ""
+        switch live.location {
+        case .all:
+            selectedRoomLocation = .bedroom
+            customRoomName = ""
+        case .custom(let name):
+            selectedRoomLocation = .custom("")
+            customRoomName = name
+        default:
+            selectedRoomLocation = live.location
+            customRoomName = ""
+        }
     }
 
     private func setupSuggestedName(for device: WLEDDevice) -> String {
@@ -1317,62 +1282,17 @@ struct ProductSetupFlowView: View {
         }
     }
 
-    private func loadCurrentDeviceLocation() async {
-        isLoadingDeviceLocation = true
-        defer { isLoadingDeviceLocation = false }
-        do {
-            let solarReference = try await WLEDAPIService.shared.fetchSolarReference(for: activeDevice)
-            if let coordinate = solarReference.coordinate {
-                deviceLatitudeInput = Self.formatCoordinate(coordinate.latitude)
-                deviceLongitudeInput = Self.formatCoordinate(coordinate.longitude)
-            }
-        } catch {
-            // Leave fields editable for manual entry if fetch fails.
+    private var resolvedSetupLocation: DeviceLocation {
+        if case .custom = selectedRoomLocation {
+            return .custom(trimmedCustomRoomName)
         }
+        return selectedRoomLocation
     }
 
-    private func fillLocationFromPhone() {
-        guard !isResolvingPhoneLocation else { return }
-        isResolvingPhoneLocation = true
-        Task {
-            let coordinate = await AutomationStore.shared.currentCoordinate()
-            await MainActor.run {
-                isResolvingPhoneLocation = false
-                if let coordinate {
-                    deviceLatitudeInput = Self.formatCoordinate(coordinate.latitude)
-                    deviceLongitudeInput = Self.formatCoordinate(coordinate.longitude)
-                    localError = nil
-                } else {
-                    localError = "Unable to access phone location. Enter coordinates manually or enable Location permission."
-                }
-            }
-        }
-    }
-
-    private func clearLocationInputs() {
-        deviceLatitudeInput = ""
-        deviceLongitudeInput = ""
-    }
-
-    private func parsedDeviceCoordinate() -> CLLocationCoordinate2D? {
-        let latitude = trimmedLatitudeInput
-        let longitude = trimmedLongitudeInput
-        guard !latitude.isEmpty || !longitude.isEmpty else { return nil }
-        guard let lat = Double(latitude), let lon = Double(longitude) else { return nil }
-        guard (-90.0...90.0).contains(lat), (-180.0...180.0).contains(lon) else { return nil }
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
-
-    private func applyDeviceLocationIfNeeded(to device: WLEDDevice) async throws {
-        if let locationInputErrorMessage {
-            throw SetupError.invalidDeviceLocation(locationInputErrorMessage)
-        }
-        guard let coordinate = parsedDeviceCoordinate() else { return }
-        try await WLEDAPIService.shared.updateDeviceTimeSettings(
-            for: device,
-            timeZone: .current,
-            coordinate: coordinate
-        )
+    private func applyDeviceRoomLocationIfNeeded(to device: WLEDDevice) async {
+        let location = resolvedSetupLocation
+        guard location != device.location else { return }
+        await viewModel.updateDeviceLocation(device, location: location)
     }
 
     private func scanForWiFiNetworks() {
@@ -1472,7 +1392,7 @@ struct ProductSetupFlowView: View {
         }
     }
 
-    private func applySetup() async {
+    private func applySetup(skipAutomationCreation: Bool) async {
         guard !trimmedDeviceName.isEmpty else {
             localError = SetupError.invalidDeviceName.localizedDescription
             return
@@ -1491,7 +1411,7 @@ struct ProductSetupFlowView: View {
                 }
             }
 
-            try await applyDeviceLocationIfNeeded(to: live)
+            await applyDeviceRoomLocationIfNeeded(to: live)
 
             if isCustomProduct {
                 await viewModel.setDeviceSetupMode(live, generic: true)
@@ -1507,7 +1427,9 @@ struct ProductSetupFlowView: View {
                 )
             }
 
-            try await createOrUpdateWakeAutomation(for: live)
+            if !skipAutomationCreation {
+                try await createOrUpdateWakeAutomation(for: live)
+            }
             closeFlow()
         } catch {
             localError = error.localizedDescription
@@ -1768,20 +1690,33 @@ struct ProductSetupFlowView: View {
         }
     }
 
-    private func locationTextField(title: String, text: Binding<String>) -> some View {
-        TextField(title, text: text)
-            .textFieldStyle(.plain)
-            .font(AppTypography.style(.subheadline, weight: .medium))
-            .foregroundColor(theme.textPrimary)
-            .keyboardType(.numbersAndPunctuation)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled(true)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(theme.surfaceMuted)
-            )
+    private func roomLocationChip(location: DeviceLocation) -> some View {
+        let isOther = { if case .custom = location { return true } else { return false } }()
+        let isSelected = {
+            if isOther {
+                if case .custom = selectedRoomLocation { return true }
+                return false
+            }
+            return selectedRoomLocation == location
+        }()
+        let title = isOther ? "Other" : location.displayName
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedRoomLocation = isOther ? .custom("") : location
+            }
+        } label: {
+            Text(title)
+                .font(AppTypography.style(.subheadline, weight: .semibold))
+                .foregroundColor(isSelected ? .black : theme.textPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isSelected ? Color.white : theme.surfaceMuted)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func gradientSwatch(_ hexes: [String]) -> some View {

@@ -506,6 +506,49 @@ struct WLEDAPIServiceTests {
         }
     }
 
+    @Test("WLED-style preset delete request targets /json/si with pdel payload")
+    func testWLEDPresetStoreDeleteRequestShape() async throws {
+        let service = WLEDAPIService.shared
+        let device = createTestDevice(ipAddress: "192.168.0.6")
+
+        let request = try await service.makePresetStoreDeleteRequestLikeWLED(
+            id: 19,
+            device: device,
+            timestamp: 1_713_456_789
+        )
+
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.absoluteString == "http://192.168.0.6/json/si")
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+
+        let bodyObject = try #require(
+            JSONSerialization.jsonObject(with: request.httpBody ?? Data(), options: []) as? [String: Any]
+        )
+        #expect(bodyObject["pdel"] as? Int == 19)
+        #expect(bodyObject["v"] as? Bool == true)
+        #expect(bodyObject["time"] as? Int == 1_713_456_789)
+    }
+
+    @Test("WLED-style automation delete orders playlist deletes before preset deletes")
+    func testOrderedPresetStoreDeleteTargetsPlacePlaylistFirst() async throws {
+        let service = WLEDAPIService.shared
+
+        let targets = await service.orderedPresetStoreDeleteTargets(
+            playlistIds: [4, 1, 4],
+            presetIds: [9, 2, 9, 3]
+        )
+
+        #expect(
+            targets == [
+                .init(type: .playlist, id: 1),
+                .init(type: .playlist, id: 4),
+                .init(type: .preset, id: 2),
+                .init(type: .preset, id: 3),
+                .init(type: .preset, id: 9)
+            ]
+        )
+    }
+
     @Test("savePlaylist rejects invalid playlist constraints")
     func testSavePlaylistValidationConstraints() async throws {
         let service = WLEDAPIService.shared
@@ -828,6 +871,40 @@ struct WLEDAPIServiceTests {
         let parsed = try await service.parsePresetsPayloadForTesting(payload)
         #expect(parsed.count == 2)
         #expect(parsed.map(\.id) == [236, 237])
+    }
+
+    @Test("strict preset verification parser rejects partial root recovery")
+    func testStrictPresetVerificationParserRejectsPartialRootRecovery() async throws {
+        let service = WLEDAPIService.shared
+        let malformed = Data("{\"0\":{}                                                                 :\"5\":{\"n\":\"Ghost preset\"}}".utf8)
+
+        do {
+            _ = try await service.debugParsedPresetRecordIdsForTesting(data: malformed, strict: true)
+            Issue.record("Strict parser should reject malformed preset payload")
+        } catch {
+            guard let apiError = error as? WLEDAPIError else {
+                Issue.record("Expected WLEDAPIError from strict parser")
+                return
+            }
+            switch apiError {
+            case .decodingError, .invalidResponse:
+                break // Expected strict rejection mode
+            default:
+                Issue.record("Expected strict parser rejection error")
+            }
+        }
+    }
+
+    @Test("strict preset verification parser tolerates invalid byte outside strings")
+    func testStrictPresetVerificationParserToleratesInvalidByteOutsideStrings() async throws {
+        let service = WLEDAPIService.shared
+        var bytes = Array("{\"0\":{},\"17\":{\"n\":\"Recovered\"}                                                                  }".utf8)
+        let insertionIndex = max(1, bytes.count - 2) // whitespace zone before final closing brace
+        bytes.insert(0xC9, at: insertionIndex) // invalid UTF-8 byte outside JSON strings
+        let malformed = Data(bytes)
+
+        let ids = try await service.debugParsedPresetRecordIdsForTesting(data: malformed, strict: true)
+        #expect(ids == [17])
     }
 
     @Test("renamePresetRecord validates ID range 1-250")

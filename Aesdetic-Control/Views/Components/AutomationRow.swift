@@ -5,6 +5,8 @@ struct AutomationRow: View {
     let scenes: [Scene]
     let isNext: Bool
     var isDeleting: Bool = false
+    var deletionProgress: AutomationDeletionProgress? = nil
+    var deleteDisabledUntil: Date? = nil
     var isRunning: Bool = false
     var runningProgress: Double? = nil
     var subtitle: String? = nil
@@ -99,16 +101,31 @@ struct AutomationRow: View {
             .fill(theme.surface.opacity(colorScheme == .dark ? 0.58 : 0.74))
             .overlay(
                 VStack(spacing: 10) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(theme.textPrimary)
-                    Text(isDeleting ? "Deleting on device..." : "Getting ready...")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(theme.textPrimary)
-                    if isDeleting {
+                    if isDeleting, let deletionProgress {
+                        ProgressView(value: deletionProgress.fractionCompleted)
+                            .progressViewStyle(.linear)
+                            .tint(theme.textPrimary)
+                        Text("Deleting on device... \(deletionProgress.completedSteps)/\(deletionProgress.totalSteps)")
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                            .foregroundColor(theme.textPrimary)
+                        Text(deletionProgress.phaseDescription)
+                            .font(AppTypography.style(.caption2))
+                            .foregroundColor(theme.textSecondary)
                         Text("Keep app open")
                             .font(AppTypography.style(.caption2))
                             .foregroundColor(theme.textSecondary)
+                    } else {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(theme.textPrimary)
+                        Text(isDeleting ? "Deleting on device..." : "Getting ready...")
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                            .foregroundColor(theme.textPrimary)
+                        if isDeleting {
+                            Text("Keep app open")
+                                .font(AppTypography.style(.caption2))
+                                .foregroundColor(theme.textSecondary)
+                        }
                     }
                 }
                 .padding(.horizontal, 20)
@@ -243,10 +260,25 @@ struct AutomationRow: View {
                 .accessibilityLabel(shortcutPinned ? "Remove from shortcuts" : "Add to shortcuts")
             }
             if let onDelete {
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let isDeleteSettling = deleteDisabledUntil.map { context.date < $0 } ?? false
+                    HStack(spacing: 6) {
+                        if isDeleteSettling {
+                            Text("Preparing device...")
+                                .font(AppTypography.style(.caption2))
+                                .foregroundColor(theme.textSecondary)
+                        }
+                        Button(role: .destructive, action: onDelete) {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isDeleteSettling)
+                        .allowsHitTesting(!isDeleteSettling)
+                        .opacity(isDeleteSettling ? 0.35 : 1.0)
+                        .accessibilityLabel(isDeleteSettling ? "Delete unavailable" : "Delete automation")
+                        .accessibilityHint(isDeleteSettling ? "Device is preparing automation assets. Delete will be available shortly." : "")
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
     }

@@ -14,21 +14,36 @@ final class DeviceCleanupManager: ObservableObject {
     // Note: We'll use WLEDAPIService.shared directly in async contexts since it's an actor
     private let maxAttempts = 12
     private let cleanupEnabled = true
-    private let maxDeletesPerPass = 2
+    private let maxDeletesPerPass = 1
+    // Emulate WLED UI-like manual deletion cadence: one preset-store mutation, then wait.
+    private let userPacedPresetStoreDeleteIntervalSeconds: TimeInterval = 2.0
+    private let largePresetStoreDeleteIntervalSeconds: TimeInterval = 3.5
+    private let veryLargePresetStoreDeleteIntervalSeconds: TimeInterval = 6.0
+    private let largePresetStoreByteThreshold = 300_000
+    private let veryLargePresetStoreByteThreshold = 800_000
+    private let presetStoreSizePressureCacheTTL: TimeInterval = 10 * 60
     // Preset/playlist filesystem mutations are heavier than timer mutations.
     // Use a slightly slower cadence to reduce presets-store write pressure.
-    private let interPresetStoreDeleteDelayNanoseconds: UInt64 = 280_000_000
+    private let interPresetStoreDeleteDelayNanoseconds: UInt64 = 2_000_000_000
     private let interTimerDeleteDelayNanoseconds: UInt64 = 180_000_000
+    private let unreadablePresetStoreBaseBackoffSeconds: TimeInterval = 20.0
+    private let unreadablePresetStoreMaxBackoffSeconds: TimeInterval = 180.0
+    private var lastDeleteAttemptAtByCadenceKey: [String: Date] = [:]
+    private var activeDeleteLeaseByDeviceId: Set<String> = []
+    private var presetStoreUnreadableBackoffUntilByDeviceId: [String: Date] = [:]
+    private var presetStoreUnreadableStreakByDeviceId: [String: Int] = [:]
+    private var presetStoreSizePressureByDeviceId: [String: (bytes: Int, checkedAt: Date)] = [:]
 
     private struct DeleteAttemptOutcome {
         let succeededIds: [Int]
         let failedIds: [Int]
         let lastError: String?
+        let wasDeferred: Bool
 
         var isSuccess: Bool { failedIds.isEmpty }
         var madeProgress: Bool { !succeededIds.isEmpty }
     }
-    
+
     private init() {
         load()
         if !cleanupEnabled {
@@ -64,9 +79,16 @@ final class DeviceCleanupManager: ObservableObject {
             pendingDeletes[index].ids = mergedIds
             pendingDeletes[index].lastAttempt = Date()
             let existingNextAttemptAt = pendingDeletes[index].nextAttemptAt ?? requestedNextAttemptAt
-            pendingDeletes[index].nextAttemptAt = min(existingNextAttemptAt, requestedNextAttemptAt)
+            let hasDeferredCooldown =
+                pendingDeletes[index].lastError?.hasPrefix("Deferred:") == true
+                && existingNextAttemptAt > Date()
+            pendingDeletes[index].nextAttemptAt = hasDeferredCooldown
+                ? existingNextAttemptAt
+                : min(existingNextAttemptAt, requestedNextAttemptAt)
             pendingDeletes[index].verificationRequired = pendingDeletes[index].verificationRequired || verificationRequired
-            pendingDeletes[index].lastError = nil
+            if !hasDeferredCooldown {
+                pendingDeletes[index].lastError = nil
+            }
             save()
             logger.info("Merged \(type.rawValue) deletion for device \(deviceId): \(mergedIds)")
             return
@@ -98,6 +120,22 @@ final class DeviceCleanupManager: ObservableObject {
         guard !ids.isEmpty else { return }
         let uniqueIds = Array(Set(ids)).sorted()
         guard !uniqueIds.isEmpty else { return }
+        // Preset/playlist mutations are the riskiest operations for presets.json integrity.
+        // Always route them through the queue so they run one-at-a-time with pacing.
+        if type == .preset || type == .playlist {
+            enqueue(
+                type: type,
+                deviceId: device.id,
+                ids: uniqueIds,
+                source: source,
+                leaseId: leaseId,
+                verificationRequired: verificationRequired
+            )
+            if device.isOnline {
+                await processQueue(for: device.id)
+            }
+            return
+        }
         let tempOverlapGuard = PendingDeviceDelete(
             type: type,
             deviceId: device.id,
@@ -118,6 +156,22 @@ final class DeviceCleanupManager: ObservableObject {
             return
         }
         if device.isOnline {
+            // Serialize immediate deletes with queued deletes for the same device.
+            // Without this lease, re-entrant MainActor execution can run queue + immediate
+            // attempts at the same time and double-hit the same IDs.
+            guard tryAcquireDeleteLease(deviceId: device.id, context: "requestDelete_immediate") else {
+                enqueue(
+                    type: type,
+                    deviceId: device.id,
+                    ids: uniqueIds,
+                    source: source,
+                    leaseId: leaseId,
+                    verificationRequired: verificationRequired
+                )
+                return
+            }
+            defer { releaseDeleteLease(deviceId: device.id, context: "requestDelete_immediate") }
+
             let outcome = await attemptDelete(
                 type: type,
                 device: device,
@@ -158,14 +212,27 @@ final class DeviceCleanupManager: ObservableObject {
     /// Process pending deletions for a specific device (called when device comes online)
     func processQueue(for deviceId: String) async {
         guard cleanupEnabled else { return }
+        guard tryAcquireDeleteLease(deviceId: deviceId, context: "processQueue") else {
+            return
+        }
+        defer { releaseDeleteLease(deviceId: deviceId, context: "processQueue") }
         guard let device = await getDevice(id: deviceId) else { return }
         guard device.isOnline else { return }
         let now = Date()
-        let pendingForDevice = self.pendingDeletes.filter {
-            $0.deviceId == deviceId
-                && $0.deadLetteredAt == nil
-                && (($0.nextAttemptAt ?? .distantPast) <= now)
-        }
+        let pendingForDevice = self.pendingDeletes
+            .filter {
+                $0.deviceId == deviceId
+                    && $0.deadLetteredAt == nil
+                    && (($0.nextAttemptAt ?? .distantPast) <= now)
+            }
+            .sorted { lhs, rhs in
+                let leftPriority = deleteTypePriority(lhs)
+                let rightPriority = deleteTypePriority(rhs)
+                if leftPriority != rightPriority {
+                    return leftPriority < rightPriority
+                }
+                return lhs.createdAt < rhs.createdAt
+            }
         guard !pendingForDevice.isEmpty else { return }
         
         logger.info("Processing \(pendingForDevice.count) pending deletions for device \(deviceId)")
@@ -174,6 +241,19 @@ final class DeviceCleanupManager: ObservableObject {
             if processedCount >= maxDeletesPerPass {
                 logger.info("cleanup.queue_pass_limited device=\(deviceId, privacy: .public) processed=\(processedCount, privacy: .public) pending=\(pendingForDevice.count, privacy: .public)")
                 break
+            }
+            if let unreadableBackoffUntil = unreadablePresetStoreBackoffUntil(for: delete),
+               unreadableBackoffUntil > Date() {
+                if let index = self.pendingDeletes.firstIndex(where: { $0.id == delete.id }) {
+                    self.pendingDeletes[index].lastAttempt = Date()
+                    self.pendingDeletes[index].lastError = "Deferred: preset-store unreadable backoff is active"
+                    self.pendingDeletes[index].nextAttemptAt = unreadableBackoffUntil
+                    self.save()
+                }
+                logger.warning(
+                    "cleanup.queue_deferred_unreadable_backoff device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) nextAttemptAt=\(unreadableBackoffUntil.ISO8601Format(), privacy: .public)"
+                )
+                continue
             }
             if await shouldDeferForActiveTempLeaseOverlap(delete) {
                 if let index = self.pendingDeletes.firstIndex(where: { $0.id == delete.id }) {
@@ -216,18 +296,60 @@ final class DeviceCleanupManager: ObservableObject {
                 } else if outcome.isSuccess {
                     // Chunk succeeded but entry still has IDs; continue in staged passes.
                     entry.lastError = nil
-                    entry.nextAttemptAt = Date()
+                    if entry.type == .preset || entry.type == .playlist {
+                        let delay = await presetStoreDeleteCadenceSeconds(for: device)
+                        entry.nextAttemptAt = Date().addingTimeInterval(delay)
+                    } else {
+                        entry.nextAttemptAt = Date()
+                    }
                     self.pendingDeletes[index] = entry
                     self.save()
                 } else {
                     entry.lastError = outcome.lastError ?? "Delete failed"
-                    if !outcome.madeProgress {
+                    if !outcome.madeProgress && !outcome.wasDeferred && !outcome.failedIds.isEmpty {
+                        let failedSet = Set(outcome.failedIds)
+                        let nonFailed = entry.ids.filter { !failedSet.contains($0) }
+                        let failedInOrder = entry.ids.filter { failedSet.contains($0) }
+                        if !nonFailed.isEmpty && !failedInOrder.isEmpty {
+                            entry.ids = nonFailed + failedInOrder
+                            logger.warning(
+                                "cleanup.queue_rotate_failed_tail device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) failed=\(failedInOrder, privacy: .public)"
+                            )
+                        }
+                    }
+                    if !outcome.madeProgress && !outcome.wasDeferred {
                         entry.retries += 1
                     }
-                    let retryAttempt = outcome.madeProgress ? 1 : max(1, entry.retries)
-                    entry.nextAttemptAt = Date().addingTimeInterval(self.retryDelay(forAttempt: retryAttempt))
+                    let retryAttempt: Int
+                    if outcome.madeProgress || outcome.wasDeferred {
+                        retryAttempt = 1
+                    } else {
+                        retryAttempt = max(1, entry.retries)
+                    }
+                    let deferredRetryDelaySeconds: TimeInterval = {
+                        let message = outcome.lastError?.lowercased() ?? ""
+                        if message.contains("preset-store unreadable") {
+                            return min(60.0, max(20.0, self.retryDelay(forAttempt: entry.retries + 2)))
+                        }
+                        if message.contains("mutation guard is active") {
+                            return min(24.0, max(10.0, self.retryDelay(forAttempt: entry.retries + 1)))
+                        }
+                        return min(20.0, max(8.0, self.retryDelay(forAttempt: entry.retries + 1)))
+                    }()
+                    let retryDelaySeconds: TimeInterval = outcome.wasDeferred
+                        ? deferredRetryDelaySeconds
+                        : self.retryDelay(forAttempt: retryAttempt)
+                    var nextAttemptAt = Date().addingTimeInterval(retryDelaySeconds)
+                    if let unreadableBackoffUntil = unreadablePresetStoreBackoffUntil(for: delete),
+                       unreadableBackoffUntil > nextAttemptAt {
+                        nextAttemptAt = unreadableBackoffUntil
+                    }
+                    entry.nextAttemptAt = nextAttemptAt
+                    logger.warning(
+                        "cleanup.queue_retry_scheduled device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) retries=\(entry.retries, privacy: .public) wasDeferred=\(outcome.wasDeferred, privacy: .public) madeProgress=\(outcome.madeProgress, privacy: .public) failedIds=\(outcome.failedIds, privacy: .public) nextAttemptAt=\(nextAttemptAt.ISO8601Format(), privacy: .public) reason=\((entry.lastError ?? "Delete failed"), privacy: .public)"
+                    )
 
-                    if !outcome.madeProgress && entry.retries >= self.maxAttempts {
+                    if !outcome.madeProgress && !outcome.wasDeferred && entry.retries >= self.maxAttempts {
                         if delete.type == .timer || delete.source == .automation {
                             // Timer cleanup controls automation re-import safety. Automation-sourced
                             // asset cleanup should also keep retrying so managed resources are not
@@ -252,6 +374,37 @@ final class DeviceCleanupManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
+    }
+
+    private func presetStoreDeleteCadenceSeconds(for device: WLEDDevice) async -> TimeInterval {
+        let now = Date()
+        if let cached = presetStoreSizePressureByDeviceId[device.id],
+           now.timeIntervalSince(cached.checkedAt) < presetStoreSizePressureCacheTTL {
+            return presetStoreDeleteCadenceSeconds(forPresetStoreBytes: cached.bytes)
+        }
+
+        guard let byteCount = await WLEDAPIService.shared.fetchPresetStoreByteCount(device: device) else {
+            return userPacedPresetStoreDeleteIntervalSeconds
+        }
+
+        presetStoreSizePressureByDeviceId[device.id] = (bytes: byteCount, checkedAt: now)
+        let cadence = presetStoreDeleteCadenceSeconds(forPresetStoreBytes: byteCount)
+        if cadence > userPacedPresetStoreDeleteIntervalSeconds {
+            logger.info(
+                "cleanup.queue_large_preset_store_cadence device=\(device.id, privacy: .public) bytes=\(byteCount, privacy: .public) cadence=\(cadence, privacy: .public)"
+            )
+        }
+        return cadence
+    }
+
+    private func presetStoreDeleteCadenceSeconds(forPresetStoreBytes byteCount: Int) -> TimeInterval {
+        if byteCount >= veryLargePresetStoreByteThreshold {
+            return veryLargePresetStoreDeleteIntervalSeconds
+        }
+        if byteCount >= largePresetStoreByteThreshold {
+            return largePresetStoreDeleteIntervalSeconds
+        }
+        return userPacedPresetStoreDeleteIntervalSeconds
     }
 
     func processEligibleQueue() async {
@@ -294,7 +447,17 @@ final class DeviceCleanupManager: ObservableObject {
             }
 
             if let nextAttemptAt = earliestNextAttemptAt(deviceId: deviceId), nextAttemptAt > Date() {
-                let waitSeconds = min(1.0, max(0.15, nextAttemptAt.timeIntervalSinceNow))
+                let remaining = nextAttemptAt.timeIntervalSinceNow
+                if remaining > 30.0 {
+                    logger.info(
+                        "cleanup.queue_drain_waiting_future_retry device=\(deviceId, privacy: .public) pass=\(pass, privacy: .public) nextAttemptAt=\(nextAttemptAt.ISO8601Format(), privacy: .public)"
+                    )
+                    return
+                }
+                logger.info(
+                    "cleanup.queue_drain_waiting_short_retry device=\(deviceId, privacy: .public) pass=\(pass, privacy: .public) seconds=\(remaining, privacy: .public) nextAttemptAt=\(nextAttemptAt.ISO8601Format(), privacy: .public)"
+                )
+                let waitSeconds = max(0.15, remaining)
                 let waitNs = UInt64(waitSeconds * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNs)
                 continue
@@ -319,15 +482,7 @@ final class DeviceCleanupManager: ObservableObject {
 
         for id in ids {
             do {
-                if (type == .preset || type == .playlist),
-                   !(await DeviceControlViewModel.shared.shouldAllowPresetStoreDeleteMutation(deviceId: device.id)) {
-                    failed.append(id)
-                    lastError = "preset-store mutation guard is active"
-                    logger.warning(
-                        "cleanup.delete.deferred_integrity_guard device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public)"
-                    )
-                    break
-                }
+                await enforceDeleteCadence(for: type, deviceId: device.id)
                 let success: Bool
                 switch type {
                 case .preset:
@@ -349,6 +504,9 @@ final class DeviceCleanupManager: ObservableObject {
                 }
                 if success {
                     succeeded.append(id)
+                    if type == .preset || type == .playlist {
+                        clearPresetStoreUnreadableBackoffIfNeeded(deviceId: device.id)
+                    }
                     logger.info("cleanup.delete.item_ok device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public)")
                 } else {
                     failed.append(id)
@@ -356,6 +514,19 @@ final class DeviceCleanupManager: ObservableObject {
                     logger.error("cleanup.delete.item_failed device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public)")
                     break
                 }
+            } catch let apiError as WLEDAPIError {
+                failed.append(id)
+                if case .presetStoreUnreadable(let reason) = apiError {
+                    let backoffUntil = registerPresetStoreUnreadableBackoff(deviceId: device.id)
+                    lastError = "Deferred: preset-store unreadable (\(reason)); backoff_until=\(backoffUntil.ISO8601Format())"
+                    logger.warning(
+                        "cleanup.delete.deferred_unreadable_store device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public) backoffUntil=\(backoffUntil.ISO8601Format(), privacy: .public) reason=\(reason, privacy: .public)"
+                    )
+                } else {
+                    lastError = apiError.localizedDescription
+                    logger.error("cleanup.delete.error device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public) error=\(apiError.localizedDescription, privacy: .public)")
+                }
+                break
             } catch {
                 failed.append(id)
                 lastError = error.localizedDescription
@@ -378,7 +549,96 @@ final class DeviceCleanupManager: ObservableObject {
         return DeleteAttemptOutcome(
             succeededIds: succeeded,
             failedIds: failed,
-            lastError: lastError
+            lastError: lastError,
+            wasDeferred: lastError?.hasPrefix("Deferred:") == true
+        )
+    }
+
+    private func cadenceKey(for type: PendingDeviceDelete.DeleteType, deviceId: String) -> String {
+        switch type {
+        case .preset, .playlist:
+            // Preset + playlist share the same underlying presets-store write path.
+            return "preset-store:\(deviceId)"
+        case .timer:
+            return "timer:\(deviceId)"
+        }
+    }
+
+    private func unreadablePresetStoreBackoffUntil(for delete: PendingDeviceDelete) -> Date? {
+        guard delete.type == .preset || delete.type == .playlist else { return nil }
+        guard let until = presetStoreUnreadableBackoffUntilByDeviceId[delete.deviceId] else { return nil }
+        if until <= Date() {
+            presetStoreUnreadableBackoffUntilByDeviceId.removeValue(forKey: delete.deviceId)
+            presetStoreUnreadableStreakByDeviceId.removeValue(forKey: delete.deviceId)
+            return nil
+        }
+        return until
+    }
+
+    private func registerPresetStoreUnreadableBackoff(deviceId: String) -> Date {
+        let streak = (presetStoreUnreadableStreakByDeviceId[deviceId] ?? 0) + 1
+        presetStoreUnreadableStreakByDeviceId[deviceId] = streak
+        let exponent = max(0, min(4, streak - 1))
+        let delay = min(
+            unreadablePresetStoreMaxBackoffSeconds,
+            unreadablePresetStoreBaseBackoffSeconds * pow(2.0, Double(exponent))
+        )
+        let backoffUntil = Date().addingTimeInterval(delay)
+        presetStoreUnreadableBackoffUntilByDeviceId[deviceId] = backoffUntil
+        return backoffUntil
+    }
+
+    private func clearPresetStoreUnreadableBackoffIfNeeded(deviceId: String) {
+        presetStoreUnreadableBackoffUntilByDeviceId.removeValue(forKey: deviceId)
+        presetStoreUnreadableStreakByDeviceId.removeValue(forKey: deviceId)
+    }
+
+    private func cadenceIntervalSeconds(for type: PendingDeviceDelete.DeleteType) -> TimeInterval {
+        switch type {
+        case .preset, .playlist:
+            return TimeInterval(interPresetStoreDeleteDelayNanoseconds) / 1_000_000_000.0
+        case .timer:
+            return TimeInterval(interTimerDeleteDelayNanoseconds) / 1_000_000_000.0
+        }
+    }
+
+    private func enforceDeleteCadence(
+        for type: PendingDeviceDelete.DeleteType,
+        deviceId: String
+    ) async {
+        let key = cadenceKey(for: type, deviceId: deviceId)
+        let minimumInterval = cadenceIntervalSeconds(for: type)
+        if let previous = lastDeleteAttemptAtByCadenceKey[key] {
+            let elapsed = Date().timeIntervalSince(previous)
+            if elapsed < minimumInterval {
+                let remaining = minimumInterval - elapsed
+                let sleepNanoseconds = UInt64((remaining * 1_000_000_000.0).rounded())
+                if sleepNanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: sleepNanoseconds)
+                }
+            }
+        }
+        lastDeleteAttemptAtByCadenceKey[key] = Date()
+    }
+
+    private func tryAcquireDeleteLease(deviceId: String, context: String) -> Bool {
+        guard !activeDeleteLeaseByDeviceId.contains(deviceId) else {
+            logger.info(
+                "cleanup.delete.lease_busy device=\(deviceId, privacy: .public) context=\(context, privacy: .public)"
+            )
+            return false
+        }
+        activeDeleteLeaseByDeviceId.insert(deviceId)
+        logger.debug(
+            "cleanup.delete.lease_acquired device=\(deviceId, privacy: .public) context=\(context, privacy: .public)"
+        )
+        return true
+    }
+
+    private func releaseDeleteLease(deviceId: String, context: String) {
+        activeDeleteLeaseByDeviceId.remove(deviceId)
+        logger.debug(
+            "cleanup.delete.lease_released device=\(deviceId, privacy: .public) context=\(context, privacy: .public)"
         )
     }
 
@@ -405,6 +665,49 @@ final class DeviceCleanupManager: ObservableObject {
         id: Int
     ) -> Bool {
         activeDeleteIds(type: type, deviceId: deviceId).contains(id)
+    }
+
+    func hasPendingDeletes(
+        source: PendingDeviceDelete.DeleteSource? = nil,
+        deviceId: String? = nil,
+        includeDeadLetter: Bool = false
+    ) -> Bool {
+        pendingDeletes.contains { item in
+            guard includeDeadLetter || item.deadLetteredAt == nil else { return false }
+            guard deviceId == nil || item.deviceId == deviceId else { return false }
+            guard source == nil || item.source == source else { return false }
+            return !item.ids.isEmpty
+        }
+    }
+
+    func hasPendingPresetStoreDeletes(
+        deviceId: String? = nil,
+        includeDeadLetter: Bool = false
+    ) -> Bool {
+        pendingDeletes.contains { item in
+            guard includeDeadLetter || item.deadLetteredAt == nil else { return false }
+            guard deviceId == nil || item.deviceId == deviceId else { return false }
+            guard item.type == .preset || item.type == .playlist else { return false }
+            return !item.ids.isEmpty
+        }
+    }
+
+    func isDeleteLeaseActive(deviceId: String) -> Bool {
+        activeDeleteLeaseByDeviceId.contains(deviceId)
+    }
+
+    func pendingDeleteDeviceIds(
+        source: PendingDeviceDelete.DeleteSource? = nil,
+        includeDeadLetter: Bool = false
+    ) -> Set<String> {
+        Set(
+            pendingDeletes.compactMap { item -> String? in
+                guard includeDeadLetter || item.deadLetteredAt == nil else { return nil }
+                guard source == nil || item.source == source else { return nil }
+                guard !item.ids.isEmpty else { return nil }
+                return item.deviceId
+            }
+        )
     }
 
     /// Remove specific IDs from active queue entries.
@@ -439,6 +742,140 @@ final class DeviceCleanupManager: ObservableObject {
             save()
             logger.info("Pruned queued \(type.rawValue) deletes for device \(deviceId): \(Array(toRemove).sorted())")
         }
+    }
+
+    /// Move scoped preset/playlist cleanup IDs into dead-letter state.
+    /// This is used for unreadable preset-store hard-stops to prevent repeated write attempts.
+    @discardableResult
+    func deadLetterPresetStoreDeletes(
+        deviceId: String,
+        source: PendingDeviceDelete.DeleteSource? = nil,
+        presetIds: Set<Int> = [],
+        playlistIds: Set<Int> = [],
+        reason: String
+    ) -> Int {
+        let now = Date()
+        var changed = false
+        var deadLetteredCount = 0
+        var spawnedDeadLetters: [PendingDeviceDelete] = []
+        var unmatchedPresetIds = presetIds
+        var unmatchedPlaylistIds = playlistIds
+
+        for index in pendingDeletes.indices.reversed() {
+            let entry = pendingDeletes[index]
+            guard entry.deviceId == deviceId else { continue }
+            guard entry.deadLetteredAt == nil else { continue }
+            if let source, entry.source != source { continue }
+            guard entry.type == .preset || entry.type == .playlist else { continue }
+
+            let scopedIds: Set<Int> = {
+                switch entry.type {
+                case .preset:
+                    return presetIds
+                case .playlist:
+                    return playlistIds
+                case .timer:
+                    return []
+                }
+            }()
+
+            let entryIdSet = Set(entry.ids)
+            let matchedIds = scopedIds.isEmpty
+                ? entryIdSet
+                : entryIdSet.intersection(scopedIds)
+            guard !matchedIds.isEmpty else { continue }
+            if entry.type == .preset {
+                unmatchedPresetIds.subtract(matchedIds)
+            } else if entry.type == .playlist {
+                unmatchedPlaylistIds.subtract(matchedIds)
+            }
+
+            changed = true
+            let matchedInEntryOrder = entry.ids.filter { matchedIds.contains($0) }
+            let remaining = entry.ids.filter { !matchedIds.contains($0) }
+
+            if remaining.isEmpty {
+                pendingDeletes[index].deadLetteredAt = now
+                pendingDeletes[index].lastAttempt = now
+                pendingDeletes[index].nextAttemptAt = nil
+                pendingDeletes[index].lastError = reason
+            } else {
+                pendingDeletes[index].ids = remaining
+                pendingDeletes[index].lastAttempt = now
+                pendingDeletes[index].lastError = "Scoped IDs moved to dead-letter: \(reason)"
+
+                let deadLetter = PendingDeviceDelete(
+                    type: entry.type,
+                    deviceId: entry.deviceId,
+                    ids: matchedInEntryOrder,
+                    retries: entry.retries,
+                    lastAttempt: now,
+                    nextAttemptAt: nil,
+                    lastError: reason,
+                    source: entry.source,
+                    leaseId: entry.leaseId,
+                    verificationRequired: entry.verificationRequired,
+                    deadLetteredAt: now,
+                    createdAt: entry.createdAt
+                )
+                spawnedDeadLetters.append(deadLetter)
+            }
+
+            deadLetteredCount += matchedInEntryOrder.count
+        }
+
+        if !presetIds.isEmpty && !unmatchedPresetIds.isEmpty {
+            spawnedDeadLetters.append(
+                PendingDeviceDelete(
+                    type: .preset,
+                    deviceId: deviceId,
+                    ids: Array(unmatchedPresetIds).sorted(),
+                    retries: 0,
+                    lastAttempt: now,
+                    nextAttemptAt: nil,
+                    lastError: reason,
+                    source: source ?? .unknown,
+                    leaseId: nil,
+                    verificationRequired: true,
+                    deadLetteredAt: now,
+                    createdAt: now
+                )
+            )
+            deadLetteredCount += unmatchedPresetIds.count
+            changed = true
+        }
+
+        if !playlistIds.isEmpty && !unmatchedPlaylistIds.isEmpty {
+            spawnedDeadLetters.append(
+                PendingDeviceDelete(
+                    type: .playlist,
+                    deviceId: deviceId,
+                    ids: Array(unmatchedPlaylistIds).sorted(),
+                    retries: 0,
+                    lastAttempt: now,
+                    nextAttemptAt: nil,
+                    lastError: reason,
+                    source: source ?? .unknown,
+                    leaseId: nil,
+                    verificationRequired: true,
+                    deadLetteredAt: now,
+                    createdAt: now
+                )
+            )
+            deadLetteredCount += unmatchedPlaylistIds.count
+            changed = true
+        }
+
+        if !spawnedDeadLetters.isEmpty {
+            pendingDeletes.append(contentsOf: spawnedDeadLetters)
+        }
+        if changed {
+            save()
+            logger.warning(
+                "cleanup.dead_lettered_preset_store device=\(deviceId, privacy: .public) count=\(deadLetteredCount, privacy: .public) reason=\(reason, privacy: .public)"
+            )
+        }
+        return deadLetteredCount
     }
     
     /// Remove a specific deletion from the queue (e.g., if manually resolved)
@@ -509,9 +946,20 @@ final class DeviceCleanupManager: ObservableObject {
     private func maxIdsPerAttempt(for type: PendingDeviceDelete.DeleteType) -> Int {
         switch type {
         case .preset:
-            return 2
+            return 1
         case .playlist, .timer:
             return 1
+        }
+    }
+
+    private func deleteTypePriority(_ delete: PendingDeviceDelete) -> Int {
+        switch delete.type {
+        case .timer:
+            return 0
+        case .playlist:
+            return 1
+        case .preset:
+            return 2
         }
     }
 

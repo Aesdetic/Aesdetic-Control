@@ -533,6 +533,31 @@ struct DirectStatePayload: Codable, Equatable {
     }
 }
 
+struct ManagedAutomationAssetCheckpoint: Codable, Equatable {
+    var capturedAt: Date
+    var playlistId: Int?
+    var presetId: Int?
+    var stepPresetIds: [Int]
+    var playlistSignature: String?
+    var presetSignature: String?
+
+    init(
+        capturedAt: Date = Date(),
+        playlistId: Int? = nil,
+        presetId: Int? = nil,
+        stepPresetIds: [Int] = [],
+        playlistSignature: String? = nil,
+        presetSignature: String? = nil
+    ) {
+        self.capturedAt = capturedAt
+        self.playlistId = playlistId
+        self.presetId = presetId
+        self.stepPresetIds = Array(Set(stepPresetIds.filter { (1...250).contains($0) })).sorted()
+        self.playlistSignature = playlistSignature
+        self.presetSignature = presetSignature
+    }
+}
+
 struct AutomationMetadata: Codable, Equatable {
     enum WLEDSyncState: String, Codable, Equatable {
         case unknown
@@ -569,6 +594,7 @@ struct AutomationMetadata: Codable, Equatable {
     var wledManagedPlaylistSignatureByDevice: [String: String]? = nil
     var wledManagedStepPresetIdsByDevice: [String: [Int]]? = nil
     var wledManagedPresetSignatureByDevice: [String: String]? = nil
+    var wledManagedAssetCheckpointByDevice: [String: ManagedAutomationAssetCheckpoint]? = nil
     var wledSyncStateByDevice: [String: WLEDSyncState]? = nil
     var wledLastSyncErrorByDevice: [String: String]? = nil
     var wledLastSyncAtByDevice: [String: Date]? = nil
@@ -594,6 +620,7 @@ struct AutomationMetadata: Codable, Equatable {
         wledManagedPlaylistSignatureByDevice: [String: String]? = nil,
         wledManagedStepPresetIdsByDevice: [String: [Int]]? = nil,
         wledManagedPresetSignatureByDevice: [String: String]? = nil,
+        wledManagedAssetCheckpointByDevice: [String: ManagedAutomationAssetCheckpoint]? = nil,
         wledSyncStateByDevice: [String: WLEDSyncState]? = nil,
         wledLastSyncErrorByDevice: [String: String]? = nil,
         wledLastSyncAtByDevice: [String: Date]? = nil,
@@ -617,6 +644,7 @@ struct AutomationMetadata: Codable, Equatable {
         self.wledManagedPlaylistSignatureByDevice = wledManagedPlaylistSignatureByDevice
         self.wledManagedStepPresetIdsByDevice = wledManagedStepPresetIdsByDevice
         self.wledManagedPresetSignatureByDevice = wledManagedPresetSignatureByDevice
+        self.wledManagedAssetCheckpointByDevice = wledManagedAssetCheckpointByDevice
         self.wledSyncStateByDevice = wledSyncStateByDevice
         self.wledLastSyncErrorByDevice = wledLastSyncErrorByDevice
         self.wledLastSyncAtByDevice = wledLastSyncAtByDevice
@@ -649,6 +677,10 @@ struct AutomationMetadata: Codable, Equatable {
 
     func managedStepPresetIds(for deviceId: String) -> [Int]? {
         wledManagedStepPresetIdsByDevice?[deviceId]
+    }
+
+    func managedAssetCheckpoint(for deviceId: String) -> ManagedAutomationAssetCheckpoint? {
+        wledManagedAssetCheckpointByDevice?[deviceId]
     }
 
     mutating func setManagedPlaylistSignature(_ signature: String?, for deviceId: String) {
@@ -686,6 +718,17 @@ struct AutomationMetadata: Codable, Equatable {
         wledManagedPresetSignatureByDevice = map.isEmpty ? nil : map
     }
 
+    mutating func setManagedAssetCheckpoint(_ checkpoint: ManagedAutomationAssetCheckpoint?, for deviceId: String) {
+        var map = wledManagedAssetCheckpointByDevice ?? [:]
+        if var checkpoint {
+            checkpoint.stepPresetIds = Array(Set(checkpoint.stepPresetIds.filter { (1...250).contains($0) })).sorted()
+            map[deviceId] = checkpoint
+        } else {
+            map.removeValue(forKey: deviceId)
+        }
+        wledManagedAssetCheckpointByDevice = map.isEmpty ? nil : map
+    }
+
     mutating func clearWLEDMacroMetadata(for deviceIds: [String], preserveTimerSlots: Bool = true) {
         let targetIds = Set(deviceIds)
         if var playlistMap = wledPlaylistIdsByDevice {
@@ -707,6 +750,10 @@ struct AutomationMetadata: Codable, Equatable {
         if var presetSignatures = wledManagedPresetSignatureByDevice {
             presetSignatures = presetSignatures.filter { !targetIds.contains($0.key) }
             wledManagedPresetSignatureByDevice = presetSignatures.isEmpty ? nil : presetSignatures
+        }
+        if var checkpointMap = wledManagedAssetCheckpointByDevice {
+            checkpointMap = checkpointMap.filter { !targetIds.contains($0.key) }
+            wledManagedAssetCheckpointByDevice = checkpointMap.isEmpty ? nil : checkpointMap
         }
         if var syncMap = wledSyncStateByDevice {
             for deviceId in targetIds {
@@ -748,6 +795,7 @@ struct AutomationMetadata: Codable, Equatable {
         wledManagedPlaylistSignatureByDevice = wledManagedPlaylistSignatureByDevice?.filter { targetIds.contains($0.key) }
         wledManagedStepPresetIdsByDevice = wledManagedStepPresetIdsByDevice?.filter { targetIds.contains($0.key) }
         wledManagedPresetSignatureByDevice = wledManagedPresetSignatureByDevice?.filter { targetIds.contains($0.key) }
+        wledManagedAssetCheckpointByDevice = wledManagedAssetCheckpointByDevice?.filter { targetIds.contains($0.key) }
         wledSyncStateByDevice = wledSyncStateByDevice?.filter { targetIds.contains($0.key) }
         wledLastSyncErrorByDevice = wledLastSyncErrorByDevice?.filter { targetIds.contains($0.key) }
         wledLastSyncAtByDevice = wledLastSyncAtByDevice?.filter { targetIds.contains($0.key) }

@@ -290,7 +290,7 @@ struct DeviceDetailView: View {
                 .presentationDragIndicator(.hidden)
                 .presentationBackground(.ultraThinMaterial)
             }
-            .confirmationDialog(
+            .alert(
                 "Delete automation?",
                 isPresented: Binding(
                     get: { automationPendingDelete != nil },
@@ -298,10 +298,15 @@ struct DeviceDetailView: View {
                 ),
                 presenting: automationPendingDelete
             ) { automation in
-                Button("Delete \(automation.name)", role: .destructive) {
+                Button("Delete", role: .destructive) {
                     automationStore.delete(id: automation.id)
                     automationPendingDelete = nil
                 }
+                Button("Cancel", role: .cancel) {
+                    automationPendingDelete = nil
+                }
+            } message: { automation in
+                Text("Delete \"\(automation.name)\" from this device?")
             }
         }
     }
@@ -905,6 +910,7 @@ struct DeviceDetailView: View {
                             scenes: scenesStore.scenes,
                             isNext: nextAutomationID == automation.id,
                             isDeleting: automationStore.isDeletionInProgress(for: automation.id),
+                            deletionProgress: automationStore.deletionProgress(for: automation.id),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
                             subtitle: activeDevice.name,
@@ -1657,6 +1663,7 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
     @Published private(set) var automations: [Automation] = []
     @Published private(set) var upcomingAutomationInfo: (automation: Automation, date: Date)?
     @Published private(set) var deletingAutomationIds: Set<UUID> = []
+    @Published private(set) var deletionProgressByAutomationId: [UUID: AutomationDeletionProgress] = [:]
 
     private var cancellables = Set<AnyCancellable>()
     private let isRunningInPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
@@ -1667,6 +1674,8 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
         let store = AutomationStore.shared
         automations = store.automations
         upcomingAutomationInfo = store.upcomingAutomationInfo
+        deletingAutomationIds = store.deletingAutomationIds
+        deletionProgressByAutomationId = store.deletionProgressByAutomationId
 
         store.$automations
             .receive(on: DispatchQueue.main)
@@ -1681,6 +1690,11 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
         store.$deletingAutomationIds
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.deletingAutomationIds = $0 }
+            .store(in: &cancellables)
+
+        store.$deletionProgressByAutomationId
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.deletionProgressByAutomationId = $0 }
             .store(in: &cancellables)
     }
 
@@ -1711,6 +1725,10 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
 
     func isDeletionInProgress(for id: UUID) -> Bool {
         deletingAutomationIds.contains(id)
+    }
+
+    func deletionProgress(for id: UUID) -> AutomationDeletionProgress? {
+        deletionProgressByAutomationId[id]
     }
 }
 

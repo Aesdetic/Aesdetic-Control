@@ -523,14 +523,14 @@ struct ScenesAutomationsSection: View {
     @StateObject private var usageStore = DashboardShortcutUsageStore.shared
     @StateObject private var favoritesStore = SceneFavoritesStore.shared
     @StateObject private var presetFavoritesStore = PresetFavoritesStore.shared
-    private let pillRowHeight: CGFloat = 44
+    private let pillRowHeight: CGFloat = 38
     private let sectionHorizontalPadding: CGFloat = 20
     private var headingTextColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.94) : DashboardPalette.primaryText
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Scenes")
                     .font(DashboardTypography.sectionTitle)
@@ -867,9 +867,6 @@ struct DeviceStatsSection: View {
     let activeAutomations: Int
     @Environment(\.colorScheme) private var colorScheme
 
-    private var headingColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.94) : DashboardPalette.primaryText
-    }
     private var valueColor: Color {
         colorScheme == .dark ? Color.white : DashboardPalette.primaryText
     }
@@ -881,27 +878,20 @@ struct DeviceStatsSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Overview")
-                .font(DashboardTypography.sectionTitle)
-                .foregroundColor(headingColor)
-            
-            // Unified Statistics Card with Vertical Dividers
-            AppOverviewCard(
-                metrics: [
-                    AppOverviewMetric(value: "\(totalDevices)", label: "Total\nDevices"),
-                    AppOverviewMetric(value: "\(activeDevices)", label: "Active\nDevices"),
-                    AppOverviewMetric(value: "\(activeAutomations)", label: "Automations\nOn")
-                ],
-                style: .systemGlass(tint: nil, interactive: false),
-                cornerRadius: 20,
-                valueColorOverride: valueColor,
-                labelColorOverride: labelColor,
-                dividerColorOverride: dividerColor,
-                valueFontOverride: DashboardTypography.metricValue,
-                labelFontOverride: DashboardTypography.metricLabel
-            )
-        }
+        AppOverviewCard(
+            metrics: [
+                AppOverviewMetric(value: "\(totalDevices)", label: "Total\nDevices"),
+                AppOverviewMetric(value: "\(activeDevices)", label: "Active\nDevices"),
+                AppOverviewMetric(value: "\(activeAutomations)", label: "Automations\nOn")
+            ],
+            style: .systemGlass(tint: nil, interactive: false),
+            cornerRadius: 20,
+            valueColorOverride: valueColor,
+            labelColorOverride: labelColor,
+            dividerColorOverride: dividerColor,
+            valueFontOverride: DashboardTypography.metricValue,
+            labelFontOverride: DashboardTypography.metricLabel
+        )
     }
 }
 

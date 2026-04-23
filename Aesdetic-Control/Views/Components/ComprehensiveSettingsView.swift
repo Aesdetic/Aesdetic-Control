@@ -877,7 +877,7 @@ struct ComprehensiveSettingsView: View {
                     InfoRow(label: "Current Active Segments", value: "\(currentActiveSegments)")
                     InfoRow(label: "Max Usable (LED Count Cap)", value: "\(maxUsableSegments)")
                     InfoRow(label: "Recommended Active", value: "\(recommendedSegmentCount)")
-                    Text("Recommended targets high visual quality (~75% of max usable) while avoiding heavy update load.")
+                    Text("Recommended defaults to about 18 active segments when supported, reducing preset size while keeping gradients smooth.")
                         .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
                         .frame(maxWidth: .infinity, alignment: .leading)

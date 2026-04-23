@@ -71,8 +71,13 @@ struct EnhancedDeviceCard: View {
     }
     
     private let cardHeight: CGFloat = 193
+    private let controlHeight: CGFloat = 28
+    private let controlCornerRadius: CGFloat = 8
     private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
     private var glassText: GlassTextStyle { GlassTheme.text(for: colorScheme) }
+    private var isReferenceLightMode: Bool { colorScheme == .light }
+    private var cardPrimaryTextColor: Color { .white.opacity(0.96) }
+    private var cardSecondaryTextColor: Color { .white.opacity(0.86) }
 
     var body: some View {
         ZStack {
@@ -171,22 +176,31 @@ struct EnhancedDeviceCard: View {
     }
     
     private var headerSection: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(device.name)
                     .font(AppTypography.style(.headline, weight: .semibold))
-                    .foregroundColor(glassText.pagePrimaryText)
+                    .foregroundColor(cardPrimaryTextColor)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.84)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
                 
-                statusIndicator
+                VStack(alignment: .leading, spacing: 5) {
+                    statusIndicator
 
-                if let run = activeRunStatus {
-                    runStatusChip(run)
+                    if let run = activeRunStatus {
+                        runStatusChip(run)
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             
             Spacer()
 
             powerButton
+                .padding(.top, 2)
         }
     }
 
@@ -194,19 +208,18 @@ struct EnhancedDeviceCard: View {
     private func runStatusChip(_ run: ActiveRunStatus) -> some View {
         Text(runStatusText(run))
             .font(AppTypography.style(.caption2))
-            .foregroundColor(.white.opacity(0.85))
+            .foregroundColor(cardSecondaryTextColor)
             .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
             .background(
                 Capsule()
-                    .fill(Color.white.opacity(0.15))
+                    .fill(Color.white.opacity(0.12))
                     .overlay(
                         Capsule()
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
                     )
             )
-            .padding(.top, 2)
     }
 
     private func runStatusText(_ run: ActiveRunStatus) -> String {
@@ -240,7 +253,7 @@ struct EnhancedDeviceCard: View {
             Text(device.isOnline ? "Online" : "Offline")
                 .font(AppTypography.style(.caption))
                 .fontWeight(.medium)
-                .foregroundColor(.white.opacity(0.95))
+                .foregroundColor(cardPrimaryTextColor)
         }
     }
 
@@ -303,17 +316,32 @@ struct EnhancedDeviceCard: View {
                 if isToggling {
                     ProgressView()
                         .scaleEffect(0.8)
-                        .foregroundColor(powerIconColor)
+                        .foregroundColor(
+                            isReferenceLightMode
+                                ? AppTheme.controlForeground(for: colorScheme, isActive: currentPowerState)
+                                : powerIconColor
+                        )
                 }
             }
             .frame(width: 36, height: 36)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(currentPowerState ? .white : .clear)
-                    .overlay(
+                Group {
+                    if isReferenceLightMode {
+                        Circle()
+                            .fill(Color.white.opacity(currentPowerState ? 0.14 : 0.08))
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white.opacity(currentPowerState ? 0.20 : 0.11), lineWidth: 0.9)
+                            )
+                    } else {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
-                    )
+                            .fill(currentPowerState ? .white : .clear)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
+                            )
+                    }
+                }
             )
             .shadow(
                 color: glassSurface.controlShadowAmbient.color,
@@ -343,53 +371,59 @@ struct EnhancedDeviceCard: View {
 
     
     private var brightnessSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .center, spacing: 10) {
                 Text("Brightness")
-                    .font(AppTypography.style(.subheadline))
-                    .fontWeight(.medium)
-                    .foregroundColor(glassText.pagePrimaryText)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(cardSecondaryTextColor)
                 
                 Spacer()
-                
-                // Image change button positioned at top right
-                Button(action: {
-                    showImagePicker = true
-                }) {
-                    Image(systemName: "pencil")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(glassText.pageSecondaryText)
-                        .frame(width: 28, height: 28)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(glassSurface.fieldFill)
-                        )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Change device image")
-                .accessibilityHint("Choose a different product image for this device.")
-                .sensorySelection(trigger: showImagePicker)
-                .disabled(requiresSetup)
             }
             
-            brightnessBar
+            HStack(alignment: .center, spacing: 8) {
+                brightnessBar
+
+                imageChangeButton
+            }
         }
+    }
+
+    private var imageChangeButton: some View {
+        Button(action: {
+            showImagePicker = true
+        }) {
+            Image(systemName: "pencil")
+                .font(AppTypography.style(.caption))
+                .foregroundColor(cardSecondaryTextColor)
+                .frame(width: controlHeight, height: controlHeight)
+                .background {
+                    subtleControlGlassBackground(cornerRadius: controlCornerRadius)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Change device image")
+        .accessibilityHint("Choose a different product image for this device.")
+        .sensorySelection(trigger: showImagePicker)
+        .disabled(requiresSetup)
     }
     
     private var brightnessBar: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                // Background track - glassmorphic semi-transparent
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(trackBackground)
-                    .frame(height: 25) // Increased by 5% (24 * 1.05)
+                    .fill(Color.white.opacity(colorScheme == .dark ? 0.03 : 0.045))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(colorScheme == .dark ? 0.06 : 0.08), lineWidth: 0.8)
+                    )
+                    .frame(height: controlHeight)
                 
                 // Progress fill
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(progressFill)
-                    .frame(width: max(24, geometry.size.width * CGFloat(localBrightness / 255.0)), height: 25)
+                    .frame(width: max(controlHeight, geometry.size.width * CGFloat(localBrightness / 255.0)), height: controlHeight)
                 .animation(PerformanceConfig.enableAnimations ? .easeInOut(duration: 0.1) : nil, value: Int(localBrightness / 5.0))
-                
+
                 // Brightness percentage text
                 HStack {
                     Text("\(Int(localBrightness / 255.0 * 100))%")
@@ -398,6 +432,9 @@ struct EnhancedDeviceCard: View {
                         .padding(.leading, 8)
                     Spacer()
                 }
+            }
+            .background {
+                subtleControlGlassBackground(cornerRadius: controlCornerRadius)
             }
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -445,7 +482,7 @@ struct EnhancedDeviceCard: View {
             }
             .accessibilityHidden(!device.isOnline || !currentPowerState || requiresSetup)
         }
-        .frame(height: 25)
+        .frame(height: controlHeight)
         .onDisappear {
             // Flush any pending brightness updates when view disappears
             brightnessUpdateTimer?.invalidate()
@@ -455,6 +492,14 @@ struct EnhancedDeviceCard: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func subtleControlGlassBackground(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.white.opacity(0.001))
+            .appLiquidGlass(role: .control, cornerRadius: cornerRadius)
+            .opacity(colorScheme == .dark ? 0.62 : 0.58)
     }
     
     private var cardFill: Color {
@@ -487,6 +532,9 @@ struct EnhancedDeviceCard: View {
     }
 
     private var powerIconColor: Color {
+        if isReferenceLightMode {
+            return Color.white.opacity(currentPowerState ? 0.90 : 0.72)
+        }
         if !currentPowerState {
             return .white
         }
@@ -527,13 +575,6 @@ struct EnhancedDeviceCard: View {
         return glassSurface.cardShadowAmbient
     }
 
-    private var trackBackground: Color {
-        if colorScheme == .dark {
-            return colorSchemeContrast == .increased ? Color.white.opacity(0.24) : Color.white.opacity(0.14)
-        }
-        return colorSchemeContrast == .increased ? Color.white.opacity(0.3) : glassSurface.fieldFill
-    }
-
     private var progressFill: LinearGradient {
         let startOpacity = colorSchemeContrast == .increased ? 1.0 : 0.7
         return LinearGradient(
@@ -544,7 +585,7 @@ struct EnhancedDeviceCard: View {
     }
 
     private var progressLabelColor: Color {
-        colorSchemeContrast == .increased ? (colorScheme == .dark ? .white : glassText.pagePrimaryText) : glassText.pagePrimaryText
+        Color.white.opacity(colorSchemeContrast == .increased ? 1.0 : 0.94)
     }
     
     private func syncWithDeviceState() {

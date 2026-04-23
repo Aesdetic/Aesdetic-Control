@@ -336,6 +336,10 @@ class WLEDConnectionMonitor: ObservableObject {
             markOnlineFromRealtime(device)
             return
         }
+        if await apiService.isPresetStoreDeleteSessionActive(deviceId: device.id) {
+            logger.debug("Skipping health check during preset-store delete session for \(device.id)")
+            return
+        }
         do {
             let response = try await apiService.getState(for: device)
             handleHealthCheckSuccess(device, response: response)

@@ -763,8 +763,8 @@ class DeviceControlViewModel: ObservableObject {
         let stop: Int
     }
     private var appManagedSegmentLayouts: [String: [SegmentBounds]] = [:]
-    private let defaultSegmentCountFloor: Int = 12
-    private let defaultSegmentQualityRatio: Double = 0.75
+    private let defaultSegmentCountFloor: Int = 18
+    private let defaultSegmentQualityRatio: Double = 0.5625
     private let perLedFallbackLedLimit: Int = 30
     private let maxWLEDTransitionDeciseconds: Int = 65535
     private let segmentedTransitionMaxStepSeconds: Double = 60.0
@@ -1089,10 +1089,16 @@ class DeviceControlViewModel: ObservableObject {
         return .deciseconds
     }
 
-    private func playlistSteps(for durationSeconds: Double, legSeconds: Double) -> Int {
+    private func playlistSteps(
+        for durationSeconds: Double,
+        legSeconds: Double,
+        clampToTransitionLimit: Bool = true
+    ) -> Int {
         let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSeconds))
         guard clampedDuration > 0 else { return 1 }
-        let safeLeg = min(maxWLEDPlaylistTransitionSeconds, max(1.0, legSeconds))
+        let safeLeg = clampToTransitionLimit
+            ? min(maxWLEDPlaylistTransitionSeconds, max(1.0, legSeconds))
+            : max(1.0, legSeconds)
         return min(maxWLEDPlaylistEntries, Int(ceil(clampedDuration / safeLeg)) + 1)
     }
 
@@ -1101,7 +1107,8 @@ class DeviceControlViewModel: ObservableObject {
         timingUnit: PlaylistTimingUnit,
         maxStepSeconds: Double = maxWLEDPlaylistTransitionSeconds,
         fixedSteps: Int? = nil,
-        generatedTimingMode: GeneratedPlaylistTimingMode = .fullBlend
+        generatedTimingMode: GeneratedPlaylistTimingMode = .fullBlend,
+        enforceTransitionLimitStepCount: Bool = true
     ) -> PlaylistStepPlan {
         let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSeconds))
         if clampedDuration == 0 {
@@ -1130,10 +1137,12 @@ class DeviceControlViewModel: ObservableObject {
             for: clampedDuration,
             legSeconds: min(maxWLEDPlaylistTransitionSeconds, max(1.0, maxStepSeconds))
         )
-        let minimumStepsForTransitionLimit = max(
-            1,
-            Int(ceil(Double(requestedUnits) / Double(maxWLEDPlaylistTransitionDeciseconds)))
-        )
+        let minimumStepsForTransitionLimit = enforceTransitionLimitStepCount
+            ? max(
+                1,
+                Int(ceil(Double(requestedUnits) / Double(maxWLEDPlaylistTransitionDeciseconds)))
+            )
+            : 1
         var steps = max(stepTarget, minimumStepsForTransitionLimit)
         steps = min(maxWLEDPlaylistEntries, steps)
         steps = min(steps, requestedUnits)
@@ -1210,9 +1219,9 @@ class DeviceControlViewModel: ObservableObject {
             if mediumDelta { return 24 }
             return 30
         case .persistentAutomation:
-            if highDelta { return 30 }
-            if mediumDelta { return 45 }
-            return 60
+            if highDelta { return 120 }
+            if mediumDelta { return 180 }
+            return 240
         }
     }
 
@@ -1223,8 +1232,8 @@ class DeviceControlViewModel: ObservableObject {
             if legSeconds <= 30 { return .balanced }
             return .conservative
         case .persistentAutomation:
-            if legSeconds <= 30 { return .high }
-            if legSeconds <= 45 { return .balanced }
+            if legSeconds <= 120 { return .high }
+            if legSeconds <= 180 { return .balanced }
             return .conservative
         }
     }
@@ -1234,9 +1243,17 @@ class DeviceControlViewModel: ObservableObject {
         case .temporaryLive:
             return [baseLegSeconds]
         case .persistentAutomation:
-            let all = [30.0, 45.0, 60.0, 65.0]
+            let all = [120.0, 180.0, 240.0, 300.0]
             return all.filter { $0 >= baseLegSeconds - 0.001 }
         }
+    }
+
+    private func persistentAutomationMaxSteps(for durationSeconds: Double) -> Int {
+        let minutes = max(0.0, durationSeconds) / 60.0
+        if minutes <= 10 { return 10 }
+        if minutes <= 20 { return 12 }
+        if minutes <= 35 { return 16 }
+        return 21
     }
 
     private func maxDurationSeconds(forSlots slots: Int, legSeconds: Double) -> Double {
@@ -1295,7 +1312,14 @@ class DeviceControlViewModel: ObservableObject {
 
         let candidates = candidateLegSeconds(baseLegSeconds: baseLeg, context: context)
         var chosenLeg = candidates.first ?? baseLeg
-        var chosenSteps = playlistSteps(for: clampedDuration, legSeconds: chosenLeg)
+        var chosenSteps = playlistSteps(
+            for: clampedDuration,
+            legSeconds: chosenLeg,
+            clampToTransitionLimit: context != .persistentAutomation
+        )
+        if context == .persistentAutomation {
+            chosenSteps = min(chosenSteps, persistentAutomationMaxSteps(for: clampedDuration))
+        }
         var chosenSlots = chosenSteps + 1
         var fitsBudget = true
 
@@ -1303,10 +1327,17 @@ class DeviceControlViewModel: ObservableObject {
             fitsBudget = chosenSlots <= budget
             if !fitsBudget {
                 for candidate in candidates.dropFirst() {
-                    let steps = playlistSteps(for: clampedDuration, legSeconds: candidate)
-                    let slots = steps + 1
+                    let steps = playlistSteps(
+                        for: clampedDuration,
+                        legSeconds: candidate,
+                        clampToTransitionLimit: context != .persistentAutomation
+                    )
+                    let cappedSteps = context == .persistentAutomation
+                        ? min(steps, persistentAutomationMaxSteps(for: clampedDuration))
+                        : steps
+                    let slots = cappedSteps + 1
                     chosenLeg = candidate
-                    chosenSteps = steps
+                    chosenSteps = cappedSteps
                     chosenSlots = slots
                     fitsBudget = slots <= budget
                     if fitsBudget {
@@ -1554,6 +1585,10 @@ class DeviceControlViewModel: ObservableObject {
 
     func debugShouldAllowPresetStoreMutationForTests(deviceId: String) async -> Bool {
         await shouldAllowPresetStoreMutation(deviceId: deviceId)
+    }
+
+    func debugShouldAllowPresetStoreDeleteMutationForTests(deviceId: String) async -> Bool {
+        await shouldAllowPresetStoreDeleteMutation(deviceId: deviceId)
     }
     #endif
 
@@ -6280,6 +6315,10 @@ class DeviceControlViewModel: ObservableObject {
                 return .apiError(message: apiError.errorDescription ?? "HTTP error")
             case .invalidConfiguration:
                 return .apiError(message: "Invalid configuration. Check API settings.")
+            case .presetStoreUnreadable(let reason):
+                return .apiError(message: "Preset store temporarily unreadable: \(reason)")
+            case .presetStoreDeleteIncomplete(let reason):
+                return .apiError(message: "Preset-store delete incomplete: \(reason)")
             }
         }
         if let urlError = error as? URLError {
@@ -7864,6 +7903,12 @@ class DeviceControlViewModel: ObservableObject {
         if hasRecentPresetStoreTransportFailure(deviceId: deviceId) {
             return true
         }
+        if DeviceCleanupManager.shared.hasPendingPresetStoreDeletes(deviceId: deviceId) {
+            return true
+        }
+        if DeviceCleanupManager.shared.isDeleteLeaseActive(deviceId: deviceId) {
+            return true
+        }
         if await apiService.isStateWriteBackoffActive(deviceId: deviceId) {
             return true
         }
@@ -7874,10 +7919,13 @@ class DeviceControlViewModel: ObservableObject {
         !(await shouldBlockPresetStoreMutation(deviceId: deviceId))
     }
 
-    /// Cleanup deletes should keep progressing even when preset catalogs are temporarily
-    /// unreadable. Only block on explicit write-pause/backoff safety gates.
+    /// Cleanup deletes should keep progressing, but back off briefly after
+    /// recent unreadable transport failures to avoid hammering a corrupt store.
     func shouldAllowPresetStoreDeleteMutation(deviceId: String) async -> Bool {
         if isPresetStoreWritePaused(for: deviceId) {
+            return false
+        }
+        if hasRecentPresetStoreTransportFailure(deviceId: deviceId, within: 25.0) {
             return false
         }
         if await apiService.isStateWriteBackoffActive(deviceId: deviceId) {
@@ -8108,6 +8156,12 @@ class DeviceControlViewModel: ObservableObject {
             #endif
             return nil
         }
+        if persist, AutomationStore.shared.isDeletionInProgress(for: device.id) {
+            #if DEBUG
+            print("⚠️ Playlist creation deferred for \(device.name): automation cleanup is still in progress.")
+            #endif
+            return nil
+        }
 
         switch await waitForHeavyOpQuiescence(deviceId: device.id, timeout: 15.0) {
         case .ready:
@@ -8184,7 +8238,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSeconds))
         let requestedDeciseconds = clampedDuration > 0 ? max(1, Int(round(clampedDuration * 10.0))) : 0
-        let minStepCountForTiming = requestedDeciseconds > 0
+        let minStepCountForTiming = requestedDeciseconds > 0 && context != .persistentAutomation
             ? max(1, Int(ceil(Double(requestedDeciseconds) / Double(maxWLEDPlaylistTransitionDeciseconds))))
             : 1
         let keyframes = cullNearDuplicateKeyframes(rawKeyframes, minimumCount: minStepCountForTiming)
@@ -8193,7 +8247,8 @@ class DeviceControlViewModel: ObservableObject {
             for: durationSeconds,
             timingUnit: timingUnit,
             fixedSteps: stepCount,
-            generatedTimingMode: .boundaryCompensated(padDeciseconds: 3)
+            generatedTimingMode: .boundaryCompensated(padDeciseconds: 3),
+            enforceTransitionLimitStepCount: context != .persistentAutomation
         )
         #if DEBUG
         let budgetText = stepProfile.perAutomationBudget.map(String.init) ?? "n/a"
@@ -8423,6 +8478,12 @@ class DeviceControlViewModel: ObservableObject {
                 return true
             }
         }
+        func shouldAbortPersistentCreationForDelete() async -> Bool {
+            guard persist else { return false }
+            return await MainActor.run {
+                AutomationStore.shared.isDeletionInProgress(for: device.id)
+            }
+        }
         for (idx, presetId) in stepPresetIds.enumerated() {
             if await shouldAbortTemporaryCreation() {
                 if temporaryLeaseId != nil {
@@ -8435,6 +8496,13 @@ class DeviceControlViewModel: ObservableObject {
                     )
                     await refreshTransitionCleanupPendingCount(for: device.id)
                 }
+                return nil
+            }
+            if await shouldAbortPersistentCreationForDelete() {
+                #if DEBUG
+                print("⚠️ Playlist creation aborted for \(device.name): automation cleanup became active mid-build.")
+                #endif
+                await cleanupFailedTemporaryOrAllocated(reason: "persist_delete_mid_build")
                 return nil
             }
             if !persist, await shouldFailFastTemporaryPlaylistBuild(device: device) {
@@ -8501,6 +8569,13 @@ class DeviceControlViewModel: ObservableObject {
             }
             // Give WLED time to flush presets.json between writes.
             try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        if await shouldAbortPersistentCreationForDelete() {
+            #if DEBUG
+            print("⚠️ Playlist creation aborted for \(device.name): automation cleanup became active before playlist save.")
+            #endif
+            await cleanupFailedTemporaryOrAllocated(reason: "persist_delete_before_playlist_save")
+            return nil
         }
         // Allow WLED to finalize the presets file before saving the playlist.
         try? await Task.sleep(nanoseconds: 500_000_000)
@@ -8700,7 +8775,7 @@ class DeviceControlViewModel: ObservableObject {
         device: WLEDDevice,
         presetInputSnapshot: TransitionPreset
     ) async -> TransitionPresetSaveOutcome? {
-        if AutomationStore.shared.hasAnyDeletionInProgress {
+        if AutomationStore.shared.isDeletionInProgress(for: device.id) {
             #if DEBUG
             print("preset_save.blocked_automation_delete device=\(device.id)")
             #endif
@@ -10015,6 +10090,26 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
+    func notePresetStoreRecoveryRequired(
+        deviceId: String,
+        message: String,
+        pauseSeconds: TimeInterval = 900
+    ) {
+        let now = Date()
+        let pauseUntil = now.addingTimeInterval(max(60, pauseSeconds))
+        let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
+        presetStoreHealthByDeviceId[deviceId] = .unsafeWritesPaused
+        let existingPause = presetStoreWritePauseUntilByDeviceId[deviceId] ?? .distantPast
+        presetStoreWritePauseUntilByDeviceId[deviceId] = max(existingPause, pauseUntil)
+        lastPresetStoreHealthEventByDeviceId[deviceId] = now
+        lastPresetStoreHealthMessageByDeviceId[deviceId] = message
+        #if DEBUG
+        if previous != .unsafeWritesPaused {
+            print("preset_store.health.recovery_required device=\(deviceId) until=\(pauseUntil)")
+        }
+        #endif
+    }
+
     private func recordPresetStoreFailure(deviceId: String, message: String) {
         let now = Date()
         let windowStart = now.addingTimeInterval(-600)
@@ -10260,6 +10355,10 @@ class DeviceControlViewModel: ObservableObject {
         guard !profileInstallInFlight.contains(device.id) else { return false }
         guard let profile = profileCatalog.profile(for: productType) else { return false }
         guard let target = devices.first(where: { $0.id == device.id }) ?? devices.first(where: { $0.ipAddress == device.ipAddress }) ?? Optional(device) else {
+            return false
+        }
+        if AutomationStore.shared.isDeletionInProgress(for: target.id) {
+            profileInstallErrorByDeviceId[target.id] = "Please wait for automation deletion to finish before installing a profile."
             return false
         }
 
@@ -11445,7 +11544,11 @@ class DeviceControlViewModel: ObservableObject {
     func deletePresetRecord(_ presetId: Int, for device: WLEDDevice) async -> Bool {
         markUserInteraction(device.id)
         do {
-            _ = try await apiService.deletePreset(id: presetId, device: device)
+            let deleted = try await apiService.deletePreset(id: presetId, device: device)
+            guard deleted else {
+                presentError(.apiError(message: "Preset delete could not be verified on device. Please retry once preset storage is readable."))
+                return false
+            }
             await refreshPresets(for: device)
             await refreshPlaylists(for: device)
             clearError()
@@ -11457,21 +11560,32 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
-    func deletePlaylist(_ playlist: WLEDPlaylist, for device: WLEDDevice) async {
+    @discardableResult
+    func deletePlaylist(_ playlist: WLEDPlaylist, for device: WLEDDevice) async -> Bool {
         markUserInteraction(device.id)
         do {
-            _ = try await apiService.deletePlaylist(id: playlist.id, device: device)
+            let deleted = try await apiService.deletePlaylist(id: playlist.id, device: device)
+            guard deleted else {
+                presentError(.apiError(message: "Playlist delete could not be verified on device. Please retry once preset storage is readable."))
+                return false
+            }
             clearPendingPlaylistRename(deviceId: device.id, playlistId: playlist.id)
             await refreshPlaylists(for: device)
             await refreshPresets(for: device)
             clearError()
+            return true
         } catch {
             let mappedError = mapToWLEDError(error, device: device)
             presentError(mappedError)
+            return false
         }
     }
 
     func renamePresetRecord(_ presetId: Int, to name: String, for device: WLEDDevice) async -> Bool {
+        if AutomationStore.shared.isDeletionInProgress(for: device.id) {
+            presentError(.apiError(message: "Please wait for automation deletion to finish before renaming presets."))
+            return false
+        }
         markUserInteraction(device.id)
         do {
             try await apiService.renamePresetRecord(id: presetId, name: name, device: device)
@@ -11486,6 +11600,10 @@ class DeviceControlViewModel: ObservableObject {
     }
 
     func renamePlaylistRecord(_ playlistId: Int, to name: String, for device: WLEDDevice) async -> Bool {
+        if AutomationStore.shared.isDeletionInProgress(for: device.id) {
+            presentError(.apiError(message: "Please wait for automation deletion to finish before renaming playlists."))
+            return false
+        }
         markUserInteraction(device.id)
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -11541,6 +11659,10 @@ class DeviceControlViewModel: ObservableObject {
     }
 
     func savePlaylistRecord(_ request: WLEDPlaylistSaveRequest, for device: WLEDDevice) async -> Bool {
+        if AutomationStore.shared.isDeletionInProgress(for: device.id) {
+            presentError(.apiError(message: "Please wait for automation deletion to finish before saving a playlist."))
+            return false
+        }
         markUserInteraction(device.id)
         do {
             _ = try await apiService.savePlaylist(request, to: device)
@@ -11613,7 +11735,7 @@ class DeviceControlViewModel: ObservableObject {
     }
     
     func savePreset(name: String, quickLoadTag: String? = nil, for device: WLEDDevice, presetId: Int? = nil) async {
-        if AutomationStore.shared.hasAnyDeletionInProgress {
+        if AutomationStore.shared.isDeletionInProgress(for: device.id) {
             presentError(.apiError(message: "Please wait for automation deletion to finish before saving a new preset."))
             return
         }
