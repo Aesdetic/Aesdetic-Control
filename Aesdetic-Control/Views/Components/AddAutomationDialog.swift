@@ -89,6 +89,9 @@ struct AddAutomationDialog: View {
     @State private var transitionStartWhiteLevel: Double?
     @State private var transitionEndTemperature: Double?
     @State private var transitionEndWhiteLevel: Double?
+    @State private var transitionSchedulePreviewStart: Date?
+    @State private var transitionSchedulePreviewEnd: Date?
+    @State private var transitionSchedulePreviewTimeZone: TimeZone = .current
     @State private var templateEffectSettings: TemplateEffectSettings?
     @State private var templateMetadata: AutomationMetadata?
     @State private var lockedAction: AutomationAction?
@@ -437,6 +440,9 @@ struct AddAutomationDialog: View {
         .task {
             await loadPresetSlots()
         }
+        .task(id: transitionSchedulePreviewInputsKey) {
+            await refreshTransitionSchedulePreview()
+        }
         .onChange(of: selectedDeviceIds) { _, _ in
             clearOnDeviceScheduleValidationMessage()
             normalizeTriggerSelectionIfNeeded()
@@ -552,6 +558,24 @@ struct AddAutomationDialog: View {
             selectedSceneId?.uuidString ?? "nil",
             selectedEffectId.map(String.init) ?? "nil",
             automationName
+        ].joined(separator: "|")
+    }
+
+    private var transitionSchedulePreviewInputsKey: String {
+        let selectedMinute = Int(selectedTime.timeIntervalSinceReferenceDate / 60.0)
+        let weekdays = selectedWeekdays.map { $0 ? "1" : "0" }.joined()
+        return [
+            triggerSelection.rawValue,
+            String(selectedMinute),
+            weekdays,
+            String(Int(solarOffsetMinutes.rounded())),
+            activeDevice.id,
+            String(Int(customTransitionDuration.rounded())),
+            useDateWindow ? "1" : "0",
+            String(startMonth),
+            String(startDay),
+            String(endMonth),
+            String(endDay)
         ].joined(separator: "|")
     }
 
@@ -791,7 +815,7 @@ struct AddAutomationDialog: View {
     @ViewBuilder
     private var solarParityHint: some View {
         if triggerSelection == .sunrise || triggerSelection == .sunset {
-            Text("WLED solar parity: Sunrise uses timer slot 8, Sunset uses slot 9. Offset range is -59...+59 minutes and uses device timezone/location.")
+            Text("WLED solar parity: Sunrise uses timer slot 8, Sunset uses slot 9. Offset range is -120...+120 minutes and uses device timezone/location.")
                 .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
         }
@@ -1426,7 +1450,10 @@ struct AddAutomationDialog: View {
             endTemperature: $transitionEndTemperature,
             endWhiteLevel: $transitionEndWhiteLevel,
             transitionProfile: transitionProfileForActiveDevice,
-            automationGuaranteeCount: 5
+            automationGuaranteeCount: 5,
+            expectedStartDate: transitionSchedulePreviewStart,
+            expectedEndDate: transitionSchedulePreviewEnd,
+            expectedTimeZone: transitionSchedulePreviewTimeZone
         )
     }
     
@@ -1769,6 +1796,138 @@ struct AddAutomationDialog: View {
 
     private var isDateWindowValid: Bool {
         dateWindowValidationMessage == nil
+    }
+
+    @MainActor
+    private func refreshTransitionSchedulePreview() async {
+        let schedule = await computeNextTransitionSchedulePreview(referenceDate: Date())
+        transitionSchedulePreviewStart = schedule.start
+        transitionSchedulePreviewEnd = schedule.start?.addingTimeInterval(max(0, customTransitionDuration))
+        transitionSchedulePreviewTimeZone = schedule.timeZone
+    }
+
+    @MainActor
+    private func computeNextTransitionSchedulePreview(referenceDate: Date) async -> (start: Date?, timeZone: TimeZone) {
+        let normalizedWeekdays = WeekdayMask.normalizeSunFirst(selectedWeekdays)
+
+        switch triggerSelection {
+        case .time:
+            let components = Calendar.current.dateComponents([.hour, .minute], from: selectedTime)
+            guard let hour = components.hour, let minute = components.minute else {
+                return (nil, .current)
+            }
+            let timeZone = TimeZone.current
+            let next = nextSpecificTimeTriggerDate(
+                hour: hour,
+                minute: minute,
+                weekdays: normalizedWeekdays,
+                referenceDate: referenceDate,
+                timeZone: timeZone
+            )
+            return (next, timeZone)
+
+        case .sunrise, .sunset:
+            guard let reference = await automationStore.currentSolarReference(for: activeDevice) else {
+                return (nil, .current)
+            }
+            let event: SolarEvent = triggerSelection == .sunrise ? .sunrise : .sunset
+            let clampedOffset = SolarTrigger.clampOnDeviceOffset(Int(solarOffsetMinutes.rounded()))
+            let next = nextSolarTriggerDate(
+                event: event,
+                coordinate: reference.coordinate,
+                offsetMinutes: clampedOffset,
+                weekdays: normalizedWeekdays,
+                referenceDate: referenceDate,
+                timeZone: reference.timeZone
+            )
+            return (next, reference.timeZone)
+        }
+    }
+
+    private func nextSpecificTimeTriggerDate(
+        hour: Int,
+        minute: Int,
+        weekdays: [Bool],
+        referenceDate: Date,
+        timeZone: TimeZone
+    ) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let normalizedWeekdays = WeekdayMask.normalizeSunFirst(weekdays)
+        let dayStart = calendar.startOfDay(for: referenceDate)
+
+        for dayOffset in 0...7 {
+            guard let day = calendar.date(byAdding: .day, value: dayOffset, to: dayStart) else { continue }
+            var components = calendar.dateComponents([.year, .month, .day], from: day)
+            components.hour = hour
+            components.minute = minute
+            components.second = 0
+            guard let triggerDate = calendar.date(from: components), triggerDate > referenceDate else { continue }
+            let weekdayIndex = calendar.component(.weekday, from: triggerDate) - 1
+            guard weekdayIndex >= 0, weekdayIndex < normalizedWeekdays.count, normalizedWeekdays[weekdayIndex] else {
+                continue
+            }
+            guard isWithinDateWindow(triggerDate, calendar: calendar) else { continue }
+            return triggerDate
+        }
+
+        return nil
+    }
+
+    private func nextSolarTriggerDate(
+        event: SolarEvent,
+        coordinate: CLLocationCoordinate2D,
+        offsetMinutes: Int,
+        weekdays: [Bool],
+        referenceDate: Date,
+        timeZone: TimeZone
+    ) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let normalizedWeekdays = WeekdayMask.normalizeSunFirst(weekdays)
+        let dayStart = calendar.startOfDay(for: referenceDate)
+
+        for dayOffset in 0...7 {
+            guard let day = calendar.date(byAdding: .day, value: dayOffset, to: dayStart) else { continue }
+            guard let triggerDate = automationStore.resolveSolarTriggerDate(
+                event: event,
+                coordinate: coordinate,
+                date: day,
+                offsetMinutes: offsetMinutes,
+                timeZone: timeZone
+            ) else {
+                continue
+            }
+            guard triggerDate > referenceDate else { continue }
+            let weekdayIndex = calendar.component(.weekday, from: triggerDate) - 1
+            guard weekdayIndex >= 0, weekdayIndex < normalizedWeekdays.count, normalizedWeekdays[weekdayIndex] else {
+                continue
+            }
+            guard isWithinDateWindow(triggerDate, calendar: calendar) else { continue }
+            return triggerDate
+        }
+
+        return nil
+    }
+
+    private func isWithinDateWindow(_ date: Date, calendar: Calendar) -> Bool {
+        guard useDateWindow else { return true }
+        guard isValidCalendarDay(month: startMonth, day: startDay),
+              isValidCalendarDay(month: endMonth, day: endDay) else {
+            return false
+        }
+
+        let components = calendar.dateComponents([.month, .day], from: date)
+        guard let month = components.month, let day = components.day else { return false }
+
+        let value = month * 100 + day
+        let startValue = startMonth * 100 + startDay
+        let endValue = endMonth * 100 + endDay
+
+        if startValue <= endValue {
+            return (startValue...endValue).contains(value)
+        }
+        return value >= startValue || value <= endValue
     }
 
     @MainActor

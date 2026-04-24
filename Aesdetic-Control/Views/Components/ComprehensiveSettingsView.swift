@@ -2065,7 +2065,7 @@ private struct NativeTimerDraft: Identifiable, Equatable {
         self.init(
             id: timer.id,
             enabled: timer.enabled,
-            hour: timer.hour == 255 || timer.hour == 24 ? 0 : max(0, min(23, timer.hour)),
+            hour: timer.hour == 255 || timer.hour == 254 || timer.hour == 24 ? 0 : max(0, min(23, timer.hour)),
             minute: max(0, min(59, timer.minute)),
             weekdays: WeekdayMask.sunFirst(fromWLEDDow: timer.days),
             macroId: timer.macroId

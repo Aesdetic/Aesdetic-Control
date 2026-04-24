@@ -60,6 +60,8 @@ class AutomationStore: ObservableObject {
     private let deleteFinalizeTimeoutSeconds: TimeInterval = 180.0
     private let postDevicePreparationDeleteLockoutSeconds: TimeInterval = 60.0
     private let postPresetStoreMutationDeleteSettleSeconds: TimeInterval = 60.0
+    private let prePresetStoreDeleteQuiesceSeconds: TimeInterval = 0.7
+    private let postTimerDeletePresetStoreSettleSeconds: TimeInterval = 1.5
     private var onDeviceSyncInFlightAutomationIds: Set<UUID> = []
     private var onDeviceSyncReplayAutomationIds: Set<UUID> = []
     private var onDeviceSyncInFlightDeviceIds: Set<String> = []
@@ -333,6 +335,16 @@ class AutomationStore: ObservableObject {
         let deadline = Date().addingTimeInterval(deleteFinalizeTimeoutSeconds)
         let cleanupComplete = await cleanupDeviceEntries(for: automation)
         guard cleanupComplete else {
+            let canFinalize = await canFinalizeAfterCleanupFailure(for: automation)
+            if canFinalize {
+                logger.warning(
+                    "automation.delete.finalize_with_postcheck_warning automation=\(automation.id.uuidString, privacy: .public)"
+                )
+                finalizeDeletedAutomationLocally(automation)
+                deletingAutomationIds.remove(automation.id)
+                deletionProgressByAutomationId.removeValue(forKey: automation.id)
+                return
+            }
             logger.error(
                 "automation.delete.finalize_aborted_cleanup_failed automation=\(automation.id.uuidString, privacy: .public)"
             )
@@ -391,28 +403,77 @@ class AutomationStore: ObservableObject {
             return
         }
 
-        if let index = automations.firstIndex(where: { $0.id == automation.id }) {
-            let removed = automations.remove(at: index)
-            removeTimerSignatures(for: removed.id)
-            save()
-            scheduleNext()
-            scheduleSolarRefreshIfNeeded()
-            scheduleOnDeviceSyncRetryIfNeeded()
-            let pendingBackgroundCleanupDeviceIds = pendingCleanupDeviceIds(for: removed)
-            if !pendingBackgroundCleanupDeviceIds.isEmpty {
-                logger.info(
-                    "automation.delete.backgrounded automation=\(removed.id.uuidString, privacy: .public) pendingDevices=\(pendingBackgroundCleanupDeviceIds, privacy: .public)"
-                )
-                Task { @MainActor in
-                    for deviceId in pendingBackgroundCleanupDeviceIds {
-                        await DeviceCleanupManager.shared.processQueue(for: deviceId)
-                    }
-                }
-            }
-            logger.info("Deleted automation: \(removed.name)")
-        }
+        finalizeDeletedAutomationLocally(automation)
         deletingAutomationIds.remove(automation.id)
         deletionProgressByAutomationId.removeValue(forKey: automation.id)
+    }
+
+    private func finalizeDeletedAutomationLocally(_ automation: Automation) {
+        guard let index = automations.firstIndex(where: { $0.id == automation.id }) else { return }
+        let removed = automations.remove(at: index)
+        removeTimerSignatures(for: removed.id)
+        save()
+        scheduleNext()
+        scheduleSolarRefreshIfNeeded()
+        scheduleOnDeviceSyncRetryIfNeeded()
+        let pendingBackgroundCleanupDeviceIds = pendingCleanupDeviceIds(for: removed)
+        if !pendingBackgroundCleanupDeviceIds.isEmpty {
+            logger.info(
+                "automation.delete.backgrounded automation=\(removed.id.uuidString, privacy: .public) pendingDevices=\(pendingBackgroundCleanupDeviceIds, privacy: .public)"
+            )
+            Task { @MainActor in
+                for deviceId in pendingBackgroundCleanupDeviceIds {
+                    await DeviceCleanupManager.shared.processQueue(for: deviceId)
+                }
+            }
+        }
+        logger.info("Deleted automation: \(removed.name)")
+    }
+
+    private func canFinalizeAfterCleanupFailure(for automation: Automation) async -> Bool {
+        // Never finalize if queue/lease still indicates outstanding cleanup work.
+        guard pendingCleanupDeviceIds(for: automation).isEmpty else {
+            return false
+        }
+
+        for deviceId in automation.targets.deviceIds {
+            guard let slot = automation.metadata.wledTimerSlotsByDevice?[deviceId] ?? automation.metadata.wledTimerSlot else {
+                continue
+            }
+            guard !timerSlotClaimedByAnotherAutomation(slot, deviceId: deviceId, excluding: automation.id) else {
+                continue
+            }
+            guard let device = viewModel.devices.first(where: { $0.id == deviceId && $0.isOnline }) else {
+                return false
+            }
+            do {
+                let timers = try await apiService.fetchTimers(for: device)
+                guard let timer = timers.first(where: { $0.id == slot }) else {
+                    continue
+                }
+                if isTimerActionableForDeletionFinalization(timer, slot: slot) {
+                    return false
+                }
+            } catch {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func isTimerActionableForDeletionFinalization(_ timer: WLEDTimer, slot: Int) -> Bool {
+        let hasDateRange = timer.startMonth != nil || timer.startDay != nil || timer.endMonth != nil || timer.endDay != nil
+        let hasClockTime = timer.hour != 0 || timer.minute != 0
+        let hasNonDefaultDays = timer.days != 0x7F
+        let hasMacro = timer.macroId != 0
+        let hasSolarMarker = timer.hour == 255 || timer.hour == 254
+
+        // Firmware can leave a non-actionable solar marker row in slots 8/9 after clear.
+        if slot >= 8 && !timer.enabled && !hasMacro && hasSolarMarker && !hasDateRange && !hasNonDefaultDays {
+            return false
+        }
+
+        return timer.enabled || hasMacro || hasClockTime || hasNonDefaultDays || hasDateRange || hasSolarMarker
     }
     
     func applyAutomation(_ automation: Automation) {
@@ -791,10 +852,15 @@ class AutomationStore: ObservableObject {
             let templateId = importedTemplateId(deviceId: device.id, slot: timer.id)
             let weekdays = WeekdayMask.sunFirst(fromWLEDDow: timer.days)
             let trigger: AutomationTrigger
-            if timer.hour == 255 {
+            if timer.hour == 255 || timer.hour == 254 {
                 let offset = SolarTrigger.clampOnDeviceOffset(timer.minute)
                 let solar = SolarTrigger(offset: .minutes(offset), location: .followDevice, weekdays: weekdays)
-                trigger = timer.id == 9 ? .sunset(solar) : .sunrise(solar)
+                if timer.hour == 254 {
+                    trigger = .sunset(solar)
+                } else {
+                    // Backward compatibility: older app builds encoded sunset as hour=255 in slot 9.
+                    trigger = timer.id == 9 ? .sunset(solar) : .sunrise(solar)
+                }
             } else {
                 let clampedHour = max(0, min(23, timer.hour))
                 let clampedMinute = max(0, min(59, timer.minute))
@@ -2141,28 +2207,42 @@ class AutomationStore: ObservableObject {
         guard let expectedConfig = await wledTimerConfig(for: automation, device: device, referenceDate: Date()) else {
             return .unknown("missing_expected_timer_config")
         }
-        let expectedSignatureEnabled = timerSignature(
-            enabled: true,
-            hour: expectedConfig.hour,
-            minute: expectedConfig.minute,
-            days: expectedConfig.days,
-            macroId: macroId,
-            startMonth: expectedConfig.startMonth,
-            startDay: expectedConfig.startDay,
-            endMonth: expectedConfig.endMonth,
-            endDay: expectedConfig.endDay
-        )
-        let expectedSignatureDisabled = timerSignature(
-            enabled: false,
-            hour: expectedConfig.hour,
-            minute: expectedConfig.minute,
-            days: expectedConfig.days,
-            macroId: macroId,
-            startMonth: expectedConfig.startMonth,
-            startDay: expectedConfig.startDay,
-            endMonth: expectedConfig.endMonth,
-            endDay: expectedConfig.endDay
-        )
+        let expectedHours: [Int] = {
+            // Backward compatibility: older builds could encode sunset on slot 9 with hour=255.
+            if slot == 9 && expectedConfig.hour == 254 {
+                return [254, 255]
+            }
+            return [expectedConfig.hour]
+        }()
+        var ownedSignatures: Set<String> = []
+        for expectedHour in expectedHours {
+            ownedSignatures.insert(
+                timerSignature(
+                    enabled: true,
+                    hour: expectedHour,
+                    minute: expectedConfig.minute,
+                    days: expectedConfig.days,
+                    macroId: macroId,
+                    startMonth: expectedConfig.startMonth,
+                    startDay: expectedConfig.startDay,
+                    endMonth: expectedConfig.endMonth,
+                    endDay: expectedConfig.endDay
+                )
+            )
+            ownedSignatures.insert(
+                timerSignature(
+                    enabled: false,
+                    hour: expectedHour,
+                    minute: expectedConfig.minute,
+                    days: expectedConfig.days,
+                    macroId: macroId,
+                    startMonth: expectedConfig.startMonth,
+                    startDay: expectedConfig.startDay,
+                    endMonth: expectedConfig.endMonth,
+                    endDay: expectedConfig.endDay
+                )
+            )
+        }
         let knownSignature = lastKnownGoodTimerSignatureByAutomationDevice[
             timerSignatureKey(automationId: automation.id, deviceId: device.id)
         ]
@@ -2173,7 +2253,7 @@ class AutomationStore: ObservableObject {
                 return .notOwned
             }
             let currentSignature = timerSignature(for: timer)
-            if currentSignature == expectedSignatureEnabled || currentSignature == expectedSignatureDisabled {
+            if ownedSignatures.contains(currentSignature) {
                 return .owned
             }
             if let knownSignature, currentSignature == knownSignature {
@@ -3949,7 +4029,7 @@ class AutomationStore: ObservableObject {
                 offsetMinutes = SolarTrigger.clampOnDeviceOffset(value)
             }
             return WLEDTimerConfig(
-                hour: 255,
+                hour: 254,
                 minute: offsetMinutes,
                 days: WeekdayMask.wledDow(fromSunFirst: solar.weekdays),
                 startMonth: dateRange.startMonth,
@@ -4509,6 +4589,22 @@ class AutomationStore: ObservableObject {
         let presetDeleteIdsSorted = Array(runtimePresetDeleteIds).sorted()
 
         if !playlistDeleteIds.isEmpty || !presetDeleteIdsSorted.isEmpty {
+            do {
+                _ = try await apiService.stopPlaylist(on: device)
+            } catch {
+                logger.warning(
+                    "automation.delete.pipeline.stop_playlist_failed trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
+            }
+            await apiService.releaseRealtimeOverride(for: device)
+            let presetStoreDeleteSettleSeconds =
+                ((shouldDeleteTimerSlot && timerSlot != nil)
+                 ? postTimerDeletePresetStoreSettleSeconds
+                 : prePresetStoreDeleteQuiesceSeconds)
+            if presetStoreDeleteSettleSeconds > 0 {
+                let settleNs = UInt64(presetStoreDeleteSettleSeconds * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: settleNs)
+            }
             updateDeletionProgress(
                 automationId: automation.id,
                 totalSteps: targetedDeleteCount,
@@ -4539,10 +4635,17 @@ class AutomationStore: ObservableObject {
                     notBefore: notBefore
                 )
             }
-            await DeviceCleanupManager.shared.processQueueUntilIdle(
-                for: device.id,
-                maxPasses: max(1, playlistDeleteIds.count + presetDeleteIdsSorted.count + 4)
+            let queueDrained = await waitForPresetStoreDeleteQueueDrain(
+                deviceId: device.id,
+                playlistIds: playlistDeleteIds,
+                presetIds: presetDeleteIdsSorted
             )
+            guard queueDrained else {
+                logger.error(
+                    "automation.delete.pipeline.queue_not_drained trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) playlistIds=\(playlistDeleteIds, privacy: .public) presetIds=\(presetDeleteIdsSorted, privacy: .public)"
+                )
+                return false
+            }
 
             do {
                 try await verifyPresetStoreDeletionAndRecoverIfNeeded(
@@ -4580,6 +4683,50 @@ class AutomationStore: ObservableObject {
         return true
     }
 
+    private func waitForPresetStoreDeleteQueueDrain(
+        deviceId: String,
+        playlistIds: [Int],
+        presetIds: [Int]
+    ) async -> Bool {
+        let normalizedPlaylistIds = Array(Set(playlistIds.filter { (1...250).contains($0) })).sorted()
+        let normalizedPresetIds = Array(Set(presetIds.filter { (1...250).contains($0) })).sorted()
+        guard !normalizedPlaylistIds.isEmpty || !normalizedPresetIds.isEmpty else {
+            return true
+        }
+
+        let estimatedCadenceSeconds = Double(max(1, normalizedPlaylistIds.count + normalizedPresetIds.count)) * 3.0
+        let timeoutSeconds = max(
+            postPresetStoreMutationDeleteSettleSeconds + 10.0,
+            min(deleteFinalizeTimeoutSeconds, estimatedCadenceSeconds + 20.0)
+        )
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var loop = 0
+
+        while Date() < deadline {
+            let pendingPlaylistIds = normalizedPlaylistIds.filter {
+                DeviceCleanupManager.shared.hasActiveDelete(type: .playlist, deviceId: deviceId, id: $0)
+            }
+            let pendingPresetIds = normalizedPresetIds.filter {
+                DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: deviceId, id: $0)
+            }
+            if pendingPlaylistIds.isEmpty && pendingPresetIds.isEmpty {
+                return true
+            }
+
+            loop += 1
+            if loop == 1 || loop % 5 == 0 {
+                logger.info(
+                    "automation.delete.pipeline.waiting_queue_drain device=\(deviceId, privacy: .public) pendingPlaylists=\(pendingPlaylistIds, privacy: .public) pendingPresets=\(pendingPresetIds, privacy: .public)"
+                )
+            }
+
+            await DeviceCleanupManager.shared.processQueue(for: deviceId)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+
+        return false
+    }
+
     private struct PresetStoreDeleteResiduals {
         let playlistIds: [Int]
         let presetIds: [Int]
@@ -4593,10 +4740,12 @@ class AutomationStore: ObservableObject {
         playlistIds: [Int],
         presetIds: [Int]
     ) async throws {
-        var residuals = try await fetchPresetStoreDeleteResiduals(
+        var residuals = try await fetchPresetStoreDeleteResidualsWithRetry(
             device: device,
             playlistIds: playlistIds,
-            presetIds: presetIds
+            presetIds: presetIds,
+            traceId: deleteTraceId,
+            phase: "pass1"
         )
         guard !residuals.isEmpty else {
             return
@@ -4624,15 +4773,22 @@ class AutomationStore: ObservableObject {
                 verificationRequired: true
             )
         }
-        await DeviceCleanupManager.shared.processQueueUntilIdle(
-            for: device.id,
-            maxPasses: max(4, residuals.playlistIds.count + residuals.presetIds.count + 4)
-        )
-
-        residuals = try await fetchPresetStoreDeleteResiduals(
-            device: device,
+        let queueDrained = await waitForPresetStoreDeleteQueueDrain(
+            deviceId: device.id,
             playlistIds: residuals.playlistIds,
             presetIds: residuals.presetIds
+        )
+        guard queueDrained else {
+            let reason = "queue_not_drained playlists=\(residuals.playlistIds) presets=\(residuals.presetIds)"
+            throw WLEDAPIError.presetStoreDeleteIncomplete(reason)
+        }
+
+        residuals = try await fetchPresetStoreDeleteResidualsWithRetry(
+            device: device,
+            playlistIds: residuals.playlistIds,
+            presetIds: residuals.presetIds,
+            traceId: deleteTraceId,
+            phase: "pass2"
         )
         guard residuals.isEmpty else {
             let reason = "leftover playlists=\(residuals.playlistIds) presets=\(residuals.presetIds)"
@@ -4647,25 +4803,67 @@ class AutomationStore: ObservableObject {
     ) async throws -> PresetStoreDeleteResiduals {
         let targetPlaylists = Set(playlistIds.filter { (1...250).contains($0) })
         let targetPresets = Set(presetIds.filter { (1...250).contains($0) })
-
-        var residualPlaylistIds: [Int] = []
-        if !targetPlaylists.isEmpty {
-            let currentPlaylists = try await apiService.fetchPlaylists(for: device)
-            let currentIds = Set(currentPlaylists.map(\.id))
-            residualPlaylistIds = targetPlaylists.intersection(currentIds).sorted()
-        }
-
-        var residualPresetIds: [Int] = []
-        if !targetPresets.isEmpty {
-            let currentPresets = try await apiService.fetchPresets(for: device)
-            let currentIds = Set(currentPresets.map(\.id))
-            residualPresetIds = targetPresets.intersection(currentIds).sorted()
-        }
+        let catalog = try await apiService.fetchPresetStoreCatalogIdsStrict(device: device)
+        let residualPlaylistIds = targetPlaylists.intersection(catalog.playlistIds).sorted()
+        let residualPresetIds = targetPresets.intersection(catalog.presetIds).sorted()
 
         return PresetStoreDeleteResiduals(
             playlistIds: residualPlaylistIds,
             presetIds: residualPresetIds
         )
+    }
+
+    private func fetchPresetStoreDeleteResidualsWithRetry(
+        device: WLEDDevice,
+        playlistIds: [Int],
+        presetIds: [Int],
+        traceId: String,
+        phase: String
+    ) async throws -> PresetStoreDeleteResiduals {
+        let attempts = 4
+        var delayNanoseconds: UInt64 = 800_000_000
+        var lastError: Error?
+
+        for attempt in 1...attempts {
+            do {
+                return try await fetchPresetStoreDeleteResiduals(
+                    device: device,
+                    playlistIds: playlistIds,
+                    presetIds: presetIds
+                )
+            } catch {
+                lastError = error
+                guard attempt < attempts, isPresetStoreCatalogRetryable(error) else {
+                    throw error
+                }
+                logger.warning(
+                    "automation.delete.pipeline.postcheck_retry trace=\(traceId, privacy: .public) device=\(device.id, privacy: .public) phase=\(phase, privacy: .public) attempt=\(attempt, privacy: .public)/\(attempts, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+                delayNanoseconds = min(delayNanoseconds * 2, 3_200_000_000)
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw WLEDAPIError.invalidResponse
+    }
+
+    private func isPresetStoreCatalogRetryable(_ error: Error) -> Bool {
+        guard let apiError = error as? WLEDAPIError else {
+            return false
+        }
+        switch apiError {
+        case .httpError(let statusCode):
+            return statusCode == 501 || statusCode >= 500
+        case .timeout, .networkError, .deviceBusy, .deviceOffline, .deviceUnreachable:
+            return true
+        case .decodingError, .invalidResponse, .presetStoreUnreadable:
+            return true
+        default:
+            return false
+        }
     }
 
     private func presetStoreDeleteSettleNotBefore(deviceId: String) async -> Date? {
@@ -4701,7 +4899,7 @@ class AutomationStore: ObservableObject {
         let hasClockTime = timer.hour != 0 || timer.minute != 0
         let hasNonDefaultDays = timer.days != 0x7F
         let hasMacro = timer.macroId != 0
-        let hasSolarMarker = timer.hour == 255
+        let hasSolarMarker = timer.hour == 255 || timer.hour == 254
         return timer.enabled || hasMacro || hasClockTime || hasNonDefaultDays || hasDateRange || hasSolarMarker
     }
 

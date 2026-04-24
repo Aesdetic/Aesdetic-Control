@@ -257,8 +257,8 @@ struct SolarTrigger: Codable, Equatable {
     var location: LocationSource
     var weekdays: [Bool]
 
-    static let minOnDeviceOffsetMinutes = -59
-    static let maxOnDeviceOffsetMinutes = 59
+    static let minOnDeviceOffsetMinutes = -120
+    static let maxOnDeviceOffsetMinutes = 120
     
     init(
         offset: EventOffset = .minutes(0),

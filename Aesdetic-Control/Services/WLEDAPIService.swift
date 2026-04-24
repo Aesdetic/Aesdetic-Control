@@ -113,18 +113,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let timerDeleteVerifyRetryAttempts = 4
     private let timerDeleteVerifyInitialDelayMs: UInt64 = 180
     private let timerDeleteVerifyMaxDelayMs: UInt64 = 1_200
-    private let presetStoreDeleteVerifyRetryAttempts = 4
-    private let presetStoreDeleteVerifyInitialDelayMs: UInt64 = 420
-    private let presetStoreDeleteVerifyMaxDelayMs: UInt64 = 2_200
-    private let presetStoreDeletePreflightStableReadCount = 2
-    private let presetStoreDeletePreflightReadIntervalMs: UInt64 = 1_500
-    private let presetStoreDeletePreflightMinInterval: TimeInterval = 12.0
-    private let manualMimicPresetStoreDeleteModeEnabled = true
-    private let manualMimicPresetStoreDeleteRequiresReadableStore = false
-    private let manualMimicPresetStoreDeletePostCheckDelayMs: UInt64 = 700
-    private let manualMimicPresetStoreDeleteRunsPostReadabilityCheck = false
-    private var lastPresetStoreDeletePreflightAtByStoreKey: [String: Date] = [:]
-    private var presetStoreRequiresFreshPreflightByStoreKey: [String: Bool] = [:]
     private var activePresetStoreDeleteSessionDeviceIds: Set<String> = []
     
     // Performance optimization: Request batching and caching
@@ -1018,12 +1006,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private func decodeWLEDTimers(from rawTimersArray: [[String: Any]]) -> [WLEDTimer] {
         var timers = defaultLogicalWLEDTimers()
 
-        // WLED stores timers as sparse positional entries.
-        // During load, hour==255 entries are remapped to slots 8/9 (sunrise/sunset).
-        var slot = 0
-        for timerDict in rawTimersArray {
-            guard slot <= 9 else { break }
-
+        func makeTimer(from timerDict: [String: Any], slot: Int) -> WLEDTimer {
             let enabled = (timerDict["en"] as? Bool)
                 ?? ((timerDict["en"] as? Int ?? 0) != 0)
             let hour = timerDict["hour"] as? Int ?? 0
@@ -1037,12 +1020,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let endMonth = end?["mon"] as? Int
             let endDay = end?["day"] as? Int
 
-            if slot < 8 && hour == 255 {
-                slot = 8
-            }
-            guard slot <= 9 else { break }
-
-            timers[slot] = WLEDTimer(
+            return WLEDTimer(
                 id: slot,
                 enabled: enabled,
                 hour: hour,
@@ -1054,7 +1032,50 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 endMonth: endMonth,
                 endDay: endDay
             )
-            slot += 1
+        }
+
+        // If firmware returns a full logical array, treat it as positional.
+        if rawTimersArray.count >= wledTimerSlotCount {
+            for (offset, timerDict) in rawTimersArray.prefix(wledTimerSlotCount).enumerated() {
+                timers[offset] = makeTimer(from: timerDict, slot: offset)
+            }
+            return timers
+        }
+
+        // Sparse decode:
+        // - regular timers are packed into slots 0...7
+        // - hour=255 -> slot 8 (sunrise)
+        // - hour=254 -> slot 9 (sunset)
+        // - legacy fallback: second hour=255 can represent sunset (slot 9)
+        var nextRegularSlot = 0
+        var didAssignSunrise = false
+        var didAssignSunset = false
+
+        for timerDict in rawTimersArray {
+            let hour = timerDict["hour"] as? Int ?? 0
+
+            if hour == 255 {
+                if !didAssignSunrise {
+                    timers[8] = makeTimer(from: timerDict, slot: 8)
+                    didAssignSunrise = true
+                } else if !didAssignSunset {
+                    timers[9] = makeTimer(from: timerDict, slot: 9)
+                    didAssignSunset = true
+                }
+                continue
+            }
+
+            if hour == 254 {
+                if !didAssignSunset {
+                    timers[9] = makeTimer(from: timerDict, slot: 9)
+                    didAssignSunset = true
+                }
+                continue
+            }
+
+            guard nextRegularSlot < 8 else { continue }
+            timers[nextRegularSlot] = makeTimer(from: timerDict, slot: nextRegularSlot)
+            nextRegularSlot += 1
         }
 
         return timers
@@ -1189,8 +1210,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let hasMacro = timer.macroId != 0
         let hasClockTime = timer.hour != 0 || timer.minute != 0
         if slot >= 8 {
-            // Solar slots are represented by hour=255; preserve that marker when present.
-            let hasSolarMarker = timer.hour == 255
+            // Solar slots are represented by hour=255 (sunrise) / 254 (sunset).
+            let hasSolarMarker = timer.hour == 255 || timer.hour == 254
             return timer.enabled || hasMacro || hasClockTime || hasSolarMarker || hasNonDefaultDays || hasDateRange
         }
         return timer.enabled || hasMacro || hasClockTime || hasNonDefaultDays || hasDateRange
@@ -1582,7 +1603,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         print("timer.delete.begin device=\(device.id) slot=\(slot) current=en:\(current.enabled) hour:\(current.hour) min:\(current.minute) dow:\(current.days) macro:\(current.macroId)")
         #endif
 
-        if isTimerSlotCleared(current) {
+        if isTimerSlotEffectivelyCleared(current, slot: slot) {
             logger.info("timer.delete.already_cleared device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
             return true
         }
@@ -1631,7 +1652,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             )
         } catch {
             if let reconciled = try? await fetchTimers(for: device).first(where: { $0.id == slot }),
-               isTimerSlotCleared(reconciled) {
+               isTimerSlotEffectivelyCleared(reconciled, slot: slot) {
                 logger.info(
                     "timer.delete.reconcile_cleared_after_verify_error device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)"
                 )
@@ -1641,7 +1662,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         if !verified {
             if let reconciled = try? await fetchTimers(for: device).first(where: { $0.id == slot }),
-               isTimerSlotCleared(reconciled) {
+               isTimerSlotEffectivelyCleared(reconciled, slot: slot) {
                 logger.info(
                     "timer.delete.reconcile_cleared_after_mismatch device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)"
                 )
@@ -1662,8 +1683,16 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return true
     }
 
-    private func isTimerSlotCleared(_ timer: WLEDTimer) -> Bool {
-        !timer.enabled &&
+    private func isTimerSlotEffectivelyCleared(_ timer: WLEDTimer, slot: Int) -> Bool {
+        // Firmware can occasionally retain sunrise/sunset marker rows with preset=0
+        // after cfg writes. They are non-actionable for automation behavior.
+        if slot >= 8,
+           timer.macroId == 0,
+           (timer.hour == 255 || timer.hour == 254) {
+            return true
+        }
+
+        return !timer.enabled &&
             timer.hour == 0 &&
             timer.minute == 0 &&
             timer.days == 0x7F &&
@@ -1744,22 +1773,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         let queueKey = presetStoreQueueKey(for: device)
         return try await enqueuePresetOperation(deviceId: queueKey, label: "preset.delete") {
-            if self.manualMimicPresetStoreDeleteModeEnabled {
-                return try await self.deletePresetStoreRecordManualMimic(
-                    id: id,
-                    device: device,
-                    context: "preset.delete",
-                    storeType: "preset",
-                    storeKey: queueKey
-                )
-            }
-
-            return try await self.deletePresetStoreRecordWithStrictVerification(
+            return try await self.deletePresetStoreRecordManualMimic(
                 id: id,
                 device: device,
                 context: "preset.delete",
-                storeType: "preset",
-                storeKey: queueKey
+                storeType: "preset"
             )
         }
     }
@@ -1836,22 +1854,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         let queueKey = presetStoreQueueKey(for: device)
         return try await enqueuePresetOperation(deviceId: queueKey, label: "playlist.delete") {
-            if self.manualMimicPresetStoreDeleteModeEnabled {
-                return try await self.deletePresetStoreRecordManualMimic(
-                    id: id,
-                    device: device,
-                    context: "playlist.delete",
-                    storeType: "playlist",
-                    storeKey: queueKey
-                )
-            }
-
-            return try await self.deletePresetStoreRecordWithStrictVerification(
+            return try await self.deletePresetStoreRecordManualMimic(
                 id: id,
                 device: device,
                 context: "playlist.delete",
-                storeType: "playlist",
-                storeKey: queueKey
+                storeType: "playlist"
             )
         }
     }
@@ -1888,183 +1895,38 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return request
     }
 
-    private func deletePresetStoreRecordWithStrictVerification(
-        id: Int,
-        device: WLEDDevice,
-        context: String,
-        storeType: String,
-        storeKey: String
-    ) async throws -> Bool {
-        let preState = await self.fetchPresetStoreDeleteStateSnapshot(device: device)
-        self.logPresetStoreDeleteStateSnapshot(
-            preState,
-            context: context,
-            targetId: id,
-            phase: "pre",
-            storeType: storeType
-        )
-        if storeType == "preset", preState?.activePresetId == id {
-            self.logger.warning(
-                "preset.delete.deleting_active_preset device=\(device.id, privacy: .public) id=\(id, privacy: .public)"
-            )
-        }
-        if storeType == "playlist", preState?.activePlaylistId == id {
-            self.logger.warning(
-                "playlist.delete.deleting_active_playlist device=\(device.id, privacy: .public) id=\(id, privacy: .public)"
-            )
-        }
-        try await self.ensurePresetStoreReadableBeforeDelete(
-            device: device,
-            context: context,
-            storeKey: storeKey
-        )
-        let postAccepted: Bool
-        do {
-            _ = try await self.postState(device, body: ["pdel": id])
-            postAccepted = true
-            // A successful write can destabilize presets.json; force a fresh
-            // preflight before the next preset-store mutation.
-            self.presetStoreRequiresFreshPreflightByStoreKey[storeKey] = true
-            let postState = await self.fetchPresetStoreDeleteStateSnapshot(device: device)
-            self.logPresetStoreDeleteStateSnapshot(
-                postState,
-                context: context,
-                targetId: id,
-                phase: "post",
-                storeType: storeType
-            )
-        } catch {
-            if let apiError = error as? WLEDAPIError,
-               case .httpError(let statusCode) = apiError,
-               statusCode == 404 {
-                postAccepted = false
-            } else {
-                self.logger.warning("\(storeType.capitalized) deletion failed for \(id) on device \(device.id), will retry later")
-                return false
-            }
-        }
-        let deleted = try await self.verifyPresetStoreRecordDeletedWithBackoff(
-            id: id,
-            device: device,
-            attempts: self.presetStoreDeleteVerifyRetryAttempts,
-            initialDelayMs: self.presetStoreDeleteVerifyInitialDelayMs,
-            context: context
-        )
-        if !deleted {
-            self.logger.warning(
-                "\(context, privacy: .public).verify_failed device=\(device.id, privacy: .public) id=\(id, privacy: .public) postAccepted=\(postAccepted, privacy: .public)"
-            )
-        }
-        return deleted
-    }
-
     private func deletePresetStoreRecordManualMimic(
         id: Int,
         device: WLEDDevice,
         context: String,
-        storeType: String,
-        storeKey: String
+        storeType: String
     ) async throws -> Bool {
-        if manualMimicPresetStoreDeleteRequiresReadableStore {
-            let readability = await checkPresetStoreReadability(device: device)
-            if case .unreadable(let reason) = readability {
-                logger.warning(
-                    "\(context, privacy: .public).manual_preflight_unreadable device=\(device.id, privacy: .public) id=\(id, privacy: .public) reason=\(reason, privacy: .public)"
-                )
-                await notePresetStoreDeleteReadFailure(
-                    device: device,
-                    context: context,
-                    reason: reason
-                )
-                throw WLEDAPIError.presetStoreUnreadable(reason)
-            }
-        }
-
         activePresetStoreDeleteSessionDeviceIds.insert(device.id)
         defer {
             activePresetStoreDeleteSessionDeviceIds.remove(device.id)
         }
 
-        var deleteAccepted = false
-        for attempt in 1...2 {
-            do {
-                _ = try await self.performPresetStoreDeleteRequestLikeWLED(
-                    id: id,
-                    device: device,
-                    targetType: storeType
-                )
-                deleteAccepted = true
-                // Keep fresh-preflight marker for any follow-up strict mutation flows.
-                self.presetStoreRequiresFreshPreflightByStoreKey[storeKey] = true
-                self.logger.debug(
-                    "\(context, privacy: .public).manual_pdel_accepted device=\(device.id, privacy: .public) id=\(id, privacy: .public) type=\(storeType, privacy: .public) attempt=\(attempt, privacy: .public)"
-                )
-                break
-            } catch {
-                if let apiError = error as? WLEDAPIError,
-                   case .httpError(let statusCode) = apiError,
-                   statusCode == 404 {
-                    return false
-                }
-                let shouldRetry = attempt == 1 && shouldRetryPresetStoreDeleteCommand(after: error)
-                if shouldRetry {
-                    self.logger.warning(
-                        "\(context, privacy: .public).manual_pdel_retrying device=\(device.id, privacy: .public) id=\(id, privacy: .public) type=\(storeType, privacy: .public) reason=\(error.localizedDescription, privacy: .public)"
-                    )
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                    continue
-                }
-                self.logger.warning(
-                    "\(context, privacy: .public).manual_pdel_failed device=\(device.id, privacy: .public) id=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-                )
+        do {
+            _ = try await self.performPresetStoreDeleteRequestLikeWLED(
+                id: id,
+                device: device,
+                targetType: storeType
+            )
+            self.logger.debug(
+                "\(context, privacy: .public).manual_pdel_accepted device=\(device.id, privacy: .public) id=\(id, privacy: .public) type=\(storeType, privacy: .public)"
+            )
+            return true
+        } catch {
+            if let apiError = error as? WLEDAPIError,
+               case .httpError(let statusCode) = apiError,
+               statusCode == 404 {
                 return false
             }
-        }
-        guard deleteAccepted else {
+            self.logger.warning(
+                "\(context, privacy: .public).manual_pdel_failed device=\(device.id, privacy: .public) id=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
             return false
         }
-
-        if manualMimicPresetStoreDeleteRunsPostReadabilityCheck {
-            if manualMimicPresetStoreDeletePostCheckDelayMs > 0 {
-                try? await Task.sleep(nanoseconds: manualMimicPresetStoreDeletePostCheckDelayMs * 1_000_000)
-            }
-            let postReadability = await checkPresetStoreReadability(device: device)
-            if case .unreadable(let reason) = postReadability {
-                logger.warning(
-                    "\(context, privacy: .public).manual_postcheck_unreadable device=\(device.id, privacy: .public) id=\(id, privacy: .public) reason=\(reason, privacy: .public)"
-                )
-                await notePresetStoreDeleteReadFailure(
-                    device: device,
-                    context: context,
-                    reason: reason
-                )
-                throw WLEDAPIError.presetStoreUnreadable(reason)
-            }
-        }
-
-        return true
-    }
-
-    private func shouldRetryPresetStoreDeleteCommand(after error: Error) -> Bool {
-        if let apiError = error as? WLEDAPIError {
-            switch apiError {
-            case .timeout, .networkError, .deviceBusy, .deviceOffline, .deviceUnreachable:
-                return true
-            case .httpError(let statusCode):
-                return statusCode == 429 || statusCode >= 500
-            case .decodingError, .invalidResponse:
-                return true
-            default:
-                return false
-            }
-        }
-
-        let message = error.localizedDescription.lowercased()
-        return message.contains("503")
-            || message.contains("service unavailable")
-            || message.contains("timeout")
-            || message.contains("network")
-            || message.contains("temporarily unavailable")
     }
 
     private func performPresetStoreDeleteRequestLikeWLED(
@@ -2085,115 +1947,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             print("✅ WLED-style pdel for \(device.name): status=\(httpResponse.statusCode) type=\(targetType) id=\(id) body=\(snippet)")
         }
         #endif
-        if !data.isEmpty {
-            _ = try parseResponse(data: data, device: device)
-        }
+        // Match native WLED UI semantics for delete: HTTP success means command accepted.
+        // WLED may include transient state-level error flags in the response body even when
+        // pdel succeeded, so don't hard-fail on response payload parsing here.
         return data
-    }
-
-    private enum PresetStoreDeleteVerificationResult {
-        case deleted
-        case stillPresent
-        case unreadable(String)
     }
 
     private enum PresetPayloadParserMode {
         case resilient
         case strict
-    }
-
-    private func verifyPresetStoreRecordDeletedWithBackoff(
-        id: Int,
-        device: WLEDDevice,
-        attempts: Int,
-        initialDelayMs: UInt64,
-        context: String
-    ) async throws -> Bool {
-        let totalAttempts = max(1, attempts)
-        var delayMs = max(UInt64(1), initialDelayMs)
-        var lastUnreadable: String?
-
-        // Give WLED a brief settle window after pdel before first verification read.
-        if initialDelayMs > 0 {
-            try? await Task.sleep(nanoseconds: initialDelayMs * 1_000_000)
-        }
-
-        for attempt in 1...totalAttempts {
-            let verification = await verifyPresetStoreRecordDeleted(id: id, device: device)
-            switch verification {
-            case .deleted:
-                return true
-            case .stillPresent:
-                if attempt < totalAttempts {
-                    logger.debug(
-                        "\(context, privacy: .public).verify_transient_mismatch device=\(device.id, privacy: .public) id=\(id, privacy: .public) attempt=\(attempt, privacy: .public)/\(totalAttempts, privacy: .public)"
-                    )
-                }
-            case .unreadable(let reason):
-                lastUnreadable = reason
-                if attempt < totalAttempts {
-                    logger.debug(
-                        "\(context, privacy: .public).verify_transient_unreadable device=\(device.id, privacy: .public) id=\(id, privacy: .public) attempt=\(attempt, privacy: .public)/\(totalAttempts, privacy: .public) reason=\(reason, privacy: .public)"
-                    )
-                }
-            }
-
-            if attempt < totalAttempts {
-                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-                delayMs = min(delayMs * 2, presetStoreDeleteVerifyMaxDelayMs)
-            }
-        }
-
-        if let lastUnreadable {
-            logger.warning(
-                "\(context, privacy: .public).verify_unreadable device=\(device.id, privacy: .public) id=\(id, privacy: .public) reason=\(lastUnreadable, privacy: .public)"
-            )
-            await notePresetStoreDeleteReadFailure(
-                device: device,
-                context: context,
-                reason: lastUnreadable
-            )
-            throw WLEDAPIError.presetStoreUnreadable(lastUnreadable)
-        }
-        return false
-    }
-
-    private func ensurePresetStoreReadableBeforeDelete(
-        device: WLEDDevice,
-        context: String,
-        storeKey: String
-    ) async throws {
-        let requiresFreshPreflight = presetStoreRequiresFreshPreflightByStoreKey[storeKey] ?? false
-        if let lastCheck = lastPresetStoreDeletePreflightAtByStoreKey[storeKey],
-           Date().timeIntervalSince(lastCheck) < presetStoreDeletePreflightMinInterval,
-           !requiresFreshPreflight {
-            return
-        }
-
-        let requiredReads = max(1, presetStoreDeletePreflightStableReadCount)
-        for read in 1...requiredReads {
-            let readability = await checkPresetStoreReadability(device: device)
-            switch readability {
-            case .readable:
-                if read == requiredReads {
-                    lastPresetStoreDeletePreflightAtByStoreKey[storeKey] = Date()
-                    presetStoreRequiresFreshPreflightByStoreKey[storeKey] = false
-                }
-                if read < requiredReads && presetStoreDeletePreflightReadIntervalMs > 0 {
-                    try? await Task.sleep(nanoseconds: presetStoreDeletePreflightReadIntervalMs * 1_000_000)
-                }
-            case .unreadable(let reason):
-                logger.warning(
-                    "\(context, privacy: .public).preflight_unreadable device=\(device.id, privacy: .public) read=\(read, privacy: .public)/\(requiredReads, privacy: .public) reason=\(reason, privacy: .public)"
-                )
-                await notePresetStoreDeleteReadFailure(
-                    device: device,
-                    context: context,
-                    reason: reason
-                )
-                throw WLEDAPIError.presetStoreUnreadable(reason)
-            }
-        }
     }
 
     private enum PresetStoreReadabilityCheckResult {
@@ -2436,45 +2198,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 let records = try parsePresetPayloadMapById(data: data, mode: .strict)
                 cachePresetRecordPayloads(records: records, device: device)
                 return .readable
-            } catch {
-                let diagnostics = await presetStoreUnreadableDiagnostics(device: device)
-                return .unreadable("\(error.localizedDescription) [\(diagnostics)]")
-            }
-        }
-    }
-
-    private func verifyPresetStoreRecordDeleted(id: Int, device: WLEDDevice) async -> PresetStoreDeleteVerificationResult {
-        do {
-            guard let fileURL = URL(string: "http://\(device.ipAddress)/presets.json") else {
-                return .unreadable("invalid URL")
-            }
-            let (data, response) = try await urlSession.data(for: URLRequest(url: fileURL))
-            try validateHTTPResponse(response, device: device)
-            if let errorCode = wledErrorCode(from: data) {
-                if errorCode == 4 {
-                    throw WLEDAPIError.httpError(501)
-                }
-                throw WLEDAPIError.invalidResponse
-            }
-            let records = try parsePresetPayloadMapById(data: data, mode: .strict)
-            cachePresetRecordPayloads(records: records, device: device)
-            return records[id] == nil ? .deleted : .stillPresent
-        } catch {
-            do {
-                guard let jsonURL = URL(string: "http://\(device.ipAddress)/json/presets") else {
-                    return .unreadable("invalid URL")
-                }
-                let (data, response) = try await urlSession.data(for: URLRequest(url: jsonURL))
-                try validateHTTPResponse(response, device: device)
-                if let errorCode = wledErrorCode(from: data) {
-                    if errorCode == 4 {
-                        throw WLEDAPIError.httpError(501)
-                    }
-                    throw WLEDAPIError.invalidResponse
-                }
-                let records = try parsePresetPayloadMapById(data: data, mode: .strict)
-                cachePresetRecordPayloads(records: records, device: device)
-                return records[id] == nil ? .deleted : .stillPresent
             } catch {
                 let diagnostics = await presetStoreUnreadableDiagnostics(device: device)
                 return .unreadable("\(error.localizedDescription) [\(diagnostics)]")
@@ -3947,6 +3670,54 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try parsePresets(from: data)
     }
 
+    func fetchPresetStoreCatalogIdsStrict(device: WLEDDevice) async throws -> (playlistIds: Set<Int>, presetIds: Set<Int>) {
+        let records = try await fetchPresetPayloadMapByIdStrict(device: device)
+        var playlistIds = Set<Int>()
+        var presetIds = Set<Int>()
+        for (id, record) in records {
+            if record["playlist"] is [String: Any] {
+                playlistIds.insert(id)
+            } else {
+                presetIds.insert(id)
+            }
+        }
+        return (playlistIds, presetIds)
+    }
+
+    private func fetchPresetPayloadMapByIdStrict(device: WLEDDevice) async throws -> [Int: [String: Any]] {
+        do {
+            guard let fileURL = URL(string: "http://\(device.ipAddress)/presets.json") else {
+                throw WLEDAPIError.invalidURL
+            }
+            let (data, response) = try await urlSession.data(for: URLRequest(url: fileURL))
+            try validateHTTPResponse(response, device: device)
+            if let errorCode = wledErrorCode(from: data) {
+                if errorCode == 4 {
+                    throw WLEDAPIError.httpError(501)
+                }
+                throw WLEDAPIError.invalidResponse
+            }
+            let records = try parsePresetPayloadMapById(data: data, mode: .strict)
+            cachePresetRecordPayloads(records: records, device: device)
+            return records
+        } catch {
+            guard let jsonURL = URL(string: "http://\(device.ipAddress)/json/presets") else {
+                throw WLEDAPIError.invalidURL
+            }
+            let (jsonData, jsonResponse) = try await urlSession.data(for: URLRequest(url: jsonURL))
+            try validateHTTPResponse(jsonResponse, device: device)
+            if let errorCode = wledErrorCode(from: jsonData) {
+                if errorCode == 4 {
+                    throw WLEDAPIError.httpError(501)
+                }
+                throw WLEDAPIError.invalidResponse
+            }
+            let records = try parsePresetPayloadMapById(data: jsonData, mode: .strict)
+            cachePresetRecordPayloads(records: records, device: device)
+            return records
+        }
+    }
+
     private func fetchPlaylistsFromPresetsFile(device: WLEDDevice) async throws -> [WLEDPlaylist] {
         guard let url = URL(string: "http://\(device.ipAddress)/presets.json") else {
             throw WLEDAPIError.invalidURL
@@ -4246,26 +4017,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             }
             return dictionary
         } catch {
-            // Strict mode still requires a full JSON parse, but allow one narrow recovery:
-            // replace invalid bytes outside JSON strings (common in corrupted presets.json tails)
-            // and retry once. We do NOT extract partial JSON objects here.
-            let strictOutside = sanitizePresetPayloadBytesStrictOutsideStrings(sanitized)
-            if strictOutside.replacedByteCount > 0 {
-                do {
-                    let json = try JSONSerialization.jsonObject(with: strictOutside.data, options: [])
-                    guard let dictionary = json as? [String: Any] else {
-                        throw WLEDAPIError.invalidResponse
-                    }
-                    #if DEBUG
-                    logger.warning(
-                        "preset_payload.strict_sanitized_outside_strings replacements=\(strictOutside.replacedByteCount, privacy: .public)"
-                    )
-                    #endif
-                    return dictionary
-                } catch {
-                    throw wrappedPresetPayloadError(error)
-                }
-            }
+            // Strict mode intentionally mirrors firmware expectations: if payload is malformed,
+            // treat the catalog as unreadable instead of trying to heal bytes in-memory.
             throw wrappedPresetPayloadError(error)
         }
     }

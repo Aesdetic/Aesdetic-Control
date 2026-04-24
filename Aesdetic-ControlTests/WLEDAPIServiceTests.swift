@@ -1097,13 +1097,13 @@ struct WLEDAPIServiceTests {
         #expect(decoded.last?.id == 9)
     }
 
-    @Test("decode remaps hour 255 to sunrise/sunset slots")
+    @Test("decode remaps solar markers to sunrise/sunset slots")
     func testDecodeRemapsSolarSlots() async throws {
         let service = WLEDAPIService.shared
         let raw: [[String: Any]] = [
             ["en": true, "hour": 7, "min": 30, "macro": 11, "dow": 0x7F],
             ["en": true, "hour": 255, "min": -15, "macro": 20, "dow": 0x7F],
-            ["en": true, "hour": 255, "min": 10, "macro": 21, "dow": 0x7F]
+            ["en": true, "hour": 254, "min": 10, "macro": 21, "dow": 0x7F]
         ]
         let decoded = await service._decodeWLEDTimersForTesting(from: raw)
 
@@ -1111,8 +1111,39 @@ struct WLEDAPIServiceTests {
         #expect(decoded[0].macroId == 11)
         #expect(decoded[8].hour == 255)
         #expect(decoded[8].macroId == 20)
-        #expect(decoded[9].hour == 255)
+        #expect(decoded[9].hour == 254)
         #expect(decoded[9].macroId == 21)
+    }
+
+    @Test("decode handles swapped sparse solar ordering without dropping either slot")
+    func testDecodeHandlesSwappedSolarOrdering() async throws {
+        let service = WLEDAPIService.shared
+        let raw: [[String: Any]] = [
+            ["en": true, "hour": 7, "min": 30, "macro": 11, "dow": 0x7F],
+            ["en": true, "hour": 254, "min": 10, "macro": 21, "dow": 0x7F],
+            ["en": true, "hour": 255, "min": -15, "macro": 20, "dow": 0x7F]
+        ]
+        let decoded = await service._decodeWLEDTimersForTesting(from: raw)
+
+        #expect(decoded[0].macroId == 11)
+        #expect(decoded[8].hour == 255)
+        #expect(decoded[8].macroId == 20)
+        #expect(decoded[9].hour == 254)
+        #expect(decoded[9].macroId == 21)
+    }
+
+    @Test("decode preserves legacy sunset marker encoded as hour 255 at slot 9")
+    func testDecodePreservesLegacySunsetMarkerAtSlotNine() async throws {
+        let service = WLEDAPIService.shared
+        var raw: [[String: Any]] = Array(
+            repeating: ["en": false, "hour": 0, "min": 0, "macro": 0, "dow": 0x7F],
+            count: 10
+        )
+        raw[9] = ["en": true, "hour": 255, "min": 5, "macro": 77, "dow": 0x7F]
+
+        let decoded = await service._decodeWLEDTimersForTesting(from: raw)
+        #expect(decoded[9].hour == 255)
+        #expect(decoded[9].macroId == 77)
     }
 
     @Test("encode preserves positional slots through highest used timer")
@@ -1148,7 +1179,7 @@ struct WLEDAPIServiceTests {
         timers[9] = WLEDTimer(
             id: 9,
             enabled: true,
-            hour: 255,
+            hour: 254,
             minute: 15,
             days: 0x7F,
             macroId: 31,
@@ -1164,7 +1195,7 @@ struct WLEDAPIServiceTests {
         #expect(encoded[0]["macro"] as? Int == 0)
         #expect(encoded[8]["hour"] as? Int == 255)
         #expect(encoded[8]["macro"] as? Int == 30)
-        #expect(encoded[9]["hour"] as? Int == 255)
+        #expect(encoded[9]["hour"] as? Int == 254)
         #expect(encoded[9]["macro"] as? Int == 31)
     }
 
@@ -1275,7 +1306,7 @@ struct WLEDAPIServiceTests {
         let update = WLEDTimerUpdate(
             id: 9,
             enabled: true,
-            hour: 255,
+            hour: 254,
             minute: 5,
             days: 0x7F,
             macroId: 42,
@@ -1291,7 +1322,7 @@ struct WLEDAPIServiceTests {
 
         #expect(merged.count == service._wledTimerSlotCountForTesting)
         #expect(merged[9].macroId == 42)
-        #expect(merged[9].hour == 255)
+        #expect(merged[9].hour == 254)
         #expect(merged[0].macroId == 10)
     }
 }

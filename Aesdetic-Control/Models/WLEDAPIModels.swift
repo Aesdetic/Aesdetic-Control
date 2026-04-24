@@ -402,7 +402,7 @@ struct WLEDTimer: Codable, Identifiable {
     let id: Int
     /// Enable/disable timer
     let enabled: Bool
-    /// Hour (0-23, 24 = hourly, 255 = sunrise/sunset)
+    /// Hour (0-23, 24 = hourly, 255 = sunrise, 254 = sunset)
     let hour: Int
     /// Minute (0-59 for standard timers, offset for sunrise/sunset)
     let minute: Int
@@ -441,7 +441,7 @@ struct WLEDTimerUpdate: Codable {
     let id: Int
     /// Enable/disable timer
     let enabled: Bool?
-    /// Hour (0-23, 24 = hourly, 255 = sunrise/sunset)
+    /// Hour (0-23, 24 = hourly, 255 = sunrise, 254 = sunset)
     let hour: Int?
     /// Minute (0-59 for standard timers, offset for sunrise/sunset)
     let minute: Int?

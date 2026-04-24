@@ -31,8 +31,8 @@ struct AutomationSchedulingTests {
 
     @Test("SolarTrigger offset clamping follows on-device WLED limits")
     func testSolarOffsetClamping() {
-        #expect(SolarTrigger.clampOnDeviceOffset(-120) == -59)
-        #expect(SolarTrigger.clampOnDeviceOffset(120) == 59)
+        #expect(SolarTrigger.clampOnDeviceOffset(-120) == -120)
+        #expect(SolarTrigger.clampOnDeviceOffset(120) == 120)
         #expect(SolarTrigger.clampOnDeviceOffset(15) == 15)
     }
 

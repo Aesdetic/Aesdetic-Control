@@ -21,6 +21,9 @@ struct AutomationTransitionEditor: View {
     let automationGuaranteeCount: Int
     let maxDurationMinutes: Int
     let showsDurationRecommendationGuide: Bool
+    let expectedStartDate: Date?
+    let expectedEndDate: Date?
+    let expectedTimeZone: TimeZone
     
     // Preview state
     @State private var previewEnabled: Bool = true
@@ -59,7 +62,10 @@ struct AutomationTransitionEditor: View {
         transitionProfile: TransitionStepProfile? = nil,
         automationGuaranteeCount: Int = 5,
         maxDurationMinutes: Int = TransitionDurationPicker.maxMinutes,
-        showsDurationRecommendationGuide: Bool = true
+        showsDurationRecommendationGuide: Bool = true,
+        expectedStartDate: Date? = nil,
+        expectedEndDate: Date? = nil,
+        expectedTimeZone: TimeZone = .current
     ) {
         self.viewModel = viewModel
         self.device = device
@@ -76,6 +82,9 @@ struct AutomationTransitionEditor: View {
         self.automationGuaranteeCount = automationGuaranteeCount
         self.maxDurationMinutes = max(0, maxDurationMinutes)
         self.showsDurationRecommendationGuide = showsDurationRecommendationGuide
+        self.expectedStartDate = expectedStartDate
+        self.expectedEndDate = expectedEndDate
+        self.expectedTimeZone = expectedTimeZone
     }
     
     private var allowedSecondValues: [Int] {
@@ -413,9 +422,16 @@ struct AutomationTransitionEditor: View {
     private var startSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 8) {
-                Text("Start")
-                    .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
+                HStack(spacing: 6) {
+                    Text("Start")
+                        .font(AppTypography.style(.footnote, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.85))
+                    if let expectedStartLabel {
+                        Text(expectedStartLabel)
+                            .font(AppTypography.style(.caption2))
+                            .foregroundColor(.white.opacity(0.62))
+                    }
+                }
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
@@ -525,9 +541,16 @@ struct AutomationTransitionEditor: View {
     private var endSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 8) {
-                Text("End")
-                    .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
+                HStack(spacing: 6) {
+                    Text("End")
+                        .font(AppTypography.style(.footnote, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.85))
+                    if let expectedEndLabel {
+                        Text(expectedEndLabel)
+                            .font(AppTypography.style(.caption2))
+                            .foregroundColor(.white.opacity(0.62))
+                    }
+                }
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
@@ -871,6 +894,23 @@ struct AutomationTransitionEditor: View {
         }
         let clampedSeconds = max(0, min(seconds, 59))
         return clampedMinutes * 60 + clampedSeconds
+    }
+
+    private var expectedStartLabel: String? {
+        formattedExpectedTime(expectedStartDate)
+    }
+
+    private var expectedEndLabel: String? {
+        formattedExpectedTime(expectedEndDate)
+    }
+
+    private func formattedExpectedTime(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        formatter.timeZone = expectedTimeZone
+        return formatter.string(from: date)
     }
 
     private func hydrateStopMapsIfNeeded() {
