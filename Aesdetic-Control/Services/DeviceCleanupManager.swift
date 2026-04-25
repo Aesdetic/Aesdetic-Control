@@ -25,6 +25,7 @@ final class DeviceCleanupManager: ObservableObject {
         let succeededIds: [Int]
         let failedIds: [Int]
         let lastError: String?
+        let terminalAPIError: WLEDAPIError?
 
         var isSuccess: Bool { failedIds.isEmpty }
         var madeProgress: Bool { !succeededIds.isEmpty }
@@ -236,6 +237,26 @@ final class DeviceCleanupManager: ObservableObject {
                     self.pendingDeletes[index] = entry
                     self.save()
                 } else {
+                    if let unreadableReason = presetStoreUnreadableHardStopReason(
+                        for: outcome,
+                        type: delete.type
+                    ) {
+                        let reason = "Preset-store unreadable hard-stop: \(unreadableReason)"
+                        let presetIds = delete.type == .preset ? Set(entry.ids) : []
+                        let playlistIds = delete.type == .playlist ? Set(entry.ids) : []
+                        _ = deadLetterPresetStoreDeletes(
+                            deviceId: deviceId,
+                            source: delete.source,
+                            presetIds: presetIds,
+                            playlistIds: playlistIds,
+                            reason: reason
+                        )
+                        logger.warning(
+                            "cleanup.queue_hard_stop_unreadable device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) reason=\(reason, privacy: .public)"
+                        )
+                        processedCount += 1
+                        continue
+                    }
                     entry.lastError = outcome.lastError ?? "Delete failed"
                     if !outcome.madeProgress && !outcome.failedIds.isEmpty {
                         let failedSet = Set(outcome.failedIds)
@@ -265,14 +286,12 @@ final class DeviceCleanupManager: ObservableObject {
                     )
 
                     if !outcome.madeProgress && entry.retries >= self.maxAttempts {
-                        if delete.type == .timer || delete.source == .automation {
-                            // Timer cleanup controls automation re-import safety. Automation-sourced
-                            // asset cleanup should also keep retrying so managed resources are not
-                            // permanently stranded in dead-letter.
+                        if delete.type == .timer {
+                            // Timer cleanup controls automation re-import safety.
                             entry.retries = self.maxAttempts - 1
                             entry.nextAttemptAt = Date().addingTimeInterval(self.retryDelay(forAttempt: self.maxAttempts))
                             logger.warning(
-                                "Max attempts exceeded for \(delete.type.rawValue) deletion \(delete.id), source=\(delete.source.rawValue, privacy: .public), keeping queued with capped backoff"
+                                "Max attempts exceeded for \(delete.type.rawValue) deletion \(delete.id), keeping queued with capped backoff"
                             )
                         } else {
                             logger.warning("Max attempts exceeded for \(delete.type.rawValue) deletion \(delete.id), moving to dead-letter")
@@ -312,6 +331,7 @@ final class DeviceCleanupManager: ObservableObject {
         var succeeded: [Int] = []
         var failed: [Int] = []
         var lastError: String?
+        var terminalAPIError: WLEDAPIError?
 
         for id in ids {
             do {
@@ -347,6 +367,7 @@ final class DeviceCleanupManager: ObservableObject {
             } catch let apiError as WLEDAPIError {
                 failed.append(id)
                 lastError = apiError.localizedDescription
+                terminalAPIError = apiError
                 logger.error("cleanup.delete.error device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) id=\(id, privacy: .public) context=\(context, privacy: .public) error=\(apiError.localizedDescription, privacy: .public)")
                 break
             } catch {
@@ -361,8 +382,25 @@ final class DeviceCleanupManager: ObservableObject {
         return DeleteAttemptOutcome(
             succeededIds: succeeded,
             failedIds: failed,
-            lastError: lastError
+            lastError: lastError,
+            terminalAPIError: terminalAPIError
         )
+    }
+
+    private func presetStoreUnreadableHardStopReason(
+        for outcome: DeleteAttemptOutcome,
+        type: PendingDeviceDelete.DeleteType
+    ) -> String? {
+        guard type == .preset || type == .playlist else { return nil }
+        guard let apiError = outcome.terminalAPIError else { return nil }
+        switch apiError {
+        case .presetStoreUnreadable(let reason):
+            return reason
+        case .httpError(let statusCode) where statusCode == 501:
+            return "WLED reported HTTP 501 during preset-store delete"
+        default:
+            return nil
+        }
     }
 
     private func cadenceKey(for type: PendingDeviceDelete.DeleteType, deviceId: String) -> String {

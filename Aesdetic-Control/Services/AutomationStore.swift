@@ -4647,19 +4647,12 @@ class AutomationStore: ObservableObject {
                 return false
             }
 
-            do {
-                try await verifyPresetStoreDeletionAndRecoverIfNeeded(
-                    device: device,
-                    deleteTraceId: deleteTraceId,
-                    playlistIds: playlistDeleteIds,
-                    presetIds: presetDeleteIdsSorted
-                )
-            } catch {
-                logger.error(
-                    "automation.delete.pipeline.postcheck_failed trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-                )
-                return false
-            }
+            await runBestEffortPresetStoreDeletePostcheck(
+                device: device,
+                deleteTraceId: deleteTraceId,
+                playlistIds: playlistDeleteIds,
+                presetIds: presetDeleteIdsSorted
+            )
         }
 
         if targetedDeleteCount > 0 {
@@ -4720,7 +4713,9 @@ class AutomationStore: ObservableObject {
                 )
             }
 
-            await DeviceCleanupManager.shared.processQueue(for: deviceId)
+            if !DeviceCleanupManager.shared.isDeleteLeaseActive(deviceId: deviceId) {
+                await DeviceCleanupManager.shared.processQueue(for: deviceId)
+            }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
 
@@ -4734,65 +4729,58 @@ class AutomationStore: ObservableObject {
         var isEmpty: Bool { playlistIds.isEmpty && presetIds.isEmpty }
     }
 
-    private func verifyPresetStoreDeletionAndRecoverIfNeeded(
+    private func runBestEffortPresetStoreDeletePostcheck(
         device: WLEDDevice,
         deleteTraceId: String,
         playlistIds: [Int],
         presetIds: [Int]
-    ) async throws {
-        var residuals = try await fetchPresetStoreDeleteResidualsWithRetry(
-            device: device,
-            playlistIds: playlistIds,
-            presetIds: presetIds,
-            traceId: deleteTraceId,
-            phase: "pass1"
-        )
-        guard !residuals.isEmpty else {
-            return
-        }
-
-        logger.warning(
-            "automation.delete.pipeline.leftovers_pass1 trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) playlists=\(residuals.playlistIds, privacy: .public) presets=\(residuals.presetIds, privacy: .public)"
-        )
-
-        if !residuals.playlistIds.isEmpty {
-            DeviceCleanupManager.shared.enqueue(
-                type: .playlist,
-                deviceId: device.id,
-                ids: residuals.playlistIds,
-                source: .automation,
-                verificationRequired: true
+    ) async {
+        do {
+            let residuals = try await fetchPresetStoreDeleteResiduals(
+                device: device,
+                playlistIds: playlistIds,
+                presetIds: presetIds
             )
-        }
-        if !residuals.presetIds.isEmpty {
-            DeviceCleanupManager.shared.enqueue(
-                type: .preset,
-                deviceId: device.id,
-                ids: residuals.presetIds,
-                source: .automation,
-                verificationRequired: true
-            )
-        }
-        let queueDrained = await waitForPresetStoreDeleteQueueDrain(
-            deviceId: device.id,
-            playlistIds: residuals.playlistIds,
-            presetIds: residuals.presetIds
-        )
-        guard queueDrained else {
-            let reason = "queue_not_drained playlists=\(residuals.playlistIds) presets=\(residuals.presetIds)"
-            throw WLEDAPIError.presetStoreDeleteIncomplete(reason)
-        }
+            guard !residuals.isEmpty else { return }
 
-        residuals = try await fetchPresetStoreDeleteResidualsWithRetry(
-            device: device,
-            playlistIds: residuals.playlistIds,
-            presetIds: residuals.presetIds,
-            traceId: deleteTraceId,
-            phase: "pass2"
-        )
-        guard residuals.isEmpty else {
-            let reason = "leftover playlists=\(residuals.playlistIds) presets=\(residuals.presetIds)"
-            throw WLEDAPIError.presetStoreDeleteIncomplete(reason)
+            logger.warning(
+                "automation.delete.pipeline.leftovers_best_effort trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) playlists=\(residuals.playlistIds, privacy: .public) presets=\(residuals.presetIds, privacy: .public)"
+            )
+
+            if !residuals.playlistIds.isEmpty {
+                DeviceCleanupManager.shared.enqueue(
+                    type: .playlist,
+                    deviceId: device.id,
+                    ids: residuals.playlistIds,
+                    source: .automation,
+                    verificationRequired: true
+                )
+            }
+            if !residuals.presetIds.isEmpty {
+                DeviceCleanupManager.shared.enqueue(
+                    type: .preset,
+                    deviceId: device.id,
+                    ids: residuals.presetIds,
+                    source: .automation,
+                    verificationRequired: true
+                )
+            }
+        } catch {
+            if let hardStopReason = presetStoreUnreadableHardStopReason(error) {
+                let reason = "Preset-store unreadable during postcheck: \(hardStopReason)"
+                _ = DeviceCleanupManager.shared.deadLetterPresetStoreDeletes(
+                    deviceId: device.id,
+                    source: .automation,
+                    reason: reason
+                )
+                logger.warning(
+                    "automation.delete.pipeline.postcheck_hard_stop trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) reason=\(reason, privacy: .public)"
+                )
+                return
+            }
+            logger.warning(
+                "automation.delete.pipeline.postcheck_skipped trace=\(deleteTraceId, privacy: .public) device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 
@@ -4813,56 +4801,17 @@ class AutomationStore: ObservableObject {
         )
     }
 
-    private func fetchPresetStoreDeleteResidualsWithRetry(
-        device: WLEDDevice,
-        playlistIds: [Int],
-        presetIds: [Int],
-        traceId: String,
-        phase: String
-    ) async throws -> PresetStoreDeleteResiduals {
-        let attempts = 4
-        var delayNanoseconds: UInt64 = 800_000_000
-        var lastError: Error?
-
-        for attempt in 1...attempts {
-            do {
-                return try await fetchPresetStoreDeleteResiduals(
-                    device: device,
-                    playlistIds: playlistIds,
-                    presetIds: presetIds
-                )
-            } catch {
-                lastError = error
-                guard attempt < attempts, isPresetStoreCatalogRetryable(error) else {
-                    throw error
-                }
-                logger.warning(
-                    "automation.delete.pipeline.postcheck_retry trace=\(traceId, privacy: .public) device=\(device.id, privacy: .public) phase=\(phase, privacy: .public) attempt=\(attempt, privacy: .public)/\(attempts, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-                )
-                try? await Task.sleep(nanoseconds: delayNanoseconds)
-                delayNanoseconds = min(delayNanoseconds * 2, 3_200_000_000)
-            }
-        }
-
-        if let lastError {
-            throw lastError
-        }
-        throw WLEDAPIError.invalidResponse
-    }
-
-    private func isPresetStoreCatalogRetryable(_ error: Error) -> Bool {
+    private func presetStoreUnreadableHardStopReason(_ error: Error) -> String? {
         guard let apiError = error as? WLEDAPIError else {
-            return false
+            return nil
         }
         switch apiError {
-        case .httpError(let statusCode):
-            return statusCode == 501 || statusCode >= 500
-        case .timeout, .networkError, .deviceBusy, .deviceOffline, .deviceUnreachable:
-            return true
-        case .decodingError, .invalidResponse, .presetStoreUnreadable:
-            return true
+        case .presetStoreUnreadable(let reason):
+            return reason
+        case .httpError(let statusCode) where statusCode == 501:
+            return "WLED returned HTTP 501 while reading presets.json"
         default:
-            return false
+            return nil
         }
     }
 

@@ -984,8 +984,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     func stopPlaylist(on device: WLEDDevice) async throws -> WLEDState {
-        var body: [String: Any] = ["playlist": [String: Any]()]
-        body["lor"] = 0
+        let body: [String: Any] = ["playlist": [String: Any]()]
         let response = try await postState(device, body: body)
         return response.state
     }
@@ -1922,10 +1921,30 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                statusCode == 404 {
                 return false
             }
+            if let hardStopError = presetStoreHardStopDeleteError(from: error) {
+                self.logger.error(
+                    "\(context, privacy: .public).manual_pdel_hard_stop device=\(device.id, privacy: .public) id=\(id, privacy: .public) type=\(storeType, privacy: .public) error=\(hardStopError.localizedDescription, privacy: .public)"
+                )
+                throw hardStopError
+            }
             self.logger.warning(
                 "\(context, privacy: .public).manual_pdel_failed device=\(device.id, privacy: .public) id=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
             return false
+        }
+    }
+
+    private func presetStoreHardStopDeleteError(from error: Error) -> WLEDAPIError? {
+        guard let apiError = error as? WLEDAPIError else {
+            return nil
+        }
+        switch apiError {
+        case .presetStoreUnreadable:
+            return apiError
+        case .httpError(let statusCode) where statusCode == 501:
+            return .presetStoreUnreadable("WLED reported HTTP 501 while mutating presets.json")
+        default:
+            return nil
         }
     }
 
@@ -2183,25 +2202,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             cachePresetRecordPayloads(records: records, device: device)
             return .readable
         } catch {
-            do {
-                guard let jsonURL = URL(string: "http://\(device.ipAddress)/json/presets") else {
-                    return .unreadable("invalid URL")
-                }
-                let (data, response) = try await urlSession.data(for: URLRequest(url: jsonURL))
-                try validateHTTPResponse(response, device: device)
-                if let errorCode = wledErrorCode(from: data) {
-                    if errorCode == 4 {
-                        throw WLEDAPIError.httpError(501)
-                    }
-                    throw WLEDAPIError.invalidResponse
-                }
-                let records = try parsePresetPayloadMapById(data: data, mode: .strict)
-                cachePresetRecordPayloads(records: records, device: device)
-                return .readable
-            } catch {
-                let diagnostics = await presetStoreUnreadableDiagnostics(device: device)
-                return .unreadable("\(error.localizedDescription) [\(diagnostics)]")
-            }
+            let diagnostics = await presetStoreUnreadableDiagnostics(device: device)
+            return .unreadable("\(error.localizedDescription) [\(diagnostics)]")
         }
     }
 
@@ -3685,37 +3687,20 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     private func fetchPresetPayloadMapByIdStrict(device: WLEDDevice) async throws -> [Int: [String: Any]] {
-        do {
-            guard let fileURL = URL(string: "http://\(device.ipAddress)/presets.json") else {
-                throw WLEDAPIError.invalidURL
-            }
-            let (data, response) = try await urlSession.data(for: URLRequest(url: fileURL))
-            try validateHTTPResponse(response, device: device)
-            if let errorCode = wledErrorCode(from: data) {
-                if errorCode == 4 {
-                    throw WLEDAPIError.httpError(501)
-                }
-                throw WLEDAPIError.invalidResponse
-            }
-            let records = try parsePresetPayloadMapById(data: data, mode: .strict)
-            cachePresetRecordPayloads(records: records, device: device)
-            return records
-        } catch {
-            guard let jsonURL = URL(string: "http://\(device.ipAddress)/json/presets") else {
-                throw WLEDAPIError.invalidURL
-            }
-            let (jsonData, jsonResponse) = try await urlSession.data(for: URLRequest(url: jsonURL))
-            try validateHTTPResponse(jsonResponse, device: device)
-            if let errorCode = wledErrorCode(from: jsonData) {
-                if errorCode == 4 {
-                    throw WLEDAPIError.httpError(501)
-                }
-                throw WLEDAPIError.invalidResponse
-            }
-            let records = try parsePresetPayloadMapById(data: jsonData, mode: .strict)
-            cachePresetRecordPayloads(records: records, device: device)
-            return records
+        guard let fileURL = URL(string: "http://\(device.ipAddress)/presets.json") else {
+            throw WLEDAPIError.invalidURL
         }
+        let (data, response) = try await urlSession.data(for: URLRequest(url: fileURL))
+        try validateHTTPResponse(response, device: device)
+        if let errorCode = wledErrorCode(from: data) {
+            if errorCode == 4 {
+                throw WLEDAPIError.httpError(501)
+            }
+            throw WLEDAPIError.invalidResponse
+        }
+        let records = try parsePresetPayloadMapById(data: data, mode: .strict)
+        cachePresetRecordPayloads(records: records, device: device)
+        return records
     }
 
     private func fetchPlaylistsFromPresetsFile(device: WLEDDevice) async throws -> [WLEDPlaylist] {
