@@ -560,17 +560,16 @@ actor TemporaryTransitionCleanupService {
         let skipDeletePhase = completedDeletePhaseLeaseIds.contains(lease.leaseId)
         do {
             if !skipDeletePhase {
-                if let playlistId {
-                    logger.info("cleanup.delete_playlist device=\(device.id, privacy: .public) id=\(playlistId)")
-                    _ = try await WLEDAPIService.shared.deletePlaylist(id: playlistId, device: device)
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                }
-                for (index, presetId) in presetIds.enumerated() {
-                    logger.info("cleanup.delete_preset device=\(device.id, privacy: .public) id=\(presetId)")
-                    _ = try await WLEDAPIService.shared.deletePreset(id: presetId, device: device)
-                    if index < presetIds.count - 1 {
-                        try? await Task.sleep(nanoseconds: 150_000_000)
-                    }
+                let playlistIds = playlistId.map { [$0] } ?? []
+                if !playlistIds.isEmpty || !presetIds.isEmpty {
+                    logger.info(
+                        "cleanup.delete_preset_store_rewrite device=\(device.id, privacy: .public) playlistIds=\(playlistIds, privacy: .public) presetIds=\(presetIds, privacy: .public)"
+                    )
+                    _ = try await WLEDAPIService.shared.rewritePresetStoreDeletingRecords(
+                        playlistIds: playlistIds,
+                        presetIds: presetIds,
+                        device: device
+                    )
                 }
                 completedDeletePhaseLeaseIds.insert(lease.leaseId)
             }

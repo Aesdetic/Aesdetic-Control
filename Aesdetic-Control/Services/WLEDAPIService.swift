@@ -44,6 +44,7 @@ protocol WLEDAPIServiceProtocol {
     // Deletion methods
     func deletePreset(id: Int, device: WLEDDevice) async throws -> Bool
     func deletePlaylist(id: Int, device: WLEDDevice) async throws -> Bool
+    func rewritePresetStoreDeletingRecords(playlistIds: [Int], presetIds: [Int], device: WLEDDevice) async throws -> Bool
     func renamePresetRecord(id: Int, name: String, device: WLEDDevice) async throws
     func renamePlaylistRecord(id: Int, name: String, device: WLEDDevice) async throws
     
@@ -1862,6 +1863,164 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
 
+    func rewritePresetStoreDeletingRecords(
+        playlistIds: [Int],
+        presetIds: [Int],
+        device: WLEDDevice
+    ) async throws -> Bool {
+        let normalizedPlaylistIds = Set(playlistIds.filter { (1...250).contains($0) })
+        let normalizedPresetIds = Set(presetIds.filter { (1...250).contains($0) })
+        let targetIds = normalizedPlaylistIds.union(normalizedPresetIds)
+        guard !targetIds.isEmpty else {
+            return true
+        }
+
+        let queueKey = presetStoreQueueKey(for: device)
+        return try await enqueuePresetOperation(deviceId: queueKey, label: "preset_store.full_rewrite_delete") {
+            try await self.rewritePresetStoreDeletingRecordsQueued(
+                playlistIds: normalizedPlaylistIds,
+                presetIds: normalizedPresetIds,
+                targetIds: targetIds,
+                device: device
+            )
+        }
+    }
+
+    private func rewritePresetStoreDeletingRecordsQueued(
+        playlistIds normalizedPlaylistIds: Set<Int>,
+        presetIds normalizedPresetIds: Set<Int>,
+        targetIds: Set<Int>,
+        device: WLEDDevice
+    ) async throws -> Bool {
+        activePresetStoreDeleteSessionDeviceIds.insert(device.id)
+        defer {
+            activePresetStoreDeleteSessionDeviceIds.remove(device.id)
+        }
+
+        let originalData = try await fetchPresetStoreRawData(device: device)
+        let originalRecords = try parsePresetPayloadMapById(data: originalData, mode: .strict)
+        let originalIds = Set(originalRecords.keys)
+        let existingTargetIds = originalIds.intersection(targetIds)
+        guard !existingTargetIds.isEmpty else {
+            logger.info(
+                "preset_store.full_rewrite_delete.noop device=\(device.id, privacy: .public) playlistIds=\(Array(normalizedPlaylistIds).sorted(), privacy: .public) presetIds=\(Array(normalizedPresetIds).sorted(), privacy: .public)"
+            )
+            return true
+        }
+
+        let rewrittenData = try makePresetStoreRewriteDeleting(ids: targetIds, from: originalData)
+        let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
+        let preflightRemainingTargets = Set(rewrittenRecords.keys).intersection(targetIds)
+        guard preflightRemainingTargets.isEmpty else {
+            logger.error(
+                "preset_store.full_rewrite_delete.preflight_failed device=\(device.id, privacy: .public) remaining=\(Array(preflightRemainingTargets).sorted(), privacy: .public)"
+            )
+            return false
+        }
+
+        let preservedIds = originalIds.subtracting(targetIds)
+        let preflightMissingPreserved = preservedIds.subtracting(Set(rewrittenRecords.keys))
+        guard preflightMissingPreserved.isEmpty else {
+            logger.error(
+                "preset_store.full_rewrite_delete.preflight_preserve_failed device=\(device.id, privacy: .public) missing=\(Array(preflightMissingPreserved).sorted(), privacy: .public)"
+            )
+            return false
+        }
+
+        do {
+            persistLocalPresetStoreBackup(data: originalData, device: device)
+            try await uploadWLEDFile(named: "presets-aesdetic-backup.json", data: originalData, device: device)
+            try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            let verificationData = try await fetchPresetStoreRawData(device: device)
+            let verificationRecords = try parsePresetPayloadMapById(data: verificationData, mode: .strict)
+            let verifiedIds = Set(verificationRecords.keys)
+            let remainingTargets = verifiedIds.intersection(targetIds)
+            let missingPreserved = preservedIds.subtracting(verifiedIds)
+
+            guard remainingTargets.isEmpty, missingPreserved.isEmpty else {
+                logger.error(
+                    "preset_store.full_rewrite_delete.verify_failed device=\(device.id, privacy: .public) remaining=\(Array(remainingTargets).sorted(), privacy: .public) missingPreserved=\(Array(missingPreserved).sorted(), privacy: .public)"
+                )
+                try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
+                return false
+            }
+
+            cachePresetRecordPayloads(records: verificationRecords, device: device)
+            recordSuccessfulRequest(deviceId: device.id)
+            logger.info(
+                "preset_store.full_rewrite_delete.success device=\(device.id, privacy: .public) removed=\(Array(existingTargetIds).sorted(), privacy: .public) preserved=\(preservedIds.count, privacy: .public)"
+            )
+            try? await deleteWLEDFile(named: "presets-aesdetic-backup.json", device: device)
+            return true
+        } catch {
+            logger.warning(
+                "preset_store.full_rewrite_delete.error device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
+            return false
+        }
+    }
+
+    private func persistLocalPresetStoreBackup(data: Data, device: WLEDDevice) {
+        do {
+            let directory = try localPresetStoreBackupDirectory()
+            let fileURL = directory.appendingPathComponent("\(safeBackupFileComponent(device.id))-presets.json")
+            try data.write(to: fileURL, options: .atomic)
+            logger.info(
+                "preset_store.full_rewrite_delete.local_backup_saved device=\(device.id, privacy: .public) bytes=\(data.count, privacy: .public)"
+            )
+        } catch {
+            logger.warning(
+                "preset_store.full_rewrite_delete.local_backup_failed device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    private func localPresetStoreBackupDirectory() throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let directory = base.appendingPathComponent("PresetStoreBackups", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func safeBackupFileComponent(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = value.unicodeScalars.map { scalar -> Character in
+            allowed.contains(scalar) ? Character(scalar) : "_"
+        }
+        let name = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        return name.isEmpty ? "unknown-device" : name
+    }
+
+    private func deleteWLEDFile(named filename: String, device: WLEDDevice) async throws {
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = device.ipAddress
+        components.path = "/edit"
+        components.queryItems = [
+            URLQueryItem(name: "func", value: "delete"),
+            URLQueryItem(name: "path", value: filename)
+        ]
+        guard let url = components.url else {
+            throw WLEDAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 8
+
+        let (_, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+        recordSuccessfulRequest(deviceId: device.id)
+    }
+
     func orderedPresetStoreDeleteTargets(
         playlistIds: [Int],
         presetIds: [Int]
@@ -2355,8 +2514,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         if reusableStepIds.isEmpty, !existingStepIds.isEmpty {
             let newIds = Set(presetIds)
             let staleIds = existingStepIds.filter { !newIds.contains($0) }
-            for presetId in staleIds {
-                _ = try? await deletePreset(id: presetId, device: device)
+            if !staleIds.isEmpty {
+                _ = try? await rewritePresetStoreDeletingRecords(
+                    playlistIds: [],
+                    presetIds: staleIds,
+                    device: device
+                )
             }
         }
         
@@ -3701,6 +3864,80 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let records = try parsePresetPayloadMapById(data: data, mode: .strict)
         cachePresetRecordPayloads(records: records, device: device)
         return records
+    }
+
+    private func fetchPresetStoreRawData(device: WLEDDevice) async throws -> Data {
+        guard let fileURL = URL(string: "http://\(device.ipAddress)/presets.json") else {
+            throw WLEDAPIError.invalidURL
+        }
+        var request = URLRequest(url: fileURL)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 8
+        let (data, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+        if let errorCode = wledErrorCode(from: data) {
+            if errorCode == 4 {
+                throw WLEDAPIError.httpError(501)
+            }
+            throw WLEDAPIError.invalidResponse
+        }
+        return data
+    }
+
+    private func makePresetStoreRewriteDeleting(ids targetIds: Set<Int>, from data: Data) throws -> Data {
+        var root = try parseJSONObjectDictionary(from: data, mode: .strict)
+        let hasWrappedPayload = root["presets"] is [String: Any]
+        var payload = root["presets"] as? [String: Any] ?? root
+
+        for id in targetIds {
+            payload.removeValue(forKey: "\(id)")
+        }
+        if payload["0"] == nil {
+            payload["0"] = [:] as [String: Any]
+        }
+
+        if hasWrappedPayload {
+            root["presets"] = payload
+        } else {
+            root = payload
+        }
+
+        guard JSONSerialization.isValidJSONObject(root) else {
+            throw WLEDAPIError.invalidResponse
+        }
+        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    private func uploadWLEDFile(named filename: String, data fileData: Data, device: WLEDDevice) async throws {
+        guard let uploadURL = URL(string: "http://\(device.ipAddress)/upload") else {
+            throw WLEDAPIError.invalidURL
+        }
+
+        let boundary = "AesdeticBoundary-\(UUID().uuidString)"
+        var body = Data()
+        body.appendUTF8("--\(boundary)\r\n")
+        body.appendUTF8("Content-Disposition: form-data; name=\"data\"; filename=\"\(filename)\"\r\n")
+        body.appendUTF8("Content-Type: application/json\r\n\r\n")
+        body.append(fileData)
+        body.appendUTF8("\r\n--\(boundary)--\r\n")
+
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+        request.httpBody = body
+
+        let (responseData, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+        recordSuccessfulRequest(deviceId: device.id)
+
+        #if DEBUG
+        if let httpResponse = response as? HTTPURLResponse {
+            let snippet = debugPayloadSnippet(responseData, limit: 200)
+            print("✅ WLED upload \(filename) for \(device.name): status=\(httpResponse.statusCode) body=\(snippet)")
+        }
+        #endif
     }
 
     private func fetchPlaylistsFromPresetsFile(device: WLEDDevice) async throws -> [WLEDPlaylist] {
@@ -5116,6 +5353,14 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
 } 
+
+private extension Data {
+    mutating func appendUTF8(_ string: String) {
+        if let data = string.data(using: .utf8) {
+            append(data)
+        }
+    }
+}
 
 private struct PresetStorePayload: Encodable {
     let ps: [String: PresetStoreBody]

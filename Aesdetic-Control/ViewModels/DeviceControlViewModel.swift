@@ -11544,7 +11544,11 @@ class DeviceControlViewModel: ObservableObject {
     func deletePresetRecord(_ presetId: Int, for device: WLEDDevice) async -> Bool {
         markUserInteraction(device.id)
         do {
-            let deleted = try await apiService.deletePreset(id: presetId, device: device)
+            let deleted = try await apiService.rewritePresetStoreDeletingRecords(
+                playlistIds: [],
+                presetIds: [presetId],
+                device: device
+            )
             guard deleted else {
                 presentError(.apiError(message: "Preset delete could not be verified on device. Please retry once preset storage is readable."))
                 return false
@@ -11564,7 +11568,11 @@ class DeviceControlViewModel: ObservableObject {
     func deletePlaylist(_ playlist: WLEDPlaylist, for device: WLEDDevice) async -> Bool {
         markUserInteraction(device.id)
         do {
-            let deleted = try await apiService.deletePlaylist(id: playlist.id, device: device)
+            let deleted = try await apiService.rewritePresetStoreDeletingRecords(
+                playlistIds: [playlist.id],
+                presetIds: [],
+                device: device
+            )
             guard deleted else {
                 presentError(.apiError(message: "Playlist delete could not be verified on device. Please retry once preset storage is readable."))
                 return false
