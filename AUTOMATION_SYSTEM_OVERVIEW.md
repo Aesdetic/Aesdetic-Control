@@ -1,464 +1,258 @@
-# Automation System Overview & Recent Changes
-
-## 📋 Table of Contents
-1. [Architecture Overview](#architecture-overview)
-2. [Recent Changes Summary](#recent-changes-summary)
-3. [Current Implementation State](#current-implementation-state)
-4. [Key Components](#key-components)
-5. [Data Models](#data-models)
-6. [Scheduling System (Current)](#scheduling-system-current)
-7. [Next Steps: BGTaskScheduler Implementation](#next-steps-bgtaskscheduler-implementation)
-
----
-
-## Architecture Overview
-
-The automation system is built around a **centralized `AutomationStore`** that manages:
-- **Storage**: JSON-based persistence (`automations.json`)
-- **Scheduling**: Timer-based execution (currently foreground-only)
-- **Execution**: Multi-device action application with retry logic
-- **Solar Calculations**: Sunrise/sunset trigger resolution with caching
-
-### Key Design Decisions
-- **@MainActor** singleton pattern for `AutomationStore`
-- **Binding-based editors** for automation creation (no direct device updates)
-- **Preset integration** for colors, transitions, and effects
-- **Metadata tracking** for previews, WLED device-side execution, and UI state
-
----
-
-## Recent Changes Summary
-
-### 1. **Automation Editor Refactoring** ✅
-**Files Changed:**
-- `AddAutomationDialog.swift` - Main dialog orchestrator
-- `AutomationColorEditor.swift` - NEW: Dedicated color/gradient editor
-- `AutomationTransitionEditor.swift` - NEW: Dedicated transition editor
-- `AutomationEffectEditor.swift` - NEW: Dedicated effect editor
-
-**What Changed:**
-- **Before**: Monolithic `VStack` in `AddAutomationDialog` causing type-checking issues
-- **After**: Three separate editor components with computed view properties
-- **Benefit**: Faster compilation, better code organization, reusable components
-
-**Key Features Added:**
-- Preset selection with visual chips
-- Preview toggle for live device updates
-- Gradient interpolation mode selection
-- Temperature/CCT support in color editors
-- Duration pickers (hours/minutes) for transitions
-
-### 2. **Preset Model Enhancement** ✅
-**Files Changed:**
-- `PresetModels.swift`
-
-**What Changed:**
-- Added `gradientInterpolation: GradientInterpolation?` to `ColorPreset`
-- Added `gradientInterpolation: GradientInterpolation?` to `WLEDEffectPreset`
-- Preserves interpolation mode when saving/loading presets
-
-**Impact:**
-- Automations now correctly preserve blend styles (linear, ease-in, ease-out, etc.)
-- Preset chips show accurate gradient previews
-
-### 3. **Device Sync Section UI Improvements** ✅
-**Files Changed:**
-- `AddAutomationDialog.swift` - `deviceSyncSection`
-
-**What Changed:**
-- Removed glass card wrapper (more compact)
-- Status dot moved to right of "Online"/"Offline" text
-- Summary moved to top-right, aligned with heading
-- Improved accessibility labels and hit areas (44pt minimum)
-
-**Visual Result:**
-```
-Sync to devices                    Syncing to 2 of 3 devices
-┌─────────────────────────────────────────────────────────┐
-│ Device Name                    Online ●                 │
-│ Device Name                    Offline ●                │
-└─────────────────────────────────────────────────────────┘
-```
-
-### 4. **Compiler Warning Fixes** ✅
-**Files Changed:**
-- `DeviceControlViewModel.swift`
-
-**What Changed:**
-- Changed `var bodies` to `let bodies` (line 2339)
-- Replaced unused `let currentBrightness` with `_ = ...` (line 2264)
-
-### 5. **Metadata Regeneration** ✅
-**Files Changed:**
-- `AddAutomationDialog.swift` - `buildAutomation()`
-
-**What Changed:**
-- `buildAutomation()` now regenerates `AutomationMetadata` with fresh `colorPreviewHex`
-- Ensures edited automations show correct previews in list/summary views
-
----
-
-## Current Implementation State
-
-### ✅ Fully Implemented
-
-1. **Automation Creation & Editing**
-   - Three action types: Colors, Transitions, Animations
-   - Three trigger types: Specific Time, Sunrise, Sunset
-   - Multi-device selection with online/offline status
-   - Preset integration for all action types
-   - Preview functionality for all editors
-
-2. **Action Execution**
-   - Gradient application with interpolation modes
-   - Transition execution (start → end gradients)
-   - Effect application with speed/intensity/palette
-   - Multi-device coordination with partial failure handling
-   - Retry logic for failed devices
-
-3. **Solar Trigger Resolution**
-   - Location-based sunrise/sunset calculation
-   - 30-day location caching
-   - Offset support (±120 minutes)
-   - Solar cache for performance
-
-4. **Data Persistence**
-   - JSON-based storage (`automations.json`)
-   - Legacy migration support
-   - Metadata preservation
-
-### ⚠️ Current Limitations
-
-1. **Scheduling Reliability**
-   - **Current**: `Timer.scheduledTimer()` - dies when app is suspended
-   - **Problem**: Automations don't fire if app is in background
-   - **Impact**: Users must keep app open for automations to work
-
-2. **No Background Execution**
-   - No `BGTaskScheduler` integration
-   - No notification fallback
-   - No launch-time missed automation check
-
-3. **WLED Native Support (Partial)**
-   - `AutomationMetadata` has fields for `wledPlaylistId` and `wledTimerSlot`
-   - No API methods for timer management (`fetchTimers`, `saveTimer`)
-   - No playlist API methods (`fetchPlaylists`, `applyPlaylist`)
-   - No execution mode selection UI
-
-4. **Hub Integration (Not Started)**
-   - No HomeKit hub detection
-   - No Home Assistant MQTT integration
-   - No execution mode enum or routing layer
-
----
-
-## Key Components
-
-### 1. AutomationStore (`Services/AutomationStore.swift`)
-**Role**: Central automation manager
-
-**Key Methods:**
-- `scheduleNext()` - Finds next automation and schedules Timer
-- `triggerAutomation(_:)` - Executes automation when timer fires
-- `applyAutomation(_:)` - Applies action to target devices
-- `resolveNextAutomation(referenceDate:)` - Finds next scheduled automation
-- `computeSolarDate(...)` - Calculates sunrise/sunset times
-
-**Current Scheduling Flow:**
-```
-scheduleNext()
-  → resolveNextAutomation()
-  → scheduleTimer(for:fireDate:)
-  → Timer.scheduledTimer(...)
-  → triggerAutomation()
-  → applyAutomation()
-  → scheduleNext() (recurse)
-```
-
-**Problem**: Timer dies when app is suspended
-
-### 2. AddAutomationDialog (`Views/Components/AddAutomationDialog.swift`)
-**Role**: Main UI for creating/editing automations
-
-**Key Sections:**
-- `automationSettingsSection` - Trigger selection (Time/Sunrise/Sunset)
-- `repeatScheduleSection` - Weekday selection with swipe-to-select
-- `automationActionSection` - Action type picker (Colors/Transitions/Animations)
-- `deviceSyncSection` - Multi-device selection with status indicators
-
-**State Management:**
-- 20+ `@State` variables for UI state
-- Bindings passed to child editors
-- Template prefill support for quick creation
-
-### 3. AutomationColorEditor (`Views/Components/AutomationColorEditor.swift`)
-**Role**: Color/gradient editor for automations
-
-**Key Features:**
-- Gradient bar with stop manipulation
-- Color wheel with CCT support
-- Preset chip selector
-- Brightness slider
-- Fade duration toggle
-- Preview toggle
-
-**Computed Views:**
-- `headerRow` - Title, preview toggle, save preset button
-- `brightnessSection` - Brightness slider
-- `blendSelector` - Interpolation mode picker
-- `gradientSection` - GradientBar component
-- `presetSelector` - Preset chips
-- `colorWheel` - ColorWheelInline component
-- `fadeSection` - Fade toggle and duration slider
-
-### 4. AutomationTransitionEditor (`Views/Components/AutomationTransitionEditor.swift`)
-**Role**: Transition editor (start → end gradients)
-
-**Key Features:**
-- Separate gradient bars for start and end
-- Duration picker (hours/minutes)
-- Transition preset selector
-- Color preset selector for each gradient
-- Preview with cancellation
-
-### 5. AutomationEffectEditor (`Views/Components/AutomationEffectEditor.swift`)
-**Role**: Effect/animation editor
-
-**Key Features:**
-- Effect picker with metadata
-- Gradient editor (adapts to effect's color slot count)
-- Brightness, speed, intensity sliders
-- Effect preset selector
-- Color preset selector
-- Debounced preview (180ms)
-
----
-
-## Data Models
-
-### Automation (`Models/Automation.swift`)
-```swift
-struct Automation {
-    let id: UUID
-    var name: String
-    var enabled: Bool
-    var createdAt: Date
-    var updatedAt: Date
-    var lastTriggered: Date?
-    
-    var trigger: AutomationTrigger  // .specificTime, .sunrise, .sunset
-    var action: AutomationAction   // .gradient, .transition, .effect, etc.
-    var targets: AutomationTargets // deviceIds, allowPartialFailure
-    var metadata: AutomationMetadata // previews, WLED IDs, execution mode
-}
-```
-
-### AutomationTrigger
-- **`.specificTime(TimeTrigger)`** - Fixed time with weekdays
-- **`.sunrise(SolarTrigger)`** - Sunrise with offset
-- **`.sunset(SolarTrigger)`** - Sunset with offset
-
-### AutomationAction
-- **`.gradient(GradientActionPayload)`** - Single gradient with fade
-- **`.transition(TransitionActionPayload)`** - Start → end gradient transition
-- **`.effect(EffectActionPayload)`** - WLED effect with gradient
-- **`.preset(PresetActionPayload)`** - WLED preset recall
-- **`.playlist(PlaylistActionPayload)`** - WLED playlist
-- **`.scene(SceneActionPayload)`** - Legacy scene (migrated to gradient)
-- **`.directState(DirectStatePayload)`** - Direct color/brightness
-
-### AutomationMetadata
-```swift
-struct AutomationMetadata {
-    var colorPreviewHex: String?
-    var accentColorHex: String?
-    var iconName: String?
-    var notes: String?
-    var templateId: String?
-    var pinnedToShortcuts: Bool?
-    
-    // WLED device-side execution (for future use)
-    var wledPlaylistId: Int?
-    var wledTimerSlot: Int?
-    var runOnDevice: Bool
-}
-```
-
-**Note**: `executionMode`, `externalId`, `lastDelegatedAt` fields are **NOT YET IMPLEMENTED** (planned for hybrid approach)
-
----
-
-## Scheduling System (Current)
-
-### Current Flow
-```
-App Launch
-  → AutomationStore.init()
-  → load() (from JSON)
-  → scheduleNext()
-  → resolveNextAutomation()
-  → scheduleTimer(for:fireDate:)
-  → Timer.scheduledTimer(...) [FOREGROUND ONLY]
-  
-When Timer Fires:
-  → triggerAutomation()
-  → applyAutomation()
-  → scheduleNext() (recurse)
-```
-
-### Timer Implementation
-```swift
-private func scheduleTimer(for automation: Automation, fireDate: Date) {
-    schedulerTimer?.invalidate()
-    let interval = max(1.0, fireDate.timeIntervalSince(Date()))
-    schedulerTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-        Task { @MainActor in
-            self?.triggerAutomation(automation)
-        }
-    }
-}
-```
-
-**Problems:**
-1. Timer is invalidated when app is suspended
-2. No background task registration
-3. No notification fallback
-4. No missed automation detection on launch
-
----
-
-## Next Steps: BGTaskScheduler Implementation
-
-### Phase 1: BGTaskScheduler Foundation (Priority 1)
-
-**Files to Modify:**
+# Automation System Overview
+
+Last updated: 2026-04-30 (Asia/Hong_Kong)
+
+## Production Status
+
+Automation create and delete are currently production-ready for WLED-device-backed automations based on the latest manual tests and code review.
+
+What is working now:
+- Automation creation writes WLED preset-store records through one serialized full `presets.json` rewrite.
+- Automation delete clears the owned WLED timer first, then deletes playlist and step preset records through one full `presets.json` rewrite.
+- Deletes do not use WLED `pdel` mutation anymore.
+- Delete intent persists across app force-quit and resumes automatically on next launch.
+- Offline or unreachable devices keep the automation in a deleting/retry state instead of locally removing metadata too early.
+- A single automation delete is allowed at a time so multiple delete bursts cannot overload WLED storage.
+- Automation creation is blocked while automation delete is in progress.
+- Preset tab color/effect/playlist deletes use the full rewrite path, not direct `pdel`.
+- Device-side backup files are not left on WLED; backups are local app files only.
+
+Important remaining product limitation:
+- WLED timers run on WLED without the app open after sync is complete.
+- App-side foreground timers still depend on the app process. The reliable production path for sold hardware is the WLED-device-side timer flow.
+
+## Core Architecture
+
+Main components:
+- `AutomationStore`: owns automation persistence, create/update/delete, scheduling, WLED sync, timer ownership checks, and retry state.
+- `DeviceCleanupManager`: owns deferred device cleanup queue, delete leases, retry backoff, and combined preset-store cleanup items.
+- `WLEDAPIService`: owns serialized WLED API/file operations and full `presets.json` rewrite helpers.
+- `DeviceControlViewModel`: creates transition playlist payloads, deletes user preset records, and refreshes device preset/playlist state.
+- `AddAutomationDialog`: creates or edits automations and only dismisses after `AutomationStore.add` confirms save.
+
+Persistence:
+- App automations: `automations.json` in app documents.
+- Pending device cleanup queue: `UserDefaults` key `aesdetic_device_cleanup_queue_v1`.
+- Pending automation deletes: `UserDefaults` key `aesdetic.pendingAutomationDeleteIds`.
+- Local preset-store backups: app support directory `PresetStoreBackups/<device-id>-presets.json`.
+
+## Automation Creation Flow
+
+User creates automation:
+1. `AddAutomationDialog` validates the form and selected target devices.
+2. `AutomationStore.add(_:)` rejects the save if an automation delete is currently active.
+3. For device-side automations, `AutomationStore` checks local WLED timer capacity.
+4. The automation is saved locally first so the user has durable app metadata.
+5. `syncOnDeviceScheduleIfNeeded` builds the WLED-side assets.
+6. For transition automations, `DeviceControlViewModel.createTransitionPlaylist(... persist: true)` builds the playlist and step preset payloads.
+7. `WLEDAPIService.rewritePresetStoreUpsertingRecords` reads current `presets.json`, merges the new playlist/presets, validates the rewritten JSON, uploads the complete file, then reads it back for verification.
+8. Timer config is written after preset-store assets exist.
+9. Metadata is updated with WLED playlist/preset IDs, timer slot, signatures, and sync state.
+
+Why this is the safe create path:
+- WLED sees one complete `presets.json` rewrite instead of many small preset saves.
+- The rewrite preserves unrelated user presets/playlists.
+- Verification confirms the new IDs exist and preserved IDs were not dropped.
+- Local backup exists before upload, but no WLED flash backup file is created.
+
+## Automation Delete Flow
+
+User deletes automation:
+1. `AutomationStore.delete(id:)` blocks if another automation delete is in progress.
+2. The automation ID is inserted into `deletingAutomationIds` and persisted to `aesdetic.pendingAutomationDeleteIds`.
+3. UI shows delete progress and other create/delete actions are disabled.
+4. `cleanupDeviceEntries(for:)` runs per target device.
+5. If the device is offline and an owned timer may exist, local finalization is blocked and retry remains active.
+6. If the device is online, `disableOwnedTimerSlotsForDeletion` scans WLED timers and disables only slots matching the automation signature.
+7. After timer cleanup is verified, playlist ID and managed step preset IDs are deleted through `rewritePresetStoreDeletingRecords` in one full rewrite.
+8. The rewritten `presets.json` is verified by readback.
+9. Only after device cleanup is complete does the automation get removed locally.
+10. A read-only post-delete verification checks for leftovers; it logs leftovers but does not issue repeated write retries.
+
+Why timer cleanup is first:
+- A WLED timer can point at a playlist/preset ID.
+- Deleting preset-store entries while a timer still points at them can leave WLED in a bad or confusing state.
+- Timer rows in WLED config compact/shift when empty rows are omitted, so stored timer slot numbers are not treated as stable IDs.
+
+Why delete does not finalize early:
+- If preset-store rewrite fails, the automation remains in deleting state and retries later.
+- If timer ownership cannot be proven, delete retries later instead of disabling a raw slot.
+- Offline timer-owning deletes are not finalized locally because local metadata is the ownership proof needed for future cleanup.
+
+## Deferred Cleanup Queue
+
+`DeviceCleanupManager` handles cleanup that cannot complete immediately.
+
+Queue item types:
+- `.timer`: only for non-automation or already safe timer cleanup. Automation-owned raw timer queue entries are rejected.
+- `.preset`: full-rewrite preset cleanup.
+- `.playlist`: full-rewrite playlist cleanup.
+- `.presetStore`: combined playlist plus preset full-rewrite cleanup.
+
+Queue behavior:
+- Per-device delete leases serialize queue processing and immediate deletes.
+- Preset-store entries are processed one per queue pass.
+- Retry uses capped backoff.
+- Preset-store unreadable hard stops move entries to dead-letter instead of repeatedly writing into a corrupted/unreadable store.
+- Legacy automation timer queue entries are dropped on load because raw WLED timer slots require live ownership proof.
+- Combined `.presetStore` entries participate in active-ID checks and queue pruning so newly-created IDs are not later deleted by stale queued work.
+
+## Preset Store Rewrite Design
+
+Full rewrite delete:
+1. Fetch raw `presets.json`.
+2. Strict-parse the file into ID records.
+3. Remove target playlist/preset IDs in memory.
+4. Preflight that targets are gone and preserved IDs still exist.
+5. Save local backup.
+6. Upload complete `presets.json`.
+7. Sleep briefly for WLED filesystem settle.
+8. Fetch `presets.json` again.
+9. Verify target IDs are gone and preserved IDs remain.
+10. Cache verified records and report success.
+
+Full rewrite create:
+1. Fetch raw `presets.json`.
+2. Strict-parse current records.
+3. Merge app-generated playlist/preset records in memory.
+4. Preflight upserts and preserved IDs.
+5. Save local backup.
+6. Upload complete `presets.json`.
+7. Read back and verify.
+8. Cache verified records and report success.
+
+Backup policy:
+- Local app backup is overwritten per device on each full rewrite.
+- No `presets-aesdetic-backup.json` is kept on WLED.
+- This avoids consuming WLED flash space with backup files.
+
+## Paths That Did Not Work
+
+Rejected path: repeated `pdel` deletes.
+- Behavior observed: missed deletes, leftover automation step presets, invalid bytes/corruption in `presets.json` under delete bursts.
+- Firmware reason: WLED preset mutations rewrite the same preset store file; repeated mutations under load increase the chance of partial/fragile file state.
+- Current status: removed from production delete paths and removed from `WLEDAPIService` API surface.
+
+Rejected path: post-delete write retries.
+- Behavior observed: retry writes after finalization could amplify WLED filesystem load.
+- Current status: post-delete verification is read-only. If cleanup fails before finalization, the automation remains pending and retries the main safe full-rewrite path.
+
+Rejected path: raw queued automation timer slot deletes.
+- Behavior observed: WLED timer rows can compact, so a stored slot can later refer to another automation's timer.
+- Current status: automation timer cleanup must prove ownership by signature before disabling a slot.
+
+Rejected path: finalizing locally after preset-store rewrite failure.
+- Risk: app could remove metadata while WLED playlist/preset records remain on device.
+- Current status: local finalization is blocked until cleanup is verified or proven unnecessary.
+
+Rejected path: device-side WLED backup file.
+- Behavior observed: `presets-aesdetic-backup.json` persists on `/edit` if cleanup fails and consumes flash.
+- Current status: backup is local-only.
+
+## Concurrency Rules
+
+Automation delete:
+- One automation delete at a time globally.
+- Other automation delete buttons are disabled while one delete is active.
+- Creation is blocked while delete is active.
+- Preset/effect/color saves are blocked while automation delete is active.
+
+Preset-store operations:
+- `WLEDAPIService` serializes preset-store operations by device key.
+- `DeviceCleanupManager` also uses a per-device delete lease.
+- Queue helpers track combined `.presetStore` entries so stale queued cleanup cannot silently delete newly-created IDs.
+
+On-device sync:
+- Creation is blocked only when target device IDs overlap an in-flight on-device sync.
+- This avoids blocking unrelated devices indefinitely.
+
+## Offline And Retry Behavior
+
+If WLED is unplugged:
+- The app cannot know instantly from WLED itself; offline is inferred from WebSocket disconnects, HTTP failures/timeouts, mDNS/health checks, and explicit unreachable markers.
+- Automation delete now marks the device unreachable faster when cleanup HTTP operations fail.
+- The automation remains visible as deleting/retrying instead of being removed locally.
+- On app relaunch, persisted pending delete IDs resume automatically.
+
+Retry behavior:
+- Automation delete retry starts at 3 seconds and caps at 30 seconds.
+- Queue retry uses a longer backoff schedule for deferred cleanup.
+- Timer cleanup retries only through ownership scan, never raw slot queueing.
+
+## UI Behavior
+
+Create/edit sheet:
+- Save is disabled during active automation delete.
+- Save does not dismiss unless `AutomationStore.add` returns true.
+- On-device sync conflicts are shown as validation/status text.
+
+Automation rows:
+- Deleting row shows progress.
+- Other delete buttons are disabled during active delete.
+- Offline/unreachable retry state is surfaced to the user.
+
+Preset tab:
+- Transition preset delete enqueues one combined playlist plus step preset full-rewrite cleanup.
+- Color/effect preset delete enqueues full-rewrite preset cleanup.
+- Direct playlist delete uses `DeviceControlViewModel.deletePlaylist`, which calls full rewrite.
+
+## Test Checklist
+
+Core happy path:
+1. Create one transition automation and wait until it is ready.
+2. Confirm it appears in WLED `presets.json` as one playlist plus step presets.
+3. Confirm the WLED timer exists and points to the playlist/macro ID.
+4. Close the app and let the WLED timer run.
+5. Delete the automation online.
+6. Confirm `presets.json` is valid JSON and the playlist/step presets are gone.
+7. Confirm no `presets-aesdetic-backup.json` exists on WLED `/edit`.
+
+Concurrency:
+1. Start deleting automation A.
+2. Try deleting automation B; it should be disabled or blocked.
+3. Try creating automation C; save should be blocked.
+4. After A finishes, B/C actions should be available again.
+
+Offline/retry:
+1. Create automation and wait until ready.
+2. Unplug WLED.
+3. Press delete.
+4. Force close the app.
+5. Reopen app.
+6. Plug WLED back in.
+7. Delete should resume automatically or remain clearly retrying until reachable.
+
+Preset tab:
+1. Delete a transition preset.
+2. Verify playlist and step preset IDs are gone from `presets.json`.
+3. Delete a normal preset.
+4. Verify `presets.json` remains valid.
+
+Stress:
+1. Create/delete/create several automations back-to-back.
+2. Verify no invalid bytes in `presets.json`.
+3. Verify no stale automation preset IDs remain.
+4. Verify WLED `/edit` has no app backup file.
+
+## Current Code Anchors
+
+Primary files:
 - `Aesdetic-Control/Services/AutomationStore.swift`
-- `Aesdetic-Control/Aesdetic_ControlApp.swift` (register identifiers)
+- `Aesdetic-Control/Services/DeviceCleanupManager.swift`
+- `Aesdetic-Control/Services/WLEDAPIService.swift`
+- `Aesdetic-Control/ViewModels/DeviceControlViewModel.swift`
+- `Aesdetic-Control/Views/Components/AddAutomationDialog.swift`
+- `Aesdetic-Control/Views/Scenes/PresetsListView.swift`
 
-**Changes Required:**
-
-1. **Register Background Task Identifiers**
-   ```swift
-   // In Aesdetic_ControlApp.init()
-   BGTaskScheduler.shared.register(
-       forTaskWithIdentifier: "com.aesdetic.automation.refresh",
-       using: nil
-   ) { task in
-       Task { @MainActor in
-           await AutomationStore.shared.handleBackgroundTask(task: task)
-       }
-   }
-   ```
-
-2. **Replace Timer with BGTaskScheduler**
-   ```swift
-   // In AutomationStore
-   private func scheduleNext() {
-       // ... existing resolveNextAutomation logic ...
-       
-       // Choose task type based on duration
-       if automationNeedsLongTask(nextAutomation) {
-           scheduleBackgroundProcessingTask(...)
-       } else {
-           scheduleBackgroundRefreshTask(...)
-       }
-       
-       // Always schedule notification fallback
-       scheduleNotificationFallback(...)
-       
-       // Keep foreground timer as last-second verification
-       scheduleForegroundTimer(...)
-   }
-   ```
-
-3. **Add Notification Fallback**
-   ```swift
-   private func scheduleNotificationFallback(...) {
-       // UNNotificationRequest with "tap to run now" action
-   }
-   ```
-
-4. **Add Launch-Time Missed Automation Check**
-   ```swift
-   func checkMissedAutomations() {
-       // Compare lastTriggered vs nextTriggerDate for past hour
-       // Log missed automations
-       // Optionally execute immediately
-   }
-   ```
-
-### Phase 2: WLED Native Support (Priority 2)
-
-**Files to Create/Modify:**
-- `Aesdetic-Control/Services/WLEDAPIService.swift` (add timer/playlist methods)
-- `Aesdetic-Control/Models/WLEDAPIModels.swift` (add timer models)
-
-**API Methods to Add:**
-- `fetchTimers(for:)` - GET `/json/timers`
-- `saveTimer(_:to:)` - POST `/json/timers`
-- `fetchPlaylists(for:)` - GET `/json/playlists`
-- `applyPlaylist(_:to:)` - Apply playlist via state update
-
-### Phase 3: Execution Mode Selection (Priority 3)
-
-**Files to Create/Modify:**
-- `Aesdetic-Control/Models/Automation.swift` (add `AutomationExecutionMode`)
-- `Aesdetic-Control/Views/Components/AddAutomationDialog.swift` (add mode selector)
-
-**New Enum:**
-```swift
-enum AutomationExecutionMode: String, Codable {
-    case homeKit
-    case homeAssistant
-    case wledNative
-    case appBackground
-}
-```
-
-**Metadata Extension:**
-```swift
-struct AutomationMetadata {
-    // ... existing fields ...
-    var executionMode: AutomationExecutionMode?
-    var externalId: String? // Hub/device ID
-    var lastDelegatedAt: Date?
-}
-```
-
-### Phase 4: Hub Integration (Priority 4)
-
-**Files to Create:**
-- `Aesdetic-Control/Services/HubDetectionService.swift`
-- `Aesdetic-Control/Services/HomeKitIntegration.swift`
-- `Aesdetic-Control/Services/HomeAssistantIntegration.swift`
-
-**Detection Logic:**
-- HomeKit: `HMHomeManager.hubState`
-- Home Assistant: User-provided URL + MQTT credentials
-- WLED Native: Device has free timer slots + preset support
-
----
-
-## Summary
-
-### What We've Built ✅
-- Complete automation creation/editing UI
-- Three dedicated editor components (Color, Transition, Effect)
-- Preset integration with interpolation mode support
-- Multi-device coordination with status indicators
-- Solar trigger resolution with caching
-- JSON-based persistence with legacy migration
-
-### What's Missing ⚠️
-- **BGTaskScheduler** for background execution
-- **Notification fallback** for missed automations
-- **WLED timer/playlist API** methods
-- **Execution mode selection** UI
-- **Hub detection and delegation**
-
-### Next Immediate Step 🎯
-**Implement BGTaskScheduler foundation** to fix the #1 reliability issue: automations not firing when app is in background.
-
----
-
-**Last Updated**: After commit `1e63560` (Automation editor refactoring checkpoint)
+Important functions:
+- `AutomationStore.add(_:)`
+- `AutomationStore.delete(id:)`
+- `AutomationStore.disableOwnedTimerSlotsForDeletion(...)`
+- `AutomationStore.cleanupDeviceEntriesOnOnlineDevice(...)`
+- `AutomationStore.resumePersistedAutomationDeletes()`
+- `DeviceCleanupManager.enqueuePresetStoreDelete(...)`
+- `DeviceCleanupManager.activeDeleteIds(...)`
+- `DeviceCleanupManager.removeIds(...)`
+- `WLEDAPIService.rewritePresetStoreUpsertingRecords(...)`
+- `WLEDAPIService.rewritePresetStoreDeletingRecords(...)`
+- `DeviceControlViewModel.createTransitionPlaylist(... persist: true)`

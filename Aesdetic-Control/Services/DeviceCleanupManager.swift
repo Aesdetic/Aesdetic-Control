@@ -53,6 +53,12 @@ final class DeviceCleanupManager: ObservableObject {
         notBefore: Date? = nil
     ) {
         guard cleanupEnabled else { return }
+        if type == .timer && source == .automation {
+            logger.warning(
+                "cleanup.timer.raw_queue_rejected device=\(deviceId, privacy: .public) ids=\(ids, privacy: .public) reason=automation_timer_slots_require_live_ownership_proof"
+            )
+            return
+        }
         let uniqueIds = Array(Set(ids)).sorted()
         guard !uniqueIds.isEmpty else { return }
         let requestedNextAttemptAt = notBefore ?? Date()
@@ -88,6 +94,64 @@ final class DeviceCleanupManager: ObservableObject {
         logger.info("Enqueued \(type.rawValue) deletion for device \(deviceId): \(uniqueIds)")
     }
 
+    func enqueuePresetStoreDelete(
+        deviceId: String,
+        playlistIds: [Int],
+        presetIds: [Int],
+        source: PendingDeviceDelete.DeleteSource = .unknown,
+        leaseId: UUID? = nil,
+        verificationRequired: Bool = false,
+        notBefore: Date? = nil
+    ) {
+        guard cleanupEnabled else { return }
+        let normalizedPlaylistIds = Array(Set(playlistIds.filter { (1...250).contains($0) })).sorted()
+        let normalizedPresetIds = Array(Set(presetIds.filter { (1...250).contains($0) })).sorted()
+        let combinedIds = Array(Set(normalizedPlaylistIds + normalizedPresetIds)).sorted()
+        guard !combinedIds.isEmpty else { return }
+        let requestedNextAttemptAt = notBefore ?? Date()
+
+        if let index = pendingDeletes.firstIndex(where: {
+            $0.type == .presetStore
+                && $0.deviceId == deviceId
+                && $0.source == source
+                && $0.leaseId == leaseId
+                && $0.deadLetteredAt == nil
+        }) {
+            let mergedPlaylistIds = Array(Set((pendingDeletes[index].playlistIds ?? []) + normalizedPlaylistIds)).sorted()
+            let mergedPresetIds = Array(Set((pendingDeletes[index].presetIds ?? []) + normalizedPresetIds)).sorted()
+            pendingDeletes[index].playlistIds = mergedPlaylistIds
+            pendingDeletes[index].presetIds = mergedPresetIds
+            pendingDeletes[index].ids = Array(Set(mergedPlaylistIds + mergedPresetIds)).sorted()
+            pendingDeletes[index].lastAttempt = Date()
+            let existingNextAttemptAt = pendingDeletes[index].nextAttemptAt ?? requestedNextAttemptAt
+            pendingDeletes[index].nextAttemptAt = min(existingNextAttemptAt, requestedNextAttemptAt)
+            pendingDeletes[index].verificationRequired = pendingDeletes[index].verificationRequired || verificationRequired
+            pendingDeletes[index].lastError = nil
+            save()
+            logger.info(
+                "Merged preset-store deletion for device \(deviceId): playlists=\(mergedPlaylistIds) presets=\(mergedPresetIds)"
+            )
+            return
+        }
+
+        let delete = PendingDeviceDelete(
+            type: .presetStore,
+            deviceId: deviceId,
+            ids: combinedIds,
+            nextAttemptAt: requestedNextAttemptAt,
+            source: source,
+            leaseId: leaseId,
+            verificationRequired: verificationRequired,
+            playlistIds: normalizedPlaylistIds,
+            presetIds: normalizedPresetIds
+        )
+        pendingDeletes.append(delete)
+        save()
+        logger.info(
+            "Enqueued preset-store deletion for device \(deviceId): playlists=\(normalizedPlaylistIds) presets=\(normalizedPresetIds)"
+        )
+    }
+
     /// Attempt a delete immediately if the device is online, otherwise enqueue
     func requestDelete(
         type: PendingDeviceDelete.DeleteType,
@@ -101,6 +165,12 @@ final class DeviceCleanupManager: ObservableObject {
         guard !ids.isEmpty else { return }
         let uniqueIds = Array(Set(ids)).sorted()
         guard !uniqueIds.isEmpty else { return }
+        if type == .timer && source == .automation {
+            logger.warning(
+                "cleanup.timer.raw_request_rejected device=\(device.id, privacy: .public) ids=\(uniqueIds, privacy: .public) reason=automation_timer_slots_require_live_ownership_proof"
+            )
+            return
+        }
         // Preset/playlist mutations are the riskiest operations for presets.json integrity.
         // Always route them through the queue so they run one-at-a-time with pacing.
         if type == .preset || type == .playlist {
@@ -207,18 +277,30 @@ final class DeviceCleanupManager: ObservableObject {
             logger.info(
                 "cleanup.queue_attempt device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) ids=\(delete.ids, privacy: .public) retries=\(delete.retries, privacy: .public) lastError=\((delete.lastError ?? "none"), privacy: .public)"
             )
-            let idsToAttempt = Array(delete.ids.prefix(maxIdsPerAttempt(for: delete.type)))
+            let idsToAttempt = delete.type == .presetStore
+                ? delete.ids
+                : Array(delete.ids.prefix(maxIdsPerAttempt(for: delete.type)))
             if idsToAttempt.count < delete.ids.count {
                 logger.info(
                     "cleanup.queue_chunked device=\(deviceId, privacy: .public) delete=\(delete.id.uuidString, privacy: .public) type=\(delete.type.rawValue, privacy: .public) attempting=\(idsToAttempt, privacy: .public) remaining=\(delete.ids.count - idsToAttempt.count, privacy: .public)"
                 )
             }
-            let outcome = await attemptDelete(
-                type: delete.type,
-                device: device,
-                ids: idsToAttempt,
-                context: "queue:\(delete.id.uuidString)"
-            )
+            let outcome: DeleteAttemptOutcome
+            if delete.type == .presetStore {
+                outcome = await attemptPresetStoreRewriteDelete(
+                    playlistIds: delete.playlistIds ?? [],
+                    presetIds: delete.presetIds ?? [],
+                    device: device,
+                    context: "queue:\(delete.id.uuidString)"
+                )
+            } else {
+                outcome = await attemptDelete(
+                    type: delete.type,
+                    device: device,
+                    ids: idsToAttempt,
+                    context: "queue:\(delete.id.uuidString)"
+                )
+            }
             if let index = self.pendingDeletes.firstIndex(where: { $0.id == delete.id }) {
                 var entry = self.pendingDeletes[index]
                 let succeeded = Set(outcome.succeededIds)
@@ -243,8 +325,16 @@ final class DeviceCleanupManager: ObservableObject {
                         type: delete.type
                     ) {
                         let reason = "Preset-store unreadable hard-stop: \(unreadableReason)"
-                        let presetIds = delete.type == .preset ? Set(entry.ids) : []
-                        let playlistIds = delete.type == .playlist ? Set(entry.ids) : []
+                        let presetIds: Set<Int> = {
+                            if delete.type == .preset { return Set(entry.ids) }
+                            if delete.type == .presetStore { return Set(entry.presetIds ?? []) }
+                            return []
+                        }()
+                        let playlistIds: Set<Int> = {
+                            if delete.type == .playlist { return Set(entry.ids) }
+                            if delete.type == .presetStore { return Set(entry.playlistIds ?? []) }
+                            return []
+                        }()
                         _ = deadLetterPresetStoreDeletes(
                             deviceId: deviceId,
                             source: delete.source,
@@ -349,10 +439,9 @@ final class DeviceCleanupManager: ObservableObject {
                 await enforceDeleteCadence(for: type, deviceId: device.id)
                 let success: Bool
                 switch type {
-                case .preset:
-                    success = try await WLEDAPIService.shared.deletePreset(id: id, device: device)
-                case .playlist:
-                    success = try await WLEDAPIService.shared.deletePlaylist(id: id, device: device)
+                case .preset, .playlist, .presetStore:
+                    assertionFailure("Preset-store deletes must use full rewrite path")
+                    success = false
                 case .timer:
                     #if DEBUG
                     if let before = try? await WLEDAPIService.shared.fetchTimers(for: device).first(where: { $0.id == id }) {
@@ -409,29 +498,52 @@ final class DeviceCleanupManager: ObservableObject {
             return DeleteAttemptOutcome(succeededIds: ids, failedIds: [], lastError: nil, terminalAPIError: nil)
         }
 
+        let playlistIds: [Int]
+        let presetIds: [Int]
+        switch type {
+        case .preset:
+            playlistIds = []
+            presetIds = normalizedIds
+        case .playlist:
+            playlistIds = normalizedIds
+            presetIds = []
+        case .presetStore, .timer:
+            playlistIds = []
+            presetIds = []
+        }
+
+        return await attemptPresetStoreRewriteDelete(
+            playlistIds: playlistIds,
+            presetIds: presetIds,
+            device: device,
+            context: context
+        )
+    }
+
+    private func attemptPresetStoreRewriteDelete(
+        playlistIds: [Int],
+        presetIds: [Int],
+        device: WLEDDevice,
+        context: String
+    ) async -> DeleteAttemptOutcome {
+        let normalizedPlaylistIds = Array(Set(playlistIds.filter { (1...250).contains($0) })).sorted()
+        let normalizedPresetIds = Array(Set(presetIds.filter { (1...250).contains($0) })).sorted()
+        let normalizedIds = Array(Set(normalizedPlaylistIds + normalizedPresetIds)).sorted()
+        guard !normalizedIds.isEmpty else {
+            return DeleteAttemptOutcome(succeededIds: [], failedIds: [], lastError: nil, terminalAPIError: nil)
+        }
+
         do {
-            await enforceDeleteCadence(for: type, deviceId: device.id)
-            let success: Bool
-            switch type {
-            case .preset:
-                success = try await WLEDAPIService.shared.rewritePresetStoreDeletingRecords(
-                    playlistIds: [],
-                    presetIds: normalizedIds,
-                    device: device
-                )
-            case .playlist:
-                success = try await WLEDAPIService.shared.rewritePresetStoreDeletingRecords(
-                    playlistIds: normalizedIds,
-                    presetIds: [],
-                    device: device
-                )
-            case .timer:
-                success = false
-            }
+            await enforceDeleteCadence(for: .presetStore, deviceId: device.id)
+            let success = try await WLEDAPIService.shared.rewritePresetStoreDeletingRecords(
+                playlistIds: normalizedPlaylistIds,
+                presetIds: normalizedPresetIds,
+                device: device
+            )
 
             guard success else {
                 logger.error(
-                    "cleanup.delete.rewrite_failed device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(normalizedIds, privacy: .public) context=\(context, privacy: .public)"
+                    "cleanup.delete.rewrite_failed device=\(device.id, privacy: .public) playlists=\(normalizedPlaylistIds, privacy: .public) presets=\(normalizedPresetIds, privacy: .public) context=\(context, privacy: .public)"
                 )
                 return DeleteAttemptOutcome(
                     succeededIds: [],
@@ -442,7 +554,7 @@ final class DeviceCleanupManager: ObservableObject {
             }
 
             logger.info(
-                "cleanup.delete.rewrite_ok device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(normalizedIds, privacy: .public) context=\(context, privacy: .public)"
+                "cleanup.delete.rewrite_ok device=\(device.id, privacy: .public) playlists=\(normalizedPlaylistIds, privacy: .public) presets=\(normalizedPresetIds, privacy: .public) context=\(context, privacy: .public)"
             )
             return DeleteAttemptOutcome(
                 succeededIds: normalizedIds,
@@ -452,7 +564,7 @@ final class DeviceCleanupManager: ObservableObject {
             )
         } catch let apiError as WLEDAPIError {
             logger.error(
-                "cleanup.delete.rewrite_error device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(normalizedIds, privacy: .public) context=\(context, privacy: .public) error=\(apiError.localizedDescription, privacy: .public)"
+                "cleanup.delete.rewrite_error device=\(device.id, privacy: .public) playlists=\(normalizedPlaylistIds, privacy: .public) presets=\(normalizedPresetIds, privacy: .public) context=\(context, privacy: .public) error=\(apiError.localizedDescription, privacy: .public)"
             )
             return DeleteAttemptOutcome(
                 succeededIds: [],
@@ -462,7 +574,7 @@ final class DeviceCleanupManager: ObservableObject {
             )
         } catch {
             logger.error(
-                "cleanup.delete.rewrite_error device=\(device.id, privacy: .public) type=\(type.rawValue, privacy: .public) ids=\(normalizedIds, privacy: .public) context=\(context, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "cleanup.delete.rewrite_error device=\(device.id, privacy: .public) playlists=\(normalizedPlaylistIds, privacy: .public) presets=\(normalizedPresetIds, privacy: .public) context=\(context, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
             return DeleteAttemptOutcome(
                 succeededIds: [],
@@ -477,7 +589,7 @@ final class DeviceCleanupManager: ObservableObject {
         for outcome: DeleteAttemptOutcome,
         type: PendingDeviceDelete.DeleteType
     ) -> String? {
-        guard type == .preset || type == .playlist else { return nil }
+        guard type == .preset || type == .playlist || type == .presetStore else { return nil }
         guard let apiError = outcome.terminalAPIError else { return nil }
         switch apiError {
         case .presetStoreUnreadable(let reason):
@@ -491,7 +603,7 @@ final class DeviceCleanupManager: ObservableObject {
 
     private func cadenceKey(for type: PendingDeviceDelete.DeleteType, deviceId: String) -> String {
         switch type {
-        case .preset, .playlist:
+        case .preset, .playlist, .presetStore:
             // Preset + playlist share the same underlying presets-store write path.
             return "preset-store:\(deviceId)"
         case .timer:
@@ -501,7 +613,7 @@ final class DeviceCleanupManager: ObservableObject {
 
     private func cadenceIntervalSeconds(for type: PendingDeviceDelete.DeleteType) -> TimeInterval {
         switch type {
-        case .preset, .playlist:
+        case .preset, .playlist, .presetStore:
             return TimeInterval(interPresetStoreDeleteDelayNanoseconds) / 1_000_000_000.0
         case .timer:
             return TimeInterval(interTimerDeleteDelayNanoseconds) / 1_000_000_000.0
@@ -554,15 +666,29 @@ final class DeviceCleanupManager: ObservableObject {
         deviceId: String,
         includeDeadLetter: Bool = false
     ) -> Set<Int> {
-        Set(
-            pendingDeletes
-                .filter {
-                    $0.type == type
-                        && $0.deviceId == deviceId
-                        && (includeDeadLetter || $0.deadLetteredAt == nil)
-                }
-                .flatMap(\.ids)
-        )
+        var ids: Set<Int> = []
+        for item in pendingDeletes {
+            guard item.deviceId == deviceId else { continue }
+            guard includeDeadLetter || item.deadLetteredAt == nil else { continue }
+
+            switch (type, item.type) {
+            case (.preset, .preset):
+                ids.formUnion(item.ids)
+            case (.playlist, .playlist):
+                ids.formUnion(item.ids)
+            case (.presetStore, .presetStore):
+                ids.formUnion(item.ids)
+            case (.preset, .presetStore):
+                ids.formUnion(item.presetIds ?? [])
+            case (.playlist, .presetStore):
+                ids.formUnion(item.playlistIds ?? [])
+            case (.timer, .timer):
+                ids.formUnion(item.ids)
+            default:
+                continue
+            }
+        }
+        return ids
     }
 
     func hasActiveDelete(
@@ -593,13 +719,17 @@ final class DeviceCleanupManager: ObservableObject {
         pendingDeletes.contains { item in
             guard includeDeadLetter || item.deadLetteredAt == nil else { return false }
             guard deviceId == nil || item.deviceId == deviceId else { return false }
-            guard item.type == .preset || item.type == .playlist else { return false }
+            guard item.type == .preset || item.type == .playlist || item.type == .presetStore else { return false }
             return !item.ids.isEmpty
         }
     }
 
     func isDeleteLeaseActive(deviceId: String) -> Bool {
         activeDeleteLeaseByDeviceId.contains(deviceId)
+    }
+
+    var hasActiveDeleteLease: Bool {
+        !activeDeleteLeaseByDeviceId.isEmpty
     }
 
     func pendingDeleteDeviceIds(
@@ -628,11 +758,43 @@ final class DeviceCleanupManager: ObservableObject {
 
         var changed = false
         for index in pendingDeletes.indices.reversed() {
-            guard pendingDeletes[index].type == type,
-                  pendingDeletes[index].deviceId == deviceId,
+            guard pendingDeletes[index].deviceId == deviceId,
                   pendingDeletes[index].deadLetteredAt == nil else {
                 continue
             }
+
+            if pendingDeletes[index].type == .presetStore {
+                let originalPlaylistIds = pendingDeletes[index].playlistIds ?? []
+                let originalPresetIds = pendingDeletes[index].presetIds ?? []
+                var playlistIds = originalPlaylistIds
+                var presetIds = originalPresetIds
+                switch type {
+                case .playlist:
+                    playlistIds.removeAll { toRemove.contains($0) }
+                case .preset:
+                    presetIds.removeAll { toRemove.contains($0) }
+                case .presetStore:
+                    playlistIds.removeAll { toRemove.contains($0) }
+                    presetIds.removeAll { toRemove.contains($0) }
+                case .timer:
+                    continue
+                }
+
+                if playlistIds != originalPlaylistIds || presetIds != originalPresetIds {
+                    changed = true
+                    let remainingCombined = Array(Set(playlistIds + presetIds)).sorted()
+                    if remainingCombined.isEmpty {
+                        pendingDeletes.remove(at: index)
+                    } else {
+                        pendingDeletes[index].playlistIds = playlistIds.sorted()
+                        pendingDeletes[index].presetIds = presetIds.sorted()
+                        pendingDeletes[index].ids = remainingCombined
+                    }
+                }
+                continue
+            }
+
+            guard pendingDeletes[index].type == type else { continue }
             let remaining = pendingDeletes[index].ids.filter { !toRemove.contains($0) }
             if remaining.count != pendingDeletes[index].ids.count {
                 changed = true
@@ -672,7 +834,7 @@ final class DeviceCleanupManager: ObservableObject {
             guard entry.deviceId == deviceId else { continue }
             guard entry.deadLetteredAt == nil else { continue }
             if let source, entry.source != source { continue }
-            guard entry.type == .preset || entry.type == .playlist else { continue }
+            guard entry.type == .preset || entry.type == .playlist || entry.type == .presetStore else { continue }
 
             let scopedIds: Set<Int> = {
                 switch entry.type {
@@ -680,6 +842,8 @@ final class DeviceCleanupManager: ObservableObject {
                     return presetIds
                 case .playlist:
                     return playlistIds
+                case .presetStore:
+                    return Set(entry.ids).intersection(presetIds.union(playlistIds))
                 case .timer:
                     return []
                 }
@@ -694,6 +858,9 @@ final class DeviceCleanupManager: ObservableObject {
                 unmatchedPresetIds.subtract(matchedIds)
             } else if entry.type == .playlist {
                 unmatchedPlaylistIds.subtract(matchedIds)
+            } else if entry.type == .presetStore {
+                unmatchedPresetIds.subtract(Set(entry.presetIds ?? []).intersection(matchedIds))
+                unmatchedPlaylistIds.subtract(Set(entry.playlistIds ?? []).intersection(matchedIds))
             }
 
             changed = true
@@ -707,6 +874,11 @@ final class DeviceCleanupManager: ObservableObject {
                 pendingDeletes[index].lastError = reason
             } else {
                 pendingDeletes[index].ids = remaining
+                if entry.type == .presetStore {
+                    let remainingSet = Set(remaining)
+                    pendingDeletes[index].playlistIds = (entry.playlistIds ?? []).filter { remainingSet.contains($0) }
+                    pendingDeletes[index].presetIds = (entry.presetIds ?? []).filter { remainingSet.contains($0) }
+                }
                 pendingDeletes[index].lastAttempt = now
                 pendingDeletes[index].lastError = "Scoped IDs moved to dead-letter: \(reason)"
 
@@ -722,7 +894,13 @@ final class DeviceCleanupManager: ObservableObject {
                     leaseId: entry.leaseId,
                     verificationRequired: entry.verificationRequired,
                     deadLetteredAt: now,
-                    createdAt: entry.createdAt
+                    createdAt: entry.createdAt,
+                    playlistIds: entry.type == .presetStore
+                        ? (entry.playlistIds ?? []).filter { matchedIds.contains($0) }
+                        : nil,
+                    presetIds: entry.type == .presetStore
+                        ? (entry.presetIds ?? []).filter { matchedIds.contains($0) }
+                        : nil
                 )
                 spawnedDeadLetters.append(deadLetter)
             }
@@ -809,7 +987,16 @@ final class DeviceCleanupManager: ObservableObject {
     private func load() {
         guard let data = UserDefaults.standard.data(forKey: queueKey) else { return }
         if let deletes = try? JSONDecoder().decode([PendingDeviceDelete].self, from: data) {
-            self.pendingDeletes = deletes
+            let filtered = deletes.filter {
+                !($0.type == .timer && $0.source == .automation && $0.deadLetteredAt == nil)
+            }
+            self.pendingDeletes = filtered
+            if filtered.count != deletes.count {
+                save()
+                logger.warning(
+                    "Dropped \(deletes.count - filtered.count) legacy automation timer deletes because WLED timer slots require live ownership proof"
+                )
+            }
             logger.info("Loaded \(self.pendingDeletes.count) pending deletions from queue")
         }
     }
@@ -829,7 +1016,7 @@ final class DeviceCleanupManager: ObservableObject {
 
     private func maxAttempts(for type: PendingDeviceDelete.DeleteType) -> Int {
         switch type {
-        case .preset, .playlist:
+        case .preset, .playlist, .presetStore:
             return maxPresetStoreDeleteAttempts
         case .timer:
             return maxAttempts
@@ -838,7 +1025,7 @@ final class DeviceCleanupManager: ObservableObject {
 
     private func maxIdsPerAttempt(for type: PendingDeviceDelete.DeleteType) -> Int {
         switch type {
-        case .preset, .playlist:
+        case .preset, .playlist, .presetStore:
             return 250
         case .timer:
             return 1
@@ -849,10 +1036,12 @@ final class DeviceCleanupManager: ObservableObject {
         switch delete.type {
         case .timer:
             return 0
-        case .playlist:
+        case .presetStore:
             return 1
-        case .preset:
+        case .playlist:
             return 2
+        case .preset:
+            return 3
         }
     }
 

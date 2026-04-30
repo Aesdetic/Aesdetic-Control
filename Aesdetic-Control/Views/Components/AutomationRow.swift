@@ -5,6 +5,7 @@ struct AutomationRow: View {
     let scenes: [Scene]
     let isNext: Bool
     var isDeleting: Bool = false
+    var isDeleteDisabled: Bool = false
     var deletionProgress: AutomationDeletionProgress? = nil
     var isRunning: Bool = false
     var runningProgress: Double? = nil
@@ -263,7 +264,14 @@ struct AutomationRow: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Delete automation")
+                .disabled(isDeleteDisabled)
+                .opacity(isDeleteDisabled ? 0.35 : 1.0)
+                .accessibilityLabel(isDeleteDisabled ? "Delete unavailable" : "Delete automation")
+                .accessibilityHint(
+                    isDeleteDisabled
+                        ? "Another automation is currently deleting. Wait for it to finish before deleting this automation."
+                        : "Deletes this automation from the app and device."
+                )
             }
         }
     }

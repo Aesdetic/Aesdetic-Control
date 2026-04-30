@@ -23,10 +23,13 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
     var verificationRequired: Bool
     var deadLetteredAt: Date?
     let createdAt: Date
+    var playlistIds: [Int]?
+    var presetIds: [Int]?
     
     enum DeleteType: String, Codable {
         case preset
         case playlist
+        case presetStore
         case timer
     }
 
@@ -44,6 +47,8 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         case verificationRequired
         case deadLetteredAt
         case createdAt
+        case playlistIds
+        case presetIds
     }
     
     init(
@@ -59,7 +64,9 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         leaseId: UUID? = nil,
         verificationRequired: Bool = false,
         deadLetteredAt: Date? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        playlistIds: [Int]? = nil,
+        presetIds: [Int]? = nil
     ) {
         self.id = id
         self.type = type
@@ -74,6 +81,8 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         self.verificationRequired = verificationRequired
         self.deadLetteredAt = deadLetteredAt
         self.createdAt = createdAt
+        self.playlistIds = playlistIds
+        self.presetIds = presetIds
     }
 
     init(from decoder: Decoder) throws {
@@ -91,6 +100,8 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         self.verificationRequired = try container.decodeIfPresent(Bool.self, forKey: .verificationRequired) ?? false
         self.deadLetteredAt = try container.decodeIfPresent(Date.self, forKey: .deadLetteredAt)
         self.createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        self.playlistIds = try container.decodeIfPresent([Int].self, forKey: .playlistIds)
+        self.presetIds = try container.decodeIfPresent([Int].self, forKey: .presetIds)
     }
 }
 

@@ -267,14 +267,19 @@ struct DeviceDetailView: View {
                     templatePrefill: prefill,
                     allowSceneAction: allowSceneAction
                 ) { automation in
+                    let saved: Bool
                     if editingAutomation != nil {
                         automationStore.update(automation)
+                        saved = true
                     } else {
-                        automationStore.add(automation)
+                        saved = automationStore.add(automation)
                     }
-                    editingAutomation = nil
-                    automationEditorDefaultName = nil
-                    pendingAutomationTemplate = nil
+                    if saved {
+                        editingAutomation = nil
+                        automationEditorDefaultName = nil
+                        pendingAutomationTemplate = nil
+                    }
+                    return saved
                 }
             }
             .sheet(isPresented: $showEditDeviceInfo) {
@@ -905,11 +910,13 @@ struct DeviceDetailView: View {
                 VStack(spacing: 14) {
                     ForEach(deviceAutomations, id: \.id) { (automation: Automation) in
                         let runStatus = activeAutomationRunStatus(for: automation)
+                        let isDeleting = automationStore.isDeletionInProgress(for: automation.id)
                         AutomationRow(
                             automation: automation,
                             scenes: scenesStore.scenes,
                             isNext: nextAutomationID == automation.id,
-                            isDeleting: automationStore.isDeletionInProgress(for: automation.id),
+                            isDeleting: isDeleting,
+                            isDeleteDisabled: automationStore.hasAnyDeletionInProgress && !isDeleting,
                             deletionProgress: automationStore.deletionProgress(for: automation.id),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
@@ -1234,15 +1241,15 @@ struct DeviceDetailView: View {
 
     private var syncStatusLine: String {
         if syncTargetCount == 0 {
-            return "Select devices to start automatic sync."
+            return "Select devices for live sync."
         }
-        return "Syncing to \(syncTargetCount) device\(syncTargetCount == 1 ? "" : "s")"
+        return "Live-syncing to \(syncTargetCount) device\(syncTargetCount == 1 ? "" : "s")"
     }
     
     private var syncTabContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Sync Targets")
+                Text("Live Sync Targets")
                     .font(AppTypography.style(.callout, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
@@ -1250,6 +1257,11 @@ struct DeviceDetailView: View {
                     .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.7))
             }
+
+            Text("Mirrors live color, brightness, effect, and transition actions. Saved presets, playlists, automations, and WLED settings stay device-specific.")
+                .font(AppTypography.style(.caption2))
+                .foregroundColor(.white.opacity(0.58))
+                .fixedSize(horizontal: false, vertical: true)
 
             if syncTargetDevices.isEmpty {
                 Text("No other devices available. Add more devices to sync.")
@@ -1316,6 +1328,8 @@ struct DeviceDetailView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .opacity(syncTargetCount == 0 ? 0.45 : 1.0)
+                    .disabled(syncTargetCount == 0)
                 }
 
                 Spacer()
@@ -1427,7 +1441,9 @@ struct DeviceDetailView: View {
             suppressUDPNUpdates = true
             udpnSend = state.send
             udpnReceive = state.recv
-            suppressUDPNUpdates = false
+            DispatchQueue.main.async {
+                suppressUDPNUpdates = false
+            }
         }
     }
     
@@ -1531,73 +1547,6 @@ struct DeviceDetailView: View {
     
     // MARK: - Colors Tab Helper Views
     
-    
-    private var globalBrightnessSlider: some View {
-        VStack(spacing: 6) {
-            HStack {
-                Text("Global Brightness")
-                    .foregroundColor(.white)
-                Spacer()
-                Text("\(Int(round(Double(activeDevice.brightness)/255.0*100)))%")
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            Slider(value: Binding(
-                get: { Double(activeDevice.brightness) },
-                set: { newValue in
-                    // Update will be handled on release
-                }
-            ), in: 0...255, step: 1, onEditingChanged: { editing in
-                if !editing {
-                    Task {
-                        await viewModel.updateDeviceBrightness(activeDevice, brightness: Int(round(Double(activeDevice.brightness))))
-                    }
-                }
-            })
-            .sensorySelection(trigger: activeDevice.brightness)
-            .accessibilityLabel("Global brightness")
-            .accessibilityValue("\(Int(round(Double(activeDevice.brightness)/255.0*100))) percent")
-            .accessibilityHint("Adjusts the device brightness globally.")
-            .accessibilityAdjustableAction { direction in
-                let current = Double(activeDevice.brightness)
-                let step: Double = 12.75
-                var newValue = current
-                switch direction {
-                case .increment:
-                    newValue = min(255, current + step)
-                case .decrement:
-                    newValue = max(0, current - step)
-                @unknown default:
-                    break
-                }
-                let rounded = Int(round(newValue))
-                Task { await viewModel.updateDeviceBrightness(activeDevice, brightness: rounded) }
-            }
-        }
-        .padding(.horizontal, 16)
-    }
-    
-    private var aBrightnessSlider: some View {
-        VStack(spacing: 6) {
-            HStack {
-                Text("A Brightness")
-                    .foregroundColor(.white)
-                Spacer()
-                Text("\(Int(round(Double(activeDevice.brightness)/255.0*100)))%")
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            Slider(value: Binding(
-                get: { Double(activeDevice.brightness) },
-                set: { newValue in
-                    // This will be handled by the UnifiedColorPane
-                }
-            ), in: 0...255, step: 1)
-            .accessibilityLabel("A brightness")
-            .accessibilityValue("\(Int(round(Double(activeDevice.brightness)/255.0*100))) percent")
-            .accessibilityHint("Adjusts brightness for gradient A.")
-        }
-        .padding(.horizontal, 16)
-    }
-    
     private var gradientAEditor: some View {
         UnifiedColorPane(device: activeDevice, dismissColorPicker: $dismissColorPicker, segmentId: effectiveSegmentId)
             .environmentObject(viewModel)
@@ -1698,9 +1647,9 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
             .store(in: &cancellables)
     }
 
-    func add(_ automation: Automation) {
-        guard !isRunningInPreview else { return }
-        AutomationStore.shared.add(automation)
+    func add(_ automation: Automation) -> Bool {
+        guard !isRunningInPreview else { return false }
+        return AutomationStore.shared.add(automation)
     }
 
     func update(_ automation: Automation) {
@@ -1729,6 +1678,10 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
 
     func deletionProgress(for id: UUID) -> AutomationDeletionProgress? {
         deletionProgressByAutomationId[id]
+    }
+
+    var hasAnyDeletionInProgress: Bool {
+        AutomationStore.shared.hasAnyDeletionInProgress
     }
 }
 

@@ -41,9 +41,7 @@ protocol WLEDAPIServiceProtocol {
     func updateTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws
     func disableTimer(slot: Int, device: WLEDDevice) async throws -> Bool
     
-    // Deletion methods
-    func deletePreset(id: Int, device: WLEDDevice) async throws -> Bool
-    func deletePlaylist(id: Int, device: WLEDDevice) async throws -> Bool
+    // Preset-store deletion uses full-file rewrite. Do not use WLED pdel-style mutation.
     func rewritePresetStoreDeletingRecords(playlistIds: [Int], presetIds: [Int], device: WLEDDevice) async throws -> Bool
     func renamePresetRecord(id: Int, name: String, device: WLEDDevice) async throws
     func renamePlaylistRecord(id: Int, name: String, device: WLEDDevice) async throws
@@ -1761,27 +1759,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         try validateHTTPResponse(response, device: device)
     }
     
-    /// Delete a preset from a WLED device
-    /// - Parameters:
-    ///   - id: Preset ID to delete
-    ///   - device: The target WLED device
-    /// - Returns: true if successful, false otherwise
-    /// - Throws: WLEDAPIError if the request fails
-    func deletePreset(id: Int, device: WLEDDevice) async throws -> Bool {
-        guard (1...250).contains(id) else {
-            throw WLEDAPIError.invalidConfiguration
-        }
-        let queueKey = presetStoreQueueKey(for: device)
-        return try await enqueuePresetOperation(deviceId: queueKey, label: "preset.delete") {
-            return try await self.deletePresetStoreRecordManualMimic(
-                id: id,
-                device: device,
-                context: "preset.delete",
-                storeType: "preset"
-            )
-        }
-    }
-
     private func applyMacroBindings(_ update: WLEDMacroBindingsUpdate, to root: inout [String: Any]) {
         if update.buttonPressMacro != nil || update.buttonLongPressMacro != nil || update.buttonDoublePressMacro != nil {
             var hw = root["hw"] as? [String: Any] ?? [:]
@@ -1842,27 +1819,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         min(250, max(0, value))
     }
     
-    /// Delete a playlist from a WLED device
-    /// - Parameters:
-    ///   - id: Playlist ID to delete
-    ///   - device: The target WLED device
-    /// - Returns: true if successful, false otherwise
-    /// - Throws: WLEDAPIError if the request fails
-    func deletePlaylist(id: Int, device: WLEDDevice) async throws -> Bool {
-        guard (1...250).contains(id) else {
-            throw WLEDAPIError.invalidConfiguration
-        }
-        let queueKey = presetStoreQueueKey(for: device)
-        return try await enqueuePresetOperation(deviceId: queueKey, label: "playlist.delete") {
-            return try await self.deletePresetStoreRecordManualMimic(
-                id: id,
-                device: device,
-                context: "playlist.delete",
-                storeType: "playlist"
-            )
-        }
-    }
-
     func rewritePresetStoreDeletingRecords(
         playlistIds: [Int],
         presetIds: [Int],
@@ -1964,7 +1920,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
         do {
             persistLocalPresetStoreBackup(data: originalData, device: device)
-            try await uploadWLEDFile(named: "presets-aesdetic-backup.json", data: originalData, device: device)
             try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
             try? await Task.sleep(nanoseconds: 500_000_000)
 
@@ -1992,7 +1947,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             logger.info(
                 "preset_store.full_rewrite_create.success device=\(device.id, privacy: .public) upserted=\(Array(upsertIds).sorted(), privacy: .public) preserved=\(preservedIds.count, privacy: .public)"
             )
-            try? await deleteWLEDFile(named: "presets-aesdetic-backup.json", device: device)
             return true
         } catch {
             logger.warning(
@@ -2046,7 +2000,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
         do {
             persistLocalPresetStoreBackup(data: originalData, device: device)
-            try await uploadWLEDFile(named: "presets-aesdetic-backup.json", data: originalData, device: device)
             try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
             try? await Task.sleep(nanoseconds: 500_000_000)
 
@@ -2069,7 +2022,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             logger.info(
                 "preset_store.full_rewrite_delete.success device=\(device.id, privacy: .public) removed=\(Array(existingTargetIds).sorted(), privacy: .public) preserved=\(preservedIds.count, privacy: .public)"
             )
-            try? await deleteWLEDFile(named: "presets-aesdetic-backup.json", device: device)
             return true
         } catch {
             logger.warning(
@@ -2086,11 +2038,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let fileURL = directory.appendingPathComponent("\(safeBackupFileComponent(device.id))-presets.json")
             try data.write(to: fileURL, options: .atomic)
             logger.info(
-                "preset_store.full_rewrite_delete.local_backup_saved device=\(device.id, privacy: .public) bytes=\(data.count, privacy: .public)"
+                "preset_store.full_rewrite.local_backup_saved device=\(device.id, privacy: .public) bytes=\(data.count, privacy: .public)"
             )
         } catch {
             logger.warning(
-                "preset_store.full_rewrite_delete.local_backup_failed device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                "preset_store.full_rewrite.local_backup_failed device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -2116,28 +2068,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return name.isEmpty ? "unknown-device" : name
     }
 
-    private func deleteWLEDFile(named filename: String, device: WLEDDevice) async throws {
-        var components = URLComponents()
-        components.scheme = "http"
-        components.host = device.ipAddress
-        components.path = "/edit"
-        components.queryItems = [
-            URLQueryItem(name: "func", value: "delete"),
-            URLQueryItem(name: "path", value: filename)
-        ]
-        guard let url = components.url else {
-            throw WLEDAPIError.invalidURL
-        }
-
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        request.timeoutInterval = 8
-
-        let (_, response) = try await urlSession.data(for: request)
-        try validateHTTPResponse(response, device: device)
-        recordSuccessfulRequest(deviceId: device.id)
-    }
-
     func orderedPresetStoreDeleteTargets(
         playlistIds: [Int],
         presetIds: [Int]
@@ -2146,106 +2076,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let normalizedPresets = Array(Set(presetIds.filter { (1...250).contains($0) })).sorted()
         return normalizedPlaylists.map { PresetStoreDeleteTarget(type: .playlist, id: $0) }
             + normalizedPresets.map { PresetStoreDeleteTarget(type: .preset, id: $0) }
-    }
-
-    func makePresetStoreDeleteRequestLikeWLED(
-        id: Int,
-        device: WLEDDevice,
-        timestamp: Int = Int(Date().timeIntervalSince1970)
-    ) throws -> URLRequest {
-        guard let url = URL(string: "http://\(device.ipAddress)/json/si") else {
-            throw WLEDAPIError.invalidURL
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(
-            withJSONObject: [
-                "pdel": id,
-                "v": true,
-                "time": timestamp
-            ],
-            options: []
-        )
-        return request
-    }
-
-    private func deletePresetStoreRecordManualMimic(
-        id: Int,
-        device: WLEDDevice,
-        context: String,
-        storeType: String
-    ) async throws -> Bool {
-        activePresetStoreDeleteSessionDeviceIds.insert(device.id)
-        defer {
-            activePresetStoreDeleteSessionDeviceIds.remove(device.id)
-        }
-
-        do {
-            _ = try await self.performPresetStoreDeleteRequestLikeWLED(
-                id: id,
-                device: device,
-                targetType: storeType
-            )
-            self.logger.debug(
-                "\(context, privacy: .public).manual_pdel_accepted device=\(device.id, privacy: .public) id=\(id, privacy: .public) type=\(storeType, privacy: .public)"
-            )
-            return true
-        } catch {
-            if let apiError = error as? WLEDAPIError,
-               case .httpError(let statusCode) = apiError,
-               statusCode == 404 {
-                return false
-            }
-            if let hardStopError = presetStoreHardStopDeleteError(from: error) {
-                self.logger.error(
-                    "\(context, privacy: .public).manual_pdel_hard_stop device=\(device.id, privacy: .public) id=\(id, privacy: .public) type=\(storeType, privacy: .public) error=\(hardStopError.localizedDescription, privacy: .public)"
-                )
-                throw hardStopError
-            }
-            self.logger.warning(
-                "\(context, privacy: .public).manual_pdel_failed device=\(device.id, privacy: .public) id=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-            )
-            return false
-        }
-    }
-
-    private func presetStoreHardStopDeleteError(from error: Error) -> WLEDAPIError? {
-        guard let apiError = error as? WLEDAPIError else {
-            return nil
-        }
-        switch apiError {
-        case .presetStoreUnreadable:
-            return apiError
-        case .httpError(let statusCode) where statusCode == 501:
-            return .presetStoreUnreadable("WLED reported HTTP 501 while mutating presets.json")
-        default:
-            return nil
-        }
-    }
-
-    private func performPresetStoreDeleteRequestLikeWLED(
-        id: Int,
-        device: WLEDDevice,
-        targetType: String
-    ) async throws -> Data {
-        let request = try makePresetStoreDeleteRequestLikeWLED(
-            id: id,
-            device: device
-        )
-        let (data, response) = try await urlSession.data(for: request)
-        try validateHTTPResponse(response, device: device)
-        recordSuccessfulRequest(deviceId: device.id)
-        #if DEBUG
-        if let httpResponse = response as? HTTPURLResponse {
-            let snippet = debugPayloadSnippet(data, limit: 200)
-            print("✅ WLED-style pdel for \(device.name): status=\(httpResponse.statusCode) type=\(targetType) id=\(id) body=\(snippet)")
-        }
-        #endif
-        // Match native WLED UI semantics for delete: HTTP success means command accepted.
-        // WLED may include transient state-level error flags in the response body even when
-        // pdel succeeded, so don't hard-fail on response payload parsing here.
-        return data
     }
 
     private enum PresetPayloadParserMode {

@@ -213,6 +213,37 @@ class WLEDConnectionMonitor: ObservableObject {
         
         logger.info("Reset reconnection state for device: \(deviceId)")
     }
+
+    func markDeviceUnreachable(_ device: WLEDDevice, reason: String) {
+        recordConnectionAttempt(deviceId: device.id, success: false, error: nil)
+        consecutiveFailures[device.id] = max(3, consecutiveFailures[device.id, default: 0] + 1)
+
+        guard !WLEDWebSocketManager.shared.isDeviceConnected(device.id) else {
+            reconnectionStatus[device.id] = "\(reason); realtime connection is still active"
+            logger.warning(
+                "Device reported unreachable by caller but realtime is connected: \(device.name, privacy: .public) (\(device.id, privacy: .public)) reason=\(reason, privacy: .public)"
+            )
+            return
+        }
+
+        let wasOnline = deviceHealthStatus[device.id] != false
+        deviceHealthStatus[device.id] = false
+        reconnectionStatus[device.id] = "\(reason); retrying connection"
+        postConnectRecoveryTasks[device.id]?.cancel()
+        postConnectRecoveryTasks.removeValue(forKey: device.id)
+        hasCompletedPostConnectRecovery.remove(device.id)
+
+        if wasOnline {
+            logger.info(
+                "Device marked unreachable: \(device.name, privacy: .public) (\(device.id, privacy: .public)) reason=\(reason, privacy: .public)"
+            )
+        }
+
+        Task {
+            await updateDeviceInCoreData(device, isOnline: false, response: nil)
+            await initiateReconnection(device)
+        }
+    }
     
     /// Perform immediate health checks for all registered devices
     func performImmediateHealthChecks() async {

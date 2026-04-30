@@ -38,7 +38,7 @@ struct AddAutomationDialog: View {
     let defaultName: String?
     let editingAutomation: Automation?
     let allowSceneAction: Bool
-    var onSave: (Automation) -> Void
+    var onSave: (Automation) -> Bool
     
     @State private var automationName: String
     @State private var selectedDeviceIds: Set<String>
@@ -117,7 +117,7 @@ struct AddAutomationDialog: View {
         editingAutomation: Automation? = nil,
         templatePrefill: AutomationTemplate.Prefill? = nil,
         allowSceneAction: Bool = true,
-        onSave: @escaping (Automation) -> Void
+        onSave: @escaping (Automation) -> Bool
     ) {
         self.device = device
         self.scenes = scenes
@@ -634,7 +634,7 @@ struct AddAutomationDialog: View {
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if automationStore.hasAnyOnDeviceSyncInProgress && !isEditing {
+            if automationStore.hasOnDeviceSyncInProgress(for: selectedDeviceIds) && !isEditing {
                 Text("Please wait for the current automation to finish getting ready before creating another on-device automation.")
                     .font(AppTypography.style(.footnote))
                     .foregroundColor(.orange)
@@ -1503,7 +1503,7 @@ struct AddAutomationDialog: View {
         if automationStore.hasAnyDeletionInProgress && !isEditing {
             return false
         }
-        if automationStore.hasAnyOnDeviceSyncInProgress && !isEditing {
+        if automationStore.hasOnDeviceSyncInProgress(for: selectedDeviceIds) && !isEditing {
             return false
         }
         guard !automationName.trimmed().isEmpty else { return false }
@@ -2048,7 +2048,11 @@ struct AddAutomationDialog: View {
                 return
             }
 
-            onSave(automation)
+            guard onSave(automation) else {
+                onDeviceScheduleValidationMessage = "Automation could not be saved because the selected device is busy. Please try again."
+                onDeviceScheduleValidationIsWarning = false
+                return
+            }
             dismiss()
         }
     }

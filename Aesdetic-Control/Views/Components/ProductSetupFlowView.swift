@@ -1590,7 +1590,11 @@ struct ProductSetupFlowView: View {
         if store.automations.contains(where: { $0.id == draft.id }) {
             store.update(draft)
         } else {
-            store.add(draft)
+            guard store.add(draft) else {
+                throw SetupError.invalidOnDeviceSchedule(
+                    "Automation could not be saved because the device is busy syncing. Please wait a moment and try again."
+                )
+            }
         }
     }
 

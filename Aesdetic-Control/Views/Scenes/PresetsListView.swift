@@ -988,10 +988,12 @@ struct PresetsListView: View {
 
     private func requestTransitionPresetDeletion(_ preset: TransitionPreset, on device: WLEDDevice) async -> Bool {
         guard let playlistId = preset.wledPlaylistId else { return true }
-        enqueuePresetStoreDelete(type: .playlist, deviceId: device.id, ids: [playlistId], target: device)
-        if let stepIds = preset.wledStepPresetIds, !stepIds.isEmpty {
-            enqueuePresetStoreDelete(type: .preset, deviceId: device.id, ids: stepIds, target: device)
-        }
+        enqueueCombinedPresetStoreDelete(
+            deviceId: device.id,
+            playlistIds: [playlistId],
+            presetIds: preset.wledStepPresetIds ?? [],
+            target: device
+        )
         return true
     }
 
@@ -1008,6 +1010,24 @@ struct PresetsListView: View {
         target: WLEDDevice?
     ) {
         DeviceCleanupManager.shared.enqueue(type: type, deviceId: deviceId, ids: ids)
+        guard let target, target.isOnline else { return }
+        Task {
+            await DeviceCleanupManager.shared.processQueue(for: target.id)
+        }
+    }
+
+    private func enqueueCombinedPresetStoreDelete(
+        deviceId: String,
+        playlistIds: [Int],
+        presetIds: [Int],
+        target: WLEDDevice?
+    ) {
+        DeviceCleanupManager.shared.enqueuePresetStoreDelete(
+            deviceId: deviceId,
+            playlistIds: playlistIds,
+            presetIds: presetIds,
+            verificationRequired: true
+        )
         guard let target, target.isOnline else { return }
         Task {
             await DeviceCleanupManager.shared.processQueue(for: target.id)

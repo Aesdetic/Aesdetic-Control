@@ -16,6 +16,7 @@ struct AutomationView: View {
     @State private var showingCreateAutomation = false
     @State private var builderDevice: WLEDDevice? = nil
     @State private var pendingTemplate: AutomationTemplate? = nil
+    @State private var automationPendingDelete: Automation? = nil
     
     // Animation constants (matching design system)
     private let standardAnimation: Animation = .easeInOut(duration: 0.25)
@@ -55,7 +56,25 @@ struct AutomationView: View {
                 builderDevice: $builderDevice,
                 pendingTemplate: $pendingTemplate,
                 isPresented: $showingCreateAutomation
-                )
+            )
+        }
+        .alert(
+            "Delete automation?",
+            isPresented: Binding(
+                get: { automationPendingDelete != nil },
+                set: { if !$0 { automationPendingDelete = nil } }
+            ),
+            presenting: automationPendingDelete
+        ) { automation in
+            Button("Delete", role: .destructive) {
+                automationStore.delete(id: automation.id)
+                automationPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                automationPendingDelete = nil
+            }
+        } message: { automation in
+            Text(deleteConfirmationMessage(for: automation))
         }
         .background(Color.clear)
     }
@@ -74,8 +93,8 @@ struct AutomationView: View {
             }
             Spacer()
             AppGlassIconButton(systemName: "plus", action: { beginCreateAutomation() })
-                .disabled(automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress)
-                .opacity((automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress) ? 0.45 : 1.0)
+                .disabled(automationStore.hasAnyDeletionInProgress)
+                .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
         }
     }
 
@@ -102,6 +121,8 @@ struct AutomationView: View {
                     QuickPresetCard(template: template) { tappedTemplate in
                         beginCreateAutomation(with: tappedTemplate)
                     }
+                    .disabled(automationStore.hasAnyDeletionInProgress)
+                    .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
                 }
             }
         }
@@ -126,8 +147,8 @@ struct AutomationView: View {
                     size: .compact,
                     action: { beginCreateAutomation() }
                 )
-                .disabled(automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress)
-                .opacity((automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress) ? 0.45 : 1.0)
+                .disabled(automationStore.hasAnyDeletionInProgress)
+                .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
             }
             
             if viewModel.automations.isEmpty {
@@ -136,35 +157,37 @@ struct AutomationView: View {
                 VStack(spacing: 14) {
                     ForEach(viewModel.automations, id: \.id) { (automation: Automation) in
                         let runStatus = activeAutomationRunStatus(for: automation)
+                        let isDeleting = automationStore.isDeletionInProgress(for: automation.id)
                         AutomationRow(
                             automation: automation,
                             scenes: scenesStore.scenes,
                             isNext: nextAutomationID == automation.id,
-                            isDeleting: AutomationStore.shared.isDeletionInProgress(for: automation.id),
-                            deletionProgress: AutomationStore.shared.deletionProgress(for: automation.id),
+                            isDeleting: isDeleting,
+                            isDeleteDisabled: automationStore.hasAnyDeletionInProgress && !isDeleting,
+                            deletionProgress: automationStore.deletionProgress(for: automation.id),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
                             subtitle: targetName(for: automation),
                             onToggle: { enabled in
                                 var updated = automation
                                 updated.enabled = enabled
-                                AutomationStore.shared.update(updated)
+                                automationStore.update(updated)
                             },
                             onRun: {
-                                AutomationStore.shared.applyAutomation(automation)
+                                automationStore.applyAutomation(automation)
                             },
                             onShortcutToggle: { pinned in
                                 var updated = automation
                                 var metadata = updated.metadata
                                 metadata.pinnedToShortcuts = pinned
                                 updated.metadata = metadata
-                                AutomationStore.shared.update(updated)
+                                automationStore.update(updated)
                             },
                             onRetrySync: {
-                                AutomationStore.shared.retryOnDeviceSync(for: automation.id)
+                                automationStore.retryOnDeviceSync(for: automation.id)
                             },
                             onDelete: {
-                                AutomationStore.shared.delete(id: automation.id)
+                                automationPendingDelete = automation
                             }
                         )
                     }
@@ -189,11 +212,11 @@ struct AutomationView_Previews: PreviewProvider {
 
 private extension AutomationView {
     var nextAutomationID: UUID? {
-        AutomationStore.shared.upcomingAutomationInfo?.automation.id
+        automationStore.upcomingAutomationInfo?.automation.id
     }
 
     var nextAutomationValue: String {
-        if let nextDate = AutomationStore.shared.upcomingAutomationInfo?.date {
+        if let nextDate = automationStore.upcomingAutomationInfo?.date {
             return nextDate.formatted(date: .omitted, time: .shortened)
         }
         if viewModel.automations.contains(where: { automation in
@@ -211,7 +234,6 @@ private extension AutomationView {
 
     func beginCreateAutomation(with template: AutomationTemplate? = nil) {
         guard !automationStore.hasAnyDeletionInProgress else { return }
-        guard !automationStore.hasAnyOnDeviceSyncInProgress else { return }
         pendingTemplate = template
         if deviceViewModel.devices.count == 1 {
             builderDevice = deviceViewModel.devices.first
@@ -229,6 +251,14 @@ private extension AutomationView {
             return device.name
         }
         return "\(ids.count) devices"
+    }
+
+    func deleteConfirmationMessage(for automation: Automation) -> String {
+        let ids = automation.targets.deviceIds
+        if ids.count <= 1 {
+            return "Delete \"\(automation.name)\" from this device?"
+        }
+        return "Delete \"\(automation.name)\" from \(ids.count) devices?"
     }
 
     func activeAutomationRunStatus(for automation: Automation) -> ActiveRunStatus? {

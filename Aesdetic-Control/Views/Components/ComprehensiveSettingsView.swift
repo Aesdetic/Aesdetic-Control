@@ -50,6 +50,7 @@ struct ComprehensiveSettingsView: View {
     @State private var isSyncingDeviceTime: Bool = false
     @State private var deviceTimeSyncMessage: String?
     @State private var deviceTimeSyncMessageIsError: Bool = false
+    @State private var suppressUDPNUpdates: Bool = false
     @State private var activeSegmentCountDraft: Int = 1
     @State private var isApplyingSegmentCount: Bool = false
     @State private var segmentSettingsMessage: String?
@@ -83,16 +84,16 @@ struct ComprehensiveSettingsView: View {
     @AppStorage("showSegmentControlsInColorTabAdvanced") private var showSegmentControlsInColorTabAdvanced: Bool = true
     
     enum SettingsCategory: String, CaseIterable {
-        case info = "Info"
-        case wifi = "WiFi Setup"
-        case leds = "LED Preferences"
+        case info = "Overview"
+        case wifi = "WiFi"
+        case leds = "Light Setup"
         case segments = "Segments"
-        case config2d = "2D Configuration"
-        case ui = "User Interface"
-        case sync = "Sync Interfaces"
-        case time = "Time & Macros"
-        case usermods = "Usermods"
-        case security = "Security & Updates"
+        case config2d = "2D Layout"
+        case ui = "Controls"
+        case sync = "Network & Sync"
+        case time = "Automations"
+        case usermods = "Extensions"
+        case security = "Advanced"
         
         var icon: String {
             switch self {
@@ -478,6 +479,33 @@ struct ComprehensiveSettingsView: View {
                 }
             }
 
+            SettingsCard(title: "WiFi Status") {
+                VStack(spacing: 12) {
+                    if let wifiInfo = currentWiFiInfo {
+                        InfoRow(label: "Network", value: wifiInfo.ssid)
+                        InfoRow(label: "Signal", value: wifiSignalSummary(wifiInfo.signalStrength))
+                        InfoRow(label: "Channel", value: wifiInfo.channel > 0 ? "\(wifiInfo.channel)" : "Unknown")
+                        InfoRow(label: "Device IP", value: wifiInfo.ipAddress ?? activeDevice.ipAddress)
+                    } else {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Loading WiFi status...")
+                                .font(AppTypography.style(.subheadline))
+                                .foregroundColor(.white.opacity(0.7))
+                            Spacer()
+                        }
+                    }
+
+                    Button(action: {
+                        selectedSettingsCategory = .wifi
+                        Task { await loadCurrentWiFiInfo() }
+                    }) {
+                        SettingsButton(title: "Manage WiFi", icon: "wifi")
+                    }
+                }
+            }
+
             SettingsCard(title: "Firmware Update") {
                 VStack(spacing: 12) {
                     if let ver = info?.ver {
@@ -518,6 +546,23 @@ struct ComprehensiveSettingsView: View {
                     }
                 }
             }
+
+            SettingsCard(title: "WLED Firmware Coverage") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Customer-critical settings stay near the top. Risky or rarely used firmware settings remain available under Advanced or the WLED web fallback.")
+                        .font(AppTypography.style(.caption))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    ForEach(WLEDFirmwareSettingsArea.overviewAreas) { area in
+                        FirmwareCoverageRow(area: area)
+                    }
+
+                    Button(action: { showWebConfig = true }) {
+                        SettingsButton(title: "Open Complete WLED Settings", icon: "slider.horizontal.3")
+                    }
+                }
+            }
             
             SettingsCard(title: "Power Control") {
                 VStack(spacing: 12) {
@@ -547,6 +592,26 @@ struct ComprehensiveSettingsView: View {
                 }
             }
         }
+    }
+
+    private func wifiSignalSummary(_ rssi: Int) -> String {
+        if rssi <= -100 {
+            return "Unknown"
+        }
+
+        let quality: String
+        switch rssi {
+        case -49...0:
+            quality = "Excellent"
+        case -59..<(-49):
+            quality = "Good"
+        case -69..<(-59):
+            quality = "Fair"
+        default:
+            quality = "Weak"
+        }
+
+        return "\(quality) (\(rssi) dBm)"
     }
     
     private var wifiSection: some View {
@@ -1068,7 +1133,12 @@ struct ComprehensiveSettingsView: View {
         VStack(spacing: 12) {
             SettingsCard(title: "Sync Interfaces") {
                 VStack(spacing: 12) {
-                    UDPTogglesRow(udpSend: $udpSend, udpRecv: $udpRecv, device: device)
+                    UDPTogglesRow(
+                        udpSend: $udpSend,
+                        udpRecv: $udpRecv,
+                        suppressUpdates: $suppressUDPNUpdates,
+                        device: activeDevice
+                    )
                         .environmentObject(viewModel)
                 }
             }
@@ -1086,6 +1156,9 @@ struct ComprehensiveSettingsView: View {
                     }
                 }
             }
+        }
+        .task {
+            await loadUDPSyncState()
         }
     }
     
@@ -1377,6 +1450,18 @@ struct ComprehensiveSettingsView: View {
                     deviceTimeSyncMessageIsError = true
                     deviceTimeSyncMessage = "Sync failed: \(error.localizedDescription)"
                 }
+            }
+        }
+    }
+
+    private func loadUDPSyncState() async {
+        guard let state = await viewModel.fetchUDPSyncState(for: activeDevice) else { return }
+        await MainActor.run {
+            suppressUDPNUpdates = true
+            udpSend = state.send
+            udpRecv = state.recv
+            DispatchQueue.main.async {
+                suppressUDPNUpdates = false
             }
         }
     }
@@ -1909,6 +1994,120 @@ struct InfoRow: View {
     }
 }
 
+private enum FirmwareSettingsExposure: String {
+    case native = "Native"
+    case guided = "Guided"
+    case advanced = "Advanced"
+    case webFallback = "Web"
+
+    var color: Color {
+        switch self {
+        case .native:
+            return .green
+        case .guided:
+            return .cyan
+        case .advanced:
+            return .orange
+        case .webFallback:
+            return .white
+        }
+    }
+}
+
+private struct WLEDFirmwareSettingsArea: Identifiable {
+    let id: String
+    let title: String
+    let location: String
+    let exposure: FirmwareSettingsExposure
+
+    static let overviewAreas: [WLEDFirmwareSettingsArea] = [
+        WLEDFirmwareSettingsArea(
+            id: "overview-wifi-firmware",
+            title: "WiFi, IP, firmware, updates",
+            location: "Overview + WiFi",
+            exposure: .native
+        ),
+        WLEDFirmwareSettingsArea(
+            id: "led-hardware",
+            title: "LED type, GPIO, count, current",
+            location: "Light Setup",
+            exposure: .guided
+        ),
+        WLEDFirmwareSettingsArea(
+            id: "daily-control",
+            title: "Power, brightness, CCT/white, night light",
+            location: "Overview + Controls",
+            exposure: .native
+        ),
+        WLEDFirmwareSettingsArea(
+            id: "segments-effects",
+            title: "Segments, effects, palettes, presets",
+            location: "Segments + Scenes",
+            exposure: .native
+        ),
+        WLEDFirmwareSettingsArea(
+            id: "timers-playlists",
+            title: "WLED timers, playlists, boot presets",
+            location: "Automations",
+            exposure: .advanced
+        ),
+        WLEDFirmwareSettingsArea(
+            id: "sync-realtime",
+            title: "UDP sync, realtime, nodes, peers",
+            location: "Network & Sync",
+            exposure: .advanced
+        ),
+        WLEDFirmwareSettingsArea(
+            id: "integrations",
+            title: "MQTT, DDP, DMX/E1.31, Hue, Alexa, IR",
+            location: "Extensions",
+            exposure: .webFallback
+        ),
+        WLEDFirmwareSettingsArea(
+            id: "maintenance",
+            title: "Security, filesystem, reset, raw config",
+            location: "Advanced",
+            exposure: .webFallback
+        )
+    ]
+}
+
+private struct FirmwareCoverageRow: View {
+    let area: WLEDFirmwareSettingsArea
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(area.exposure.color.opacity(0.75))
+                .frame(width: 8, height: 8)
+                .padding(.top, 6)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(area.title)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(area.location)
+                    .font(AppTypography.style(.caption2))
+                    .foregroundColor(.white.opacity(0.62))
+            }
+
+            Spacer(minLength: 8)
+
+            Text(area.exposure.rawValue)
+                .font(AppTypography.style(.caption2, weight: .semibold))
+                .foregroundColor(area.exposure == .webFallback ? .white.opacity(0.82) : .black)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(area.exposure == .webFallback ? Color.white.opacity(0.12) : area.exposure.color)
+                )
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 struct SettingsButton: View {
     let title: String
     let icon: String
@@ -1968,6 +2167,7 @@ fileprivate struct UDPTogglesRow: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @Binding var udpSend: Bool
     @Binding var udpRecv: Bool
+    @Binding var suppressUpdates: Bool
     let device: WLEDDevice
 
     var body: some View {
@@ -1976,6 +2176,7 @@ fileprivate struct UDPTogglesRow: View {
                 .tint(.white)
                 .foregroundColor(.white)
                 .onChange(of: udpSend) { _, v in
+                    guard !suppressUpdates else { return }
                     Task { await viewModel.setUDPSync(device, send: v, recv: nil) }
                 }
             Spacer()
@@ -1983,6 +2184,7 @@ fileprivate struct UDPTogglesRow: View {
                 .tint(.white)
                 .foregroundColor(.white)
                 .onChange(of: udpRecv) { _, v in
+                    guard !suppressUpdates else { return }
                     Task { await viewModel.setUDPSync(device, send: nil, recv: v) }
                 }
         }
