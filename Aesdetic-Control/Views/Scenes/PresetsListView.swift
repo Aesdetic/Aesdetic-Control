@@ -11,6 +11,9 @@ struct PresetsListView: View {
     @State private var playlistEditorOriginalId: Int?
     @State private var playlistEditorDraft = PlaylistEditorDraft.defaultDraft
     @State private var expandedAutomationFolders: Set<UUID> = []
+    @State private var deletingColorPresetIds: Set<UUID> = []
+    @State private var deletingTransitionPresetIds: Set<UUID> = []
+    @State private var deletingEffectPresetIds: Set<UUID> = []
     
     var body: some View {
         ScrollView {
@@ -166,7 +169,7 @@ struct PresetsListView: View {
             } else {
                 VStack(spacing: 8) {
                     ForEach(colorPresets) { preset in
-                        ColorPresetRow(preset: preset, onApply: {
+                        ColorPresetRow(preset: preset, isDeleting: deletingColorPresetIds.contains(preset.id), onApply: {
                         Task {
                             await viewModel.cancelActiveTransitionIfNeeded(for: device)
                             // Try WLED preset ID first (if synced), otherwise apply directly
@@ -205,7 +208,10 @@ struct PresetsListView: View {
                     }, onEdit: {
                         onRequestRename(.color(preset))
                     }, onDelete: {
+                        guard !deletingColorPresetIds.contains(preset.id) else { return }
+                        deletingColorPresetIds.insert(preset.id)
                         Task {
+                            defer { deletingColorPresetIds.remove(preset.id) }
                             let deleted = await requestColorPresetDeletion(preset, on: device)
                             if deleted {
                                 store.removeColorPreset(preset.id)
@@ -252,6 +258,7 @@ struct PresetsListView: View {
                             TransitionPresetRow(
                                 preset: preset,
                                 isQueued: queuedPresetId == preset.id,
+                                isDeleting: deletingTransitionPresetIds.contains(preset.id),
                                 onApply: {
                                 Task {
                                     _ = await viewModel.applyTransitionPreset(preset, to: device)
@@ -259,7 +266,10 @@ struct PresetsListView: View {
                             }, onEdit: {
                                 onRequestRename(.transition(preset))
                             }, onDelete: {
+                                guard !deletingTransitionPresetIds.contains(preset.id) else { return }
+                                deletingTransitionPresetIds.insert(preset.id)
                                 Task {
+                                    defer { deletingTransitionPresetIds.remove(preset.id) }
                                     let deleted = await requestTransitionPresetDeletion(preset, on: device)
                                     if deleted {
                                         store.removeTransitionPreset(preset.id)
@@ -293,7 +303,7 @@ struct PresetsListView: View {
                 } else {
                     VStack(spacing: 8) {
                         ForEach(effectPresets) { preset in
-                            EffectPresetRow(preset: preset, onApply: {
+                            EffectPresetRow(preset: preset, isDeleting: deletingEffectPresetIds.contains(preset.id), onApply: {
                             Task {
                                 await viewModel.cancelActiveTransitionIfNeeded(for: device)
                                 if let stops = preset.gradientStops, !stops.isEmpty {
@@ -336,7 +346,10 @@ struct PresetsListView: View {
                         }, onEdit: {
                             onRequestRename(.effect(preset))
                         }, onDelete: {
+                            guard !deletingEffectPresetIds.contains(preset.id) else { return }
+                            deletingEffectPresetIds.insert(preset.id)
                             Task {
+                                defer { deletingEffectPresetIds.remove(preset.id) }
                                 let deleted = await requestEffectPresetDeletion(preset, on: device)
                                 if deleted {
                                     store.removeEffectPreset(preset.id)
@@ -392,6 +405,7 @@ struct PresetsListView: View {
                                     DevicePlaylistRecordRow(
                                         playlist: playlist,
                                         preview: preview,
+                                        isDeleting: viewModel.isDeletingPlaylistRecord(playlist.id, for: device),
                                         onRun: {
                                             Task {
                                                 _ = await viewModel.startPlaylist(
@@ -431,6 +445,7 @@ struct PresetsListView: View {
                                         preset: preset,
                                         previewGradient: preview.gradient,
                                         previewBrightness: preview.brightness,
+                                        isDeleting: viewModel.isDeletingPresetRecord(preset.id, for: device),
                                         onApply: {
                                             Task {
                                                 _ = await viewModel.applyPresetId(
@@ -710,8 +725,16 @@ struct PresetsListView: View {
                                     .fill(Color.white.opacity(0.18))
                             )
 
-                            Button("Delete") {
+                            Button {
                                 Task { await viewModel.deletePlaylist(playlist, for: device) }
+                            } label: {
+                                if viewModel.isDeletingPlaylistRecord(playlist.id, for: device) {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .controlSize(.mini)
+                                } else {
+                                    Text("Delete")
+                                }
                             }
                             .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.white)
@@ -721,6 +744,7 @@ struct PresetsListView: View {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(Color.red.opacity(0.55))
                             )
+                            .disabled(viewModel.isDeletingPlaylistRecord(playlist.id, for: device))
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
@@ -946,56 +970,83 @@ struct PresetsListView: View {
     }
 
     private func requestColorPresetDeletion(_ preset: ColorPreset, on device: WLEDDevice) async -> Bool {
-        var allResolved = true
         if let idsByDevice = preset.wledPresetIds, !idsByDevice.isEmpty {
             for (deviceId, presetId) in idsByDevice {
                 if let target = viewModel.devices.first(where: { $0.id == deviceId }) {
-                    await DeviceCleanupManager.shared.requestDelete(type: .preset, device: target, ids: [presetId])
+                    enqueuePresetStoreDelete(type: .preset, deviceId: deviceId, ids: [presetId], target: target)
                 } else {
                     DeviceCleanupManager.shared.enqueue(type: .preset, deviceId: deviceId, ids: [presetId])
                 }
-                if DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: deviceId, id: presetId) {
-                    allResolved = false
-                }
             }
-            return allResolved
+            return true
         }
         if let legacyId = preset.wledPresetId {
-            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [legacyId])
-            if DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: device.id, id: legacyId) {
-                allResolved = false
-            }
+            enqueuePresetStoreDelete(type: .preset, deviceId: device.id, ids: [legacyId], target: device)
         }
-        return allResolved
+        return true
     }
 
     private func requestTransitionPresetDeletion(_ preset: TransitionPreset, on device: WLEDDevice) async -> Bool {
         guard let playlistId = preset.wledPlaylistId else { return true }
-        var allResolved = true
-        await DeviceCleanupManager.shared.requestDelete(type: .playlist, device: device, ids: [playlistId])
-        if DeviceCleanupManager.shared.hasActiveDelete(type: .playlist, deviceId: device.id, id: playlistId) {
-            allResolved = false
-        }
+        enqueuePresetStoreDelete(type: .playlist, deviceId: device.id, ids: [playlistId], target: device)
         if let stepIds = preset.wledStepPresetIds, !stepIds.isEmpty {
-            await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: stepIds)
-            for stepId in stepIds where DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: device.id, id: stepId) {
-                allResolved = false
-            }
+            enqueuePresetStoreDelete(type: .preset, deviceId: device.id, ids: stepIds, target: device)
         }
-        return allResolved
+        return true
     }
 
     private func requestEffectPresetDeletion(_ preset: WLEDEffectPreset, on device: WLEDDevice) async -> Bool {
         guard let presetId = preset.wledPresetId else { return true }
-        await DeviceCleanupManager.shared.requestDelete(type: .preset, device: device, ids: [presetId])
-        return !DeviceCleanupManager.shared.hasActiveDelete(type: .preset, deviceId: device.id, id: presetId)
+        enqueuePresetStoreDelete(type: .preset, deviceId: device.id, ids: [presetId], target: device)
+        return true
+    }
+
+    private func enqueuePresetStoreDelete(
+        type: PendingDeviceDelete.DeleteType,
+        deviceId: String,
+        ids: [Int],
+        target: WLEDDevice?
+    ) {
+        DeviceCleanupManager.shared.enqueue(type: type, deviceId: deviceId, ids: ids)
+        guard let target, target.isOnline else { return }
+        Task {
+            await DeviceCleanupManager.shared.processQueue(for: target.id)
+        }
     }
 }
 
 // MARK: - Preset Row Views
 
+private struct PresetDeleteButton: View {
+    let isDeleting: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if isDeleting {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.8)))
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "trash")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+            }
+            .frame(width: 28, height: 28)
+            .background(Color.white.opacity(0.1))
+            .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDeleting)
+        .accessibilityLabel(isDeleting ? "Deleting" : "Delete")
+    }
+}
+
 struct ColorPresetRow: View {
     let preset: ColorPreset
+    let isDeleting: Bool
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1010,17 +1061,9 @@ struct ColorPresetRow: View {
                 
                 Spacer()
                 
-                Button(action: {
+                PresetDeleteButton(isDeleting: isDeleting) {
                     onDelete()
-                }) {
-                    Image(systemName: "trash")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
                 }
-                .buttonStyle(.plain)
                 
                 Button(action: {
                     onEdit()
@@ -1122,6 +1165,7 @@ struct ColorPresetRow: View {
 struct TransitionPresetRow: View {
     let preset: TransitionPreset
     let isQueued: Bool
+    let isDeleting: Bool
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1153,17 +1197,9 @@ struct TransitionPresetRow: View {
                 
                 Spacer()
                 
-                Button(action: {
+                PresetDeleteButton(isDeleting: isDeleting) {
                     onDelete()
-                }) {
-                    Image(systemName: "trash")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
                 }
-                .buttonStyle(.plain)
                 
                 Button(action: {
                     onEdit()
@@ -1293,6 +1329,7 @@ struct DevicePresetRecordRow: View {
     let preset: WLEDPreset
     let previewGradient: LEDGradient
     let previewBrightness: Int
+    let isDeleting: Bool
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1311,15 +1348,7 @@ struct DevicePresetRecordRow: View {
 
                 Spacer()
 
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
 
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
@@ -1417,6 +1446,7 @@ struct DeviceEffectRecordRow: View {
     let previewGradient: LEDGradient
     let previewBrightness: Int
     let effectId: Int?
+    let isDeleting: Bool = false
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1439,15 +1469,7 @@ struct DeviceEffectRecordRow: View {
 
                 Spacer()
 
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
 
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
@@ -1539,6 +1561,7 @@ struct DeviceEffectRecordRow: View {
 struct DevicePlaylistRecordRow: View {
     let playlist: WLEDPlaylist
     let preview: PresetsListView.DevicePlaylistPreview
+    let isDeleting: Bool
     let onRun: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1561,15 +1584,7 @@ struct DevicePlaylistRecordRow: View {
 
                 Spacer()
 
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
 
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
@@ -1668,6 +1683,7 @@ struct DevicePlaylistRecordRow: View {
 
 struct EffectPresetRow: View {
     let preset: WLEDEffectPreset
+    let isDeleting: Bool
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1693,17 +1709,9 @@ struct EffectPresetRow: View {
                 
                 Spacer()
                 
-                Button(action: {
+                PresetDeleteButton(isDeleting: isDeleting) {
                     onDelete()
-                }) {
-                    Image(systemName: "trash")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
                 }
-                .buttonStyle(.plain)
                 
                 Button(action: {
                     onEdit()

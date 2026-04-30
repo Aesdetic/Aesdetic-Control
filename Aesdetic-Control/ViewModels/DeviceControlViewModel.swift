@@ -722,6 +722,8 @@ class DeviceControlViewModel: ObservableObject {
     @Published private(set) var presetNameMapsByDevice: [String: [Int: String]] = [:]
     @Published private(set) var playlistNameMapsByDevice: [String: [Int: String]] = [:]
     @Published private(set) var pendingPlaylistRenameIdsByDevice: [String: Set<Int>] = [:]
+    @Published private(set) var deletingPresetRecordIdsByDevice: [String: Set<Int>] = [:]
+    @Published private(set) var deletingPlaylistRecordIdsByDevice: [String: Set<Int>] = [:]
     private var presetModificationTimes: [String: Int] = [:]
     @Published private(set) var palettePreviewEntriesByDevice: [String: [Int: [PalettePreviewEntry]]] = [:]
     @Published private(set) var latestGradientStops: [String: [GradientStop]] = [:]
@@ -775,6 +777,7 @@ class DeviceControlViewModel: ObservableObject {
     // Safety default: avoid writing temp transition steps/playlists to presets.json.
     // Persistent transition saves (+Preset) still use playlist/preset storage.
     private let enableTemporaryPresetStoreBackedTransitions: Bool = false
+    private let enablePersistentAutomationFullRewriteCreate: Bool = true
     private let presetSaveRetryAttempts: Int = 3
     private let presetVerifyRetryAttempts: Int = 4
     private let presetSaveDelayNanos: UInt64 = 500_000_000
@@ -8469,6 +8472,8 @@ class DeviceControlViewModel: ObservableObject {
         #if DEBUG
         let debugIndices: Set<Int> = [0, stepPresetCount / 2, max(0, stepPresetCount - 1)]
         #endif
+        let useFullRewritePersistentCreate = persist && enablePersistentAutomationFullRewriteCreate
+        var fullRewritePresetRequests: [WLEDPresetSaveRequest] = []
         func shouldAbortTemporaryCreation() async -> Bool {
             guard !persist, let runId else { return false }
             return await MainActor.run {
@@ -8549,11 +8554,15 @@ class DeviceControlViewModel: ObservableObject {
                 transitionDeciseconds: device.state?.transitionDeciseconds ?? 7
             )
             do {
-                try await savePresetWithRetry(
-                    request,
-                    device: device,
-                    retryAttempts: presetSaveAttempts
-                )
+                if useFullRewritePersistentCreate {
+                    fullRewritePresetRequests.append(request)
+                } else {
+                    try await savePresetWithRetry(
+                        request,
+                        device: device,
+                        retryAttempts: presetSaveAttempts
+                    )
+                }
                 if let temporaryLeaseId {
                     _ = await TemporaryTransitionCleanupService.shared.updateAllocatingLease(
                         leaseId: temporaryLeaseId,
@@ -8568,7 +8577,9 @@ class DeviceControlViewModel: ObservableObject {
                 return nil
             }
             // Give WLED time to flush presets.json between writes.
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            if !useFullRewritePersistentCreate {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
         }
         if await shouldAbortPersistentCreationForDelete() {
             #if DEBUG
@@ -8577,8 +8588,46 @@ class DeviceControlViewModel: ObservableObject {
             await cleanupFailedTemporaryOrAllocated(reason: "persist_delete_before_playlist_save")
             return nil
         }
-        // Allow WLED to finalize the presets file before saving the playlist.
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        let durations = stepPlan.durations
+        let transitions = stepPlan.transitions
+        let playlistName = label?.isEmpty == false ? label! : "\(autoTransitionPrefix)\(playlistId)"
+        let playlistRequest = WLEDPlaylistSaveRequest(
+            id: playlistId,
+            name: playlistName,
+            ps: stepPresetIds,
+            dur: durations,
+            transition: transitions,
+            repeat: 1,
+            endPresetId: 0,
+            shuffle: 0
+        )
+
+        if useFullRewritePersistentCreate {
+            do {
+                let rewritten = try await apiService.rewritePresetStoreUpsertingRecords(
+                    presetRequests: fullRewritePresetRequests,
+                    playlistRequests: [playlistRequest],
+                    device: device,
+                    maxSegmentCount: deviceMaxSegmentCapacity(for: device)
+                )
+                guard rewritten else {
+                    #if DEBUG
+                    print("⚠️ Playlist creation failed: full preset-store rewrite create returned false for \(device.name).")
+                    #endif
+                    await cleanupFailedTemporaryOrAllocated(reason: "full_rewrite_create_failed")
+                    return nil
+                }
+            } catch {
+                #if DEBUG
+                print("⚠️ Playlist creation failed: full preset-store rewrite create error for \(device.name): \(error.localizedDescription)")
+                #endif
+                await cleanupFailedTemporaryOrAllocated(reason: "full_rewrite_create_error")
+                return nil
+            }
+        } else {
+            // Allow WLED to finalize the presets file before saving the playlist.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
         // Verify presets exist before building playlist for persistent saves.
         if persist {
             let presetVerification = await verifyPresetIds(stepPresetIds, device: device)
@@ -8602,19 +8651,6 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
 
-        let durations = stepPlan.durations
-        let transitions = stepPlan.transitions
-        let playlistName = label?.isEmpty == false ? label! : "\(autoTransitionPrefix)\(playlistId)"
-        let playlistRequest = WLEDPlaylistSaveRequest(
-            id: playlistId,
-            name: playlistName,
-            ps: stepPresetIds,
-            dur: durations,
-            transition: transitions,
-            repeat: 1,
-            endPresetId: 0,
-            shuffle: 0
-        )
         #if DEBUG
         print("🔎 Playlist payload for \(device.name): id=\(playlistId) ps=\(stepPresetIds) dur=\(debugArraySummary(durations)) transition=\(debugArraySummary(transitions)) repeat=1 end=0 r=0")
         #endif
@@ -8634,11 +8670,13 @@ class DeviceControlViewModel: ObservableObject {
         }
 
         do {
-            try await savePlaylistWithRetry(
-                playlistRequest,
-                device: device,
-                retryAttempts: playlistSaveAttempts
-            )
+            if !useFullRewritePersistentCreate {
+                try await savePlaylistWithRetry(
+                    playlistRequest,
+                    device: device,
+                    retryAttempts: playlistSaveAttempts
+                )
+            }
             if let temporaryLeaseId {
                 _ = await TemporaryTransitionCleanupService.shared.markReady(
                     leaseId: temporaryLeaseId,
@@ -11210,6 +11248,14 @@ class DeviceControlViewModel: ObservableObject {
     func isLoadingPlaylists(for device: WLEDDevice) -> Bool {
         playlistLoadingStates[device.id] ?? false
     }
+
+    func isDeletingPresetRecord(_ presetId: Int, for device: WLEDDevice) -> Bool {
+        deletingPresetRecordIdsByDevice[device.id, default: []].contains(presetId)
+    }
+
+    func isDeletingPlaylistRecord(_ playlistId: Int, for device: WLEDDevice) -> Bool {
+        deletingPlaylistRecordIdsByDevice[device.id, default: []].contains(playlistId)
+    }
     
     func nextPresetId(for device: WLEDDevice) -> Int {
         let existing = Set(presets(for: device).map { $0.id })
@@ -11542,7 +11588,15 @@ class DeviceControlViewModel: ObservableObject {
 
     @discardableResult
     func deletePresetRecord(_ presetId: Int, for device: WLEDDevice) async -> Bool {
+        guard !isDeletingPresetRecord(presetId, for: device) else { return false }
         markUserInteraction(device.id)
+        deletingPresetRecordIdsByDevice[device.id, default: []].insert(presetId)
+        defer {
+            deletingPresetRecordIdsByDevice[device.id, default: []].remove(presetId)
+            if deletingPresetRecordIdsByDevice[device.id]?.isEmpty == true {
+                deletingPresetRecordIdsByDevice.removeValue(forKey: device.id)
+            }
+        }
         do {
             let deleted = try await apiService.rewritePresetStoreDeletingRecords(
                 playlistIds: [],
@@ -11566,7 +11620,15 @@ class DeviceControlViewModel: ObservableObject {
 
     @discardableResult
     func deletePlaylist(_ playlist: WLEDPlaylist, for device: WLEDDevice) async -> Bool {
+        guard !isDeletingPlaylistRecord(playlist.id, for: device) else { return false }
         markUserInteraction(device.id)
+        deletingPlaylistRecordIdsByDevice[device.id, default: []].insert(playlist.id)
+        defer {
+            deletingPlaylistRecordIdsByDevice[device.id, default: []].remove(playlist.id)
+            if deletingPlaylistRecordIdsByDevice[device.id]?.isEmpty == true {
+                deletingPlaylistRecordIdsByDevice.removeValue(forKey: device.id)
+            }
+        }
         do {
             let deleted = try await apiService.rewritePresetStoreDeletingRecords(
                 playlistIds: [playlist.id],

@@ -6,7 +6,6 @@ struct AutomationRow: View {
     let isNext: Bool
     var isDeleting: Bool = false
     var deletionProgress: AutomationDeletionProgress? = nil
-    var deleteDisabledUntil: Date? = nil
     var isRunning: Bool = false
     var runningProgress: Double? = nil
     var subtitle: String? = nil
@@ -260,25 +259,11 @@ struct AutomationRow: View {
                 .accessibilityLabel(shortcutPinned ? "Remove from shortcuts" : "Add to shortcuts")
             }
             if let onDelete {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let isDeleteSettling = deleteDisabledUntil.map { context.date < $0 } ?? false
-                    HStack(spacing: 6) {
-                        if isDeleteSettling {
-                            Text("Preparing device...")
-                                .font(AppTypography.style(.caption2))
-                                .foregroundColor(theme.textSecondary)
-                        }
-                        Button(role: .destructive, action: onDelete) {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isDeleteSettling)
-                        .allowsHitTesting(!isDeleteSettling)
-                        .opacity(isDeleteSettling ? 0.35 : 1.0)
-                        .accessibilityLabel(isDeleteSettling ? "Delete unavailable" : "Delete automation")
-                        .accessibilityHint(isDeleteSettling ? "Device is preparing automation assets. Delete will be available shortly." : "")
-                    }
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Delete automation")
             }
         }
     }

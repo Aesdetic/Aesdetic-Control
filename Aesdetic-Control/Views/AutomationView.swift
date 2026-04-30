@@ -74,8 +74,8 @@ struct AutomationView: View {
             }
             Spacer()
             AppGlassIconButton(systemName: "plus", action: { beginCreateAutomation() })
-                .disabled(automationStore.hasAnyDeletionInProgress)
-                .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
+                .disabled(automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress)
+                .opacity((automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress) ? 0.45 : 1.0)
         }
     }
 
@@ -126,8 +126,8 @@ struct AutomationView: View {
                     size: .compact,
                     action: { beginCreateAutomation() }
                 )
-                .disabled(automationStore.hasAnyDeletionInProgress)
-                .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
+                .disabled(automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress)
+                .opacity((automationStore.hasAnyDeletionInProgress || automationStore.hasAnyOnDeviceSyncInProgress) ? 0.45 : 1.0)
             }
             
             if viewModel.automations.isEmpty {
@@ -142,7 +142,6 @@ struct AutomationView: View {
                             isNext: nextAutomationID == automation.id,
                             isDeleting: AutomationStore.shared.isDeletionInProgress(for: automation.id),
                             deletionProgress: AutomationStore.shared.deletionProgress(for: automation.id),
-                            deleteDisabledUntil: AutomationStore.shared.deleteDisabledUntil(for: automation),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
                             subtitle: targetName(for: automation),
@@ -212,6 +211,7 @@ private extension AutomationView {
 
     func beginCreateAutomation(with template: AutomationTemplate? = nil) {
         guard !automationStore.hasAnyDeletionInProgress else { return }
+        guard !automationStore.hasAnyOnDeviceSyncInProgress else { return }
         pendingTemplate = template
         if deviceViewModel.devices.count == 1 {
             builderDevice = deviceViewModel.devices.first

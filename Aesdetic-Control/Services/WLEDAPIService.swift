@@ -1886,6 +1886,123 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
 
+    func rewritePresetStoreUpsertingRecords(
+        presetRequests: [WLEDPresetSaveRequest],
+        playlistRequests: [WLEDPlaylistSaveRequest],
+        device: WLEDDevice,
+        maxSegmentCount: Int? = nil
+    ) async throws -> Bool {
+        guard !presetRequests.isEmpty || !playlistRequests.isEmpty else {
+            return true
+        }
+
+        var presetRecords: [Int: [String: Any]] = [:]
+        for request in presetRequests {
+            guard presetRecords[request.id] == nil else {
+                throw WLEDAPIError.invalidConfiguration
+            }
+            presetRecords[request.id] = try presetStoreRecordPayload(
+                from: request,
+                maxSegmentCount: maxSegmentCount
+            )
+        }
+
+        var playlistRecords: [Int: [String: Any]] = [:]
+        for request in playlistRequests {
+            let normalized = try validatedPlaylistRequest(request)
+            guard playlistRecords[normalized.id] == nil else {
+                throw WLEDAPIError.invalidConfiguration
+            }
+            playlistRecords[normalized.id] = playlistStoreRecordPayload(from: normalized)
+        }
+        let upsertIds = Set(presetRecords.keys).union(playlistRecords.keys)
+        guard upsertIds.count == presetRecords.count + playlistRecords.count else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+
+        let queueKey = presetStoreQueueKey(for: device)
+        return try await enqueuePresetOperation(deviceId: queueKey, label: "preset_store.full_rewrite_create") {
+            try await self.rewritePresetStoreUpsertingRecordsQueued(
+                presetRecords: presetRecords,
+                playlistRecords: playlistRecords,
+                device: device
+            )
+        }
+    }
+
+    private func rewritePresetStoreUpsertingRecordsQueued(
+        presetRecords: [Int: [String: Any]],
+        playlistRecords: [Int: [String: Any]],
+        device: WLEDDevice
+    ) async throws -> Bool {
+        let upsertRecords = presetRecords.merging(playlistRecords) { _, _ in [:] }
+        let upsertIds = Set(upsertRecords.keys)
+        guard !upsertIds.isEmpty else { return true }
+
+        let originalData = try await fetchPresetStoreRawData(device: device)
+        let originalRecords = try parsePresetPayloadMapById(data: originalData, mode: .strict)
+        let originalIds = Set(originalRecords.keys)
+        let preservedIds = originalIds.subtracting(upsertIds)
+
+        let rewrittenData = try makePresetStoreRewriteUpserting(records: upsertRecords, from: originalData)
+        let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
+        let rewrittenIds = Set(rewrittenRecords.keys)
+        let missingUpserts = upsertIds.subtracting(rewrittenIds)
+        let missingPreserved = preservedIds.subtracting(rewrittenIds)
+        let invalidPlaylistIds = playlistRecords.keys.filter { rewrittenRecords[$0]?["playlist"] == nil }
+        let invalidPresetIds = presetRecords.keys.filter { rewrittenRecords[$0]?["playlist"] != nil }
+
+        guard missingUpserts.isEmpty,
+              missingPreserved.isEmpty,
+              invalidPlaylistIds.isEmpty,
+              invalidPresetIds.isEmpty else {
+            logger.error(
+                "preset_store.full_rewrite_create.preflight_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(missingUpserts).sorted(), privacy: .public) missingPreserved=\(Array(missingPreserved).sorted(), privacy: .public) invalidPlaylists=\(invalidPlaylistIds.sorted(), privacy: .public) invalidPresets=\(invalidPresetIds.sorted(), privacy: .public)"
+            )
+            return false
+        }
+
+        do {
+            persistLocalPresetStoreBackup(data: originalData, device: device)
+            try await uploadWLEDFile(named: "presets-aesdetic-backup.json", data: originalData, device: device)
+            try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            let verificationData = try await fetchPresetStoreRawData(device: device)
+            let verificationRecords = try parsePresetPayloadMapById(data: verificationData, mode: .strict)
+            let verifiedIds = Set(verificationRecords.keys)
+            let verifyMissingUpserts = upsertIds.subtracting(verifiedIds)
+            let verifyMissingPreserved = preservedIds.subtracting(verifiedIds)
+            let verifyInvalidPlaylistIds = playlistRecords.keys.filter { verificationRecords[$0]?["playlist"] == nil }
+            let verifyInvalidPresetIds = presetRecords.keys.filter { verificationRecords[$0]?["playlist"] != nil }
+
+            guard verifyMissingUpserts.isEmpty,
+                  verifyMissingPreserved.isEmpty,
+                  verifyInvalidPlaylistIds.isEmpty,
+                  verifyInvalidPresetIds.isEmpty else {
+                logger.error(
+                    "preset_store.full_rewrite_create.verify_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(verifyMissingUpserts).sorted(), privacy: .public) missingPreserved=\(Array(verifyMissingPreserved).sorted(), privacy: .public) invalidPlaylists=\(verifyInvalidPlaylistIds.sorted(), privacy: .public) invalidPresets=\(verifyInvalidPresetIds.sorted(), privacy: .public)"
+                )
+                try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
+                return false
+            }
+
+            cachePresetRecordPayloads(records: verificationRecords, device: device)
+            recordSuccessfulRequest(deviceId: device.id)
+            logger.info(
+                "preset_store.full_rewrite_create.success device=\(device.id, privacy: .public) upserted=\(Array(upsertIds).sorted(), privacy: .public) preserved=\(preservedIds.count, privacy: .public)"
+            )
+            try? await deleteWLEDFile(named: "presets-aesdetic-backup.json", device: device)
+            return true
+        } catch {
+            logger.warning(
+                "preset_store.full_rewrite_create.error device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
+            return false
+        }
+    }
+
     private func rewritePresetStoreDeletingRecordsQueued(
         playlistIds normalizedPlaylistIds: Set<Int>,
         presetIds normalizedPresetIds: Set<Int>,
@@ -3908,6 +4025,33 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
+    private func makePresetStoreRewriteUpserting(records: [Int: [String: Any]], from data: Data) throws -> Data {
+        var root = try parseJSONObjectDictionary(from: data, mode: .strict)
+        let hasWrappedPayload = root["presets"] is [String: Any]
+        var payload = root["presets"] as? [String: Any] ?? root
+
+        for (id, record) in records {
+            guard (1...250).contains(id) else {
+                throw WLEDAPIError.invalidConfiguration
+            }
+            payload["\(id)"] = sanitizedPresetRecord(record)
+        }
+        if payload["0"] == nil {
+            payload["0"] = [:] as [String: Any]
+        }
+
+        if hasWrappedPayload {
+            root["presets"] = payload
+        } else {
+            root = payload
+        }
+
+        guard JSONSerialization.isValidJSONObject(root) else {
+            throw WLEDAPIError.invalidResponse
+        }
+        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
     private func uploadWLEDFile(named filename: String, data fileData: Data, device: WLEDDevice) async throws {
         guard let uploadURL = URL(string: "http://\(device.ipAddress)/upload") else {
             throw WLEDAPIError.invalidURL
@@ -4857,6 +5001,94 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         #endif
         _ = try await postState(device, body: body)
+    }
+
+    private func presetStoreRecordPayload(
+        from request: WLEDPresetSaveRequest,
+        maxSegmentCount: Int?
+    ) throws -> [String: Any] {
+        guard (1...250).contains(request.id) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        guard request.customAPICommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+
+        var record: [String: Any] = [:]
+        if let state = request.state {
+            let stateData = try encoder.encode(state)
+            if let stateDict = try JSONSerialization.jsonObject(with: stateData, options: []) as? [String: Any] {
+                record.merge(stateDict) { _, new in new }
+            }
+        }
+        record["n"] = sanitizedPresetName(request.name, fallback: "Preset \(request.id)")
+        if let quickLoad = request.quickLoad {
+            record["ql"] = quickLoad
+        }
+        if let transition = request.transitionDeciseconds {
+            record["transition"] = transition
+        }
+        return wledShapedPresetRecord(record, maxSegmentCount: maxSegmentCount)
+    }
+
+    private func wledShapedPresetRecord(
+        _ record: [String: Any],
+        maxSegmentCount: Int?
+    ) -> [String: Any] {
+        var shaped = sanitizedPresetRecord(record)
+        guard var segments = shaped["seg"] as? [[String: Any]], !segments.isEmpty else {
+            return shaped
+        }
+
+        segments = segments.map { normalizeWLEDSegmentPayload($0) }
+
+        if let maxSegmentCount {
+            let targetCount = max(segments.count, min(maxSegmentCount, 64))
+            if targetCount > segments.count {
+                segments.append(contentsOf: Array(repeating: ["stop": 0], count: targetCount - segments.count))
+            }
+        }
+
+        shaped["seg"] = segments
+        return shaped
+    }
+
+    private func normalizeWLEDSegmentPayload(_ segment: [String: Any]) -> [String: Any] {
+        var normalized = segment
+        if let colorSlots = segment["col"] as? [Any] {
+            normalized["col"] = normalizeWLEDColorSlots(colorSlots)
+        }
+        return normalized
+    }
+
+    private func normalizeWLEDColorSlots(_ colorSlots: [Any]) -> [[Int]] {
+        var normalized = colorSlots.prefix(3).map { normalizeWLEDColorSlot($0) }
+        while normalized.count < 3 {
+            normalized.append([0, 0, 0, 0])
+        }
+        return normalized
+    }
+
+    private func normalizeWLEDColorSlot(_ colorSlot: Any) -> [Int] {
+        guard let values = colorSlot as? [Any] else {
+            return [0, 0, 0, 0]
+        }
+        var normalized = values.prefix(4).map { value -> Int in
+            let decoded = decodeInt(value) ?? 0
+            return max(0, min(255, decoded))
+        }
+        while normalized.count < 4 {
+            normalized.append(0)
+        }
+        return normalized
+    }
+
+    private func playlistStoreRecordPayload(from request: WLEDPlaylistSaveRequest) -> [String: Any] {
+        [
+            "n": sanitizedPresetName(request.name, fallback: "Playlist \(request.id)"),
+            "on": true,
+            "playlist": playlistPayload(from: request)
+        ]
     }
 
     private func playlistPayload(from request: WLEDPlaylistSaveRequest) -> [String: Any] {

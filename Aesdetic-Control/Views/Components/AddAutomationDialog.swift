@@ -622,8 +622,20 @@ struct AddAutomationDialog: View {
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let message = sameDayScheduleWarningMessage {
+                Text(message)
+                    .font(AppTypography.style(.footnote))
+                    .foregroundColor(.yellow)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if automationStore.hasAnyDeletionInProgress && !isEditing {
                 Text("Please wait for automation deletion to finish before creating a new automation.")
+                    .font(AppTypography.style(.footnote))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if automationStore.hasAnyOnDeviceSyncInProgress && !isEditing {
+                Text("Please wait for the current automation to finish getting ready before creating another on-device automation.")
                     .font(AppTypography.style(.footnote))
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1491,6 +1503,9 @@ struct AddAutomationDialog: View {
         if automationStore.hasAnyDeletionInProgress && !isEditing {
             return false
         }
+        if automationStore.hasAnyOnDeviceSyncInProgress && !isEditing {
+            return false
+        }
         guard !automationName.trimmed().isEmpty else { return false }
         guard !selectedDeviceIds.isEmpty else { return false }
         if !selectedWeekdays.contains(true) {
@@ -1971,6 +1986,41 @@ struct AddAutomationDialog: View {
             return "Invalid end date for selected month."
         }
         return nil
+    }
+
+    private var sameDayScheduleWarningMessage: String? {
+        guard triggerSelection == .time else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let now = Date()
+        let todayWeekdayIndex = calendar.component(.weekday, from: now) - 1
+        guard selectedWeekdays.indices.contains(todayWeekdayIndex),
+              selectedWeekdays[todayWeekdayIndex] else {
+            return nil
+        }
+        guard isWithinDateWindow(now, calendar: calendar) else { return nil }
+
+        let timeComponents = calendar.dateComponents([.hour, .minute], from: selectedTime)
+        guard let hour = timeComponents.hour, let minute = timeComponents.minute else {
+            return nil
+        }
+        var todayStartComponents = calendar.dateComponents([.year, .month, .day], from: now)
+        todayStartComponents.hour = hour
+        todayStartComponents.minute = minute
+        todayStartComponents.second = 0
+        guard let todayStart = calendar.date(from: todayStartComponents),
+              todayStart <= now else {
+            return nil
+        }
+
+        if actionSelection == .transition {
+            let todayEnd = todayStart.addingTimeInterval(max(0, customTransitionDuration))
+            if now < todayEnd {
+                return "Today's automation window is already in progress. WLED timers cannot start midway, so the on-device schedule will run at the next selected start unless you run it manually now."
+            }
+        }
+
+        return "Today's start time has already passed. The on-device schedule will first run on the next selected day."
     }
 
     private func isValidCalendarDay(month: Int, day: Int) -> Bool {
