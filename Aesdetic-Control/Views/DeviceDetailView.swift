@@ -710,29 +710,28 @@ struct DeviceDetailView: View {
 
     private var primaryControlSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Spacer()
-                saveColorPill
-            }
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(currentModeLabel)
+                        .font(AppTypography.style(.subheadline, weight: .medium))
+                        .foregroundColor(.white.opacity(0.72))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
-            HStack(alignment: .center, spacing: 14) {
-                Text(currentModeLabel)
-                    .font(AppTypography.style(.subheadline, weight: .medium))
-                    .foregroundColor(.white.opacity(0.72))
-                    .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text("\(quickBrightnessPercent)%")
+                            .font(AppTypography.style(.subheadline, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.92))
+                            .monospacedDigit()
+
+                        Text("Brightness")
+                            .font(AppTypography.style(.caption2, weight: .medium))
+                            .foregroundColor(.white.opacity(0.62))
+                    }
+                }
 
                 Spacer(minLength: 8)
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(quickBrightnessPercent)%")
-                        .font(AppTypography.style(.headline, weight: .bold))
-                        .foregroundColor(.white)
-                        .monospacedDigit()
-
-                    Text("Brightness")
-                        .font(AppTypography.style(.caption2, weight: .medium))
-                        .foregroundColor(.white.opacity(0.62))
-                }
+                saveColorPill
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -1357,15 +1356,25 @@ struct DeviceDetailView: View {
     }
     
     private var automationShortcutsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Shortcuts")
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(AppTypography.style(.callout, weight: .semibold))
+                    .foregroundColor(.white)
                 if !shortcutAutomations.isEmpty {
                     Text("\(shortcutAutomations.count)")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.5))
+                        .font(AppTypography.style(.caption2, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.78))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.10))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                )
+                        )
                 }
                 Spacer()
                 Menu {
@@ -1378,9 +1387,18 @@ struct DeviceDetailView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(AppTypography.style(.title3, weight: .semibold))
-                        .foregroundColor(.white)
+                    Image(systemName: "plus")
+                        .font(AppTypography.style(.caption, weight: .bold))
+                        .foregroundColor(.white.opacity(0.9))
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.10))
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                                )
+                        )
                 }
                 .disabled(isAutomationMutationLocked)
                 .opacity(isAutomationMutationLocked ? 0.45 : 1.0)
@@ -1388,9 +1406,19 @@ struct DeviceDetailView: View {
             }
             
             if shortcutAutomations.isEmpty {
-                Text("Pin an automation with the heart icon to surface it here for quick toggles.")
-                    .font(AppTypography.style(.footnote))
-                    .foregroundColor(.white.opacity(0.7))
+                Text("Pin automations with the heart icon for quick toggles.")
+                    .font(AppTypography.style(.caption, weight: .medium))
+                    .foregroundColor(.white.opacity(0.70))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                    )
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
@@ -1404,8 +1432,8 @@ struct DeviceDetailView: View {
                             .id(automation.id) // Explicit ID for proper view updates
                         }
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 2)
+                    .padding(.top, 2)
+                    .padding(.bottom, 4)
                 }
             }
         }
@@ -2156,45 +2184,49 @@ private struct ShortcutAutomationChip: View {
     var subtitle: String? = nil
     var onTap: () -> Void
     var onLongPress: () -> Void
-    
-    private var titleColor: Color {
-        automation.enabled ? .black : .white
-    }
-    
-    private var fillColor: Color {
-        return automation.enabled ? Color.white : Color.white.opacity(0.12)
-    }
-    
-    private var textColor: Color {
-        automation.enabled ? .black.opacity(0.8) : .white.opacity(0.8)
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var cardStyle: AppCardStyle {
+        AppCardStyles.glass(
+            for: colorScheme,
+            tone: automation.enabled ? .active : .muted,
+            cornerRadius: 18
+        )
     }
     
     var body: some View {
         Button(action: onTap) {
             ZStack(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        if let icon = automation.metadata.iconName {
-                            Image(systemName: icon)
-                                .font(AppTypography.style(.caption, weight: .semibold))
-                                .foregroundColor(automation.enabled ? .black : .white)
-                        }
-                        Text(automation.name)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: automation.metadata.iconName ?? "clock")
                             .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundColor(titleColor)
-                            .lineLimit(1)
-                    }
+                            .foregroundColor(.white.opacity(0.84))
+                            .frame(width: 24, height: 24)
+                            .background(
+                                Circle()
+                                    .fill(Color.white.opacity(0.10))
+                            )
 
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(AppTypography.style(.caption2))
-                            .foregroundColor(textColor)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(automation.name)
+                                .font(AppTypography.style(.caption, weight: .semibold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+
+                            if let subtitle {
+                                Text(subtitle)
+                                    .font(AppTypography.style(.caption2, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.64))
+                                    .lineLimit(1)
+                            }
+                        }
                     }
 
                     Text(automation.trigger.displayName)
-                        .font(AppTypography.style(.caption2))
-                        .foregroundColor(textColor)
+                        .font(AppTypography.style(.caption2, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
                         .lineLimit(1)
                 }
 
@@ -2204,15 +2236,10 @@ private struct ShortcutAutomationChip: View {
                         .allowsHitTesting(false)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .frame(width: 178, alignment: .leading)
+            .padding(14)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(fillColor)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    )
+                AppCardBackground(style: cardStyle)
             )
         }
         .buttonStyle(.plain)
