@@ -1,5 +1,33 @@
 import SwiftUI
 
+private struct PresetGlassCardModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let cornerRadius: CGFloat
+    let tone: AppCardTone
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                AppCardBackground(
+                    style: AppCardStyles.glass(
+                        for: colorScheme,
+                        tone: tone,
+                        cornerRadius: cornerRadius
+                    )
+                )
+            )
+    }
+}
+
+private extension View {
+    func presetGlassCard(
+        cornerRadius: CGFloat = 18,
+        tone: AppCardTone = .muted
+    ) -> some View {
+        modifier(PresetGlassCardModifier(cornerRadius: cornerRadius, tone: tone))
+    }
+}
+
 struct PresetsListView: View {
     @ObservedObject var store = PresetsStore.shared
     @ObservedObject private var automationStore = AutomationStore.shared
@@ -109,18 +137,7 @@ struct PresetsListView: View {
 
     private var alexaFavoritesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Label("Alexa Favorites", systemImage: "star.circle.fill")
-                    .font(AppTypography.style(.headline))
-                    .foregroundColor(.white)
-                Spacer()
-                Text("\(alexaFavorites.count)/9")
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.72))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.white.opacity(0.12)))
-            }
+            sectionHeader("Alexa Favorites", icon: "star", count: "\(alexaFavorites.count)/9")
 
             let conflicts = viewModel.alexaMirrorConflictSlots(for: device)
             if !conflicts.isEmpty {
@@ -209,7 +226,34 @@ struct PresetsListView: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.14)))
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+        .presetGlassCard(cornerRadius: 16)
+    }
+
+    private func sectionHeader(_ title: String, icon: String, count: String? = nil) -> some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: icon)
+                .font(AppTypography.style(.headline, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+
+            if let count {
+                Text(count)
+                    .font(AppTypography.style(.caption2, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.74))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.10))
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                            )
+                    )
+            }
+
+            Spacer()
+        }
     }
 
     private var devicePlaylistsById: [Int: WLEDPlaylist] {
@@ -285,12 +329,7 @@ struct PresetsListView: View {
     
     private var colorPresetsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Colors", systemImage: "sun.max")
-                    .font(AppTypography.style(.headline))
-                    .foregroundColor(.white)
-                Spacer()
-            }
+            sectionHeader("Colors", icon: "sun.max")
             
             let colorPresets = store.colorPresets
             if colorPresets.isEmpty {
@@ -369,12 +408,7 @@ struct PresetsListView: View {
     private var effectPresetsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
-                        .font(AppTypography.style(.headline))
-                        .foregroundColor(.white)
-                    Spacer()
-                }
+                sectionHeader("Transitions", icon: "arrow.triangle.2.circlepath")
                 
                 let transitionPresets = store.transitionPresets(for: device.id)
                 if transitionPresets.isEmpty {
@@ -418,12 +452,7 @@ struct PresetsListView: View {
             }
             
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label("Animations", systemImage: "sparkles")
-                        .font(AppTypography.style(.headline))
-                        .foregroundColor(.white)
-                    Spacer()
-                }
+                sectionHeader("Animations", icon: "sparkles")
                 
                 let effectPresets = store.effectPresets(for: device.id)
                 if effectPresets.isEmpty {
@@ -634,12 +663,8 @@ struct PresetsListView: View {
                                 }
                             }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
-                        )
+                        .padding(12)
+                        .presetGlassCard(cornerRadius: 16)
                     }
                 }
             }
@@ -737,12 +762,8 @@ struct PresetsListView: View {
                                     .fill(Color.blue.opacity(0.7))
                             )
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.white.opacity(0.06))
-                        )
+                        .padding(12)
+                        .presetGlassCard(cornerRadius: 16)
                     }
                 }
             }
@@ -892,12 +913,8 @@ struct PresetsListView: View {
                             )
                             .disabled(viewModel.isDeletingPlaylistRecord(playlist.id, for: device))
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.white.opacity(0.06))
-                        )
+                        .padding(12)
+                        .presetGlassCard(cornerRadius: 16)
                     }
                 }
             }
@@ -1103,16 +1120,18 @@ struct PresetsListView: View {
         VStack(spacing: 8) {
             Image(systemName: icon)
                 .font(AppTypography.style(.title2))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(.white.opacity(0.58))
             Text(message)
                 .font(AppTypography.style(.caption))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(.white.opacity(0.74))
             Text(hint)
                 .font(AppTypography.style(.caption2))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(.white.opacity(0.58))
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
+        .padding(.vertical, 18)
+        .padding(.horizontal, 14)
+        .presetGlassCard(cornerRadius: 18)
     }
 
     private func requestColorPresetDeletion(_ preset: ColorPreset, on device: WLEDDevice) async -> Bool {
@@ -1272,17 +1291,11 @@ struct ColorPresetRow: View {
                     onDelete()
                 }
                 
-                Button(action: {
-                    onEdit()
-                }) {
-                    Image(systemName: "pencil")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetIconButton(
+                    systemName: "pencil",
+                    accessibilityLabel: "Rename color preset",
+                    action: onEdit
+                )
             }
             
             // Simple Gradient Preview (no tabs/handles) with brightness indicator
@@ -1314,13 +1327,9 @@ struct ColorPresetRow: View {
                 .padding(4)
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(14)
+        .presetGlassCard(cornerRadius: 18)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Color preset \(preset.name)")
@@ -1338,12 +1347,18 @@ struct ColorPresetRow: View {
     private var alexaFavoriteButton: some View {
         if let onAddToAlexa {
             Button(action: onAddToAlexa) {
-                Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(isAlexaFavorite ? .yellow : .white.opacity(canAddToAlexa ? 0.78 : 0.35))
-                    .frame(width: 28, height: 28)
-                    .background(Color.white.opacity(0.1))
-                    .cornerRadius(6)
+                    Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(.white.opacity(isAlexaFavorite || canAddToAlexa ? 0.78 : 0.35))
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(isAlexaFavorite ? 0.16 : 0.10))
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                                )
+                        )
             }
             .buttonStyle(.plain)
             .disabled(isAlexaFavorite || !canAddToAlexa)
@@ -1425,10 +1440,7 @@ struct AlexaFavoriteRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
+        .presetGlassCard(cornerRadius: 16)
     }
 
     private var statusColor: Color {
@@ -1485,17 +1497,11 @@ struct TransitionPresetRow: View {
                     onDelete()
                 }
                 
-                Button(action: {
-                    onEdit()
-                }) {
-                    Image(systemName: "pencil")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetIconButton(
+                    systemName: "pencil",
+                    accessibilityLabel: "Rename transition preset",
+                    action: onEdit
+                )
             }
             
             // Gradient preview (two bars side by side)
@@ -1505,13 +1511,9 @@ struct TransitionPresetRow: View {
             }
             .onTapGesture(perform: handleApply)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(14)
+        .presetGlassCard(cornerRadius: 18)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Transition preset \(preset.name)")
@@ -1529,12 +1531,18 @@ struct TransitionPresetRow: View {
     private var alexaFavoriteButton: some View {
         if let onAddToAlexa {
             Button(action: onAddToAlexa) {
-                Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(isAlexaFavorite ? .yellow : .white.opacity(canAddToAlexa ? 0.78 : 0.35))
-                    .frame(width: 28, height: 28)
-                    .background(Color.white.opacity(0.1))
-                    .cornerRadius(6)
+                    Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(.white.opacity(isAlexaFavorite || canAddToAlexa ? 0.78 : 0.35))
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(isAlexaFavorite ? 0.16 : 0.10))
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                                )
+                        )
             }
             .buttonStyle(.plain)
             .disabled(isAlexaFavorite || !canAddToAlexa)
@@ -1651,15 +1659,11 @@ struct DevicePresetRecordRow: View {
 
                 PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
 
-                Button(action: onEdit) {
-                    Image(systemName: "pencil")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetIconButton(
+                    systemName: "pencil",
+                    accessibilityLabel: "Rename device preset",
+                    action: onEdit
+                )
             }
 
             ZStack(alignment: .bottomTrailing) {
@@ -1689,13 +1693,9 @@ struct DevicePresetRecordRow: View {
                 .padding(4)
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(14)
+        .presetGlassCard(cornerRadius: 18)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Device preset \(preset.name)")
@@ -1772,15 +1772,11 @@ struct DeviceEffectRecordRow: View {
 
                 PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
 
-                Button(action: onEdit) {
-                    Image(systemName: "pencil")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetIconButton(
+                    systemName: "pencil",
+                    accessibilityLabel: "Rename device effect preset",
+                    action: onEdit
+                )
             }
 
             ZStack(alignment: .bottomTrailing) {
@@ -1810,13 +1806,9 @@ struct DeviceEffectRecordRow: View {
                 .padding(4)
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(14)
+        .presetGlassCard(cornerRadius: 18)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Device effect preset \(preset.name)")
@@ -1887,15 +1879,11 @@ struct DevicePlaylistRecordRow: View {
 
                 PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
 
-                Button(action: onEdit) {
-                    Image(systemName: "pencil")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetIconButton(
+                    systemName: "pencil",
+                    accessibilityLabel: "Rename playlist",
+                    action: onEdit
+                )
             }
 
             HStack(spacing: 4) {
@@ -1903,13 +1891,9 @@ struct DevicePlaylistRecordRow: View {
                 gradientPreview(for: preview.gradientB, brightness: preview.brightnessB)
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(14)
+        .presetGlassCard(cornerRadius: 18)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleRun)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Device playlist \(playlist.name)")
@@ -2019,17 +2003,11 @@ struct EffectPresetRow: View {
                     onDelete()
                 }
                 
-                Button(action: {
-                    onEdit()
-                }) {
-                    Image(systemName: "pencil")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
+                PresetIconButton(
+                    systemName: "pencil",
+                    accessibilityLabel: "Rename animation preset",
+                    action: onEdit
+                )
             }
             
             // Gradient preview styled like transition presets
@@ -2082,13 +2060,9 @@ struct EffectPresetRow: View {
                 Spacer()
             }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(14)
+        .presetGlassCard(cornerRadius: 18)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Effect preset \(preset.name)")
@@ -2106,12 +2080,18 @@ struct EffectPresetRow: View {
     private var alexaFavoriteButton: some View {
         if let onAddToAlexa {
             Button(action: onAddToAlexa) {
-                Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(isAlexaFavorite ? .yellow : .white.opacity(canAddToAlexa ? 0.78 : 0.35))
-                    .frame(width: 28, height: 28)
-                    .background(Color.white.opacity(0.1))
-                    .cornerRadius(6)
+                    Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(.white.opacity(isAlexaFavorite || canAddToAlexa ? 0.78 : 0.35))
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(isAlexaFavorite ? 0.16 : 0.10))
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                                )
+                        )
             }
             .buttonStyle(.plain)
             .disabled(isAlexaFavorite || !canAddToAlexa)
