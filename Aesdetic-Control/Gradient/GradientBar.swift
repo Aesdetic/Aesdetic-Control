@@ -15,9 +15,10 @@ struct GradientBar: View {
     var onTapAnywhere: (_ t: Double, _ tappedStopId: UUID?) -> Void
     var onStopsChanged: (_ stops: [GradientStop], _ phase: DragPhase) -> Void
 
-    private let railHeight: CGFloat = 44
-    private let handleWidth: CGFloat = 22
-    private let handleHeight: CGFloat = 44
+    private let railHeight: CGFloat = 38
+    private let trackHeight: CGFloat = 34
+    private let handleWidth: CGFloat = 24
+    private let handleHeight: CGFloat = 34
     private let epsilon: Double = 0.0001
 
     var body: some View {
@@ -30,8 +31,8 @@ struct GradientBar: View {
                     startPoint: .leading,
                     endPoint: .trailing
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.25), lineWidth: 1))
+                .frame(height: trackHeight)
+                .clipShape(Capsule(style: .continuous))
                 .contentShape(Rectangle())
                 .onTapGesture { location in
                     let w = max(1, geo.size.width - handleWidth)
@@ -68,21 +69,15 @@ struct GradientBar: View {
     private func handle(for stop: GradientStop) -> some View {
         let isSelected = selectedStopId == stop.id
         
-        return RoundedRectangle(cornerRadius: 8)
+        return Capsule(style: .continuous)
             .fill(stop.color)
             .frame(width: handleWidth, height: handleHeight)
-            .shadow(
-                color: .black.opacity(0.3), 
-                radius: isSelected ? 6 : 3, 
-                x: 0, 
-                y: isSelected ? 4 : 2
-            )
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.white.opacity(0.6), lineWidth: 1)
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.95 : 0.64), lineWidth: isSelected ? 1.6 : 1)
             )
-            .scaleEffect(isSelected ? 1.1 : 1.0)
-            .animation(.easeInOut(duration: 0.2), value: isSelected)
+            .scaleEffect(isSelected ? 1.07 : 1.0)
+            .animation(.spring(response: 0.24, dampingFraction: 0.78), value: isSelected)
             .accessibilityLabel("Gradient stop")
             .accessibilityHint(allowsStopDrag ? "Drag to reposition. Tap to edit. Use Remove to delete." : "Tap to edit. Use Remove to delete.")
     }

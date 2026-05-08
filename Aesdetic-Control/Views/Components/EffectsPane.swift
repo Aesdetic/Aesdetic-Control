@@ -204,6 +204,7 @@ struct EffectsPane: View {
                 showColorPicker = false
             }
         )
+        .frame(maxWidth: .infinity)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
     
@@ -228,8 +229,12 @@ struct EffectsPane: View {
         }
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(backgroundFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(colorSchemeContrast == .increased ? 0.26 : 0.16), lineWidth: 1)
+                )
         )
         .task {
             let needsFetch = metadataBundle?.effects.isEmpty ?? true
@@ -428,22 +433,26 @@ struct EffectsPane: View {
                                     .scaleEffect(0.7)
                                     .tint(.white)
                             } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle.fill")
+                                Image(systemName: "checkmark.circle")
                                     .font(AppTypography.style(.caption))
-                                    .foregroundColor(.green)
+                                    .foregroundColor(.white)
                             } else {
-                                Image(systemName: "plus.circle.fill")
+                                Image(systemName: "plus.circle")
                                     .font(AppTypography.style(.caption))
                             }
-                            Text("Preset")
-                                .font(AppTypography.style(.caption, weight: .medium))
+                            Text("Save")
+                                .font(AppTypography.style(.caption, weight: .semibold))
                         }
-                        .foregroundColor(.white.opacity(0.8))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
                         .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white.opacity(0.1))
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.12))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                )
                         )
                     }
                     .buttonStyle(.plain)
@@ -458,18 +467,22 @@ struct EffectsPane: View {
                                 .progressViewStyle(.circular)
                                 .scaleEffect(0.8)
                         } else {
-                            Image(systemName: isEffectEnabled ? "power" : "poweroff")
+                            Image(systemName: "power")
                                 .font(AppTypography.style(.caption))
                         }
-                        Text(isEffectEnabled ? "ON" : "OFF")
-                            .font(AppTypography.style(.caption, weight: .medium))
+                        Text(isEffectEnabled ? "On" : "Off")
+                            .font(AppTypography.style(.caption, weight: .semibold))
                     }
-                    .foregroundColor(isEffectEnabled ? .white : .white.opacity(0.6))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .foregroundColor(.white.opacity(isEffectEnabled ? 0.92 : 0.62))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
                     .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(isEffectEnabled ? Color.white.opacity(0.15) : Color.white.opacity(0.08))
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(isEffectEnabled ? 0.14 : 0.08))
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                            )
                     )
                 }
                 .buttonStyle(.plain)
@@ -1239,14 +1252,44 @@ private extension EffectsPane {
         Button(action: {
             applyColorPreset(preset)
         }) {
-            Text(preset.name)
-                .font(AppTypography.style(.caption, weight: .medium))
-                .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.75))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(isSelected ? 0.22 : 0.12))
+            LinearGradient(
+                gradient: Gradient(stops: preset.gradientStops.sorted { $0.position < $1.position }.map {
+                    .init(color: $0.color, location: $0.position)
+                }),
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: 48, height: 30)
+            .clipShape(Capsule(style: .continuous))
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.82 : 0.28), lineWidth: isSelected ? 1.5 : 1)
+            )
+            .shadow(
+                color: .black.opacity(isSelected ? 0.24 : 0.12),
+                radius: isSelected ? 4 : 2,
+                x: 0,
+                y: isSelected ? 2 : 1
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(AppTypography.text(size: 9, weight: .bold, relativeTo: .caption2))
+                        .foregroundColor(.black.opacity(0.75))
+                        .frame(width: 14, height: 14)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.9))
+                        )
+                        .offset(x: 2, y: 2)
+                }
+            }
+            .contentShape(Capsule(style: .continuous))
+            .accessibilityHidden(true)
+            .padding(.vertical, 1)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(isSelected ? 0.12 : 0.04))
                 )
         }
         .buttonStyle(.plain)

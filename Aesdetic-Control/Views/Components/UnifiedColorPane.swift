@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum UnifiedColorPanePresentation {
+    case full
+    case compactControl
+}
+
 struct UnifiedColorPane: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @ObservedObject private var automationStore = AutomationStore.shared
@@ -7,6 +12,9 @@ struct UnifiedColorPane: View {
     let device: WLEDDevice
     @Binding var dismissColorPicker: Bool
     let segmentId: Int  // Track which segment we're controlling
+    let presentation: UnifiedColorPanePresentation
+    let brightnessOverride: Int?
+    let showsCompactSaveButton: Bool
 
     @State private var gradient: LEDGradient?
     @State private var selectedStopId: UUID? = nil
@@ -40,10 +48,20 @@ struct UnifiedColorPane: View {
         liveDevice ?? device
     }
     
-    init(device: WLEDDevice, dismissColorPicker: Binding<Bool>, segmentId: Int = 0) {
+    init(
+        device: WLEDDevice,
+        dismissColorPicker: Binding<Bool>,
+        segmentId: Int = 0,
+        presentation: UnifiedColorPanePresentation = .full,
+        brightnessOverride: Int? = nil,
+        showsCompactSaveButton: Bool = true
+    ) {
         self.device = device
         _dismissColorPicker = dismissColorPicker
         self.segmentId = segmentId
+        self.presentation = presentation
+        self.brightnessOverride = brightnessOverride
+        self.showsCompactSaveButton = showsCompactSaveButton
         _briUI = State(initialValue: Double(device.brightness))
         
         // Initialize gradient from device's current color
@@ -68,99 +86,73 @@ struct UnifiedColorPane: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            // Header with Preset button (matching Transition/Effects style)
-            HStack {
-                Label("Colors", systemImage: "paintbrush.fill")
-                    .font(AppTypography.style(.headline))
-                    .foregroundColor(.white)
-                Spacer()
-                
-                Button(action: {
-                    if advancedUIEnabled {
-                        showSavePresetDialog = true
-                    } else {
-                        Task {
-                            await saveColorPresetDirectly()
-                        }
-                    }
-                }) {
-                    HStack(spacing: 6) {
-                        if isSavingPreset {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .tint(.white)
-                        } else if showSaveSuccess {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(AppTypography.style(.caption))
-                                .foregroundColor(.green)
-                        } else {
-                            Image(systemName: "plus.circle.fill")
-                                .font(AppTypography.style(.caption))
-                        }
-                        Text("Preset")
-                            .font(AppTypography.style(.caption, weight: .medium))
-                    }
-                    .foregroundColor(.white.opacity(0.8))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.white.opacity(0.1))
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isSavingPreset || automationStore.hasAnyDeletionInProgress)
-                .opacity((isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
-            }
-            .padding(.horizontal, 16)
-            
-            // Brightness with percent label; apply on release
-            VStack(spacing: 6) {
+        VStack(spacing: presentation == .compactControl ? 10 : 16) {
+            if presentation == .full {
                 HStack {
-                    Text("Brightness")
-                        .foregroundColor(primaryLabelColor)
+                    Label("Colors", systemImage: "paintbrush")
+                        .font(AppTypography.style(.headline, weight: .semibold))
+                        .foregroundColor(.white)
                     Spacer()
-                    Text("\(Int(round(briUI/255.0*100)))%")
-                        .foregroundColor(secondaryLabelColor)
+
+                    savePresetButton(title: "Preset")
                 }
-                Slider(value: $briUI, in: 0...255, step: 1, onEditingChanged: { editing in
-                    isAdjustingBrightness = editing
-                    if !editing {
+                .padding(.horizontal, 16)
+            } else if showsCompactSaveButton {
+                HStack {
+                    Spacer()
+                    savePresetButton(title: "Save Color")
+                }
+            }
+
+            // Brightness with percent label; apply on release
+            if presentation == .full {
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("Brightness")
+                            .foregroundColor(primaryLabelColor)
+                        Spacer()
+                        Text("\(Int(round(briUI/255.0*100)))%")
+                            .foregroundColor(secondaryLabelColor)
+                    }
+                    Slider(value: $briUI, in: 0...255, step: 1, onEditingChanged: { editing in
+                        isAdjustingBrightness = editing
+                        if !editing {
+                            // CRITICAL: Mark when brightness was set to prevent WebSocket overwrites
+                            lastBrightnessSet = Date()
+                            DispatchQueue.main.async {
+                                Task { await viewModel.updateDeviceBrightness(device, brightness: Int(briUI)) }
+                            }
+                        }
+                    }
+                    )
+                    .tint(sliderTintColor)
+                    .sensorySelection(trigger: Int(briUI))
+                    .accessibilityLabel("Brightness")
+                    .accessibilityValue("\(Int(round(briUI / 255.0 * 100))) percent")
+                    .accessibilityHint("Adjusts the segment brightness.")
+                    .accessibilityAdjustableAction { direction in
+                        let step: Double = 12.75 // roughly 5%
+                        switch direction {
+                        case .increment:
+                            briUI = min(255, briUI + step)
+                        case .decrement:
+                            briUI = max(0, briUI - step)
+                        @unknown default:
+                            break
+                        }
+                        let brightnessValue = Int(round(briUI))
                         // CRITICAL: Mark when brightness was set to prevent WebSocket overwrites
                         lastBrightnessSet = Date()
                         DispatchQueue.main.async {
-                            Task { await viewModel.updateDeviceBrightness(device, brightness: Int(briUI)) }
+                            Task { await viewModel.updateDeviceBrightness(device, brightness: brightnessValue) }
                         }
                     }
-                })
-                .tint(sliderTintColor)
-                .sensorySelection(trigger: Int(briUI))
-                .accessibilityLabel("Brightness")
-                .accessibilityValue("\(Int(round(briUI / 255.0 * 100))) percent")
-                .accessibilityHint("Adjusts the segment brightness.")
-                .accessibilityAdjustableAction { direction in
-                    let step: Double = 12.75 // roughly 5%
-                    switch direction {
-                    case .increment:
-                        briUI = min(255, briUI + step)
-                    case .decrement:
-                        briUI = max(0, briUI - step)
-                    @unknown default:
-                        break
-                    }
-                    let brightnessValue = Int(round(briUI))
-                    // CRITICAL: Mark when brightness was set to prevent WebSocket overwrites
-                    lastBrightnessSet = Date()
-                    DispatchQueue.main.async {
-                        Task { await viewModel.updateDeviceBrightness(device, brightness: brightnessValue) }
-                    }
                 }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
             
             // Interpolation mode selector (only show when multiple stops)
-            if advancedUIEnabled, currentGradient.stops.count >= 2 {
+            if presentation == .full, advancedUIEnabled, currentGradient.stops.count >= 2 {
                 VStack(spacing: 6) {
                     HStack {
                         Text("Blend Style")
@@ -197,7 +189,7 @@ struct UnifiedColorPane: View {
                 .padding(.horizontal, 16)
             }
 
-            if advancedUIEnabled {
+            if presentation == .full, advancedUIEnabled {
                 perLedToggleSection
             }
 
@@ -298,12 +290,12 @@ struct UnifiedColorPane: View {
                     throttleApply(stops: stops, phase: phase)
                 }
             )
-            .frame(height: 56)
+            .frame(height: presentation == .compactControl ? 42 : 48)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Gradient editor")
             .accessibilityValue("\(currentGradient.stops.count) color stops")
             .accessibilityHint("Double tap a stop to edit its color or double tap in the gradient to add a new stop.")
-            .padding(.horizontal, 16)
+            .padding(.horizontal, presentation == .compactControl ? 0 : 16)
             
             // Inline color picker
             // In 1-tab mode (single stop), automatically select the first stop if none selected
@@ -315,15 +307,17 @@ struct UnifiedColorPane: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(containerFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(borderStroke, lineWidth: 1)
-                )
-        )
+        .padding(.vertical, presentation == .compactControl ? 0 : 16)
+        .background {
+            if presentation == .full {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(containerFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(borderStroke, lineWidth: 1)
+                    )
+            }
+        }
         .task {
             // Load persisted gradient into UI first (don't refresh state to prevent flash)
             if let latestStops = viewModel.gradientStops(for: device.id), !latestStops.isEmpty {
@@ -415,7 +409,7 @@ struct UnifiedColorPane: View {
             SaveColorPresetDialog(
                 device: activeDevice,
                 currentGradient: currentGradient,
-                currentBrightness: Int(round(briUI)),
+                currentBrightness: brightnessValueForSaving,
                 currentTemperature: stopTemperatures.values.first,
                 currentWhiteLevel: stopWhiteLevels.values.first
             ) { preset in
@@ -424,6 +418,49 @@ struct UnifiedColorPane: View {
                 }
             }
         }
+    }
+
+    private func savePresetButton(title: String) -> some View {
+        Button(action: {
+            if advancedUIEnabled {
+                showSavePresetDialog = true
+            } else {
+                Task {
+                    await saveColorPresetDirectly()
+                }
+            }
+        }) {
+            HStack(spacing: 6) {
+                if isSavingPreset {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .tint(.white)
+                } else if showSaveSuccess {
+                    Image(systemName: "checkmark.circle")
+                        .font(AppTypography.style(.caption))
+                        .foregroundColor(.white)
+                } else {
+                    Image(systemName: "plus.circle")
+                        .font(AppTypography.style(.caption))
+                }
+                Text(title)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+            }
+            .foregroundColor(.white.opacity(0.9))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isSavingPreset || automationStore.hasAnyDeletionInProgress)
+        .opacity((isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
     }
 
     private var perLedToggleSection: some View {
@@ -561,8 +598,9 @@ struct UnifiedColorPane: View {
             print("🎛️ ColorPicker capabilities for \(device.name): segmentId=\(segmentId) CCT=\(supportsCCT) White=\(supportsWhite) Kelvin=\(usesKelvin)")
         }
         #endif
+        .frame(maxWidth: .infinity)
         .transition(.move(edge: .bottom).combined(with: .opacity))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, presentation == .compactControl ? 0 : 16)
     }
 
     private func applyIncomingGradient(_ stops: [GradientStop]) {
@@ -761,6 +799,13 @@ private extension UnifiedColorPane {
         colorSchemeContrast == .increased ? .white : .white.opacity(0.9)
     }
 
+    var brightnessValueForSaving: Int {
+        if let brightnessOverride {
+            return max(1, min(255, brightnessOverride))
+        }
+        return max(1, min(255, Int(round(briUI))))
+    }
+
     func adjustedOpacity(_ base: Double) -> Double {
         colorSchemeContrast == .increased ? min(1.0, base * 1.7) : base
     }
@@ -773,7 +818,7 @@ private extension UnifiedColorPane {
             name: "Color Preset \(Date().presetNameTimestamp())",
             gradientStops: currentGradient.stops,
             gradientInterpolation: currentGradient.interpolation,
-            brightness: Int(briUI),
+            brightness: brightnessValueForSaving,
             temperature: stopTemperatures.values.first ?? (stopTemperatures.isEmpty ? nil : 0.5),
             whiteLevel: stopWhiteLevels.values.first
         )

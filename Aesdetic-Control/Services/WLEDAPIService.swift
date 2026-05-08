@@ -1818,6 +1818,318 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private func clampMacroId(_ value: Int) -> Int {
         min(250, max(0, value))
     }
+
+    // MARK: - Alexa Integration
+
+    /// Fetch native WLED Alexa settings from /json/cfg.
+    func fetchAlexaIntegrationSettings(for device: WLEDDevice) async throws -> WLEDAlexaIntegrationSettings {
+        let config = try await fetchRawConfig(for: device)
+        let resolved = (config["cfg"] as? [String: Any]) ?? config
+
+        let id = resolved["id"] as? [String: Any] ?? [:]
+        let interfaces = resolved["if"] as? [String: Any] ?? [:]
+        let va = interfaces["va"] as? [String: Any] ?? [:]
+
+        let invocationName = decodeString(id["inv"]) ?? device.name
+        let isEnabled = decodeBool(va["alexa"]) ?? false
+        let presetCount = clampAlexaPresetCount(decodeInt(va["p"]) ?? 0)
+
+        return WLEDAlexaIntegrationSettings(
+            isEnabled: isEnabled,
+            invocationName: invocationName,
+            exposedPresetCount: presetCount
+        )
+    }
+
+    /// Update native WLED Alexa settings in /json/cfg while preserving unrelated WLED configuration.
+    func updateAlexaIntegrationSettings(_ settings: WLEDAlexaIntegrationSettings, for device: WLEDDevice) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+
+        var configPayload = try await fetchRawConfig(for: device)
+        applyAlexaIntegrationSettings(settings, to: &configPayload)
+        if var cfg = configPayload["cfg"] as? [String: Any] {
+            applyAlexaIntegrationSettings(settings, to: &cfg)
+            configPayload["cfg"] = cfg
+        }
+        _ = enforceColorGammaCorrection(in: &configPayload)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: configPayload, options: [])
+
+        let (_, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+    }
+
+    private func applyAlexaIntegrationSettings(_ settings: WLEDAlexaIntegrationSettings, to root: inout [String: Any]) {
+        var id = root["id"] as? [String: Any] ?? [:]
+        id["inv"] = sanitizedAlexaInvocationName(settings.invocationName)
+        root["id"] = id
+
+        var interfaces = root["if"] as? [String: Any] ?? [:]
+        var va = interfaces["va"] as? [String: Any] ?? [:]
+        va["alexa"] = settings.isEnabled
+        va["p"] = clampAlexaPresetCount(settings.exposedPresetCount)
+        interfaces["va"] = va
+        root["if"] = interfaces
+    }
+
+    private func sanitizedAlexaInvocationName(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = trimmed.isEmpty ? "WLED" : trimmed
+        return String(fallback.prefix(32))
+    }
+
+    private func clampAlexaPresetCount(_ value: Int) -> Int {
+        min(9, max(0, value))
+    }
+
+    // MARK: - Native Integration Settings
+
+    /// Fetch WLED's native Sync Interfaces settings from /json/cfg.
+    func fetchNativeIntegrationSettings(for device: WLEDDevice) async throws -> WLEDNativeIntegrationSettings {
+        let config = try await fetchRawConfig(for: device)
+        let resolved = (config["cfg"] as? [String: Any]) ?? config
+        let defaults = WLEDNativeIntegrationSettings.defaults
+
+        let interfaces = resolved["if"] as? [String: Any] ?? [:]
+        let sync = interfaces["sync"] as? [String: Any] ?? [:]
+        let syncRecv = sync["recv"] as? [String: Any] ?? [:]
+        let syncSend = sync["send"] as? [String: Any] ?? [:]
+        let nodes = interfaces["nodes"] as? [String: Any] ?? [:]
+        let live = interfaces["live"] as? [String: Any] ?? [:]
+        let dmx = live["dmx"] as? [String: Any] ?? [:]
+        let mqtt = interfaces["mqtt"] as? [String: Any] ?? [:]
+        let mqttTopics = mqtt["topics"] as? [String: Any] ?? [:]
+        let hue = interfaces["hue"] as? [String: Any] ?? [:]
+        let hueRecv = hue["recv"] as? [String: Any] ?? [:]
+        let hw = resolved["hw"] as? [String: Any] ?? [:]
+        let button = hw["btn"] as? [String: Any] ?? [:]
+
+        let livePort = clampIntegrationValue(decodeInt(live["port"]) ?? defaults.realtime.port, to: 1...65535)
+        let realtimeMode = WLEDRealtimeProtocolMode.mode(for: livePort)
+        let dmxModeRaw = decodeInt(dmx["mode"]) ?? defaults.realtime.dmxMode.rawValue
+        let dmxMode = WLEDDMXMode(rawValue: dmxModeRaw) ?? defaults.realtime.dmxMode
+
+        let syncSettings = WLEDIntegrationSyncSettings(
+            udpPort: clampIntegrationValue(decodeInt(sync["port0"]) ?? defaults.sync.udpPort, to: 1...65535),
+            secondaryUdpPort: clampIntegrationValue(decodeInt(sync["port1"]) ?? defaults.sync.secondaryUdpPort, to: 1...65535),
+            espNowEnabled: decodeBool(sync["espnow"]) ?? defaults.sync.espNowEnabled,
+            sendGroups: clampIntegrationValue(decodeInt(syncSend["grp"]) ?? defaults.sync.sendGroups, to: 0...255),
+            receiveGroups: clampIntegrationValue(decodeInt(syncRecv["grp"]) ?? defaults.sync.receiveGroups, to: 0...255),
+            receiveBrightness: decodeBool(syncRecv["bri"]) ?? defaults.sync.receiveBrightness,
+            receiveColor: decodeBool(syncRecv["col"]) ?? defaults.sync.receiveColor,
+            receiveEffects: decodeBool(syncRecv["fx"]) ?? defaults.sync.receiveEffects,
+            receivePalette: decodeBool(syncRecv["pal"]) ?? defaults.sync.receivePalette,
+            receiveSegmentOptions: decodeBool(syncRecv["seg"]) ?? defaults.sync.receiveSegmentOptions,
+            receiveSegmentBounds: decodeBool(syncRecv["sb"]) ?? defaults.sync.receiveSegmentBounds,
+            sendOnStart: decodeBool(syncSend["en"]) ?? defaults.sync.sendOnStart,
+            sendDirectChanges: decodeBool(syncSend["dir"]) ?? defaults.sync.sendDirectChanges,
+            sendButtonChanges: decodeBool(syncSend["btn"]) ?? defaults.sync.sendButtonChanges,
+            sendAlexaChanges: decodeBool(syncSend["va"]) ?? defaults.sync.sendAlexaChanges,
+            sendHueChanges: decodeBool(syncSend["hue"]) ?? defaults.sync.sendHueChanges,
+            udpRetransmissions: clampIntegrationValue(decodeInt(syncSend["ret"]) ?? defaults.sync.udpRetransmissions, to: 0...30),
+            nodeListEnabled: decodeBool(nodes["list"]) ?? defaults.sync.nodeListEnabled,
+            nodeBroadcastEnabled: decodeBool(nodes["bcast"]) ?? defaults.sync.nodeBroadcastEnabled
+        )
+
+        let realtimeSettings = WLEDIntegrationRealtimeSettings(
+            receiveRealtime: decodeBool(live["en"]) ?? defaults.realtime.receiveRealtime,
+            mainSegmentOnly: decodeBool(live["mso"]) ?? defaults.realtime.mainSegmentOnly,
+            respectLedMaps: decodeBool(live["rlm"]) ?? defaults.realtime.respectLedMaps,
+            protocolMode: realtimeMode,
+            port: livePort,
+            multicast: decodeBool(live["mc"]) ?? defaults.realtime.multicast,
+            startUniverse: clampIntegrationValue(decodeInt(dmx["uni"]) ?? defaults.realtime.startUniverse, to: 0...63999),
+            skipOutOfSequence: decodeBool(dmx["seqskip"]) ?? defaults.realtime.skipOutOfSequence,
+            dmxStartAddress: clampIntegrationValue(decodeInt(dmx["addr"]) ?? defaults.realtime.dmxStartAddress, to: 1...510),
+            dmxSegmentSpacing: clampIntegrationValue(decodeInt(dmx["dss"]) ?? defaults.realtime.dmxSegmentSpacing, to: 0...150),
+            e131Priority: clampIntegrationValue(decodeInt(dmx["e131prio"]) ?? defaults.realtime.e131Priority, to: 0...200),
+            dmxMode: dmxMode,
+            timeoutMs: clampIntegrationValue((decodeInt(live["timeout"]) ?? (defaults.realtime.timeoutMs / 100)) * 100, to: 100...65000),
+            forceMaxBrightness: decodeBool(live["maxbri"]) ?? defaults.realtime.forceMaxBrightness,
+            disableGammaCorrection: decodeBool(live["no-gc"]) ?? defaults.realtime.disableGammaCorrection,
+            ledOffset: clampIntegrationValue(decodeInt(live["offset"]) ?? defaults.realtime.ledOffset, to: -255...255)
+        )
+
+        let mqttSettings = WLEDIntegrationMQTTSettings(
+            enabled: decodeBool(mqtt["en"]) ?? defaults.mqtt.enabled,
+            broker: decodeString(mqtt["broker"]) ?? defaults.mqtt.broker,
+            port: clampIntegrationValue(decodeInt(mqtt["port"]) ?? defaults.mqtt.port, to: 1...65535),
+            username: decodeString(mqtt["user"]) ?? defaults.mqtt.username,
+            password: "",
+            clientID: decodeString(mqtt["cid"]) ?? defaults.mqtt.clientID,
+            deviceTopic: decodeString(mqttTopics["device"]) ?? defaults.mqtt.deviceTopic,
+            groupTopic: decodeString(mqttTopics["group"]) ?? defaults.mqtt.groupTopic,
+            publishButtonPresses: decodeBool(button["mqtt"]) ?? defaults.mqtt.publishButtonPresses,
+            retainMessages: decodeBool(mqtt["rtn"]) ?? defaults.mqtt.retainMessages
+        )
+
+        let hueSettings = WLEDIntegrationHueSettings(
+            enabled: decodeBool(hue["en"]) ?? defaults.hue.enabled,
+            lightID: clampIntegrationValue(decodeInt(hue["id"]) ?? defaults.hue.lightID, to: 1...99),
+            pollIntervalMs: clampIntegrationValue((decodeInt(hue["iv"]) ?? (defaults.hue.pollIntervalMs / 100)) * 100, to: 100...65000),
+            receiveOnOff: decodeBool(hueRecv["on"]) ?? defaults.hue.receiveOnOff,
+            receiveBrightness: decodeBool(hueRecv["bri"]) ?? defaults.hue.receiveBrightness,
+            receiveColor: decodeBool(hueRecv["col"]) ?? defaults.hue.receiveColor,
+            bridgeIP: decodeIPv4String(hue["ip"]) ?? defaults.hue.bridgeIP
+        )
+
+        return WLEDNativeIntegrationSettings(
+            sync: syncSettings,
+            realtime: realtimeSettings,
+            mqtt: mqttSettings,
+            hue: hueSettings
+        )
+    }
+
+    /// Update WLED's native Sync Interfaces settings in /json/cfg.
+    func updateNativeIntegrationSettings(_ settings: WLEDNativeIntegrationSettings, for device: WLEDDevice) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+
+        var configPayload = try await fetchRawConfig(for: device)
+        applyNativeIntegrationSettings(settings, to: &configPayload)
+        if var cfg = configPayload["cfg"] as? [String: Any] {
+            applyNativeIntegrationSettings(settings, to: &cfg)
+            configPayload["cfg"] = cfg
+        }
+        _ = enforceColorGammaCorrection(in: &configPayload)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: configPayload, options: [])
+
+        let (_, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+    }
+
+    private func applyNativeIntegrationSettings(_ settings: WLEDNativeIntegrationSettings, to root: inout [String: Any]) {
+        var interfaces = root["if"] as? [String: Any] ?? [:]
+
+        var sync = interfaces["sync"] as? [String: Any] ?? [:]
+        sync["port0"] = clampIntegrationValue(settings.sync.udpPort, to: 1...65535)
+        sync["port1"] = clampIntegrationValue(settings.sync.secondaryUdpPort, to: 1...65535)
+        sync["espnow"] = settings.sync.espNowEnabled
+
+        var syncRecv = sync["recv"] as? [String: Any] ?? [:]
+        syncRecv["bri"] = settings.sync.receiveBrightness
+        syncRecv["col"] = settings.sync.receiveColor
+        syncRecv["fx"] = settings.sync.receiveEffects
+        syncRecv["pal"] = settings.sync.receivePalette
+        syncRecv["grp"] = clampIntegrationValue(settings.sync.receiveGroups, to: 0...255)
+        syncRecv["seg"] = settings.sync.receiveSegmentOptions
+        syncRecv["sb"] = settings.sync.receiveSegmentBounds
+        sync["recv"] = syncRecv
+
+        var syncSend = sync["send"] as? [String: Any] ?? [:]
+        syncSend["en"] = settings.sync.sendOnStart
+        syncSend["dir"] = settings.sync.sendDirectChanges
+        syncSend["btn"] = settings.sync.sendButtonChanges
+        syncSend["va"] = settings.sync.sendAlexaChanges
+        syncSend["hue"] = settings.sync.sendHueChanges
+        syncSend["grp"] = clampIntegrationValue(settings.sync.sendGroups, to: 0...255)
+        syncSend["ret"] = clampIntegrationValue(settings.sync.udpRetransmissions, to: 0...30)
+        sync["send"] = syncSend
+        interfaces["sync"] = sync
+
+        var nodes = interfaces["nodes"] as? [String: Any] ?? [:]
+        nodes["list"] = settings.sync.nodeListEnabled
+        nodes["bcast"] = settings.sync.nodeBroadcastEnabled
+        interfaces["nodes"] = nodes
+
+        var live = interfaces["live"] as? [String: Any] ?? [:]
+        live["en"] = settings.realtime.receiveRealtime
+        live["mso"] = settings.realtime.mainSegmentOnly
+        live["rlm"] = settings.realtime.respectLedMaps
+        live["port"] = resolvedRealtimePort(for: settings.realtime)
+        live["mc"] = settings.realtime.multicast
+        live["timeout"] = clampIntegrationValue(settings.realtime.timeoutMs, to: 100...65000) / 100
+        live["maxbri"] = settings.realtime.forceMaxBrightness
+        live["no-gc"] = settings.realtime.disableGammaCorrection
+        live["offset"] = clampIntegrationValue(settings.realtime.ledOffset, to: -255...255)
+
+        var dmx = live["dmx"] as? [String: Any] ?? [:]
+        dmx["uni"] = clampIntegrationValue(settings.realtime.startUniverse, to: 0...63999)
+        dmx["seqskip"] = settings.realtime.skipOutOfSequence
+        dmx["addr"] = clampIntegrationValue(settings.realtime.dmxStartAddress, to: 1...510)
+        dmx["dss"] = clampIntegrationValue(settings.realtime.dmxSegmentSpacing, to: 0...150)
+        dmx["e131prio"] = clampIntegrationValue(settings.realtime.e131Priority, to: 0...200)
+        dmx["mode"] = settings.realtime.dmxMode.rawValue
+        live["dmx"] = dmx
+        interfaces["live"] = live
+
+        var mqtt = interfaces["mqtt"] as? [String: Any] ?? [:]
+        mqtt["en"] = settings.mqtt.enabled
+        mqtt["broker"] = limitIntegrationString(settings.mqtt.broker, maxLength: 32)
+        mqtt["port"] = clampIntegrationValue(settings.mqtt.port, to: 1...65535)
+        mqtt["user"] = limitIntegrationString(settings.mqtt.username, maxLength: 40)
+        if !settings.mqtt.password.isEmpty {
+            mqtt["psk"] = limitIntegrationString(settings.mqtt.password, maxLength: 64)
+        }
+        mqtt["cid"] = limitIntegrationString(settings.mqtt.clientID, maxLength: 40)
+        mqtt["rtn"] = settings.mqtt.retainMessages
+        var topics = mqtt["topics"] as? [String: Any] ?? [:]
+        topics["device"] = limitIntegrationString(settings.mqtt.deviceTopic, maxLength: 32)
+        topics["group"] = limitIntegrationString(settings.mqtt.groupTopic, maxLength: 32)
+        mqtt["topics"] = topics
+        interfaces["mqtt"] = mqtt
+
+        var hue = interfaces["hue"] as? [String: Any] ?? [:]
+        hue["en"] = settings.hue.enabled
+        hue["id"] = clampIntegrationValue(settings.hue.lightID, to: 1...99)
+        hue["iv"] = clampIntegrationValue(settings.hue.pollIntervalMs, to: 100...65000) / 100
+        var hueRecv = hue["recv"] as? [String: Any] ?? [:]
+        hueRecv["on"] = settings.hue.receiveOnOff
+        hueRecv["bri"] = settings.hue.receiveBrightness
+        hueRecv["col"] = settings.hue.receiveColor
+        hue["recv"] = hueRecv
+        hue["ip"] = encodeIPv4String(settings.hue.bridgeIP)
+        interfaces["hue"] = hue
+
+        root["if"] = interfaces
+
+        var hw = root["hw"] as? [String: Any] ?? [:]
+        var button = hw["btn"] as? [String: Any] ?? [:]
+        button["mqtt"] = settings.mqtt.publishButtonPresses
+        hw["btn"] = button
+        root["hw"] = hw
+    }
+
+    private func resolvedRealtimePort(for settings: WLEDIntegrationRealtimeSettings) -> Int {
+        switch settings.protocolMode {
+        case .e131, .artNet:
+            return settings.protocolMode.rawValue
+        case .custom:
+            return clampIntegrationValue(settings.port, to: 1...65535)
+        }
+    }
+
+    private func clampIntegrationValue(_ value: Int, to range: ClosedRange<Int>) -> Int {
+        min(range.upperBound, max(range.lowerBound, value))
+    }
+
+    private func limitIntegrationString(_ value: String, maxLength: Int) -> String {
+        String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxLength))
+    }
+
+    private func decodeIPv4String(_ value: Any?) -> String? {
+        guard let parts = value as? [Any], parts.count == 4 else { return nil }
+        let octets = parts.map { clampIntegrationValue(decodeInt($0) ?? 0, to: 0...255) }
+        return octets.map(String.init).joined(separator: ".")
+    }
+
+    private func encodeIPv4String(_ value: String) -> [Int] {
+        let octets = value.split(separator: ".").map { clampIntegrationValue(Int($0) ?? 0, to: 0...255) }
+        return (0..<4).map { index in
+            index < octets.count ? octets[index] : 0
+        }
+    }
     
     func rewritePresetStoreDeletingRecords(
         playlistIds: [Int],
@@ -1840,6 +2152,51 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 device: device
             )
         }
+    }
+
+    func deletePreset(id: Int, device: WLEDDevice) async throws -> Bool {
+        guard (1...250).contains(id) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        return try await rewritePresetStoreDeletingRecords(
+            playlistIds: [],
+            presetIds: [id],
+            device: device
+        )
+    }
+
+    func deletePlaylist(id: Int, device: WLEDDevice) async throws -> Bool {
+        guard (1...250).contains(id) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        return try await rewritePresetStoreDeletingRecords(
+            playlistIds: [id],
+            presetIds: [],
+            device: device
+        )
+    }
+
+    func makePresetStoreDeleteRequestLikeWLED(
+        id: Int,
+        device: WLEDDevice,
+        timestamp: Int = Int(Date().timeIntervalSince1970)
+    ) async throws -> URLRequest {
+        guard (1...250).contains(id) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        guard let url = URL(string: "http://\(device.ipAddress)/json/si") else {
+            throw WLEDAPIError.invalidURL
+        }
+        let body: [String: Any] = [
+            "pdel": id,
+            "v": true,
+            "time": timestamp
+        ]
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        return request
     }
 
     func rewritePresetStoreUpsertingRecords(
@@ -1883,6 +2240,112 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 playlistRecords: playlistRecords,
                 device: device
             )
+        }
+    }
+
+    func syncAlexaPresetMirrors(
+        favorites: [WLEDAlexaMirrorFavorite],
+        device: WLEDDevice,
+        allowReplacingExisting: Bool = false
+    ) async throws -> WLEDAlexaMirrorSyncResult {
+        let normalizedFavorites = favorites
+            .filter {
+                alexaReservedPresetRange.contains($0.slot)
+                    && appManagedPresetRange.contains($0.sourcePresetId)
+            }
+            .sorted { $0.slot < $1.slot }
+        guard Set(normalizedFavorites.map(\.slot)).count == normalizedFavorites.count else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+
+        let queueKey = presetStoreQueueKey(for: device)
+        return try await enqueuePresetOperation(deviceId: queueKey, label: "preset_store.alexa_mirror_sync") {
+            try await self.syncAlexaPresetMirrorsQueued(
+                favorites: normalizedFavorites,
+                device: device,
+                allowReplacingExisting: allowReplacingExisting
+            )
+        }
+    }
+
+    private func syncAlexaPresetMirrorsQueued(
+        favorites: [WLEDAlexaMirrorFavorite],
+        device: WLEDDevice,
+        allowReplacingExisting: Bool
+    ) async throws -> WLEDAlexaMirrorSyncResult {
+        let originalData = try await fetchPresetStoreRawData(device: device)
+        let plan = try alexaMirrorRewritePlan(
+            data: originalData,
+            favorites: favorites,
+            allowReplacingExisting: allowReplacingExisting
+        )
+        guard plan.conflictSlots.isEmpty, plan.missingSourceIds.isEmpty else {
+            return WLEDAlexaMirrorSyncResult(
+                mirroredSlots: [],
+                deletedSlots: [],
+                conflictSlots: plan.conflictSlots,
+                missingSourceIds: plan.missingSourceIds
+            )
+        }
+
+        let rewrittenData = try makePresetStoreRewriteReplacingAlexaMirrors(
+            upserting: plan.upsertRecords,
+            deleting: Set(plan.deleteSlots),
+            from: originalData
+        )
+        let originalRecords = try parsePresetPayloadMapById(data: originalData, mode: .strict)
+        let originalIds = Set(originalRecords.keys)
+        let changedIds = Set(plan.upsertRecords.keys).union(plan.deleteSlots)
+        let preservedIds = originalIds.subtracting(changedIds)
+        let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
+        let rewrittenIds = Set(rewrittenRecords.keys)
+        let missingUpserts = Set(plan.upsertRecords.keys).subtracting(rewrittenIds)
+        let remainingDeletes = Set(plan.deleteSlots).intersection(rewrittenIds)
+        let missingPreserved = preservedIds.subtracting(rewrittenIds)
+
+        guard missingUpserts.isEmpty, remainingDeletes.isEmpty, missingPreserved.isEmpty else {
+            logger.error(
+                "preset_store.alexa_mirror.preflight_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(missingUpserts).sorted(), privacy: .public) remainingDeletes=\(Array(remainingDeletes).sorted(), privacy: .public) missingPreserved=\(Array(missingPreserved).sorted(), privacy: .public)"
+            )
+            throw WLEDAPIError.invalidResponse
+        }
+
+        do {
+            persistLocalPresetStoreBackup(data: originalData, device: device)
+            try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            let verificationData = try await fetchPresetStoreRawData(device: device)
+            let verificationRecords = try parsePresetPayloadMapById(data: verificationData, mode: .strict)
+            let verifiedIds = Set(verificationRecords.keys)
+            let verifyMissingUpserts = Set(plan.upsertRecords.keys).subtracting(verifiedIds)
+            let verifyRemainingDeletes = Set(plan.deleteSlots).intersection(verifiedIds)
+            let verifyMissingPreserved = preservedIds.subtracting(verifiedIds)
+
+            guard verifyMissingUpserts.isEmpty,
+                  verifyRemainingDeletes.isEmpty,
+                  verifyMissingPreserved.isEmpty else {
+                logger.error(
+                    "preset_store.alexa_mirror.verify_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(verifyMissingUpserts).sorted(), privacy: .public) remainingDeletes=\(Array(verifyRemainingDeletes).sorted(), privacy: .public) missingPreserved=\(Array(verifyMissingPreserved).sorted(), privacy: .public)"
+                )
+                try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
+                throw WLEDAPIError.invalidResponse
+            }
+
+            cachePresetRecordPayloads(records: verificationRecords, device: device)
+            recordSuccessfulRequest(deviceId: device.id)
+            return WLEDAlexaMirrorSyncResult(
+                mirroredSlots: plan.upsertRecords.keys.sorted(),
+                deletedSlots: plan.deleteSlots.sorted(),
+                conflictSlots: [],
+                missingSourceIds: []
+            )
+        } catch {
+            logger.warning(
+                "preset_store.alexa_mirror.error device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
+            throw error
         }
     }
 
@@ -2396,7 +2859,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let existingStepIds = preset.wledStepPresetIds ?? []
         var reusableStepIds: [Int] = []
         if existingStepIds.count == stepCount {
-            let validIds = existingStepIds.filter { (1...250).contains($0) }
+            let validIds = existingStepIds.filter { appManagedPresetRange.contains($0) }
             if validIds.count == stepCount, Set(validIds).isSubset(of: usedPresetIds) {
                 reusableStepIds = validIds
                 reusableStepIds.forEach { usedPresetIds.remove($0) }
@@ -3882,6 +4345,125 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
+    private struct AlexaMirrorRewritePlan {
+        let upsertRecords: [Int: [String: Any]]
+        let deleteSlots: [Int]
+        let conflictSlots: [Int]
+        let missingSourceIds: [Int]
+    }
+
+    private func alexaMirrorRewritePlan(
+        data: Data,
+        favorites: [WLEDAlexaMirrorFavorite],
+        allowReplacingExisting: Bool
+    ) throws -> AlexaMirrorRewritePlan {
+        let records = try parsePresetPayloadMapById(data: data, mode: .strict)
+        let targetSlots = Set(favorites.map(\.slot))
+        var conflicts: [Int] = []
+        var missingSources: [Int] = []
+        var upserts: [Int: [String: Any]] = [:]
+
+        for slot in alexaReservedPresetRange {
+            guard let record = records[slot], !isAesdeticAlexaMirrorRecord(record) else { continue }
+            if !allowReplacingExisting {
+                conflicts.append(slot)
+            }
+        }
+
+        guard conflicts.isEmpty else {
+            return AlexaMirrorRewritePlan(
+                upsertRecords: [:],
+                deleteSlots: [],
+                conflictSlots: conflicts.sorted(),
+                missingSourceIds: []
+            )
+        }
+
+        for favorite in favorites {
+            guard let sourceRecord = records[favorite.sourcePresetId] else {
+                missingSources.append(favorite.sourcePresetId)
+                continue
+            }
+            upserts[favorite.slot] = alexaMirrorRecord(
+                from: sourceRecord,
+                sourceId: favorite.sourcePresetId,
+                slot: favorite.slot,
+                displayName: favorite.displayName
+            )
+        }
+
+        let deleteSlots = alexaReservedPresetRange
+            .filter { slot in
+                guard !targetSlots.contains(slot), let record = records[slot] else { return false }
+                return isAesdeticAlexaMirrorRecord(record) || allowReplacingExisting
+            }
+
+        return AlexaMirrorRewritePlan(
+            upsertRecords: upserts,
+            deleteSlots: deleteSlots,
+            conflictSlots: [],
+            missingSourceIds: Array(Set(missingSources)).sorted()
+        )
+    }
+
+    private func makePresetStoreRewriteReplacingAlexaMirrors(
+        upserting records: [Int: [String: Any]],
+        deleting deleteIds: Set<Int>,
+        from data: Data
+    ) throws -> Data {
+        var root = try parseJSONObjectDictionary(from: data, mode: .strict)
+        let hasWrappedPayload = root["presets"] is [String: Any]
+        var payload = root["presets"] as? [String: Any] ?? root
+
+        for id in deleteIds {
+            guard alexaReservedPresetRange.contains(id) else {
+                throw WLEDAPIError.invalidConfiguration
+            }
+            payload.removeValue(forKey: "\(id)")
+        }
+        for (id, record) in records {
+            guard alexaReservedPresetRange.contains(id) else {
+                throw WLEDAPIError.invalidConfiguration
+            }
+            payload["\(id)"] = sanitizedPresetRecord(record)
+        }
+        if payload["0"] == nil {
+            payload["0"] = [:] as [String: Any]
+        }
+
+        if hasWrappedPayload {
+            root["presets"] = payload
+        } else {
+            root = payload
+        }
+
+        guard JSONSerialization.isValidJSONObject(root) else {
+            throw WLEDAPIError.invalidResponse
+        }
+        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    private func alexaMirrorRecord(
+        from sourceRecord: [String: Any],
+        sourceId: Int,
+        slot: Int,
+        displayName: String
+    ) -> [String: Any] {
+        var record = sanitizedPresetRecord(sourceRecord)
+        record["n"] = sanitizedPresetName(displayName, fallback: "Alexa Favorite \(slot)")
+        record["aesdetic"] = [
+            "alexa": true,
+            "source": sourceId,
+            "slot": slot
+        ] as [String: Any]
+        return record
+    }
+
+    private func isAesdeticAlexaMirrorRecord(_ record: [String: Any]) -> Bool {
+        guard let metadata = record["aesdetic"] as? [String: Any] else { return false }
+        return decodeBool(metadata["alexa"]) == true
+    }
+
     private func uploadWLEDFile(named filename: String, data fileData: Data, device: WLEDDevice) async throws {
         guard let uploadURL = URL(string: "http://\(device.ipAddress)/upload") else {
             throw WLEDAPIError.invalidURL
@@ -4141,6 +4723,24 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let mode: PresetPayloadParserMode = strict ? .strict : .resilient
         let parsed = try parsePresetPayloadMapById(data: data, mode: mode)
         return Array(parsed.keys).sorted()
+    }
+
+    func debugAlexaMirrorPlanForTesting(
+        data: Data,
+        favorites: [WLEDAlexaMirrorFavorite],
+        allowReplacingExisting: Bool
+    ) throws -> WLEDAlexaMirrorSyncResult {
+        let plan = try alexaMirrorRewritePlan(
+            data: data,
+            favorites: favorites,
+            allowReplacingExisting: allowReplacingExisting
+        )
+        return WLEDAlexaMirrorSyncResult(
+            mirroredSlots: plan.upsertRecords.keys.sorted(),
+            deletedSlots: plan.deleteSlots.sorted(),
+            conflictSlots: plan.conflictSlots.sorted(),
+            missingSourceIds: plan.missingSourceIds.sorted()
+        )
     }
     #endif
     
@@ -4721,7 +5321,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private func allocateIds(from start: Int, excluding used: Set<Int>, count: Int) -> [Int]? {
         guard count > 0 else { return [] }
         var results: [Int] = []
-        for id in stride(from: start, through: 1, by: -1) {
+        let lowerBound = max(1, appManagedPresetLowerBound)
+        guard start >= lowerBound else { return nil }
+        for id in stride(from: start, through: lowerBound, by: -1) {
             if !used.contains(id) {
                 results.append(id)
                 if results.count == count {

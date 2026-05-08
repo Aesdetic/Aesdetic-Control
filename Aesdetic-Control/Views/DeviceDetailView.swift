@@ -9,12 +9,16 @@ enum DeviceDetailBackgroundStyle {
 struct DeviceDetailView: View {
     let device: WLEDDevice
     private let backgroundStyle: DeviceDetailBackgroundStyle
+    private let containerCornerRadius: CGFloat
+    private let presentationProgress: CGFloat
+    private let onClose: (() -> Void)?
     @ObservedObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
-    @State private var selectedTab: String = "Colors"
+    @State private var selectedTab: String = "Light"
     
     // State variables for new features
     @State private var showSettings: Bool = false
+    @State private var settingsInitialCategory: ComprehensiveSettingsView.SettingsCategory = .overview
     @State private var showProductSetup: Bool = false
     @State private var showSaveSceneDialog: Bool = false
     @State private var showAddAutomation: Bool = false
@@ -25,6 +29,11 @@ struct DeviceDetailView: View {
     @StateObject private var automationStore = DeviceDetailAutomationStoreBridge()
     @State private var showEditDeviceInfo: Bool = false
     @State private var isToggling: Bool = false
+    @State private var quickBrightness: Double = 0
+    @State private var isAdjustingQuickBrightness: Bool = false
+    @State private var isSavingColorPreset: Bool = false
+    @State private var showSaveColorSuccess: Bool = false
+    @State private var showSaveColorPresetDialog: Bool = false
     @State private var dismissColorPicker: Bool = false
     @State private var selectedSegmentId: Int = 0  // Track selected segment for multi-segment devices
     @State private var presetRenameContext: PresetRenameContext?
@@ -41,18 +50,37 @@ struct DeviceDetailView: View {
     @State private var armedCancelRunId: UUID? = nil
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     @AppStorage("showSegmentControlsInColorTabAdvanced") private var showSegmentControlsInColorTabAdvanced: Bool = true
-    private let detailCardCornerRadius: CGFloat = 30
+    private var detailCardCornerRadius: CGFloat { containerCornerRadius }
 
     init(
         device: WLEDDevice,
         viewModel: DeviceControlViewModel,
-        initialTab: String = "Colors",
-        backgroundStyle: DeviceDetailBackgroundStyle = .frosted
+        initialTab: String = "Light",
+        backgroundStyle: DeviceDetailBackgroundStyle = .frosted,
+        containerCornerRadius: CGFloat = DeviceDetailPresentation.expandedCornerRadius,
+        presentationProgress: CGFloat = 1,
+        onClose: (() -> Void)? = nil
     ) {
         self.device = device
         self.backgroundStyle = backgroundStyle
+        self.containerCornerRadius = containerCornerRadius
+        self.presentationProgress = presentationProgress
+        self.onClose = onClose
         self.viewModel = viewModel
-        _selectedTab = State(initialValue: initialTab)
+        _selectedTab = State(initialValue: Self.normalizedTabName(initialTab))
+    }
+
+    private static func normalizedTabName(_ tab: String) -> String {
+        switch tab {
+        case "Colors":
+            return "Light"
+        case "Presets":
+            return "Saves"
+        case "Automation":
+            return "Automations"
+        default:
+            return tab
+        }
     }
     
     // Use coordinated power state from ViewModel
@@ -85,6 +113,40 @@ struct DeviceDetailView: View {
             return "Preset #\(presetId)"
         }
         return nil
+    }
+
+    private var currentModeLabel: String {
+        if let run = viewModel.activeRunStatus[activeDevice.id] {
+            return run.title
+        }
+        if let playlistId = activeDevice.state?.playlistId, playlistId > 0 {
+            return "Playlist #\(playlistId)"
+        }
+        if let presetId = activeDevice.state?.presetId, presetId > 0 {
+            return "Preset #\(presetId)"
+        }
+        return currentPowerState ? "Manual color" : "Standby"
+    }
+
+    private var effectiveBrightnessValue: Double {
+        Double(max(1, viewModel.getEffectiveBrightness(for: activeDevice)))
+    }
+
+    private var quickBrightnessDisplayValue: Double {
+        quickBrightness > 0 ? quickBrightness : effectiveBrightnessValue
+    }
+
+    private var quickBrightnessPercent: Int {
+        Int(round((quickBrightnessDisplayValue / 255.0) * 100.0))
+    }
+
+    private var quickBrightnessBinding: Binding<Double> {
+        Binding(
+            get: { quickBrightnessDisplayValue },
+            set: { newValue in
+                quickBrightness = min(255, max(1, newValue))
+            }
+        )
     }
 
     private var isRebootWaitActive: Bool {
@@ -121,9 +183,13 @@ struct DeviceDetailView: View {
             ZStack(alignment: .top) {
                 backgroundLayer
                 contentLayer
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
                     .background(detailContainerBackground)
+                    .overlay(alignment: .bottom) {
+                        detailDockFade
+                    }
                     .clipShape(RoundedRectangle(cornerRadius: detailCardCornerRadius, style: .continuous))
                     .disabled(isRebootWaitActive || requiresProductSetup)
                 bannerOverlay(topInset: topInset)
@@ -288,12 +354,25 @@ struct DeviceDetailView: View {
             }
             .sheet(isPresented: $showSettings) {
                 NavigationStack {
-                    ComprehensiveSettingsView(device: activeDevice)
+                    ComprehensiveSettingsView(device: activeDevice, initialCategory: settingsInitialCategory)
                         .environmentObject(viewModel)
                 }
                 .presentationDetents([.large])
                 .presentationDragIndicator(.hidden)
                 .presentationBackground(.ultraThinMaterial)
+            }
+            .sheet(isPresented: $showSaveColorPresetDialog) {
+                SaveColorPresetDialog(
+                    device: activeDevice,
+                    currentGradient: currentLightGradientForSaving,
+                    currentBrightness: currentBrightnessValueForSaving,
+                    currentTemperature: nil,
+                    currentWhiteLevel: nil
+                ) { preset in
+                    Task {
+                        await saveLightColorPreset(preset)
+                    }
+                }
             }
             .alert(
                 "Delete automation?",
@@ -320,13 +399,33 @@ struct DeviceDetailView: View {
         Color.clear
         .ignoresSafeArea()
     }
+
+    private var detailContentOpacity: Double {
+        guard onClose != nil else { return 1 }
+        let normalized = (presentationProgress - 0.36) / 0.42
+        return Double(min(1, max(0, normalized)))
+    }
+
+    private var detailContentOffset: CGFloat {
+        guard onClose != nil else { return 0 }
+        return (1 - min(1, max(0, presentationProgress))) * 18
+    }
     
     private var contentLayer: some View {
         VStack(spacing: 0) {
+            if onClose != nil {
+                Capsule()
+                    .fill(Color.white.opacity(0.34))
+                    .frame(width: 42, height: 5)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
+                    .accessibilityHidden(true)
+            }
+
             condensedHeader
                 .padding(.horizontal, 16)
-                .padding(.top, 20)
-                .padding(.bottom, 12)
+                .padding(.top, onClose == nil ? 20 : 10)
+                .padding(.bottom, 10)
             
             tabNavigationBar
                 .padding(.horizontal, 20)
@@ -337,11 +436,52 @@ struct DeviceDetailView: View {
                 tabContent
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
+                    .padding(.bottom, onClose == nil ? 16 : 152)
             }
+            .frame(maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .opacity(detailContentOpacity)
+        .offset(y: detailContentOffset)
+        .allowsHitTesting(detailContentOpacity > 0.82)
         .contentShape(Rectangle())
         .onTapGesture {
             dismissColorPicker = true
+        }
+    }
+
+    @ViewBuilder
+    private var detailDockFade: some View {
+        if onClose != nil {
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .mask(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                .black.opacity(0.82),
+                                .black
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+
+                LinearGradient(
+                    colors: [
+                        .clear,
+                        Color.white.opacity(0.10),
+                        Color.black.opacity(0.12)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .frame(height: 156)
+            .opacity(detailContentOpacity)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
     
@@ -503,25 +643,24 @@ struct DeviceDetailView: View {
     }
     
     private var condensedHeader: some View {
-        HStack(alignment: .center, spacing: 16) {
-            Button(action: togglePower) {
-                powerButtonContent
-            }
-            .buttonStyle(.plain)
-            .disabled(isToggling || isRebootWaitActive)
-            .accessibilityLabel("Power")
-            .accessibilityHint(currentPowerState ? "Turns the device off." : "Turns the device on.")
-
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(activeDevice.name)
-                    .font(AppTypography.style(.title3, weight: .semibold))
+                    .font(AppTypography.style(.title2, weight: .bold))
                     .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
 
                 HStack(spacing: 8) {
                     statusDot
                     Text(viewModel.isDeviceOnline(activeDevice) || isToggling ? "Online" : "Offline")
                         .font(AppTypography.style(.caption))
                         .foregroundColor(.white.opacity(0.7))
+
+                    Text(activeDevice.location.displayName)
+                        .font(AppTypography.style(.caption))
+                        .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(1)
 
                     if let activeRun = viewModel.activeRunStatus[activeDevice.id] {
                         activeRunStatusChip(activeRun)
@@ -555,41 +694,187 @@ struct DeviceDetailView: View {
 
             Spacer()
 
-            Menu {
-                Button(action: startRename) {
-                    Label("Rename Device", systemImage: "pencil")
+            HStack(spacing: 10) {
+                deviceOptionsMenu
+
+                Button(action: togglePower) {
+                    compactPowerButtonContent
                 }
-                Button(action: { showSettings.toggle() }) {
-                    Label("Settings", systemImage: "gearshape")
-                }
-                Button(action: { showProductSetup = true }) {
-                    Label("Aesdetic Profile", systemImage: "sparkles")
-                }
-                Button(action: { advancedUIEnabled.toggle() }) {
-                    Label(
-                        advancedUIEnabled ? "Disable Advanced UI" : "Enable Advanced UI",
-                        systemImage: advancedUIEnabled ? "checkmark.circle.fill" : "circle"
-                    )
-                }
-                Button(action: {
-                    Task {
-                        await viewModel.clearProtectionWindows(for: activeDevice)
-                    }
-                }) {
-                    Label("Recover Device", systemImage: "arrow.triangle.2.circlepath")
-                }
-                Button(role: .destructive, action: {
-                    showRebootConfirm = true
-                }) {
-                    Label("Reboot Device", systemImage: "power")
-                }
-                .disabled(isRebootWaitActive)
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(AppTypography.style(.title2, weight: .semibold))
-                    .foregroundColor(.white)
+                .buttonStyle(.plain)
+                .disabled(isToggling || isRebootWaitActive)
+                .accessibilityLabel("Power")
+                .accessibilityHint(currentPowerState ? "Turns the device off." : "Turns the device on.")
             }
         }
+    }
+
+    private var primaryControlSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Spacer()
+                saveColorPill
+            }
+
+            HStack(alignment: .center, spacing: 14) {
+                Text(currentModeLabel)
+                    .font(AppTypography.style(.subheadline, weight: .medium))
+                    .foregroundColor(.white.opacity(0.72))
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(quickBrightnessPercent)%")
+                        .font(AppTypography.style(.headline, weight: .bold))
+                        .foregroundColor(.white)
+                        .monospacedDigit()
+
+                    Text("Brightness")
+                        .font(AppTypography.style(.caption2, weight: .medium))
+                        .foregroundColor(.white.opacity(0.62))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Slider(
+                    value: quickBrightnessBinding,
+                    in: 1...255,
+                    onEditingChanged: { editing in
+                        isAdjustingQuickBrightness = editing
+                        if !editing {
+                            commitQuickBrightness()
+                        }
+                    }
+                )
+                .tint(currentPowerState ? Color.white : Color.white.opacity(0.45))
+                .disabled(!activeDevice.isOnline || !currentPowerState || isRebootWaitActive)
+                .accessibilityLabel("Brightness")
+                .accessibilityValue("\(quickBrightnessPercent) percent")
+
+            }
+
+            UnifiedColorPane(
+                device: activeDevice,
+                dismissColorPicker: $dismissColorPicker,
+                segmentId: effectiveSegmentId,
+                presentation: .compactControl,
+                brightnessOverride: Int(round(quickBrightnessDisplayValue)),
+                showsCompactSaveButton: false
+            )
+            .environmentObject(viewModel)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+        )
+        .onAppear {
+            syncQuickBrightnessIfNeeded()
+        }
+        .onChange(of: activeDevice.brightness) { _, _ in
+            syncQuickBrightnessIfNeeded()
+        }
+    }
+
+    private var saveColorPill: some View {
+        Button(action: {
+            if advancedUIEnabled {
+                showSaveColorPresetDialog = true
+            } else {
+                Task {
+                    await saveLightColorPresetDirectly()
+                }
+            }
+        }) {
+            HStack(spacing: 6) {
+                if isSavingColorPreset {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .tint(.white)
+                } else if showSaveColorSuccess {
+                    Image(systemName: "checkmark.circle")
+                        .font(AppTypography.style(.caption))
+                } else {
+                    Image(systemName: "plus.circle")
+                        .font(AppTypography.style(.caption))
+                }
+                Text("Save Color")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundColor(.white.opacity(0.92))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isSavingColorPreset || AutomationStore.shared.hasAnyDeletionInProgress)
+        .opacity((isSavingColorPreset || AutomationStore.shared.hasAnyDeletionInProgress) ? 0.45 : 1.0)
+        .accessibilityLabel("Save color")
+    }
+
+    private var deviceOptionsMenu: some View {
+        Menu {
+            Button(action: startRename) {
+                Label("Rename Device", systemImage: "pencil")
+            }
+            Button(action: { openSettings(.overview) }) {
+                Label("Settings", systemImage: "gearshape")
+            }
+            Button(action: { openSettings(.integrations) }) {
+                Label("Integrations", systemImage: "link")
+            }
+            Button(action: { showProductSetup = true }) {
+                Label("Aesdetic Profile", systemImage: "sparkles")
+            }
+            Button(action: { advancedUIEnabled.toggle() }) {
+                Label(
+                    advancedUIEnabled ? "Disable Advanced UI" : "Enable Advanced UI",
+                    systemImage: advancedUIEnabled ? "checkmark.circle.fill" : "circle"
+                )
+            }
+            Button(action: {
+                Task {
+                    await viewModel.clearProtectionWindows(for: activeDevice)
+                }
+            }) {
+                Label("Recover Device", systemImage: "arrow.triangle.2.circlepath")
+            }
+            Button(role: .destructive, action: {
+                showRebootConfirm = true
+            }) {
+                Label("Reboot Device", systemImage: "power")
+            }
+            .disabled(isRebootWaitActive)
+        } label: {
+            Image(systemName: "line.3.horizontal")
+                .font(AppTypography.style(.headline, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundColor(.white.opacity(0.92))
+                .frame(width: 44, height: 44)
+                .background(Color.white.opacity(0.12))
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                )
+        }
+    }
+
+    private func openSettings(_ category: ComprehensiveSettingsView.SettingsCategory) {
+        settingsInitialCategory = category
+        showSettings = true
     }
 
     @ViewBuilder
@@ -705,9 +990,14 @@ struct DeviceDetailView: View {
                 }
             } else {
                 HStack(spacing: 6) {
+                    Image(systemName: run.kind == .transition ? "arrow.triangle.2.circlepath" : "waveform.path.ecg")
+                        .font(AppTypography.style(.caption2, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.78))
+
                     Text(statusLabel)
-                        .font(AppTypography.style(.caption2))
-                        .foregroundColor(.white.opacity(0.85))
+                        .font(AppTypography.style(.caption2, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.78))
+                        .lineLimit(1)
 
                     if run.isCancellable {
                         Button(action: armCancel) {
@@ -721,14 +1011,14 @@ struct DeviceDetailView: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: isCancelArmed)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
         .background(
             Capsule()
-                .fill(Color.white.opacity(0.15))
+                .fill(Color.white.opacity(0.12))
                 .overlay(
                     Capsule()
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
                 )
         )
         .contentShape(Capsule())
@@ -758,6 +1048,48 @@ struct DeviceDetailView: View {
                 .stroke(Color.white.opacity(currentPowerState ? 0 : 0.3), lineWidth: 1)
         )
     }
+
+    private var largePowerButtonContent: some View {
+        ZStack {
+            Image(systemName: "power")
+                .font(AppTypography.style(.title2, weight: .semibold))
+                .foregroundColor(currentPowerState ? .black : .white)
+                .opacity(isToggling ? 0.65 : 1)
+
+            if isToggling {
+                ProgressView()
+                    .scaleEffect(0.82)
+            }
+        }
+        .frame(width: 58, height: 58)
+        .background(currentPowerState ? Color.white : Color.white.opacity(0.16))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(currentPowerState ? 0 : 0.24), lineWidth: 1)
+        )
+    }
+
+    private var compactPowerButtonContent: some View {
+        ZStack {
+            Image(systemName: "power")
+                .font(AppTypography.style(.headline, weight: .semibold))
+                .foregroundColor(currentPowerState ? .black : .white)
+                .opacity(isToggling ? 0.65 : 1)
+
+            if isToggling {
+                ProgressView()
+                    .scaleEffect(0.68)
+            }
+        }
+        .frame(width: 44, height: 44)
+        .background(currentPowerState ? Color.white : Color.white.opacity(0.16))
+        .clipShape(Circle())
+        .overlay(
+            Circle()
+                .stroke(Color.white.opacity(currentPowerState ? 0 : 0.24), lineWidth: 1)
+        )
+    }
     
     private func togglePower() {
         let targetState = !currentPowerState
@@ -772,43 +1104,116 @@ struct DeviceDetailView: View {
             await MainActor.run { isToggling = false }
         }
     }
+
+    private func syncQuickBrightnessIfNeeded() {
+        guard !isAdjustingQuickBrightness else { return }
+        quickBrightness = effectiveBrightnessValue
+    }
+
+    private func commitQuickBrightness() {
+        let targetBrightness = Int(min(255, max(1, quickBrightnessDisplayValue)).rounded())
+        quickBrightness = Double(targetBrightness)
+        Task {
+            await viewModel.updateDeviceBrightness(activeDevice, brightness: targetBrightness)
+        }
+    }
+
+    private var currentBrightnessValueForSaving: Int {
+        Int(min(255, max(1, quickBrightnessDisplayValue)).rounded())
+    }
+
+    private var currentLightGradientForSaving: LEDGradient {
+        let stops = viewModel.gradientStops(for: activeDevice.id) ?? [
+            GradientStop(position: 0.0, hexColor: activeDevice.currentColor.toHex()),
+            GradientStop(position: 1.0, hexColor: activeDevice.currentColor.toHex())
+        ]
+        return LEDGradient(stops: stops, interpolation: .linear)
+    }
+
+    private func saveLightColorPresetDirectly() async {
+        guard !AutomationStore.shared.hasAnyDeletionInProgress else { return }
+        let preset = ColorPreset(
+            name: "Color Preset \(Date().presetNameTimestamp())",
+            gradientStops: currentLightGradientForSaving.stops,
+            gradientInterpolation: currentLightGradientForSaving.interpolation,
+            brightness: currentBrightnessValueForSaving,
+            temperature: nil,
+            whiteLevel: nil
+        )
+        await saveLightColorPreset(preset)
+    }
+
+    private func saveLightColorPreset(_ presetInput: ColorPreset) async {
+        guard !AutomationStore.shared.hasAnyDeletionInProgress else { return }
+        await MainActor.run {
+            isSavingColorPreset = true
+            showSaveColorSuccess = false
+        }
+        var preset = presetInput
+
+        do {
+            let savedId = try await PresetSyncManager.shared.saveColorPreset(preset, to: activeDevice)
+            await MainActor.run {
+                var ids = preset.wledPresetIds ?? [:]
+                ids[activeDevice.id] = savedId
+                preset.wledPresetIds = ids
+                preset.wledPresetId = savedId
+                PresetsStore.shared.addColorPreset(preset)
+                isSavingColorPreset = false
+                showSaveColorSuccess = true
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run {
+                showSaveColorSuccess = false
+            }
+        } catch {
+            await MainActor.run {
+                isSavingColorPreset = false
+                showSaveColorSuccess = false
+            }
+        }
+    }
     
     
     // MARK: - Tab Navigation Bar
     
     private var tabNavigationBar: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             ForEach(tabItems, id: \.title) { tabItem in
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             selectedTab = tabItem.title
                         }
                     }) {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 4) {
                             Image(systemName: tabItem.icon)
-                                .font(AppTypography.style(.title3))
+                                .font(AppTypography.style(.title3, weight: .medium))
                                 .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(0.4))
                             
                             Text(tabItem.title)
-                                .font(AppTypography.style(.footnote, weight: .medium))
+                                .font(AppTypography.style(.caption, weight: .medium))
                                 .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(0.4))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.76)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                        .frame(minHeight: 48)
+                        .contentShape(Rectangle())
                     }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tabItem.title)
                 .accessibilityHint("Shows the \(tabItem.title.lowercased()) controls.")
             }
         }
+        .padding(.bottom, 10)
         .background(Color.clear)
     }
     
     private var tabItems: [(title: String, icon: String)] {
         [
-            ("Colors", "paintbrush.fill"),
-            ("Presets", "rectangle.stack.fill"),
-            ("Automation", "clock.fill"),
+            ("Light", "sun.max"),
+            ("Saves", "bookmark"),
+            ("Automations", "clock"),
             ("Sync", "arrow.triangle.2.circlepath")
         ]
     }
@@ -818,11 +1223,11 @@ struct DeviceDetailView: View {
     @ViewBuilder
     private var tabContent: some View {
         switch selectedTab {
-        case "Colors":
+        case "Light":
             colorsTabContent
-        case "Presets":
+        case "Saves":
             presetsTabContent
-        case "Automation":
+        case "Automations":
             automationTabContent
         case "Sync":
             syncTabContent
@@ -833,15 +1238,14 @@ struct DeviceDetailView: View {
     
     private var colorsTabContent: some View {
         VStack(spacing: 16) {
+            primaryControlSection
+
             // Segment Picker (only show for multi-segment devices)
             if advancedUIEnabled,
                showSegmentControlsInColorTabAdvanced,
                viewModel.hasMultipleSegments(for: activeDevice) {
                 segmentPicker
             }
-            
-            // Gradient Editor (includes working brightness control)
-            gradientAEditor
             
             // Transition Section
             transitionSection
@@ -895,7 +1299,11 @@ struct DeviceDetailView: View {
     }
     
     private var presetsTabContent: some View {
-        PresetsListView(device: activeDevice, onRequestRename: startPresetRename)
+        PresetsListView(
+            device: activeDevice,
+            onRequestRename: startPresetRename,
+            onOpenIntegrations: { openSettings(.integrations) }
+        )
             .environmentObject(viewModel)
     }
     
@@ -920,7 +1328,6 @@ struct DeviceDetailView: View {
                             deletionProgress: automationStore.deletionProgress(for: automation.id),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
-                            subtitle: activeDevice.name,
                             onToggle: { enabled in
                                 var updated = automation
                                 updated.enabled = enabled
@@ -1211,7 +1618,7 @@ struct DeviceDetailView: View {
         var metadata = automation.metadata
         metadata.pinnedToShortcuts = pinned
         updated.metadata = metadata
-        automationStore.update(updated)
+        automationStore.update(updated, syncOnDevice: false)
     }
     
     private func startAutomationCreation(using template: AutomationTemplate? = nil) {
@@ -1652,9 +2059,9 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
         return AutomationStore.shared.add(automation)
     }
 
-    func update(_ automation: Automation) {
+    func update(_ automation: Automation, syncOnDevice: Bool = true) {
         guard !isRunningInPreview else { return }
-        AutomationStore.shared.update(automation)
+        AutomationStore.shared.update(automation, syncOnDevice: syncOnDevice)
     }
 
     func delete(id: UUID) {

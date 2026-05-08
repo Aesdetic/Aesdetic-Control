@@ -181,7 +181,7 @@ struct AutomationView: View {
                                 var metadata = updated.metadata
                                 metadata.pinnedToShortcuts = pinned
                                 updated.metadata = metadata
-                                automationStore.update(updated)
+                                automationStore.update(updated, syncOnDevice: false)
                             },
                             onRetrySync: {
                                 automationStore.retryOnDeviceSync(for: automation.id)

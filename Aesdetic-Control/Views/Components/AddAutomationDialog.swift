@@ -635,7 +635,7 @@ struct AddAutomationDialog: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if automationStore.hasOnDeviceSyncInProgress(for: selectedDeviceIds) && !isEditing {
-                Text("Please wait for the current automation to finish getting ready before creating another on-device automation.")
+                Text("Please wait for the current automation to finish preparing before creating another on-device automation.")
                     .font(AppTypography.style(.footnote))
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -517,6 +517,90 @@ struct WiFiInfo: Codable {
     let macAddress: String?
 }
 
+struct WLEDNetworkConfiguration: Equatable {
+    var mdnsName: String
+    var stationSSID: String
+    var staticIP: String
+    var staticGateway: String
+    var staticSubnet: String
+    var dnsServer: String
+    var apSSID: String
+    var apPassword: String
+    var apPasswordConfigured: Bool
+    var hideAP: Bool
+    var apChannel: Int
+    var apBehavior: Int
+    var disableWiFiSleep: Bool
+    var force80211g: Bool
+    var txPower: Int
+
+    init(
+        mdnsName: String = "",
+        stationSSID: String = "",
+        staticIP: String = "0.0.0.0",
+        staticGateway: String = "0.0.0.0",
+        staticSubnet: String = "255.255.255.0",
+        dnsServer: String = "0.0.0.0",
+        apSSID: String = "",
+        apPassword: String = "",
+        apPasswordConfigured: Bool = false,
+        hideAP: Bool = false,
+        apChannel: Int = 1,
+        apBehavior: Int = 0,
+        disableWiFiSleep: Bool = false,
+        force80211g: Bool = false,
+        txPower: Int = 78
+    ) {
+        self.mdnsName = mdnsName
+        self.stationSSID = stationSSID
+        self.staticIP = staticIP
+        self.staticGateway = staticGateway
+        self.staticSubnet = staticSubnet
+        self.dnsServer = dnsServer
+        self.apSSID = apSSID
+        self.apPassword = apPassword
+        self.apPasswordConfigured = apPasswordConfigured
+        self.hideAP = hideAP
+        self.apChannel = apChannel
+        self.apBehavior = apBehavior
+        self.disableWiFiSleep = disableWiFiSleep
+        self.force80211g = force80211g
+        self.txPower = txPower
+    }
+
+    var isValid: Bool {
+        isValidHostnamePart(mdnsName)
+            && isValidIPv4(staticIP)
+            && isValidIPv4(staticGateway)
+            && isValidIPv4(staticSubnet)
+            && isValidIPv4(dnsServer)
+            && apSSID.count <= 32
+            && (apPassword.isEmpty || (apPassword.count >= 8 && apPassword.count <= 63))
+            && (1...13).contains(apChannel)
+            && (0...4).contains(apBehavior)
+            && [78, 76, 74, 68, 60, 52].contains(txPower)
+    }
+
+    private func isValidHostnamePart(_ value: String) -> Bool {
+        guard value.count <= 32 else { return false }
+        guard !value.hasPrefix("-"), !value.hasSuffix("-") else { return false }
+        return value.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "-"
+        }
+    }
+
+    private func isValidIPv4(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            guard !part.isEmpty, let number = Int(part), (0...255).contains(number) else {
+                return false
+            }
+            return String(number) == String(part) || part == "0"
+        }
+    }
+}
+
 // MARK: - Error Types
 
 enum WiFiError: LocalizedError {
@@ -698,6 +782,39 @@ class WLEDWiFiService {
         try await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
     }
 
+    func getNetworkConfiguration(device: WLEDDevice) async throws -> WLEDNetworkConfiguration {
+        let config = try await fetchConfig(device: device)
+        return parseNetworkConfiguration(from: config)
+    }
+
+    func updateNetworkConfiguration(device: WLEDDevice, configuration: WLEDNetworkConfiguration) async throws {
+        guard configuration.isValid else {
+            throw WiFiError.invalidRequest
+        }
+
+        var config = try await fetchConfig(device: device)
+        applyNetworkConfiguration(configuration, to: &config)
+        if var wrapped = config["cfg"] as? [String: Any] {
+            applyNetworkConfiguration(configuration, to: &wrapped)
+            config["cfg"] = wrapped
+        }
+
+        guard let configUrl = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WiFiError.invalidURL
+        }
+        var request = URLRequest(url: configUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15.0
+        request.httpBody = try JSONSerialization.data(withJSONObject: config)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw WiFiError.connectionFailed
+        }
+    }
+
     private func fetchConfiguredSSID(device: WLEDDevice) async throws -> String? {
         guard let configURL = URL(string: "http://\(device.ipAddress)/json/cfg") else {
             throw WiFiError.invalidURL
@@ -747,6 +864,97 @@ class WLEDWiFiService {
             return extractConfiguredSSID(fromRoot: wrapped)
         }
         return nil
+    }
+
+    private func fetchConfig(device: WLEDDevice) async throws -> [String: Any] {
+        guard let configURL = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WiFiError.invalidURL
+        }
+        var request = URLRequest(url: configURL)
+        request.timeoutInterval = 10.0
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200,
+              let config = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw WiFiError.invalidResponse
+        }
+        return config
+    }
+
+    private func parseNetworkConfiguration(from config: [String: Any]) -> WLEDNetworkConfiguration {
+        let root = (config["cfg"] as? [String: Any]) ?? config
+        let id = root["id"] as? [String: Any] ?? [:]
+        let nw = root["nw"] as? [String: Any] ?? [:]
+        let station = (nw["ins"] as? [[String: Any]])?.first ?? [:]
+        let ap = root["ap"] as? [String: Any] ?? [:]
+        let wifi = root["wifi"] as? [String: Any] ?? [:]
+
+        return WLEDNetworkConfiguration(
+            mdnsName: parseString(id["mdns"]) ?? "",
+            stationSSID: parseString(station["ssid"]) ?? "",
+            staticIP: ipv4String(from: station["ip"], fallback: "0.0.0.0"),
+            staticGateway: ipv4String(from: station["gw"], fallback: "0.0.0.0"),
+            staticSubnet: ipv4String(from: station["sn"], fallback: "255.255.255.0"),
+            dnsServer: ipv4String(from: nw["dns"], fallback: "0.0.0.0"),
+            apSSID: parseString(ap["ssid"]) ?? "",
+            apPassword: "",
+            apPasswordConfigured: (parseInt(ap["pskl"]) ?? 0) > 0,
+            hideAP: parseBool(ap["hide"]) ?? false,
+            apChannel: parseInt(ap["chan"]) ?? 1,
+            apBehavior: parseInt(ap["behav"]) ?? 0,
+            disableWiFiSleep: !(parseBool(wifi["sleep"]) ?? true),
+            force80211g: parseBool(wifi["phy"]) ?? false,
+            txPower: parseInt(wifi["txpwr"]) ?? 78
+        )
+    }
+
+    private func applyNetworkConfiguration(_ configuration: WLEDNetworkConfiguration, to root: inout [String: Any]) {
+        var id = root["id"] as? [String: Any] ?? [:]
+        id["mdns"] = configuration.mdnsName.trimmingCharacters(in: .whitespacesAndNewlines)
+        root["id"] = id
+
+        var nw = root["nw"] as? [String: Any] ?? [:]
+        var wifiInputs = nw["ins"] as? [[String: Any]] ?? []
+        if wifiInputs.isEmpty {
+            wifiInputs.append([:])
+        }
+        var station = wifiInputs[0]
+        station["ip"] = ipv4Array(from: configuration.staticIP)
+        station["gw"] = ipv4Array(from: configuration.staticGateway)
+        station["sn"] = ipv4Array(from: configuration.staticSubnet)
+        wifiInputs[0] = station
+        nw["ins"] = wifiInputs
+        nw["dns"] = ipv4Array(from: configuration.dnsServer)
+        root["nw"] = nw
+
+        var ap = root["ap"] as? [String: Any] ?? [:]
+        ap["ssid"] = configuration.apSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configuration.apPassword.isEmpty {
+            ap["psk"] = configuration.apPassword
+            ap.removeValue(forKey: "pskl")
+        }
+        ap["hide"] = configuration.hideAP
+        ap["chan"] = configuration.apChannel
+        ap["behav"] = configuration.apBehavior
+        root["ap"] = ap
+
+        var wifi = root["wifi"] as? [String: Any] ?? [:]
+        wifi["sleep"] = !configuration.disableWiFiSleep
+        wifi["phy"] = configuration.force80211g
+        wifi["txpwr"] = configuration.txPower
+        root["wifi"] = wifi
+    }
+
+    private func ipv4String(from value: Any?, fallback: String) -> String {
+        guard let parts = value as? [Any], parts.count >= 4 else {
+            return fallback
+        }
+        return parts.prefix(4).map { String(parseInt($0) ?? 0) }.joined(separator: ".")
+    }
+
+    private func ipv4Array(from value: String) -> [Int] {
+        value.split(separator: ".").prefix(4).map { Int($0) ?? 0 }
     }
 
     private func extractConfiguredSSID(fromRoot root: [String: Any]) -> String? {
@@ -865,6 +1073,21 @@ class WLEDWiFiService {
         }
         if let stringValue = value as? String {
             return Int(stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    private func parseBool(_ value: Any?) -> Bool? {
+        if let boolValue = value as? Bool {
+            return boolValue
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let stringValue = value as? String {
+            let normalized = stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["true", "1", "yes", "on"].contains(normalized) { return true }
+            if ["false", "0", "no", "off"].contains(normalized) { return false }
         }
         return nil
     }

@@ -8,6 +8,115 @@
 import SwiftUI
 import Foundation
 
+enum DeviceDetailPresentation {
+    static let coordinateSpaceName = "device-detail-presentation"
+    static let animation = Animation.spring(response: 0.54, dampingFraction: 0.91, blendDuration: 0.1)
+    static let expandedCornerRadius: CGFloat = 30
+    static let dismissGestureActivationHeight: CGFloat = 168
+
+    static func interactiveProgress(isPresented: Bool, dragOffset: CGFloat) -> CGFloat {
+        let baseProgress: CGFloat = isPresented ? 1 : 0
+        guard isPresented, dragOffset > 0 else { return baseProgress }
+
+        let collapseAmount = min(max(dragOffset, 0), 260) / 260
+        let softenedCollapse = collapseAmount * collapseAmount * (3 - (2 * collapseAmount))
+        return max(0.46, baseProgress - (softenedCollapse * 0.54))
+    }
+
+    static func canStartDismissGesture(at startLocation: CGPoint) -> Bool {
+        startLocation.y <= dismissGestureActivationHeight
+    }
+
+    static func sourceCornerRadius(for sourceFrame: CGRect?) -> CGFloat {
+        guard let sourceFrame else { return 20 }
+        return abs(sourceFrame.width - sourceFrame.height) < 24 ? 20 : 16
+    }
+
+    static func fallbackSourceFrame(for panelFrame: CGRect) -> CGRect {
+        CGRect(
+            x: panelFrame.minX + 18,
+            y: panelFrame.maxY - 178,
+            width: max(1, panelFrame.width - 36),
+            height: 158
+        )
+    }
+
+    static func morphFrame(sourceFrame: CGRect?, panelFrame: CGRect, progress: CGFloat) -> CGRect {
+        let source = sourceFrame ?? fallbackSourceFrame(for: panelFrame)
+        let clampedProgress = min(1, max(0, progress))
+
+        return CGRect(
+            x: source.minX + ((panelFrame.minX - source.minX) * clampedProgress),
+            y: source.minY + ((panelFrame.minY - source.minY) * clampedProgress),
+            width: source.width + ((panelFrame.width - source.width) * clampedProgress),
+            height: source.height + ((panelFrame.height - source.height) * clampedProgress)
+        )
+    }
+
+    static func cornerRadius(sourceFrame: CGRect?, progress: CGFloat) -> CGFloat {
+        let sourceRadius = sourceCornerRadius(for: sourceFrame)
+        let clampedProgress = min(1, max(0, progress))
+        return sourceRadius + ((expandedCornerRadius - sourceRadius) * clampedProgress)
+    }
+}
+
+struct DeviceDetailPresentationState {
+    var device: WLEDDevice?
+    var sourceFrame: CGRect?
+    var isPresented = false
+    var isClosing = false
+    var closingDragOffset: CGFloat = 0
+
+    mutating func prepare(device: WLEDDevice, sourceFrame: CGRect?) {
+        self.device = device
+        self.sourceFrame = sourceFrame
+        isPresented = false
+        isClosing = false
+        closingDragOffset = 0
+    }
+
+    mutating func reset() {
+        device = nil
+        sourceFrame = nil
+        isPresented = false
+        isClosing = false
+        closingDragOffset = 0
+    }
+}
+
+struct DeviceDetailSourceFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
+private struct DeviceDetailSourceFrameModifier: ViewModifier {
+    let deviceId: String
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .preference(
+                            key: DeviceDetailSourceFramePreferenceKey.self,
+                            value: [
+                                deviceId: proxy.frame(in: .named(DeviceDetailPresentation.coordinateSpaceName))
+                            ]
+                        )
+                }
+            }
+    }
+}
+
+extension View {
+    func deviceDetailSourceFrame(deviceId: String) -> some View {
+        modifier(DeviceDetailSourceFrameModifier(deviceId: deviceId))
+    }
+}
+
 // MARK: - Performance Configuration
 
 struct PerformanceConfig {
@@ -39,7 +148,11 @@ struct EnhancedDeviceCard: View {
     private let animationDuration: Double = PerformanceConfig.animationDuration
     
     // Initialize local state from device
-    init(device: WLEDDevice, viewModel: DeviceControlViewModel, onTap: @escaping () -> Void) {
+    init(
+        device: WLEDDevice,
+        viewModel: DeviceControlViewModel,
+        onTap: @escaping () -> Void
+    ) {
         self.device = device
         self.viewModel = viewModel
         self.onTap = onTap
@@ -105,6 +218,7 @@ struct EnhancedDeviceCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)
         .appLiquidGlass(role: .card, cornerRadius: 16)
+        .deviceDetailSourceFrame(deviceId: device.id)
         .overlay {
             if requiresSetup {
                 Button(action: onTap) {

@@ -493,6 +493,229 @@ struct WLEDMacroBindingsUpdate {
     let nightLightMacro: Int?
 }
 
+/// Native WLED Alexa integration settings stored in /json/cfg.
+struct WLEDAlexaIntegrationSettings: Equatable {
+    var isEnabled: Bool
+    var invocationName: String
+    var exposedPresetCount: Int
+}
+
+/// Native WLED integration settings stored in /json/cfg under the "if" tree.
+struct WLEDNativeIntegrationSettings: Equatable {
+    var sync: WLEDIntegrationSyncSettings
+    var realtime: WLEDIntegrationRealtimeSettings
+    var mqtt: WLEDIntegrationMQTTSettings
+    var hue: WLEDIntegrationHueSettings
+
+    static let defaults = WLEDNativeIntegrationSettings(
+        sync: .defaults,
+        realtime: .defaults,
+        mqtt: .defaults,
+        hue: .defaults
+    )
+}
+
+struct WLEDIntegrationSyncSettings: Equatable {
+    var udpPort: Int
+    var secondaryUdpPort: Int
+    var espNowEnabled: Bool
+    var sendGroups: Int
+    var receiveGroups: Int
+    var receiveBrightness: Bool
+    var receiveColor: Bool
+    var receiveEffects: Bool
+    var receivePalette: Bool
+    var receiveSegmentOptions: Bool
+    var receiveSegmentBounds: Bool
+    var sendOnStart: Bool
+    var sendDirectChanges: Bool
+    var sendButtonChanges: Bool
+    var sendAlexaChanges: Bool
+    var sendHueChanges: Bool
+    var udpRetransmissions: Int
+    var nodeListEnabled: Bool
+    var nodeBroadcastEnabled: Bool
+
+    static let defaults = WLEDIntegrationSyncSettings(
+        udpPort: 21324,
+        secondaryUdpPort: 65506,
+        espNowEnabled: false,
+        sendGroups: 1,
+        receiveGroups: 1,
+        receiveBrightness: true,
+        receiveColor: true,
+        receiveEffects: true,
+        receivePalette: true,
+        receiveSegmentOptions: false,
+        receiveSegmentBounds: false,
+        sendOnStart: false,
+        sendDirectChanges: true,
+        sendButtonChanges: false,
+        sendAlexaChanges: false,
+        sendHueChanges: false,
+        udpRetransmissions: 0,
+        nodeListEnabled: true,
+        nodeBroadcastEnabled: true
+    )
+}
+
+enum WLEDRealtimeProtocolMode: Int, CaseIterable, Identifiable, Equatable {
+    case e131 = 5568
+    case artNet = 6454
+    case custom = 0
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .e131:
+            return "E1.31 (sACN)"
+        case .artNet:
+            return "Art-Net"
+        case .custom:
+            return "Custom Port"
+        }
+    }
+
+    static func mode(for port: Int) -> WLEDRealtimeProtocolMode {
+        switch port {
+        case WLEDRealtimeProtocolMode.e131.rawValue:
+            return .e131
+        case WLEDRealtimeProtocolMode.artNet.rawValue:
+            return .artNet
+        default:
+            return .custom
+        }
+    }
+}
+
+enum WLEDDMXMode: Int, CaseIterable, Identifiable, Equatable {
+    case disabled = 0
+    case singleRGB = 1
+    case singleDRGB = 2
+    case effect = 3
+    case multiRGB = 4
+    case dimmerMultiRGB = 5
+    case multiRGBW = 6
+    case effectWhite = 7
+    case effectSegment = 8
+    case effectSegmentWhite = 9
+    case preset = 10
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .disabled:
+            return "Disabled"
+        case .singleRGB:
+            return "Single RGB"
+        case .singleDRGB:
+            return "Single DRGB"
+        case .effect:
+            return "Effect"
+        case .multiRGB:
+            return "Multi RGB"
+        case .dimmerMultiRGB:
+            return "Dimmer + Multi RGB"
+        case .multiRGBW:
+            return "Multi RGBW"
+        case .effectWhite:
+            return "Effect + White"
+        case .effectSegment:
+            return "Effect Segment"
+        case .effectSegmentWhite:
+            return "Effect Segment + White"
+        case .preset:
+            return "Preset"
+        }
+    }
+}
+
+struct WLEDIntegrationRealtimeSettings: Equatable {
+    var receiveRealtime: Bool
+    var mainSegmentOnly: Bool
+    var respectLedMaps: Bool
+    var protocolMode: WLEDRealtimeProtocolMode
+    var port: Int
+    var multicast: Bool
+    var startUniverse: Int
+    var skipOutOfSequence: Bool
+    var dmxStartAddress: Int
+    var dmxSegmentSpacing: Int
+    var e131Priority: Int
+    var dmxMode: WLEDDMXMode
+    var timeoutMs: Int
+    var forceMaxBrightness: Bool
+    var disableGammaCorrection: Bool
+    var ledOffset: Int
+
+    static let defaults = WLEDIntegrationRealtimeSettings(
+        receiveRealtime: false,
+        mainSegmentOnly: false,
+        respectLedMaps: false,
+        protocolMode: .e131,
+        port: 5568,
+        multicast: false,
+        startUniverse: 1,
+        skipOutOfSequence: false,
+        dmxStartAddress: 1,
+        dmxSegmentSpacing: 0,
+        e131Priority: 0,
+        dmxMode: .disabled,
+        timeoutMs: 2500,
+        forceMaxBrightness: false,
+        disableGammaCorrection: false,
+        ledOffset: 0
+    )
+}
+
+struct WLEDIntegrationMQTTSettings: Equatable {
+    var enabled: Bool
+    var broker: String
+    var port: Int
+    var username: String
+    var password: String
+    var clientID: String
+    var deviceTopic: String
+    var groupTopic: String
+    var publishButtonPresses: Bool
+    var retainMessages: Bool
+
+    static let defaults = WLEDIntegrationMQTTSettings(
+        enabled: false,
+        broker: "",
+        port: 1883,
+        username: "",
+        password: "",
+        clientID: "",
+        deviceTopic: "wled",
+        groupTopic: "",
+        publishButtonPresses: false,
+        retainMessages: false
+    )
+}
+
+struct WLEDIntegrationHueSettings: Equatable {
+    var enabled: Bool
+    var lightID: Int
+    var pollIntervalMs: Int
+    var receiveOnOff: Bool
+    var receiveBrightness: Bool
+    var receiveColor: Bool
+    var bridgeIP: String
+
+    static let defaults = WLEDIntegrationHueSettings(
+        enabled: false,
+        lightID: 1,
+        pollIntervalMs: 2500,
+        receiveOnOff: true,
+        receiveBrightness: true,
+        receiveColor: true,
+        bridgeIP: "0.0.0.0"
+    )
+}
+
 // MARK: - WLED Transition Constants
 
 /// Maximum WLED transition time in deciseconds (tenths of a second)
@@ -513,13 +736,17 @@ let maxWLEDPlaylistTransitionDeciseconds = 650
 let maxWLEDPlaylistTransitionMilliseconds = maxWLEDPlaylistTransitionDeciseconds * 100
 let maxWLEDPlaylistDurationSeconds = 3600.0
 let maxWLEDPresetSlots = 250
+let alexaReservedPresetRange = 1...9
+let appManagedPresetLowerBound = alexaReservedPresetRange.upperBound + 1
+let appManagedPresetRange = appManagedPresetLowerBound...maxWLEDPresetSlots
 let presetSlotReserve = 20
+// Legacy quarantine for old preset-store-backed live transitions. New live
+// transitions use WLED native `tt` / state updates and never allocate here.
 let temporaryTransitionReservedPresetLower = 170
 let temporaryTransitionReservedPresetUpper = 250
 let temporaryTransitionCleanupGraceMinutes = 15.0
 
 enum TransitionGenerationContext: String, Codable {
-    case temporaryLive
     case persistentAutomation
 }
 
@@ -740,6 +967,14 @@ struct LEDConfiguration: Codable {
     let offRefresh: Bool
     /// Auto white mode (0=none, 1=brighter, 2=accurate, 3=dual, 4=max)
     let autoWhiteMode: Int
+    /// Global auto white override (255 = use each output's own setting)
+    let globalAutoWhiteMode: Int
+    /// White channel swap packed into high bits of WLED bus color order
+    let whiteChannelSwap: Int
+    /// Bus clock/PWM frequency from hw.led.ins[n].freq
+    let signalFrequency: Int
+    /// Bus driver preference (0=RMT/default, 1=I2S)
+    let driverType: Int
     /// Optional CCT Kelvin range from config (min/max)
     let cctKelvinMin: Int?
     let cctKelvinMax: Int?
@@ -751,6 +986,28 @@ struct LEDConfiguration: Codable {
     let usePerOutputLimiter: Bool
     /// Enable automatic brightness limiter
     let enableABL: Bool
+    /// WLED "White Balance correction" setting (hw.led.cct)
+    let whiteBalanceCorrection: Bool
+    /// WLED "Calculate CCT from RGB" setting (hw.led.cr)
+    let calculateCCTFromRGB: Bool
+    /// WLED "CCT IC used" setting (hw.led.ic)
+    let cctICUsed: Bool
+    /// WLED CCT blending percentage, -100...100 (hw.led.cb)
+    let cctBlending: Int
+    /// WLED global brightness factor, 1...255 (light.scale-bri)
+    let globalBrightnessFactor: Int
+    /// WLED target refresh rate, 0...250 FPS (hw.led.fps)
+    let targetFPS: Int
+    /// WLED palette wrapping/blend mode (light.pal-mode)
+    let paletteBlendMode: Int
+    /// WLED make-a-segment-for-each-output setting (light.aseg)
+    let autoSegments: Bool
+    /// WLED gamma correction for color (light.gc.col != 1)
+    let gammaCorrectColor: Bool
+    /// WLED gamma correction for brightness (light.gc.bri != 1)
+    let gammaCorrectBrightness: Bool
+    /// WLED gamma value (light.gc.val)
+    let gammaValue: Double
 
     init(
         stripType: Int,
@@ -762,12 +1019,27 @@ struct LEDConfiguration: Codable {
         reverseDirection: Bool,
         offRefresh: Bool,
         autoWhiteMode: Int,
+        globalAutoWhiteMode: Int = 255,
+        whiteChannelSwap: Int = 0,
+        signalFrequency: Int = 0,
+        driverType: Int = 0,
         cctKelvinMin: Int? = nil,
         cctKelvinMax: Int? = nil,
         maxCurrentPerLED: Int,
         maxTotalCurrent: Int,
         usePerOutputLimiter: Bool,
-        enableABL: Bool
+        enableABL: Bool,
+        whiteBalanceCorrection: Bool = false,
+        calculateCCTFromRGB: Bool = false,
+        cctICUsed: Bool = false,
+        cctBlending: Int = 0,
+        globalBrightnessFactor: Int = 100,
+        targetFPS: Int = 42,
+        paletteBlendMode: Int = 0,
+        autoSegments: Bool = false,
+        gammaCorrectColor: Bool = true,
+        gammaCorrectBrightness: Bool = false,
+        gammaValue: Double = 2.2
     ) {
         self.stripType = stripType
         self.colorOrder = colorOrder
@@ -778,12 +1050,27 @@ struct LEDConfiguration: Codable {
         self.reverseDirection = reverseDirection
         self.offRefresh = offRefresh
         self.autoWhiteMode = autoWhiteMode
+        self.globalAutoWhiteMode = globalAutoWhiteMode
+        self.whiteChannelSwap = whiteChannelSwap
+        self.signalFrequency = signalFrequency
+        self.driverType = driverType
         self.cctKelvinMin = cctKelvinMin
         self.cctKelvinMax = cctKelvinMax
         self.maxCurrentPerLED = maxCurrentPerLED
         self.maxTotalCurrent = maxTotalCurrent
         self.usePerOutputLimiter = usePerOutputLimiter
         self.enableABL = enableABL
+        self.whiteBalanceCorrection = whiteBalanceCorrection
+        self.calculateCCTFromRGB = calculateCCTFromRGB
+        self.cctICUsed = cctICUsed
+        self.cctBlending = cctBlending
+        self.globalBrightnessFactor = globalBrightnessFactor
+        self.targetFPS = targetFPS
+        self.paletteBlendMode = paletteBlendMode
+        self.autoSegments = autoSegments
+        self.gammaCorrectColor = gammaCorrectColor
+        self.gammaCorrectBrightness = gammaCorrectBrightness
+        self.gammaValue = gammaValue
     }
 
     init(from decoder: Decoder) throws {
@@ -797,10 +1084,25 @@ struct LEDConfiguration: Codable {
         reverseDirection = try container.decode(Bool.self, forKey: .reverseDirection)
         offRefresh = try container.decode(Bool.self, forKey: .offRefresh)
         autoWhiteMode = try container.decode(Int.self, forKey: .autoWhiteMode)
+        globalAutoWhiteMode = try container.decodeIfPresent(Int.self, forKey: .globalAutoWhiteMode) ?? 255
+        whiteChannelSwap = try container.decodeIfPresent(Int.self, forKey: .whiteChannelSwap) ?? 0
+        signalFrequency = try container.decodeIfPresent(Int.self, forKey: .signalFrequency) ?? 0
+        driverType = try container.decodeIfPresent(Int.self, forKey: .driverType) ?? 0
         maxCurrentPerLED = try container.decode(Int.self, forKey: .maxCurrentPerLED)
         maxTotalCurrent = try container.decode(Int.self, forKey: .maxTotalCurrent)
         usePerOutputLimiter = try container.decode(Bool.self, forKey: .usePerOutputLimiter)
         enableABL = try container.decode(Bool.self, forKey: .enableABL)
+        whiteBalanceCorrection = try container.decodeIfPresent(Bool.self, forKey: .whiteBalanceCorrection) ?? false
+        calculateCCTFromRGB = try container.decodeIfPresent(Bool.self, forKey: .calculateCCTFromRGB) ?? false
+        cctICUsed = try container.decodeIfPresent(Bool.self, forKey: .cctICUsed) ?? false
+        cctBlending = try container.decodeIfPresent(Int.self, forKey: .cctBlending) ?? 0
+        globalBrightnessFactor = try container.decodeIfPresent(Int.self, forKey: .globalBrightnessFactor) ?? 100
+        targetFPS = try container.decodeIfPresent(Int.self, forKey: .targetFPS) ?? 42
+        paletteBlendMode = try container.decodeIfPresent(Int.self, forKey: .paletteBlendMode) ?? 0
+        autoSegments = try container.decodeIfPresent(Bool.self, forKey: .autoSegments) ?? false
+        gammaCorrectColor = try container.decodeIfPresent(Bool.self, forKey: .gammaCorrectColor) ?? true
+        gammaCorrectBrightness = try container.decodeIfPresent(Bool.self, forKey: .gammaCorrectBrightness) ?? false
+        gammaValue = try container.decodeIfPresent(Double.self, forKey: .gammaValue) ?? 2.2
         cctKelvinMin = nil
         cctKelvinMax = nil
     }
@@ -816,10 +1118,25 @@ struct LEDConfiguration: Codable {
         try container.encode(reverseDirection, forKey: .reverseDirection)
         try container.encode(offRefresh, forKey: .offRefresh)
         try container.encode(autoWhiteMode, forKey: .autoWhiteMode)
+        try container.encode(globalAutoWhiteMode, forKey: .globalAutoWhiteMode)
+        try container.encode(whiteChannelSwap, forKey: .whiteChannelSwap)
+        try container.encode(signalFrequency, forKey: .signalFrequency)
+        try container.encode(driverType, forKey: .driverType)
         try container.encode(maxCurrentPerLED, forKey: .maxCurrentPerLED)
         try container.encode(maxTotalCurrent, forKey: .maxTotalCurrent)
         try container.encode(usePerOutputLimiter, forKey: .usePerOutputLimiter)
         try container.encode(enableABL, forKey: .enableABL)
+        try container.encode(whiteBalanceCorrection, forKey: .whiteBalanceCorrection)
+        try container.encode(calculateCCTFromRGB, forKey: .calculateCCTFromRGB)
+        try container.encode(cctICUsed, forKey: .cctICUsed)
+        try container.encode(cctBlending, forKey: .cctBlending)
+        try container.encode(globalBrightnessFactor, forKey: .globalBrightnessFactor)
+        try container.encode(targetFPS, forKey: .targetFPS)
+        try container.encode(paletteBlendMode, forKey: .paletteBlendMode)
+        try container.encode(autoSegments, forKey: .autoSegments)
+        try container.encode(gammaCorrectColor, forKey: .gammaCorrectColor)
+        try container.encode(gammaCorrectBrightness, forKey: .gammaCorrectBrightness)
+        try container.encode(gammaValue, forKey: .gammaValue)
     }
     
     enum CodingKeys: String, CodingKey {
@@ -832,10 +1149,83 @@ struct LEDConfiguration: Codable {
         case reverseDirection = "rev"
         case offRefresh = "rf"
         case autoWhiteMode = "aw"
+        case globalAutoWhiteMode = "globalAW"
+        case whiteChannelSwap = "wo"
+        case signalFrequency = "freq"
+        case driverType = "drv"
         case maxCurrentPerLED = "la"
         case maxTotalCurrent = "ma"
         case usePerOutputLimiter = "per"
         case enableABL = "abl"
+        case whiteBalanceCorrection = "correctWB"
+        case calculateCCTFromRGB = "cctFromRGB"
+        case cctICUsed = "cctIC"
+        case cctBlending = "cctBlend"
+        case globalBrightnessFactor = "brightnessFactor"
+        case targetFPS = "fps"
+        case paletteBlendMode = "paletteBlend"
+        case autoSegments = "autoSegments"
+        case gammaCorrectColor = "gammaColor"
+        case gammaCorrectBrightness = "gammaBrightness"
+        case gammaValue = "gammaValue"
+    }
+}
+
+struct WLEDSecurityConfiguration: Equatable {
+    let otaLocked: Bool
+    let wifiSettingsLocked: Bool
+    let arduinoOTAEnabled: Bool
+    let sameSubnetOnly: Bool
+    let otaPasswordConfigured: Bool
+
+    init(
+        otaLocked: Bool = true,
+        wifiSettingsLocked: Bool = false,
+        arduinoOTAEnabled: Bool = false,
+        sameSubnetOnly: Bool = true,
+        otaPasswordConfigured: Bool = false
+    ) {
+        self.otaLocked = otaLocked
+        self.wifiSettingsLocked = wifiSettingsLocked
+        self.arduinoOTAEnabled = arduinoOTAEnabled
+        self.sameSubnetOnly = sameSubnetOnly
+        self.otaPasswordConfigured = otaPasswordConfigured
+    }
+}
+
+struct WLEDSecurityConfigurationUpdate: Equatable {
+    var otaLocked: Bool
+    var wifiSettingsLocked: Bool
+    var arduinoOTAEnabled: Bool
+    var sameSubnetOnly: Bool
+    var otaPassword: String
+
+    init(
+        otaLocked: Bool = true,
+        wifiSettingsLocked: Bool = false,
+        arduinoOTAEnabled: Bool = false,
+        sameSubnetOnly: Bool = true,
+        otaPassword: String = ""
+    ) {
+        self.otaLocked = otaLocked
+        self.wifiSettingsLocked = wifiSettingsLocked
+        self.arduinoOTAEnabled = arduinoOTAEnabled
+        self.sameSubnetOnly = sameSubnetOnly
+        self.otaPassword = otaPassword
+    }
+
+    init(configuration: WLEDSecurityConfiguration) {
+        self.init(
+            otaLocked: configuration.otaLocked,
+            wifiSettingsLocked: configuration.wifiSettingsLocked,
+            arduinoOTAEnabled: configuration.arduinoOTAEnabled,
+            sameSubnetOnly: configuration.sameSubnetOnly,
+            otaPassword: ""
+        )
+    }
+
+    var isValid: Bool {
+        otaPassword.count <= 32
     }
 }
 

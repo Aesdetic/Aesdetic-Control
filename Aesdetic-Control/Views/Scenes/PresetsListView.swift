@@ -6,6 +6,7 @@ struct PresetsListView: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
     let onRequestRename: (PresetRenameContext) -> Void
+    let onOpenIntegrations: () -> Void
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     @State private var isPlaylistEditorPresented = false
     @State private var playlistEditorOriginalId: Int?
@@ -14,24 +15,27 @@ struct PresetsListView: View {
     @State private var deletingColorPresetIds: Set<UUID> = []
     @State private var deletingTransitionPresetIds: Set<UUID> = []
     @State private var deletingEffectPresetIds: Set<UUID> = []
+
+    init(
+        device: WLEDDevice,
+        onRequestRename: @escaping (PresetRenameContext) -> Void,
+        onOpenIntegrations: @escaping () -> Void = {}
+    ) {
+        self.device = device
+        self.onRequestRename = onRequestRename
+        self.onOpenIntegrations = onOpenIntegrations
+    }
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                // Color Presets Section
-                colorPresetsSection
-                
-                // Effect Presets Section
-                effectPresetsSection
+        VStack(spacing: 16) {
+            colorPresetsSection
+            effectPresetsSection
 
-                if advancedUIEnabled {
-                    automationAssetsAdvancedSection
-                }
+            if advancedUIEnabled {
+                automationAssetsAdvancedSection
             }
-            .padding(.vertical, 20)
-            .padding(.horizontal, 16)
         }
-        .navigationTitle("Presets")
+        .navigationTitle("Saves")
         .sheet(isPresented: $isPlaylistEditorPresented) {
             PlaylistEditorSheet(
                 draft: $playlistEditorDraft,
@@ -103,6 +107,111 @@ struct PresetsListView: View {
         }
     }
 
+    private var alexaFavoritesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Label("Alexa Favorites", systemImage: "star.circle.fill")
+                    .font(AppTypography.style(.headline))
+                    .foregroundColor(.white)
+                Spacer()
+                Text("\(alexaFavorites.count)/9")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.72))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.white.opacity(0.12)))
+            }
+
+            let conflicts = viewModel.alexaMirrorConflictSlots(for: device)
+            if !conflicts.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    alexaStatusRow(
+                        icon: "exclamationmark.triangle.fill",
+                        title: "Alexa slots need review",
+                        message: "WLED slots \(conflicts.map(String.init).joined(separator: ", ")) already contain presets.",
+                        actionTitle: "Use Existing",
+                        action: {
+                            store.clearAlexaFavorites(for: device.id)
+                            viewModel.clearAlexaMirrorConflicts(for: device)
+                        }
+                    )
+                    Button("Replace with Aesdetic Favorites") {
+                        Task {
+                            _ = await viewModel.syncAlexaFavoritesToDevice(
+                                device,
+                                enabled: true,
+                                invocationName: device.name,
+                                allowReplacingExisting: true
+                            )
+                        }
+                    }
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.white)
+                    .cornerRadius(8)
+                }
+            }
+
+            if alexaFavorites.isEmpty {
+                emptyStateView(
+                    icon: "star",
+                    message: "No Alexa favorites",
+                    hint: "Choose up to 9 presets Alexa can discover"
+                )
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(alexaFavorites) { favorite in
+                        AlexaFavoriteRow(favorite: favorite) {
+                            viewModel.removeAlexaFavorite(favorite, for: device)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var alexaFavorites: [AlexaFavorite] {
+        store.alexaFavorites(for: device.id)
+    }
+
+    private var alexaIntegrationEnabled: Bool {
+        viewModel.isAlexaIntegrationEnabled(for: device)
+    }
+
+    private func alexaStatusRow(
+        icon: String,
+        title: String,
+        message: String,
+        actionTitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(AppTypography.style(.subheadline, weight: .semibold))
+                .foregroundColor(.white.opacity(0.86))
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.white)
+                Text(message)
+                    .font(AppTypography.style(.caption2))
+                    .foregroundColor(.white.opacity(0.62))
+            }
+            Spacer()
+            Button(actionTitle, action: action)
+                .font(AppTypography.style(.caption2, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.14)))
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+    }
+
     private var devicePlaylistsById: [Int: WLEDPlaylist] {
         Dictionary(uniqueKeysWithValues: viewModel.playlists(for: device).map { ($0.id, $0) })
     }
@@ -140,6 +249,30 @@ struct PresetsListView: View {
             .sorted { $0.id < $1.id }
     }
 
+    private func colorAlexaCandidate(_ preset: ColorPreset) -> AlexaFavoriteCandidate? {
+        guard let wledId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId else { return nil }
+        return viewModel.alexaFavoriteCandidate(sourceType: .color, sourceId: preset.id, wledPresetId: wledId, name: preset.name)
+    }
+
+    private func transitionAlexaCandidate(_ preset: TransitionPreset) -> AlexaFavoriteCandidate? {
+        guard preset.wledSyncState == .synced,
+              let playlistId = preset.wledPlaylistId,
+              !(temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper).contains(playlistId) else {
+            return nil
+        }
+        return viewModel.alexaFavoriteCandidate(sourceType: .transition, sourceId: preset.id, wledPresetId: playlistId, name: preset.name)
+    }
+
+    private func effectAlexaCandidate(_ preset: WLEDEffectPreset) -> AlexaFavoriteCandidate? {
+        guard let wledId = preset.wledPresetId else { return nil }
+        return viewModel.alexaFavoriteCandidate(sourceType: .effect, sourceId: preset.id, wledPresetId: wledId, name: preset.name)
+    }
+
+    private func addToAlexa(_ candidate: AlexaFavoriteCandidate?) {
+        guard let candidate else { return }
+        _ = viewModel.addAlexaFavorite(candidate, for: device)
+    }
+
     private func isEffectDevicePreset(_ preset: WLEDPreset) -> Bool {
         let segments = preset.state?.seg ?? (preset.segment.map { [$0] } ?? [])
         if let fx = segments.compactMap(\.fx).first {
@@ -153,7 +286,7 @@ struct PresetsListView: View {
     private var colorPresetsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("Color Presets", systemImage: "paintbrush.fill")
+                Label("Colors", systemImage: "sun.max")
                     .font(AppTypography.style(.headline))
                     .foregroundColor(.white)
                 Spacer()
@@ -163,13 +296,20 @@ struct PresetsListView: View {
             if colorPresets.isEmpty {
                 emptyStateView(
                     icon: "paintbrush",
-                    message: "No color presets",
+                    message: "No saved colors",
                     hint: "Tap + to save current gradient"
                 )
             } else {
                 VStack(spacing: 8) {
                     ForEach(colorPresets) { preset in
-                        ColorPresetRow(preset: preset, isDeleting: deletingColorPresetIds.contains(preset.id), onApply: {
+                        let alexaCandidate = colorAlexaCandidate(preset)
+                        ColorPresetRow(
+                            preset: preset,
+                            isDeleting: deletingColorPresetIds.contains(preset.id),
+                            isAlexaFavorite: alexaCandidate.map { store.isAlexaFavorite($0, for: device.id) } ?? false,
+                            canAddToAlexa: alexaIntegrationEnabled && alexaCandidate != nil && alexaFavorites.count < alexaReservedPresetRange.count,
+                            onAddToAlexa: alexaIntegrationEnabled ? { addToAlexa(alexaCandidate) } : nil,
+                            onApply: {
                         Task {
                             await viewModel.cancelActiveTransitionIfNeeded(for: device)
                             // Try WLED preset ID first (if synced), otherwise apply directly
@@ -227,20 +367,12 @@ struct PresetsListView: View {
     // MARK: - Effect Presets Section
     
     private var effectPresetsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Effect Presets", systemImage: "sparkles")
-                    .font(AppTypography.style(.headline))
-                    .foregroundColor(.white)
-                Spacer()
-            }
-            
-            // Transitions Subsection
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Transitions")
-                        .font(AppTypography.style(.subheadline, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
+                    Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
+                        .font(AppTypography.style(.headline))
+                        .foregroundColor(.white)
                     Spacer()
                 }
                 
@@ -248,17 +380,21 @@ struct PresetsListView: View {
                 if transitionPresets.isEmpty {
                     emptyStateView(
                         icon: "arrow.triangle.2.circlepath",
-                        message: "No transition presets",
+                        message: "No saved transitions",
                         hint: "Tap + to save current transition"
                     )
                 } else {
                     VStack(spacing: 8) {
                         let queuedPresetId = viewModel.queuedTransitionPresetApplyByDeviceId[device.id]
                         ForEach(transitionPresets) { preset in
+                            let alexaCandidate = transitionAlexaCandidate(preset)
                             TransitionPresetRow(
                                 preset: preset,
                                 isQueued: queuedPresetId == preset.id,
                                 isDeleting: deletingTransitionPresetIds.contains(preset.id),
+                                isAlexaFavorite: alexaCandidate.map { store.isAlexaFavorite($0, for: device.id) } ?? false,
+                                canAddToAlexa: alexaIntegrationEnabled && alexaCandidate != nil && alexaFavorites.count < alexaReservedPresetRange.count,
+                                onAddToAlexa: alexaIntegrationEnabled ? { addToAlexa(alexaCandidate) } : nil,
                                 onApply: {
                                 Task {
                                     _ = await viewModel.applyTransitionPreset(preset, to: device)
@@ -281,15 +417,11 @@ struct PresetsListView: View {
                 }
             }
             
-            Divider()
-                .background(Color.white.opacity(0.2))
-            
-            // Effects Subsection
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Animations")
-                        .font(AppTypography.style(.subheadline, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
+                    Label("Animations", systemImage: "sparkles")
+                        .font(AppTypography.style(.headline))
+                        .foregroundColor(.white)
                     Spacer()
                 }
                 
@@ -297,13 +429,20 @@ struct PresetsListView: View {
                 if effectPresets.isEmpty {
                     emptyStateView(
                         icon: "sparkles",
-                        message: "No effect presets",
+                        message: "No saved animations",
                         hint: "Tap + to save current effect"
                     )
                 } else {
                     VStack(spacing: 8) {
                         ForEach(effectPresets) { preset in
-                            EffectPresetRow(preset: preset, isDeleting: deletingEffectPresetIds.contains(preset.id), onApply: {
+                            let alexaCandidate = effectAlexaCandidate(preset)
+                            EffectPresetRow(
+                                preset: preset,
+                                isDeleting: deletingEffectPresetIds.contains(preset.id),
+                                isAlexaFavorite: alexaCandidate.map { store.isAlexaFavorite($0, for: device.id) } ?? false,
+                                canAddToAlexa: alexaIntegrationEnabled && alexaCandidate != nil && alexaFavorites.count < alexaReservedPresetRange.count,
+                                onAddToAlexa: alexaIntegrationEnabled ? { addToAlexa(alexaCandidate) } : nil,
+                                onApply: {
                             Task {
                                 await viewModel.cancelActiveTransitionIfNeeded(for: device)
                                 if let stops = preset.gradientStops, !stops.isEmpty {
@@ -359,6 +498,13 @@ struct PresetsListView: View {
                         }
                     }
                 }
+            }
+
+            if alexaIntegrationEnabled {
+                Divider()
+                    .background(Color.white.opacity(0.2))
+
+                alexaFavoritesSection
             }
         }
     }
@@ -1054,9 +1200,15 @@ private struct PresetDeleteButton: View {
                         .foregroundColor(.white.opacity(0.7))
                 }
             }
-            .frame(width: 28, height: 28)
-            .background(Color.white.opacity(0.1))
-            .cornerRadius(6)
+            .frame(width: 32, height: 32)
+            .background(
+                Circle()
+                    .fill(Color.white.opacity(0.10))
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                    )
+            )
         }
         .buttonStyle(.plain)
         .disabled(isDeleting)
@@ -1064,9 +1216,42 @@ private struct PresetDeleteButton: View {
     }
 }
 
+private struct PresetIconButton: View {
+    let systemName: String
+    var isActive: Bool = false
+    var isDisabled: Bool = false
+    var activeColor: Color = .white
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .foregroundColor(isActive ? activeColor : .white.opacity(isDisabled ? 0.34 : 0.76))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(isActive ? 0.16 : 0.10))
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1.0)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
 struct ColorPresetRow: View {
     let preset: ColorPreset
     let isDeleting: Bool
+    var isAlexaFavorite: Bool = false
+    var canAddToAlexa: Bool = false
+    var onAddToAlexa: (() -> Void)? = nil
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1080,6 +1265,8 @@ struct ColorPresetRow: View {
                     .lineLimit(1)
                 
                 Spacer()
+
+                alexaFavoriteButton
                 
                 PresetDeleteButton(isDeleting: isDeleting) {
                     onDelete()
@@ -1147,6 +1334,23 @@ struct ColorPresetRow: View {
         onApply()
     }
 
+    @ViewBuilder
+    private var alexaFavoriteButton: some View {
+        if let onAddToAlexa {
+            Button(action: onAddToAlexa) {
+                Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(isAlexaFavorite ? .yellow : .white.opacity(canAddToAlexa ? 0.78 : 0.35))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .disabled(isAlexaFavorite || !canAddToAlexa)
+            .accessibilityLabel(isAlexaFavorite ? "Already in Alexa Favorites" : "Add to Alexa Favorites")
+        }
+    }
+
     private var gradientStops: [Gradient.Stop] {
         preset.gradientStops
             .sorted { $0.position < $1.position }
@@ -1182,10 +1386,68 @@ struct ColorPresetRow: View {
     }
 }
 
+struct AlexaFavoriteRow: View {
+    let favorite: AlexaFavorite
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(favorite.slot)")
+                .font(AppTypography.style(.caption, weight: .bold))
+                .foregroundColor(.black)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Color.white))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(favorite.displayName)
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(favorite.sourceType.displayName)
+                    Text("-")
+                    Text(favorite.syncState.displayName)
+                }
+                .font(AppTypography.style(.caption2, weight: .medium))
+                .foregroundColor(statusColor)
+            }
+
+            Spacer()
+
+            Button(action: onRemove) {
+                Image(systemName: "minus.circle.fill")
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.78))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(favorite.displayName) from Alexa Favorites")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+    }
+
+    private var statusColor: Color {
+        switch favorite.syncState {
+        case .synced: return .green.opacity(0.9)
+        case .pending: return .white.opacity(0.58)
+        case .conflict: return .orange.opacity(0.95)
+        case .failed: return .red.opacity(0.9)
+        }
+    }
+}
+
 struct TransitionPresetRow: View {
     let preset: TransitionPreset
     let isQueued: Bool
     let isDeleting: Bool
+    var isAlexaFavorite: Bool = false
+    var canAddToAlexa: Bool = false
+    var onAddToAlexa: (() -> Void)? = nil
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1216,6 +1478,8 @@ struct TransitionPresetRow: View {
                 }
                 
                 Spacer()
+
+                alexaFavoriteButton
                 
                 PresetDeleteButton(isDeleting: isDeleting) {
                     onDelete()
@@ -1259,6 +1523,23 @@ struct TransitionPresetRow: View {
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
         onApply()
+    }
+
+    @ViewBuilder
+    private var alexaFavoriteButton: some View {
+        if let onAddToAlexa {
+            Button(action: onAddToAlexa) {
+                Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(isAlexaFavorite ? .yellow : .white.opacity(canAddToAlexa ? 0.78 : 0.35))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .disabled(isAlexaFavorite || !canAddToAlexa)
+            .accessibilityLabel(isAlexaFavorite ? "Already in Alexa Favorites" : "Add to Alexa Favorites")
+        }
     }
     
     @ViewBuilder
@@ -1704,6 +1985,9 @@ struct DevicePlaylistRecordRow: View {
 struct EffectPresetRow: View {
     let preset: WLEDEffectPreset
     let isDeleting: Bool
+    var isAlexaFavorite: Bool = false
+    var canAddToAlexa: Bool = false
+    var onAddToAlexa: (() -> Void)? = nil
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1728,6 +2012,8 @@ struct EffectPresetRow: View {
                 }
                 
                 Spacer()
+
+                alexaFavoriteButton
                 
                 PresetDeleteButton(isDeleting: isDeleting) {
                     onDelete()
@@ -1814,6 +2100,23 @@ struct EffectPresetRow: View {
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
         onApply()
+    }
+
+    @ViewBuilder
+    private var alexaFavoriteButton: some View {
+        if let onAddToAlexa {
+            Button(action: onAddToAlexa) {
+                Image(systemName: isAlexaFavorite ? "star.fill" : "star.badge.plus")
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(isAlexaFavorite ? .yellow : .white.opacity(canAddToAlexa ? 0.78 : 0.35))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.1))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .disabled(isAlexaFavorite || !canAddToAlexa)
+            .accessibilityLabel(isAlexaFavorite ? "Already in Alexa Favorites" : "Add to Alexa Favorites")
+        }
     }
     
     private var effectPreviewColors: [Color] {

@@ -527,8 +527,8 @@ struct DeviceControlViewModelTests {
             stepCount: 3
         )
 
-        #expect(allocation.playlistId == 3)
-        #expect(allocation.stepPresetIds == [8, 9, 10])
+        #expect(allocation.playlistId == 10)
+        #expect(allocation.stepPresetIds == [11, 12, 13])
     }
 
     @Test("persistent transition allocation excludes temporary reserved band")
@@ -540,7 +540,7 @@ struct DeviceControlViewModelTests {
         )
 
         if let playlistId = allocation.playlistId {
-            #expect((1...169).contains(playlistId))
+            #expect((10...169).contains(playlistId))
             #expect(!(170...250).contains(playlistId))
         } else {
             Issue.record("Expected playlist ID allocation in persistent range")
@@ -548,7 +548,7 @@ struct DeviceControlViewModelTests {
         if let stepPresetIds = allocation.stepPresetIds {
             #expect(stepPresetIds.count == 5)
             #expect(stepPresetIds == stepPresetIds.sorted())
-            #expect(stepPresetIds.allSatisfy { (1...169).contains($0) })
+            #expect(stepPresetIds.allSatisfy { (10...169).contains($0) })
             #expect(stepPresetIds.allSatisfy { !(170...250).contains($0) })
         } else {
             Issue.record("Expected step preset ID allocation in persistent range")
@@ -558,14 +558,14 @@ struct DeviceControlViewModelTests {
     @Test("persistent transition allocation fails when no contiguous block exists")
     func testPersistentTransitionAllocationRequiresContiguousBlock() {
         let viewModel = DeviceControlViewModel.shared
-        // Leave odd IDs free only; no contiguous run of length 2 in 1...169.
+        // Leave odd IDs free only; no contiguous run of length 2 in 10...169.
         let used = Set((1...169).filter { $0 % 2 == 0 })
         let allocation = viewModel.debugPersistentTransitionIdAllocationForTests(
             usedIds: used,
             stepCount: 2
         )
 
-        #expect(allocation.playlistId == 1)
+        #expect(allocation.playlistId == 11)
         #expect(allocation.stepPresetIds == nil)
     }
 
@@ -601,15 +601,10 @@ struct DeviceControlViewModelTests {
         #expect(TransitionDurationPicker.exceedsRecommendedMax(2101) == true)
     }
 
-    @Test("transition keyframe sampling uses seam-safe modes")
-    func testTransitionSamplingModes() {
+    @Test("persistent transition keyframe sampling uses seam-safe mode")
+    func testPersistentTransitionSamplingMode() {
         let viewModel = DeviceControlViewModel.shared
-        let temporary = viewModel.debugTransitionKeyframeTsForTests(stepCount: 5, context: .temporaryLive)
         let persistent = viewModel.debugTransitionKeyframeTsForTests(stepCount: 5, context: .persistentAutomation)
-
-        #expect(abs((temporary.first ?? 0) - 0.2) < 0.0001)
-        #expect(abs((temporary.last ?? 0) - 1.0) < 0.0001)
-        #expect(temporary.allSatisfy { $0 > 0.0 })
 
         #expect(abs((persistent.first ?? 1) - 0.0) < 0.0001)
         #expect(abs((persistent.last ?? 0) - 1.0) < 0.0001)
@@ -778,5 +773,43 @@ struct DeviceControlViewModelTests {
 
         #expect(playlist == nil)
         #expect(viewModel.presetWriteInProgress.contains(device.id) == false)
+    }
+
+    @Test("next preset ID skips Alexa reserved slots")
+    func testNextPresetIdSkipsAlexaReservedSlots() async {
+        let viewModel = DeviceControlViewModel.shared
+
+        #expect(viewModel.debugNextPresetIdForTests(existingIds: Set(1...9)) == 10)
+        #expect(viewModel.debugNextPresetIdForTests(existingIds: Set(1...10)) == 11)
+        #expect(viewModel.debugNextPresetIdForTests(existingIds: Set(appManagedPresetRange)) == nil)
+    }
+
+    @Test("Alexa favorites auto-fill compacts and respects manual removal")
+    func testAlexaFavoritesAutoFillCompactsAndRespectsRemoval() async {
+        let store = PresetsStore.shared
+        let deviceId = "alexa-favorites-\(UUID().uuidString)"
+        store.debugResetAlexaFavoritesForTests(deviceId: deviceId)
+        defer { store.debugResetAlexaFavoritesForTests(deviceId: deviceId) }
+
+        let candidates = [
+            AlexaFavoriteCandidate(sourceType: .color, sourceId: UUID(), sourceWLEDPresetId: 10, displayName: "Warm"),
+            AlexaFavoriteCandidate(sourceType: .effect, sourceId: UUID(), sourceWLEDPresetId: 11, displayName: "Glow"),
+            AlexaFavoriteCandidate(sourceType: .transition, sourceId: UUID(), sourceWLEDPresetId: 12, displayName: "Fade")
+        ]
+
+        _ = store.autoFillAlexaFavorites(for: deviceId, candidates: candidates)
+        let initial = store.alexaFavorites(for: deviceId)
+        #expect(initial.map(\.slot) == [1, 2, 3])
+
+        if let removed = initial.dropFirst().first {
+            store.removeAlexaFavorite(removed.id, for: deviceId)
+        }
+        let compacted = store.alexaFavorites(for: deviceId)
+        #expect(compacted.map(\.slot) == [1, 2])
+        #expect(compacted.map(\.sourceWLEDPresetId) == [10, 12])
+
+        _ = store.autoFillAlexaFavorites(for: deviceId, candidates: candidates)
+        let afterRefill = store.alexaFavorites(for: deviceId)
+        #expect(afterRefill.map(\.sourceWLEDPresetId) == [10, 12])
     }
 }

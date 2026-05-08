@@ -13,7 +13,10 @@ struct DeviceListView: View {
     var body: some View {
         LazyVStack(spacing: 12) {
             ForEach(displayDevices) { device in
-                EnhancedDeviceCard(device: device, viewModel: viewModel) {
+                EnhancedDeviceCard(
+                    device: device,
+                    viewModel: viewModel
+                ) {
                     if let onSelectDevice {
                         onSelectDevice(device)
                     } else {

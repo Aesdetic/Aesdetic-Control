@@ -28,15 +28,8 @@ struct AutomationRow: View {
         )
     }
     private let cardCornerRadius: CGFloat = 20
-    private var isInteractionLockedDuringSync: Bool {
-        guard automation.metadata.runOnDevice else { return false }
-        let deviceIds = automation.targets.deviceIds
-        guard !deviceIds.isEmpty else { return false }
-        return deviceIds.contains { automation.metadata.syncState(for: $0) == .syncing }
-    }
-
     private var isInteractionLocked: Bool {
-        isDeleting || isInteractionLockedDuringSync
+        isDeleting
     }
     
     private var accentColor: Color {
@@ -57,11 +50,17 @@ struct AutomationRow: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            headerRow
-            metadataRow
+        ZStack(alignment: .bottomLeading) {
+            HStack(alignment: .top, spacing: 12) {
+                topContentColumn
+                Spacer(minLength: 8)
+                actionColumn
+            }
+
+            bottomContent
+                .padding(.trailing, 54)
         }
-        .padding(18)
+        .padding(16)
         .background(
             AppCardBackground(style: cardStyle)
         )
@@ -86,13 +85,9 @@ struct AutomationRow: View {
         }
         .accessibilityLabel("\(automation.name) automation")
         .accessibilityValue(automation.enabled ? "Enabled" : "Disabled")
-        .accessibilityHint(
-            isDeleting
-                ? "Automation is being deleted from device. Keep app open until it completes."
-                : (isInteractionLockedDuringSync
-                    ? "Automation is getting ready. Controls are temporarily locked."
-                : (automation.enabled ? "Double tap to disable this automation." : "Double tap to enable this automation.")
-                  )
+        .accessibilityHint(isDeleting
+            ? "Automation is being deleted. Keep app open until it completes."
+            : "Double tap to edit this automation. Use the inline controls to run, save, delete, or toggle it."
         )
     }
 
@@ -118,103 +113,70 @@ struct AutomationRow: View {
                         ProgressView()
                             .progressViewStyle(.circular)
                             .tint(theme.textPrimary)
-                        Text(isDeleting ? "Deleting on device..." : "Getting ready...")
+                        Text("Deleting...")
                             .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(theme.textPrimary)
-                        if isDeleting {
-                            Text("Keep app open")
-                                .font(AppTypography.style(.caption2))
-                                .foregroundColor(theme.textSecondary)
-                        }
+                        Text("Keep app open")
+                            .font(AppTypography.style(.caption2))
+                            .foregroundColor(theme.textSecondary)
                     }
                 }
                 .padding(.horizontal, 20)
             )
     }
     
-    private var headerRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            iconBadge
-            VStack(alignment: .leading, spacing: 4) {
-                titleRow
-                if let subtitle {
-                    Text(subtitle)
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(theme.textSecondary)
-                }
-                Text(actionDescription)
-                    .font(AppTypography.style(.subheadline))
-                    .foregroundColor(theme.textSecondary)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 10) {
-                shortcutControls
-                executionControls
+    private var topContentColumn: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            topStatusChips
+            Text(automation.name)
+                .font(AppTypography.style(.headline, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(actionDescription)
+                .font(AppTypography.style(.caption, weight: .medium))
+                .foregroundColor(.white.opacity(0.72))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+            if let subtitle {
+                Text(subtitle)
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(.white.opacity(0.62))
             }
         }
+        .padding(.bottom, 48)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var bottomContent: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            colorPreviewStrip
+            metadataRow
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     
     private var metadataRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             triggerRow
             if let devicesLabel {
-                Capsule()
-                    .fill(theme.surfaceMuted)
-                    .overlay(
-                        Text(devicesLabel)
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(theme.textSecondary)
-                            .padding(.horizontal, 10)
-                    )
-            }
-            if isRunning {
-                Capsule()
-                    .fill(theme.surfaceMuted)
-                    .overlay(
-                        Text(runningChipText)
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(theme.status.positive)
-                            .padding(.horizontal, 10)
-                    )
-            }
-            if let deviceTimerStatus {
-                Capsule()
-                    .fill(theme.surfaceMuted)
-                    .overlay(
-                        Text(deviceTimerStatus.text)
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(deviceTimerStatus.color)
-                            .padding(.horizontal, 10)
-                    )
-            }
-            if let onRetrySync,
-               let deviceTimerStatus,
-               deviceTimerStatus.retryable {
-                Button("Retry") {
-                    onRetrySync()
-                }
-                .font(AppTypography.style(.caption, weight: .semibold))
-                .foregroundColor(theme.status.warning)
-                .buttonStyle(.plain)
-            }
-            TimelineView(.periodic(from: .now, by: 20)) { context in
-                if let triggerText = recentOnDeviceTriggerText(referenceDate: context.date) {
-                    Capsule()
-                        .fill(theme.surfaceMuted)
-                        .overlay(
-                            Text(triggerText)
-                                .font(AppTypography.style(.caption))
-                                .foregroundColor(theme.status.info)
-                                .padding(.horizontal, 10)
-                        )
-                }
+                neutralChip(devicesLabel)
             }
             Spacer()
-            if let nextTriggerDescription {
-                Text(nextTriggerDescription)
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(theme.textSecondary)
+        }
+    }
+
+    @ViewBuilder
+    private var colorPreviewStrip: some View {
+        let previews = actionColorPreviews
+        if !previews.isEmpty {
+            HStack(spacing: previews.count > 1 ? 4 : 0) {
+                ForEach(Array(previews.enumerated()), id: \.offset) { _, gradient in
+                    previewRail(for: gradient)
+                }
             }
+            .frame(maxWidth: previews.count > 1 ? 190 : 150)
+            .accessibilityLabel("Automation color preview")
         }
     }
     
@@ -223,84 +185,179 @@ struct AutomationRow: View {
         if let iconName = automation.metadata.iconName {
             Image(systemName: iconName)
                 .font(AppTypography.style(.body, weight: .semibold))
-                .foregroundColor(accentColor.opacity(0.9))
+                .foregroundColor(.white.opacity(0.88))
                 .padding(10)
-                .background(theme.surfaceMuted)
+                .background(Color.white.opacity(0.10))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
     
-    private var titleRow: some View {
-        HStack(spacing: 8) {
-            Text(automation.name)
-                .font(AppTypography.style(.headline, weight: .semibold))
-                .foregroundColor(theme.textPrimary)
+    @ViewBuilder
+    private var topStatusChips: some View {
+        HStack(spacing: 7) {
             if isNext {
-                Text("Next")
-                    .font(AppTypography.style(.caption2, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(theme.status.warning.opacity(0.18))
-                    .foregroundColor(theme.status.warning)
-                    .clipShape(Capsule())
+                neutralChip("Next", prominent: true)
+            }
+            if isRunning {
+                neutralChip(runningChipText, prominent: true)
+            }
+            if let deviceTimerStatus {
+                neutralChip(deviceTimerStatus.text)
+            }
+            TimelineView(.periodic(from: .now, by: 20)) { context in
+                if let triggerText = recentOnDeviceTriggerText(referenceDate: context.date) {
+                    neutralChip(triggerText)
+                }
+            }
+            if let onRetrySync,
+               let deviceTimerStatus,
+               deviceTimerStatus.retryable {
+                Button("Retry") {
+                    onRetrySync()
+                }
+                .font(AppTypography.style(.caption2, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.12))
+                )
+                .buttonStyle(.plain)
             }
         }
     }
-    
-    private var shortcutControls: some View {
-        HStack(spacing: 8) {
+
+    private var actionColumn: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            powerToggleButton
             if let onShortcutToggle {
-                Button {
+                neutralIconButton(
+                    systemName: shortcutPinned ? "heart.fill" : "heart",
+                    accessibilityLabel: shortcutPinned ? "Remove from shortcuts" : "Add to shortcuts"
+                ) {
                     onShortcutToggle(!shortcutPinned)
-                } label: {
-                    Image(systemName: shortcutPinned ? "heart.fill" : "heart")
-                        .foregroundColor(shortcutPinned ? theme.status.warning : theme.textSecondary)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(shortcutPinned ? "Remove from shortcuts" : "Add to shortcuts")
+            }
+            if let onRun {
+                neutralIconButton(
+                    systemName: "play",
+                    accessibilityLabel: "Run \(automation.name)",
+                    action: onRun
+                )
             }
             if let onDelete {
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.plain)
-                .disabled(isDeleteDisabled)
-                .opacity(isDeleteDisabled ? 0.35 : 1.0)
-                .accessibilityLabel(isDeleteDisabled ? "Delete unavailable" : "Delete automation")
-                .accessibilityHint(
-                    isDeleteDisabled
-                        ? "Another automation is currently deleting. Wait for it to finish before deleting this automation."
-                        : "Deletes this automation from the app and device."
+                neutralIconButton(
+                    systemName: "trash",
+                    accessibilityLabel: isDeleteDisabled ? "Delete unavailable" : "Delete automation",
+                    isDisabled: isDeleteDisabled,
+                    action: onDelete
                 )
             }
         }
     }
-    
-    private var executionControls: some View {
-        HStack(spacing: 8) {
-            if let onRun {
-                AppGlassIconButton(systemName: "play.fill", size: 40, action: onRun)
-                .accessibilityLabel("Run \(automation.name)")
+
+    private var powerToggleButton: some View {
+        Button(action: {
+            onToggle(!automation.enabled)
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "power")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                Text(automation.enabled ? "On" : "Off")
+                    .font(AppTypography.style(.caption, weight: .semibold))
             }
-            Toggle("", isOn: Binding(
-                get: { automation.enabled },
-                set: { onToggle($0) }
-            ))
-            .tint(accentColor)
-            .labelsHidden()
+            .foregroundColor(.white.opacity(automation.enabled ? 0.96 : 0.62))
+            .frame(minWidth: 70, minHeight: 38)
+            .padding(.horizontal, 10)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(automation.enabled ? 0.16 : 0.08))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                    )
+            )
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(automation.enabled ? "Disable \(automation.name)" : "Enable \(automation.name)")
+    }
+
+    private func neutralIconButton(
+        systemName: String,
+        accessibilityLabel: String,
+        isActive: Bool = false,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .foregroundColor(.white.opacity(isActive ? 0.95 : 0.76))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(isActive ? 0.16 : 0.10))
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.35 : 1.0)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func previewRail(for gradient: LEDGradient) -> some View {
+        LinearGradient(
+            gradient: Gradient(stops: gradient.stops.sorted { $0.position < $1.position }.map {
+                .init(color: $0.color, location: $0.position)
+            }),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(height: 14)
+        .frame(maxWidth: .infinity)
+        .opacity(0.68)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private func neutralChip(_ text: String, prominent: Bool = false) -> some View {
+        Text(text)
+            .font(AppTypography.style(.caption2, weight: .semibold))
+            .foregroundColor(.white.opacity(prominent ? 0.94 : 0.76))
+            .lineLimit(1)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(prominent ? 0.16 : 0.10))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+            )
     }
     
     private var triggerRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "clock")
                 .font(AppTypography.style(.caption, weight: .medium))
-                .foregroundColor(accentColor)
+                .foregroundColor(.white.opacity(0.58))
             
             Text(automation.trigger.displayName)
-                .font(AppTypography.style(.caption, weight: .medium))
-                .foregroundColor(theme.textPrimary)
+                .font(AppTypography.style(.caption2, weight: .semibold))
+                .foregroundColor(.white.opacity(0.78))
+                .lineLimit(1)
+                .layoutPriority(1)
         }
+        .lineLimit(1)
     }
 
     private var deviceTimerStatus: (text: String, color: Color, retryable: Bool)? {
@@ -315,7 +372,7 @@ struct AutomationRow: View {
             return ("Ready", theme.status.positive, false)
         }
         if states.contains(.syncing) {
-            return ("Getting ready", theme.textSecondary, false)
+            return ("Preparing", theme.textSecondary, false)
         }
         if states.contains(.notSynced) {
             if syncedCount > 0 {
@@ -398,6 +455,37 @@ struct AutomationRow: View {
         case .directState:
             return "Custom state"
         }
+    }
+
+    private var actionColorPreviews: [LEDGradient] {
+        switch automation.action {
+        case .gradient(let payload):
+            return payload.powerOn ? [payload.gradient] : []
+        case .transition(let payload):
+            return [payload.startGradient, payload.endGradient]
+        case .effect(let payload):
+            if let gradient = payload.gradient {
+                return [gradient]
+            }
+            if let hex = automation.metadata.colorPreviewHex, !hex.isEmpty {
+                return [solidPreviewGradient(hex: hex)]
+            }
+            return []
+        case .directState(let payload):
+            return [solidPreviewGradient(hex: payload.colorHex)]
+        case .scene, .preset, .playlist:
+            if let hex = automation.metadata.colorPreviewHex, !hex.isEmpty {
+                return [solidPreviewGradient(hex: hex)]
+            }
+            return []
+        }
+    }
+
+    private func solidPreviewGradient(hex: String) -> LEDGradient {
+        LEDGradient(stops: [
+            GradientStop(position: 0.0, hexColor: hex),
+            GradientStop(position: 1.0, hexColor: hex)
+        ])
     }
     
     private var nextTriggerDescription: String? {

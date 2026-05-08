@@ -570,7 +570,7 @@ struct AutomationMetadata: Codable, Equatable {
             case .unknown:
                 return "Not ready"
             case .syncing:
-                return "Getting ready"
+                return "Preparing"
             case .synced:
                 return "Ready"
             case .notSynced:

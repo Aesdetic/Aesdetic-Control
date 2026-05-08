@@ -279,7 +279,7 @@ struct EditDeviceInfoDialog: View {
             dismiss()
         }) {
             NavigationStack {
-                ComprehensiveSettingsView(device: activeDevice, initialCategory: .wifi)
+                ComprehensiveSettingsView(device: activeDevice, initialCategory: .wifiUpdates)
                     .environmentObject(viewModel)
             }
             .presentationDetents([.large])

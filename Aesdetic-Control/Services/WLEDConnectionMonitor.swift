@@ -497,14 +497,6 @@ class WLEDConnectionMonitor: ObservableObject {
         if await apiService.isPresetStoreMutationInFlight(deviceId: device.id) {
             return false
         }
-        if TemporaryTransitionCleanupService.isEnabled {
-            await TemporaryTransitionCleanupService.shared.resumePending(for: device)
-            if Task.isCancelled { return false }
-            if await apiService.isPresetStoreMutationInFlight(deviceId: device.id) {
-                return false
-            }
-            await TemporaryTransitionCleanupService.shared.scanAndCleanOrphans(for: device)
-        }
         return !Task.isCancelled
     }
     

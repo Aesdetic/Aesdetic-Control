@@ -64,7 +64,7 @@ actor PresetSyncManager {
                 _ = try await self.apiService.saveColorPreset(preset, to: device, presetId: presetId)
             }
             try await self.verifyPresetExists(id: presetId, device: device)
-            if let existingId, existingId != presetId {
+            if let existingId, existingId != presetId, !alexaReservedPresetRange.contains(existingId) {
                 await DeviceCleanupManager.shared.requestDelete(
                     type: .preset,
                     device: device,
@@ -90,7 +90,7 @@ actor PresetSyncManager {
                 _ = try await self.apiService.saveEffectPreset(preset, to: device, presetId: presetId)
             }
             try await self.verifyPresetExists(id: presetId, device: device)
-            if let existingId, existingId != presetId {
+            if let existingId, existingId != presetId, !alexaReservedPresetRange.contains(existingId) {
                 await DeviceCleanupManager.shared.requestDelete(
                     type: .preset,
                     device: device,
@@ -122,7 +122,7 @@ actor PresetSyncManager {
                 _ = try await self.apiService.saveTransitionPreset(preset, to: device, playlistId: playlistId)
             }
             try await self.verifyPlaylistExists(id: playlistId, device: device)
-            if let existingId, existingId != playlistId {
+            if let existingId, existingId != playlistId, !alexaReservedPresetRange.contains(existingId) {
                 await DeviceCleanupManager.shared.requestDelete(
                     type: .playlist,
                     device: device,
@@ -135,7 +135,9 @@ actor PresetSyncManager {
                let playlists = try? await self.apiService.fetchPlaylists(for: device),
                let playlist = playlists.first(where: { $0.id == playlistId }) {
                 let newStepIds = Set(playlist.presets)
-                let staleStepIds = existingStepIds.filter { !newStepIds.contains($0) }
+                let staleStepIds = existingStepIds.filter {
+                    !newStepIds.contains($0) && !alexaReservedPresetRange.contains($0)
+                }
                 if !staleStepIds.isEmpty {
                     await DeviceCleanupManager.shared.requestDelete(
                         type: .preset,
@@ -153,32 +155,41 @@ actor PresetSyncManager {
     private func resolvePresetId(for preset: ColorPreset, device: WLEDDevice, existingId: Int?) async throws -> Int {
         let existingPresets = try await apiService.fetchPresets(for: device)
         let used = Set(existingPresets.map { $0.id })
-        if let existingId, (1...250).contains(existingId) {
+        if let existingId, appManagedPresetRange.contains(existingId) {
             return existingId
         }
-        return allocateId(used: used) ?? 1
+        guard let id = allocateId(used: used) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        return id
     }
 
     private func resolvePresetId(for preset: WLEDEffectPreset, device: WLEDDevice, existingId: Int?) async throws -> Int {
         let existingPresets = try await apiService.fetchPresets(for: device)
         let used = Set(existingPresets.map { $0.id })
-        if let existingId, (1...250).contains(existingId) {
+        if let existingId, appManagedPresetRange.contains(existingId) {
             return existingId
         }
-        return allocateId(used: used) ?? 1
+        guard let id = allocateId(used: used) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        return id
     }
 
     private func resolvePlaylistId(for preset: TransitionPreset, device: WLEDDevice, existingId: Int?) async throws -> Int {
         let existingPresets = try await apiService.fetchPresets(for: device)
         let used = Set(existingPresets.map { $0.id })
-        if let existingId, (1...250).contains(existingId) {
+        if let existingId, appManagedPresetRange.contains(existingId) {
             return existingId
         }
-        return allocateId(used: used) ?? 1
+        guard let id = allocateId(used: used) else {
+            throw WLEDAPIError.invalidConfiguration
+        }
+        return id
     }
 
     private func allocateId(used: Set<Int>) -> Int? {
-        for id in 1...250 where !used.contains(id) {
+        for id in appManagedPresetRange where !used.contains(id) {
             return id
         }
         return nil

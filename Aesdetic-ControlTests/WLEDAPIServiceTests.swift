@@ -907,6 +907,62 @@ struct WLEDAPIServiceTests {
         #expect(ids == [17])
     }
 
+    @Test("Alexa mirror plan detects existing non-app Alexa slots")
+    func testAlexaMirrorPlanDetectsConflicts() async throws {
+        let service = WLEDAPIService.shared
+        let payload = Data("""
+        {
+          "0": {},
+          "1": { "n": "Existing WLED Alexa Preset" },
+          "10": { "n": "Warm", "seg": [] }
+        }
+        """.utf8)
+        let result = try await service.debugAlexaMirrorPlanForTesting(
+            data: payload,
+            favorites: [WLEDAlexaMirrorFavorite(slot: 1, sourcePresetId: 10, displayName: "Warm")],
+            allowReplacingExisting: false
+        )
+
+        #expect(result.conflictSlots == [1])
+        #expect(result.mirroredSlots.isEmpty)
+    }
+
+    @Test("Alexa mirror plan mirrors sources and deletes stale owned slots")
+    func testAlexaMirrorPlanMirrorsAndDeletesStaleOwnedSlots() async throws {
+        let service = WLEDAPIService.shared
+        let payload = Data("""
+        {
+          "0": {},
+          "2": { "n": "Old Alexa", "aesdetic": { "alexa": true, "source": 11, "slot": 2 } },
+          "10": { "n": "Warm", "seg": [] }
+        }
+        """.utf8)
+        let result = try await service.debugAlexaMirrorPlanForTesting(
+            data: payload,
+            favorites: [WLEDAlexaMirrorFavorite(slot: 1, sourcePresetId: 10, displayName: "Warm")],
+            allowReplacingExisting: false
+        )
+
+        #expect(result.mirroredSlots == [1])
+        #expect(result.deletedSlots == [2])
+        #expect(result.conflictSlots.isEmpty)
+        #expect(result.missingSourceIds.isEmpty)
+    }
+
+    @Test("Alexa mirror plan reports missing source presets")
+    func testAlexaMirrorPlanReportsMissingSources() async throws {
+        let service = WLEDAPIService.shared
+        let payload = Data("{\"0\":{}}".utf8)
+        let result = try await service.debugAlexaMirrorPlanForTesting(
+            data: payload,
+            favorites: [WLEDAlexaMirrorFavorite(slot: 1, sourcePresetId: 10, displayName: "Warm")],
+            allowReplacingExisting: false
+        )
+
+        #expect(result.missingSourceIds == [10])
+        #expect(result.mirroredSlots.isEmpty)
+    }
+
     @Test("renamePresetRecord validates ID range 1-250")
     func testRenamePresetRecordValidation() async throws {
         let service = WLEDAPIService.shared

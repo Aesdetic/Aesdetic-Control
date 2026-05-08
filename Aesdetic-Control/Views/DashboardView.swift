@@ -69,9 +69,11 @@ struct DashboardView: View {
     
     @Environment(\.colorScheme) var colorScheme
     @State private var navigationPath = NavigationPath()
-    @State private var selectedDevice: WLEDDevice?
+    @State private var detailPresentation = DeviceDetailPresentationState()
+    @State private var detailSourceFrames: [String: CGRect] = [:]
     @State private var setupDevice: WLEDDevice?
     @State private var detailBackgroundDismissEnabledAt: Date = .distantPast
+    @GestureState private var detailDragOffset: CGFloat = 0
     
     // MARK: - Performance Optimization Properties
     
@@ -88,6 +90,7 @@ struct DashboardView: View {
     private let contentHorizontalPadding: CGFloat = 20
     private let sectionSpacing: CGFloat = 20
     private let detailDismissGuardDelay: TimeInterval = 0.45
+    private let detailPanelAnimation: Animation = DeviceDetailPresentation.animation
     private let debugHideGreeting = false
     private let debugHideQuote = false
     private let debugHideScenes = false
@@ -215,9 +218,13 @@ struct DashboardView: View {
                                 spacing: 14
                             ) {
                                 ForEach(filteredDevices, id: \.id) { device in
-                                    MiniDeviceCard(device: device, onTap: {
-                                        openDeviceDetail(device)
-                                    })
+                                    MiniDeviceCard(
+                                        device: device,
+                                        onTap: {
+                                            openDeviceDetail(device)
+                                        }
+                                    )
+                                    .deviceDetailSourceFrame(deviceId: device.id)
                                     .id(device.id)
                                 }
                             }
@@ -237,6 +244,10 @@ struct DashboardView: View {
                     await refreshData()
                 }
             }
+            .coordinateSpace(name: DeviceDetailPresentation.coordinateSpaceName)
+            .onPreferenceChange(DeviceDetailSourceFramePreferenceKey.self) { frames in
+                detailSourceFrames = frames
+            }
             .onAppear {
                 updateMemoizedStats()
                 updateMemoizedFilteredDevices()
@@ -249,7 +260,7 @@ struct DashboardView: View {
                     var transaction = Transaction()
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
-                        closeDeviceDetail()
+                        closeDeviceDetail(animated: false)
                     }
                 }
             }
@@ -262,13 +273,38 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var dashboardDeviceDetailOverlay: some View {
-        if let selectedDevice {
+        if let selectedDevice = detailPresentation.device {
             GeometryReader { proxy in
-                let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
-                ZStack(alignment: .topTrailing) {
+                let liveDragOffset = max(0, detailDragOffset)
+                let dragOffset = liveDragOffset > 0 ? liveDragOffset : detailPresentation.closingDragOffset
+                let panelTopPadding: CGFloat = 4
+                let panelHorizontalPadding: CGFloat = 8
+                let dockOverlapAllowance: CGFloat = 0
+                let panelWidth = max(1, proxy.size.width - (panelHorizontalPadding * 2))
+                let panelHeight = max(420, proxy.size.height - proxy.safeAreaInsets.bottom - panelTopPadding + dockOverlapAllowance)
+                let panelFrame = CGRect(
+                    x: panelHorizontalPadding,
+                    y: panelTopPadding,
+                    width: panelWidth,
+                    height: panelHeight
+                )
+                let presentationProgress = DeviceDetailPresentation.interactiveProgress(
+                    isPresented: detailPresentation.isPresented,
+                    dragOffset: dragOffset
+                )
+                let morphFrame = DeviceDetailPresentation.morphFrame(
+                    sourceFrame: detailPresentation.sourceFrame,
+                    panelFrame: panelFrame,
+                    progress: presentationProgress
+                )
+                let morphCornerRadius = DeviceDetailPresentation.cornerRadius(
+                    sourceFrame: detailPresentation.sourceFrame,
+                    progress: presentationProgress
+                )
+                ZStack(alignment: .topLeading) {
                     Color.clear
                         .ignoresSafeArea()
-                        .allowsHitTesting(canDismissDetailFromBackground)
+                        .allowsHitTesting(canDismissDetailFromBackground && detailPresentation.isPresented && !detailPresentation.isClosing)
                         .onTapGesture {
                             closeDeviceDetail()
                         }
@@ -276,28 +312,48 @@ struct DashboardView: View {
                     DeviceDetailView(
                         device: selectedDevice,
                         viewModel: deviceControlViewModel,
-                        backgroundStyle: .liquidGlass
+                        backgroundStyle: .liquidGlass,
+                        containerCornerRadius: morphCornerRadius,
+                        presentationProgress: presentationProgress,
+                        onClose: { closeDeviceDetail() }
                     )
-                    .frame(maxHeight: maxPopupHeight, alignment: .top)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 26)
-
-                    Button(action: closeDeviceDetail) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(AppTypography.style(.title2))
-                            .foregroundColor(.white.opacity(0.9))
-                            .padding(12)
-                    }
-                    .padding(.top, 20)
-                    .padding(.trailing, 20)
+                    .frame(width: morphFrame.width, height: morphFrame.height, alignment: .top)
+                    .position(x: morphFrame.midX, y: morphFrame.midY)
+                    .opacity(Double(0.18 + (0.82 * presentationProgress)))
+                    .simultaneousGesture(detailCollapseDragGesture)
                 }
             }
-            .transition(.identity)
+            .zIndex(2)
         }
     }
 
     private var canDismissDetailFromBackground: Bool {
         Date() >= detailBackgroundDismissEnabledAt
+    }
+
+    private var detailCollapseDragGesture: some Gesture {
+        DragGesture(minimumDistance: 14, coordinateSpace: .local)
+            .updating($detailDragOffset) { value, state, _ in
+                let translation = value.translation
+                guard DeviceDetailPresentation.canStartDismissGesture(at: value.startLocation),
+                      translation.height > 0,
+                      translation.height > abs(translation.width) * 0.8 else {
+                    return
+                }
+                state = min(translation.height, 220)
+            }
+            .onEnded { value in
+                let translation = value.translation
+                let predictedDrop = value.predictedEndTranslation.height - translation.height
+                guard DeviceDetailPresentation.canStartDismissGesture(at: value.startLocation),
+                      translation.height > 0,
+                      translation.height > abs(translation.width) * 0.8 else {
+                    return
+                }
+                if translation.height > 150 || predictedDrop > 220 {
+                    closeDeviceDetail(fromDragOffset: min(translation.height, 220))
+                }
+            }
     }
 
     @ViewBuilder
@@ -466,9 +522,13 @@ struct DashboardView: View {
         ) {
             // Use memoized filtered devices
             ForEach(filteredDevices, id: \.id) { device in
-                MiniDeviceCard(device: device, onTap: {
-                    openDeviceDetail(device)
-                })
+                MiniDeviceCard(
+                    device: device,
+                    onTap: {
+                        openDeviceDetail(device)
+                    }
+                )
+                    .deviceDetailSourceFrame(deviceId: device.id)
                     .id(device.id) // Stable identity for animations
                     .transition(.asymmetric(
                         insertion: .scale.combined(with: .opacity).animation(.easeInOut(duration: 0.2).delay(0.1)),
@@ -483,17 +543,39 @@ struct DashboardView: View {
 
     private func openDeviceDetail(_ device: WLEDDevice) {
         if deviceControlViewModel.requiresProfileSetup(device) {
-            closeDeviceDetail()
+            closeDeviceDetail(animated: false)
             setupDevice = device
             return
         }
         detailBackgroundDismissEnabledAt = Date().addingTimeInterval(detailDismissGuardDelay)
-        selectedDevice = device
+        detailPresentation.prepare(device: device, sourceFrame: detailSourceFrames[device.id])
+        DispatchQueue.main.async {
+            withAnimation(detailPanelAnimation) {
+                detailPresentation.isPresented = true
+            }
+        }
     }
 
-    private func closeDeviceDetail() {
-        selectedDevice = nil
-        detailBackgroundDismissEnabledAt = .distantPast
+    private func closeDeviceDetail(fromDragOffset dragOffset: CGFloat = 0, animated: Bool = true) {
+        guard detailPresentation.device != nil else {
+            detailBackgroundDismissEnabledAt = .distantPast
+            return
+        }
+        guard animated else {
+            detailPresentation.reset()
+            detailBackgroundDismissEnabledAt = .distantPast
+            return
+        }
+
+        detailPresentation.isClosing = true
+        detailPresentation.closingDragOffset = max(0, dragOffset)
+        withAnimation(detailPanelAnimation) {
+            detailPresentation.isPresented = false
+            detailPresentation.closingDragOffset = 0
+        } completion: {
+            detailPresentation.reset()
+            detailBackgroundDismissEnabledAt = .distantPast
+        }
     }
     
     // MARK: - Performance Optimized Data Refresh
@@ -602,7 +684,7 @@ struct ScenesAutomationsSection: View {
                                 var metadata = updated.metadata
                                 metadata.pinnedToShortcuts = !(automation.metadata.pinnedToShortcuts ?? false)
                                 updated.metadata = metadata
-                                AutomationStore.shared.update(updated)
+                                AutomationStore.shared.update(updated, syncOnDevice: false)
                             }
                         }
                     }
@@ -924,7 +1006,11 @@ struct MiniDeviceCard: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var isToggling: Bool = false
 
-    init(device: WLEDDevice, onTap: @escaping () -> Void = {}, showPowerToggle: Bool = true) {
+    init(
+        device: WLEDDevice,
+        onTap: @escaping () -> Void = {},
+        showPowerToggle: Bool = true
+    ) {
         self.device = device
         self.onTap = onTap
         self.showPowerToggle = showPowerToggle

@@ -247,7 +247,9 @@ class AutomationStore: ObservableObject {
         save()
         scheduleNext()
         scheduleSolarRefreshIfNeeded()
-        scheduleOnDeviceSyncRetryIfNeeded()
+        if syncOnDevice {
+            scheduleOnDeviceSyncRetryIfNeeded()
+        }
         logger.info("Updated automation: \(record.name)")
         if shouldSyncOnDevice {
             Task { [weak self] in
@@ -2945,6 +2947,7 @@ class AutomationStore: ObservableObject {
 
             if let previousManagedPlaylistId,
                previousManagedPlaylistId != playlist.playlistId,
+               !alexaReservedPresetRange.contains(previousManagedPlaylistId),
                !managedPlaylistClaimedByAnotherAutomation(
                     previousManagedPlaylistId,
                     deviceId: device.id,
@@ -2962,7 +2965,8 @@ class AutomationStore: ObservableObject {
             let staleStepPresetIds = previousManagedStepPresetIds
                 .subtracting(Set(playlist.stepPresetIds))
                 .filter {
-                    !managedStepPresetClaimedByAnotherAutomation(
+                    !alexaReservedPresetRange.contains($0)
+                    && !managedStepPresetClaimedByAnotherAutomation(
                         $0,
                         deviceId: device.id,
                         excluding: automation.id
@@ -3104,7 +3108,7 @@ class AutomationStore: ObservableObject {
     }
 
     private func availablePresetId(excluding used: Set<Int>) -> Int? {
-        for id in stride(from: maxWLEDPresetSlots, through: 1, by: -1) {
+        for id in stride(from: maxWLEDPresetSlots, through: appManagedPresetLowerBound, by: -1) {
             if !used.contains(id) {
                 return id
             }
@@ -3217,7 +3221,8 @@ class AutomationStore: ObservableObject {
         }
         do {
             let existingPresets = try await apiService.fetchPresets(for: device)
-            let remaining = max(0, maxWLEDPresetSlots - existingPresets.count)
+            let appManagedUsed = existingPresets.filter { appManagedPresetRange.contains($0.id) }.count
+            let remaining = max(0, appManagedPresetRange.count - appManagedUsed)
             guard remaining > presetSlotReserve else {
                 logger.error("Automation preset save blocked: remaining slots=\(remaining) for \(device.name, privacy: .public)")
                 return nil
@@ -3231,7 +3236,7 @@ class AutomationStore: ObservableObject {
             }
             let presetId: Int
             if let existingStoredId,
-               (1...maxWLEDPresetSlots).contains(existingStoredId),
+               appManagedPresetRange.contains(existingStoredId),
                !excludedIds.contains(existingStoredId),
                !managedPresetClaimedByAnotherAutomation(existingStoredId, deviceId: device.id, excluding: automation.id) {
                 presetId = existingStoredId

@@ -136,14 +136,6 @@ struct TransitionPane: View {
         durationMinutesPart >= 60 ? [0] : Array(0...59)
     }
 
-    private var selectedDurationSeconds: Int {
-        transitionPickerDurationSeconds()
-    }
-
-    private var transitionExceedsRecommendedMax: Bool {
-        TransitionDurationPicker.exceedsRecommendedMax(Double(selectedDurationSeconds))
-    }
-    
     private var colorPresets: [ColorPreset] {
         PresetsStore.shared.colorPresets
     }
@@ -171,8 +163,12 @@ struct TransitionPane: View {
         }
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(backgroundFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(colorSchemeContrast == .increased ? 0.26 : 0.16), lineWidth: 1)
+                )
         )
     }
 
@@ -318,14 +314,44 @@ struct TransitionPane: View {
         Button(action: {
             applyPreset(preset, to: target)
         }) {
-            Text(preset.name)
-                .font(AppTypography.style(.caption, weight: .medium))
-                .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.75))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(isSelected ? 0.22 : 0.12))
+            LinearGradient(
+                gradient: Gradient(stops: preset.gradientStops.sorted { $0.position < $1.position }.map {
+                    .init(color: $0.color, location: $0.position)
+                }),
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: 48, height: 30)
+            .clipShape(Capsule(style: .continuous))
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.82 : 0.28), lineWidth: isSelected ? 1.5 : 1)
+            )
+            .shadow(
+                color: .black.opacity(isSelected ? 0.24 : 0.12),
+                radius: isSelected ? 4 : 2,
+                x: 0,
+                y: isSelected ? 2 : 1
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(AppTypography.text(size: 9, weight: .bold, relativeTo: .caption2))
+                        .foregroundColor(.black.opacity(0.75))
+                        .frame(width: 14, height: 14)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.9))
+                        )
+                        .offset(x: 2, y: 2)
+                }
+            }
+            .contentShape(Capsule(style: .continuous))
+            .accessibilityHidden(true)
+            .padding(.vertical, 1)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(isSelected ? 0.12 : 0.04))
                 )
         }
         .buttonStyle(.plain)
@@ -419,22 +445,26 @@ struct TransitionPane: View {
                                     .scaleEffect(0.7)
                                     .tint(.white)
                             } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle.fill")
+                                Image(systemName: "checkmark.circle")
                                     .font(AppTypography.style(.caption))
-                                    .foregroundColor(.green)
+                                    .foregroundColor(.white)
                             } else {
-                                Image(systemName: "plus.circle.fill")
+                                Image(systemName: "plus.circle")
                                     .font(AppTypography.style(.caption))
                             }
-                            Text("Preset")
-                                .font(AppTypography.style(.caption, weight: .medium))
+                            Text("Save")
+                                .font(AppTypography.style(.caption, weight: .semibold))
                         }
-                        .foregroundColor(.white.opacity(0.8))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
                         .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white.opacity(0.1))
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.12))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                )
                         )
                     }
                     .buttonStyle(.plain)
@@ -461,17 +491,21 @@ struct TransitionPane: View {
                     }
                 }) {
                     HStack(spacing: 6) {
-                        Image(systemName: transitionOn ? "power" : "poweroff")
+                        Image(systemName: "power")
                             .font(AppTypography.style(.caption))
-                        Text(transitionOn ? "ON" : "OFF")
-                            .font(AppTypography.style(.caption, weight: .medium))
+                        Text(transitionOn ? "On" : "Off")
+                            .font(AppTypography.style(.caption, weight: .semibold))
                     }
-                    .foregroundColor(transitionOn ? .white : .white.opacity(0.6))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .foregroundColor(.white.opacity(transitionOn ? 0.92 : 0.62))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
                     .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(transitionOn ? Color.white.opacity(0.15) : Color.white.opacity(0.08))
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(transitionOn ? 0.14 : 0.08))
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                            )
                     )
                 }
                 .buttonStyle(.plain)
@@ -535,57 +569,6 @@ struct TransitionPane: View {
             }
             .frame(maxWidth: .infinity)
 
-            durationRecommendationGuide
-        }
-    }
-
-    private var durationRecommendationGuide: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            GeometryReader { geo in
-                let width = max(1, geo.size.width)
-                let progress = min(
-                    1.0,
-                    Double(selectedDurationSeconds) / Double(TransitionDurationPicker.maxSeconds)
-                )
-                let markerX = width * TransitionDurationPicker.recommendedMaxRatio
-
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.12))
-                        .frame(height: 6)
-
-                    Capsule()
-                        .fill(transitionExceedsRecommendedMax ? Color.orange.opacity(0.9) : Color.white.opacity(0.45))
-                        .frame(width: width * progress, height: 6)
-
-                    Rectangle()
-                        .fill(Color.orange.opacity(0.95))
-                        .frame(width: 2, height: 12)
-                        .offset(x: max(0, min(width - 2, markerX - 1)))
-                }
-                .frame(height: 12)
-            }
-            .frame(height: 12)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Recommended transition duration marker")
-            .accessibilityValue("Recommended max \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds)))")
-
-            HStack {
-                Text("0:00")
-                Spacer()
-                Text("\(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) recommended")
-                    .foregroundColor(.orange.opacity(0.9))
-                Spacer()
-                Text("60:00")
-            }
-            .font(AppTypography.style(.caption2))
-            .foregroundColor(.white.opacity(0.55))
-
-            if transitionExceedsRecommendedMax {
-                Text("Above \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) may be less reliable on some devices and use more preset storage.")
-                    .font(AppTypography.style(.caption2))
-                    .foregroundColor(.orange.opacity(0.9))
-            }
         }
     }
 
@@ -804,6 +787,7 @@ struct TransitionPane: View {
                     showWheel = false
                 }
             )
+            .frame(maxWidth: .infinity)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
@@ -1025,6 +1009,7 @@ struct TransitionPane: View {
                     showWheel = false
                 }
             )
+            .frame(maxWidth: .infinity)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }

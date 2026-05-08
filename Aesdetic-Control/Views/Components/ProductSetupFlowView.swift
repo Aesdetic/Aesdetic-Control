@@ -7,7 +7,8 @@ struct ProductSetupFlowView: View {
         case product = 0
         case ledPreferences = 1
         case nameAndWiFi = 2
-        case automation = 3
+        case smartHome = 3
+        case automation = 4
 
         var title: String {
             switch self {
@@ -17,6 +18,8 @@ struct ProductSetupFlowView: View {
                 return "LED Preferences"
             case .nameAndWiFi:
                 return "Name & Wi-Fi"
+            case .smartHome:
+                return "Smart Home"
             case .automation:
                 return "First Automation"
             }
@@ -30,6 +33,8 @@ struct ProductSetupFlowView: View {
                 return "We'll apply safe recommended LED settings."
             case .nameAndWiFi:
                 return "Name your device and confirm network before continuing."
+            case .smartHome:
+                return "Connect Alexa now or set up smart home later."
             case .automation:
                 return "Set a wake automation from sunrise to sky blue."
             }
@@ -164,6 +169,7 @@ struct ProductSetupFlowView: View {
     let onClose: (() -> Void)?
     let allowsManualClose: Bool
     @EnvironmentObject var viewModel: DeviceControlViewModel
+    @ObservedObject private var smartHomeStore = SmartHomeIntegrationStore.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
@@ -186,6 +192,12 @@ struct ProductSetupFlowView: View {
     @State private var wifiScanTask: Task<Void, Never>?
     @State private var selectedRoomLocation: DeviceLocation = .bedroom
     @State private var customRoomName: String = ""
+    @State private var setupAlexaEnabled: Bool = false
+    @State private var setupAlexaName: String = ""
+    @State private var isSavingSetupSmartHome: Bool = false
+    @State private var setupSmartHomeMessage: String?
+    @State private var setupSmartHomeMessageIsError: Bool = false
+    @State private var showSetupAlexaDiscoveryInstructions: Bool = false
 
     @State private var wakeTriggerMode: WakeTriggerMode = .sunrise
     @State private var wakeTime: Date
@@ -262,7 +274,7 @@ struct ProductSetupFlowView: View {
 
     private var activeSetupSteps: [SetupStep] {
         if isCustomProduct {
-            return [.product, .ledPreferences, .nameAndWiFi]
+            return [.product, .ledPreferences, .nameAndWiFi, .smartHome]
         }
         return SetupStep.allCases
     }
@@ -283,6 +295,8 @@ struct ProductSetupFlowView: View {
             return true
         case .nameAndWiFi:
             return !trimmedDeviceName.isEmpty && hasConfirmedWiFi && setupLocationValidationError == nil
+        case .smartHome:
+            return !isSavingSetupSmartHome && (!setupAlexaEnabled || !trimmedSetupAlexaName.isEmpty)
         case .automation:
             return !isApplying && wakeWeekdays.contains(true)
         }
@@ -294,6 +308,17 @@ struct ProductSetupFlowView: View {
 
     private var trimmedCustomRoomName: String {
         customRoomName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedSetupAlexaName: String {
+        setupAlexaName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func resetSmartHomeSetupSaveState() {
+        guard !isSavingSetupSmartHome else { return }
+        showSetupAlexaDiscoveryInstructions = false
+        setupSmartHomeMessage = nil
+        setupSmartHomeMessageIsError = false
     }
 
     private var setupLocationValidationError: String? {
@@ -395,6 +420,12 @@ struct ProductSetupFlowView: View {
                 guard newValue == ProductOption.custom.id, step == .automation else { return }
                 moveToStep(SetupStep.nameAndWiFi.rawValue)
             }
+            .onChange(of: setupAlexaEnabled) { _, _ in
+                resetSmartHomeSetupSaveState()
+            }
+            .onChange(of: setupAlexaName) { _, _ in
+                resetSmartHomeSetupSaveState()
+            }
             .onAppear {
                 viewModel.isMandatorySetupFlowActive = true
             }
@@ -449,6 +480,8 @@ struct ProductSetupFlowView: View {
                     ledPreferencesStep
                 case .nameAndWiFi:
                     nameAndWiFiStep
+                case .smartHome:
+                    smartHomeStep
                 case .automation:
                     automationStep
                 }
@@ -589,7 +622,7 @@ struct ProductSetupFlowView: View {
                         }
                         .buttonStyle(.plain)
 
-                        Text("Custom setup ends after Name & Wi-Fi. No automation is created.")
+                        Text("Custom setup ends after Smart Home. No automation is created.")
                             .font(AppTypography.style(.caption))
                             .foregroundStyle(theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -784,6 +817,116 @@ struct ProductSetupFlowView: View {
                 }
             }
         }
+    }
+
+    private var smartHomeStep: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            infoPanel(title: "Alexa") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Enable Alexa Control", isOn: $setupAlexaEnabled)
+                        .settingsToggleStyle()
+
+                    if setupAlexaEnabled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Alexa Name")
+                                .font(AppTypography.style(.caption, weight: .semibold))
+                                .foregroundStyle(theme.textSecondary)
+                            TextField("Bedroom Lights", text: $setupAlexaName)
+                                .textFieldStyle(.plain)
+                                .font(AppTypography.style(.subheadline, weight: .semibold))
+                                .foregroundColor(theme.textPrimary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(theme.surfaceMuted)
+                                )
+                                .textInputAutocapitalization(.words)
+                                .disableAutocorrection(true)
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            setupBullet("Uses WLED native Alexa support")
+                            setupBullet("Auto-fills up to 9 eligible favorites")
+                            setupBullet("You will finish in the Alexa app with Discover Devices")
+                        }
+                    } else {
+                        Text("You can set up Alexa later from Device Settings > Integrations.")
+                            .font(AppTypography.style(.subheadline))
+                            .foregroundStyle(theme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if isSavingSetupSmartHome {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                                .tint(.white)
+                            Text("Saving Alexa setup...")
+                                .font(AppTypography.style(.caption))
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                    }
+
+                    if let setupSmartHomeMessage {
+                        Text(setupSmartHomeMessage)
+                            .font(AppTypography.style(.caption))
+                            .foregroundStyle(setupSmartHomeMessageIsError ? theme.status.negative : theme.status.positive)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if showSetupAlexaDiscoveryInstructions {
+                        AlexaDiscoveryInstructionsView()
+                    }
+                }
+            }
+
+            infoPanel(title: "Coming Next") {
+                VStack(spacing: 10) {
+                    setupIntegrationStatusRow(kind: .homeAssistant)
+                    setupIntegrationStatusRow(kind: .appleHome)
+                    setupIntegrationStatusRow(kind: .googleHome)
+                    setupIntegrationStatusRow(kind: .mqtt)
+                }
+            }
+        }
+    }
+
+    private func setupBullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .foregroundStyle(theme.status.positive)
+                .padding(.top, 1)
+            Text(text)
+                .font(AppTypography.style(.caption))
+                .foregroundStyle(theme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func setupIntegrationStatusRow(kind: SmartHomeIntegrationKind) -> some View {
+        let status = smartHomeStore.status(for: kind, deviceId: activeDevice.id)
+        return HStack(spacing: 10) {
+            Image(systemName: kind.iconName)
+                .font(AppTypography.style(.subheadline, weight: .semibold))
+                .foregroundStyle(theme.textSecondary)
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(kind.displayName)
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                Text(status.state.displayName)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(theme.surfaceMuted)
+        )
     }
 
     private var automationStep: some View {
@@ -1160,11 +1303,21 @@ struct ProductSetupFlowView: View {
 
     private var primaryButtonTitle: String {
         if isApplying { return "Applying…" }
+        if isSavingSetupSmartHome { return "Saving…" }
+        if step == .smartHome {
+            if setupAlexaEnabled && !showSetupAlexaDiscoveryInstructions {
+                return "Save Alexa Setup"
+            }
+            return step == finalStep ? "Finish Setup" : "Continue"
+        }
         return step == finalStep ? "Finish Setup" : "Continue"
     }
 
     private var primaryButtonIcon: String {
-        if isApplying { return "hourglass" }
+        if isApplying || isSavingSetupSmartHome { return "hourglass" }
+        if step == .smartHome && setupAlexaEnabled && !showSetupAlexaDiscoveryInstructions {
+            return "checkmark"
+        }
         return step == finalStep ? "checkmark" : "chevron.right"
     }
 
@@ -1193,6 +1346,29 @@ struct ProductSetupFlowView: View {
     private func handlePrimaryAction() async {
         localError = nil
 
+        if step == .smartHome {
+            if setupAlexaEnabled && showSetupAlexaDiscoveryInstructions {
+                if let next = nextStep(after: step) {
+                    moveToStep(next.rawValue)
+                } else {
+                    await applySetup(skipAutomationCreation: true)
+                }
+                return
+            }
+
+            let saved = await saveSmartHomeSetupIfNeeded()
+            guard saved else { return }
+            if setupAlexaEnabled {
+                return
+            }
+            if let next = nextStep(after: step) {
+                moveToStep(next.rawValue)
+            } else {
+                await applySetup(skipAutomationCreation: true)
+            }
+            return
+        }
+
         if step == finalStep {
             await applySetup(skipAutomationCreation: false)
             return
@@ -1219,6 +1395,12 @@ struct ProductSetupFlowView: View {
         }
 
         hasConfirmedWiFi = false
+        setupAlexaEnabled = false
+        setupAlexaName = setupSuggestedName(for: live)
+        isSavingSetupSmartHome = false
+        setupSmartHomeMessage = nil
+        setupSmartHomeMessageIsError = false
+        showSetupAlexaDiscoveryInstructions = false
         wakeTriggerMode = .sunrise
         wakeTime = Self.defaultWakeTime()
         sunriseOffsetMinutes = -15
@@ -1390,6 +1572,51 @@ struct ProductSetupFlowView: View {
                 }
             }
         }
+    }
+
+    private func saveSmartHomeSetupIfNeeded() async -> Bool {
+        setupSmartHomeMessage = nil
+        setupSmartHomeMessageIsError = false
+        showSetupAlexaDiscoveryInstructions = false
+
+        guard setupAlexaEnabled else {
+            SmartHomeIntegrationStore.shared.setStatus(
+                .notSetUp,
+                for: .alexa,
+                deviceId: activeDevice.id
+            )
+            return true
+        }
+
+        let name = trimmedSetupAlexaName
+        guard !name.isEmpty else {
+            setupSmartHomeMessage = "Add a name Alexa can discover."
+            setupSmartHomeMessageIsError = true
+            return false
+        }
+
+        isSavingSetupSmartHome = true
+        defer { isSavingSetupSmartHome = false }
+
+        let success = await viewModel.syncAlexaFavoritesToDevice(
+            activeDevice,
+            enabled: true,
+            invocationName: name
+        )
+
+        if success {
+            showSetupAlexaDiscoveryInstructions = true
+            setupSmartHomeMessage = nil
+            setupSmartHomeMessageIsError = false
+            return true
+        }
+
+        let conflicts = viewModel.alexaMirrorConflictSlots(for: activeDevice)
+        setupSmartHomeMessage = conflicts.isEmpty
+            ? "Could not save Alexa setup. You can continue and set it up later from Integrations."
+            : "Alexa slots \(conflicts.map(String.init).joined(separator: ", ")) already contain WLED presets."
+        setupSmartHomeMessageIsError = true
+        return false
     }
 
     private func applySetup(skipAutomationCreation: Bool) async {
