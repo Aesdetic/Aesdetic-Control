@@ -192,6 +192,9 @@ struct TransitionPane: View {
             isApplyingTransition = newValue != nil
             if newValue == nil {
                 isCancellingTransition = false
+                if !isExpanded {
+                    transitionOn = false
+                }
             }
             if newValue != nil {
                 transitionOn = true
@@ -272,6 +275,9 @@ struct TransitionPane: View {
         }
         .onChange(of: isExpanded) { _, expanded in
             // UI-only: pane collapse (including tab switches/view recreation) must not stop transitions.
+            if !expanded, activeTransitionId == nil, !isSavingPreset {
+                transitionOn = false
+            }
             persistDraftSession()
         }
         .onChange(of: transitionOn) { _, _ in persistDraftSession() }
@@ -428,56 +434,13 @@ struct TransitionPane: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Label("Transitions", systemImage: "arrow.triangle.2.circlepath")
-                    .font(AppTypography.style(.headline))
-                    .foregroundColor(.white)
-                Spacer()
-
-                if isTransitionActive {
-                    Button(action: {
-                        Task {
-                            await saveTransitionPresetDirectly()
-                        }
-                    }) {
-                        HStack(spacing: 6) {
-                            if isSavingPreset {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .tint(.white)
-                            } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle")
-                                    .font(AppTypography.style(.caption))
-                                    .foregroundColor(.white)
-                            } else {
-                                Image(systemName: "plus.circle")
-                                    .font(AppTypography.style(.caption))
-                            }
-                            Text("Save")
-                                .font(AppTypography.style(.caption, weight: .semibold))
-                        }
-                        .foregroundColor(.white.opacity(0.9))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.white.opacity(0.12))
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                                )
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isPresetButtonDisabled)
-                    .opacity(isPresetButtonDisabled ? 0.45 : 1.0)
-                }
-
                 Button(action: {
                     if transitionOn {
                         transitionOn = false
                         isExpanded = false
                         Task { await stopAndRevertTransition() }
                     } else {
+                        let hasActiveAnimation = viewModel.currentEffectState(for: device, segmentId: 0).isEnabled
                         transitionOn = true
                         isExpanded = true
                         onActivate()
@@ -487,6 +450,11 @@ struct TransitionPane: View {
                             }
                             stopsB = copiedStops
                             gradientB = LEDGradient(stops: copiedStops, interpolation: currentGradientA.interpolation)
+                        }
+                        if hasActiveAnimation {
+                            Task {
+                                await viewModel.disableEffect(for: device, segmentId: 0)
+                            }
                         }
                     }
                 }) {
@@ -509,6 +477,51 @@ struct TransitionPane: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                Text("Transition")
+                    .font(AppTypography.style(.headline))
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                if isTransitionActive {
+                    Button(action: {
+                        Task {
+                            await saveTransitionPresetDirectly()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            if isSavingPreset {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(.white)
+                            } else if showSaveSuccess {
+                                Image(systemName: "checkmark.circle")
+                                    .font(AppTypography.style(.caption))
+                                    .foregroundColor(.white)
+                            } else {
+                                Image(systemName: "plus.circle")
+                                    .font(AppTypography.style(.caption))
+                            }
+                            Text("Save Transition")
+                                .font(AppTypography.style(.caption, weight: .semibold))
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.12))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isPresetButtonDisabled)
+                    .opacity(isPresetButtonDisabled ? 0.45 : 1.0)
+                }
             }
 
             if !transitionOn {

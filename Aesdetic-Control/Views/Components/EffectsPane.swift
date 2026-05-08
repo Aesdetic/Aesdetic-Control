@@ -415,51 +415,6 @@ struct EffectsPane: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Label("Animations", systemImage: "sparkles")
-                    .font(AppTypography.style(.headline))
-                    .foregroundColor(.white)
-                Spacer()
-                if isExpanded {
-                    Button(action: {
-                        if advancedUIEnabled {
-                            showSavePresetDialog = true
-                        } else {
-                            Task { await saveEffectPresetDirectly() }
-                        }
-                    }) {
-                        HStack(spacing: 6) {
-                            if isSavingPreset {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .tint(.white)
-                            } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle")
-                                    .font(AppTypography.style(.caption))
-                                    .foregroundColor(.white)
-                            } else {
-                                Image(systemName: "plus.circle")
-                                    .font(AppTypography.style(.caption))
-                            }
-                            Text("Save")
-                                .font(AppTypography.style(.caption, weight: .semibold))
-                        }
-                        .foregroundColor(.white.opacity(0.9))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.white.opacity(0.12))
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                                )
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress)
-                    .opacity((isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
-                }
-
                 Button(action: toggleEffect) {
                     HStack(spacing: 6) {
                         if isApplyingEffect {
@@ -487,6 +442,54 @@ struct EffectsPane: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isApplyingEffect || effectOptions.isEmpty)
+
+                Text("Animations")
+                    .font(AppTypography.style(.headline))
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                if isExpanded {
+                    Button(action: {
+                        if advancedUIEnabled {
+                            showSavePresetDialog = true
+                        } else {
+                            Task { await saveEffectPresetDirectly() }
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            if isSavingPreset {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(.white)
+                            } else if showSaveSuccess {
+                                Image(systemName: "checkmark.circle")
+                                    .font(AppTypography.style(.caption))
+                                    .foregroundColor(.white)
+                            } else {
+                                Image(systemName: "plus.circle")
+                                    .font(AppTypography.style(.caption))
+                            }
+                            Text("Save Animation")
+                                .lineLimit(1)
+                                .font(AppTypography.style(.caption, weight: .semibold))
+                        }
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.12))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress)
+                    .opacity((isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
+                }
             }
             
             if !effectOptions.isEmpty && !isEffectEnabled {

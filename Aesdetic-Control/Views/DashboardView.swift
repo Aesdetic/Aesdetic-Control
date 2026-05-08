@@ -1072,12 +1072,14 @@ struct MiniDeviceCard: View {
                             Text(device.name)
                                 .font(DashboardTypography.cardTitle)
                                 .foregroundColor(primaryTextColor)
+                                .opacity(device.isOnline ? 1.0 : 0.58)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             
                             Text(device.location.displayName)
                                 .font(DashboardTypography.bodyStrong)
                                 .foregroundColor(secondaryTextColor)
+                                .opacity(device.isOnline ? 1.0 : 0.58)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
 

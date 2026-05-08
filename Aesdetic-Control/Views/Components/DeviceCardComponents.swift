@@ -295,6 +295,7 @@ struct EnhancedDeviceCard: View {
                 Text(device.name)
                     .font(AppTypography.style(.headline, weight: .semibold))
                     .foregroundColor(cardPrimaryTextColor)
+                    .opacity(device.isOnline ? 1.0 : 0.58)
                     .lineLimit(2)
                     .minimumScaleFactor(0.84)
                     .multilineTextAlignment(.leading)
@@ -363,12 +364,8 @@ struct EnhancedDeviceCard: View {
                         .stroke(Color.white.opacity(0.95), lineWidth: 1.4)
                 )
                 .frame(width: 8, height: 8)
-
-            Text(device.isOnline ? "Online" : "Offline")
-                .font(AppTypography.style(.caption))
-                .fontWeight(.medium)
-                .foregroundColor(cardPrimaryTextColor)
         }
+        .opacity(device.isOnline ? 1.0 : 0.58)
     }
 
     private var powerButton: some View {

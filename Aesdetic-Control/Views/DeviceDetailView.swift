@@ -643,23 +643,23 @@ struct DeviceDetailView: View {
     }
     
     private var condensedHeader: some View {
-        HStack(alignment: .top, spacing: 12) {
+        let isDeviceOnline = viewModel.isDeviceOnline(activeDevice) || isToggling
+        return HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(activeDevice.name)
                     .font(AppTypography.style(.title2, weight: .bold))
                     .foregroundColor(.white)
+                    .opacity(isDeviceOnline ? 1.0 : 0.58)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
 
                 HStack(spacing: 8) {
                     statusDot
-                    Text(viewModel.isDeviceOnline(activeDevice) || isToggling ? "Online" : "Offline")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                        .opacity(isDeviceOnline ? 1.0 : 0.58)
 
                     Text(activeDevice.location.displayName)
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.white.opacity(isDeviceOnline ? 0.7 : 0.42))
                         .lineLimit(1)
 
                     if let activeRun = viewModel.activeRunStatus[activeDevice.id] {
@@ -931,9 +931,13 @@ struct DeviceDetailView: View {
     
     private var statusDot: some View {
         Circle()
-            .fill((viewModel.isDeviceOnline(activeDevice) || isToggling) ? Color.green : Color.red)
+            .fill((viewModel.isDeviceOnline(activeDevice) || isToggling) ? Color.white : Color.clear)
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.95), lineWidth: 1.4)
+            )
             .frame(width: 8, height: 8)
-            .shadow(color: (viewModel.isDeviceOnline(activeDevice) || isToggling) ? Color.green.opacity(0.5) : Color.red.opacity(0.5), radius: 4, x: 0, y: 0)
+            .shadow(color: Color.white.opacity((viewModel.isDeviceOnline(activeDevice) || isToggling) ? 0.35 : 0.0), radius: 4, x: 0, y: 0)
     }
     
     @ViewBuilder
