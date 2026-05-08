@@ -140,13 +140,7 @@ struct AutomationView: View {
                     .font(AppTypography.style(.title3, weight: .semibold))
                     .foregroundColor(theme.textPrimary)
                 Spacer()
-                AppGlassPillButton(
-                    title: "Create",
-                    isSelected: true,
-                    iconName: "plus",
-                    size: .compact,
-                    action: { beginCreateAutomation() }
-                )
+                createAutomationButton
                 .disabled(automationStore.hasAnyDeletionInProgress)
                 .opacity(automationStore.hasAnyDeletionInProgress ? 0.45 : 1.0)
             }
@@ -211,6 +205,31 @@ struct AutomationView_Previews: PreviewProvider {
 // MARK: - Helpers
 
 private extension AutomationView {
+    var createAutomationButton: some View {
+        Button(action: { beginCreateAutomation() }) {
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle")
+                    .font(AppTypography.style(.caption))
+                Text("Create Automation")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundColor(.white.opacity(0.92))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Create automation")
+    }
+
     var nextAutomationID: UUID? {
         automationStore.upcomingAutomationInfo?.automation.id
     }

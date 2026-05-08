@@ -346,21 +346,23 @@ struct AutomationRow: View {
     }
     
     private var triggerRow: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: 6) {
             Image(systemName: "clock")
                 .font(AppTypography.style(.caption, weight: .medium))
                 .foregroundColor(.white.opacity(0.58))
             
-            Text(automation.trigger.displayName)
+            Text(compactTriggerDisplayName)
                 .font(AppTypography.style(.caption2, weight: .semibold))
                 .foregroundColor(.white.opacity(0.78))
                 .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .allowsTightening(true)
                 .layoutPriority(1)
         }
-        .lineLimit(1)
     }
 
     private var deviceTimerStatus: (text: String, color: Color, retryable: Bool)? {
+        guard automation.enabled else { return nil }
         guard automation.metadata.runOnDevice else { return nil }
         let deviceIds = automation.targets.deviceIds
         if deviceIds.isEmpty {
@@ -449,7 +451,11 @@ struct AutomationRow: View {
         case .gradient(let payload):
             return payload.powerOn ? "Color · \(automation.summary)" : "Power · Off"
         case .transition:
-            return "Transition · \(automation.summary)"
+            let summary = automation.summary
+            if summary.localizedCaseInsensitiveCompare("Transition") == .orderedSame {
+                return "Transition"
+            }
+            return "Transition · \(summary)"
         case .effect(let payload):
             return "Animation · \(payload.effectName ?? "Effect")"
         case .directState:
@@ -516,5 +522,34 @@ struct AutomationRow: View {
         default:
             break
         }
+    }
+
+    private var compactTriggerDisplayName: String {
+        switch automation.trigger {
+        case .specificTime(let trigger):
+            return compactTimeTriggerDisplay(trigger)
+        case .sunrise(let solar):
+            return solar.displayString(eventName: "Sunrise")
+        case .sunset(let solar):
+            return solar.displayString(eventName: "Sunset")
+        }
+    }
+
+    private func compactTimeTriggerDisplay(_ trigger: TimeTrigger) -> String {
+        let normalized = WeekdayMask.normalizeSunFirst(trigger.weekdays)
+        let mondayFirstWeekdays: [(index: Int, label: String)] = [
+            (1, "M"),
+            (2, "Tu"),
+            (3, "W"),
+            (4, "Th"),
+            (5, "F"),
+            (6, "Sa"),
+            (0, "Su")
+        ]
+        let selected = mondayFirstWeekdays.compactMap { weekday in
+            normalized[weekday.index] ? weekday.label : nil
+        }
+        let daysText = selected.isEmpty ? "No days" : selected.joined(separator: " · ")
+        return "\(trigger.time) · \(daysText)"
     }
 }

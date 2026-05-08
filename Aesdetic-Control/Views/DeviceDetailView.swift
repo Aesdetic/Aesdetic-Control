@@ -1382,12 +1382,13 @@ struct DeviceDetailView: View {
                 }
                 Spacer()
                 Menu {
-                    Button("New Automation") {
-                        startAutomationCreation()
-                    }
-                    ForEach(AutomationTemplate.quickStartTemplates) { template in
-                        Button(template.name) {
-                            startAutomationCreation(using: template)
+                    if shortcutMenuAutomations.isEmpty {
+                        Text("No user automations available")
+                    } else {
+                        ForEach(shortcutMenuAutomations, id: \.id) { automation in
+                            Button(automation.name) {
+                                toggleAutomationShortcut(automation, pinned: true)
+                            }
                         }
                     }
                 } label: {
@@ -1404,8 +1405,8 @@ struct DeviceDetailView: View {
                                 )
                         )
                 }
-                .disabled(isAutomationMutationLocked)
-                .opacity(isAutomationMutationLocked ? 0.45 : 1.0)
+                .disabled(isAutomationMutationLocked || shortcutMenuAutomations.isEmpty)
+                .opacity((isAutomationMutationLocked || shortcutMenuAutomations.isEmpty) ? 0.45 : 1.0)
                 .accessibilityLabel("Add shortcut")
             }
             
@@ -1430,6 +1431,7 @@ struct DeviceDetailView: View {
                             ShortcutAutomationChip(
                                 automation: automation,
                                 isNext: nextAutomationID == automation.id,
+                                actionDescription: shortcutActionDescription(for: automation),
                                 onTap: { toggleAutomationEnabled(automation) },
                                 onLongPress: { editAutomation(automation) }
                             )
@@ -1510,6 +1512,14 @@ struct DeviceDetailView: View {
             let rhsDate = rhs.lastTriggered ?? rhs.updatedAt
             return lhsDate > rhsDate
         }
+    }
+
+    private var shortcutMenuAutomations: [Automation] {
+        deviceAutomations
+            .filter { !($0.metadata.pinnedToShortcuts ?? false) }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
     }
     
     private var upcomingAutomation: (automation: Automation, date: Date?)? {
@@ -1651,6 +1661,29 @@ struct DeviceDetailView: View {
         metadata.pinnedToShortcuts = pinned
         updated.metadata = metadata
         automationStore.update(updated, syncOnDevice: false)
+    }
+
+    private func shortcutActionDescription(for automation: Automation) -> String {
+        switch automation.action {
+        case .scene(let payload):
+            let sceneName = payload.sceneName
+                ?? scenesStore.scenes.first(where: { $0.id == payload.sceneId })?.name
+                ?? "Scene"
+            return "Scene · \(sceneName)"
+        case .preset(let payload):
+            return "Preset · #\(payload.presetId)"
+        case .playlist(let payload):
+            let playlistName = payload.playlistName ?? "Playlist #\(payload.playlistId)"
+            return "Playlist · \(playlistName)"
+        case .gradient(let payload):
+            return payload.powerOn ? "Color · \(automation.summary)" : "Power · Off"
+        case .transition:
+            return "Transition · \(automation.summary)"
+        case .effect(let payload):
+            return "Animation · \(payload.effectName ?? "Effect \(payload.effectId)")"
+        case .directState:
+            return "Custom state"
+        }
     }
     
     private func startAutomationCreation(using template: AutomationTemplate? = nil) {
@@ -2185,65 +2218,53 @@ struct DeviceDetailView_Previews: PreviewProvider {
 private struct ShortcutAutomationChip: View {
     let automation: Automation
     let isNext: Bool
-    var subtitle: String? = nil
+    let actionDescription: String
     var onTap: () -> Void
     var onLongPress: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private var cardStyle: AppCardStyle {
-        AppCardStyles.glass(
-            for: colorScheme,
-            tone: automation.enabled ? .active : .muted,
-            cornerRadius: 18
-        )
+    private var chipFill: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(automation.enabled ? 0.12 : 0.08)
+            : Color.white.opacity(automation.enabled ? 0.22 : 0.16)
+    }
+
+    private var chipStroke: Color {
+        Color.white.opacity(colorScheme == .dark ? 0.18 : 0.24)
     }
     
     var body: some View {
         Button(action: onTap) {
-            ZStack(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: automation.metadata.iconName ?? "clock")
-                            .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.84))
-                            .frame(width: 24, height: 24)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(0.10))
-                            )
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(automation.name)
-                                .font(AppTypography.style(.caption, weight: .semibold))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-
-                            if let subtitle {
-                                Text(subtitle)
-                                    .font(AppTypography.style(.caption2, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.64))
-                                    .lineLimit(1)
-                            }
-                        }
-                    }
-
-                    Text(automation.trigger.displayName)
-                        .font(AppTypography.style(.caption2, weight: .medium))
-                        .foregroundColor(.white.opacity(0.68))
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(automation.name)
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(.white)
                         .lineLimit(1)
+                    Spacer(minLength: 6)
+                    if isNext {
+                        nextBadge
+                            .allowsHitTesting(false)
+                    }
                 }
 
-                if isNext {
-                    nextBadge
-                        .offset(x: -8, y: -8)
-                        .allowsHitTesting(false)
-                }
+                Text(actionDescription)
+                    .font(AppTypography.style(.caption2, weight: .medium))
+                    .foregroundColor(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
             }
-            .frame(width: 178, alignment: .leading)
-            .padding(14)
+            .frame(width: 168, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
             .background(
-                AppCardBackground(style: cardStyle)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(chipFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(chipStroke, lineWidth: 1)
+                    )
             )
         }
         .buttonStyle(.plain)
@@ -2259,15 +2280,16 @@ private struct ShortcutAutomationChip: View {
     private var nextBadge: some View {
         Text("Next")
             .font(AppTypography.style(.caption2, weight: .semibold))
-            .foregroundColor(.white.opacity(0.96))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .foregroundColor(.white.opacity(0.94))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
             .background(
-                Capsule()
-                    .fill(Color.black.opacity(0.72))
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.14))
                     .overlay(
-                        Capsule()
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
                     )
             )
     }

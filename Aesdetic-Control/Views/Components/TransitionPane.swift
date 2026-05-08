@@ -525,7 +525,7 @@ struct TransitionPane: View {
             }
 
             if !transitionOn {
-                Text("Smoothly blend between two color gradients over time")
+                Text("Smoothly blend between two color gradients")
                     .font(AppTypography.style(.caption))
                     .foregroundColor(.white.opacity(0.6))
             }
