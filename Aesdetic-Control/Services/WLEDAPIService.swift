@@ -2837,7 +2837,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             applyAtBoot: preset.applyAtBoot,
             customAPICommand: preset.customAPICommand
         )
-        try await savePreset(saveRequest, to: device)
+        let rewritten = try await rewritePresetStoreUpsertingRecords(
+            presetRequests: [saveRequest],
+            playlistRequests: [],
+            device: device,
+            maxSegmentCount: device.state?.segments.count
+        )
+        guard rewritten else {
+            throw WLEDAPIError.invalidResponse
+        }
         
         return presetId
     }
@@ -2876,6 +2884,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
 
         let denom = Double(max(1, stepCount - 1))
+        var presetRequests: [WLEDPresetSaveRequest] = []
         for (idx, presetId) in presetIds.enumerated() {
             let t = Double(idx) / denom
             let gradient = interpolatedGradient(from: preset.gradientA, to: preset.gradientB, t: t)
@@ -2892,7 +2901,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 whiteLevel: whiteLevel,
                 includeSegmentBounds: true
             )
-            try await savePreset(
+            presetRequests.append(
                 WLEDPresetSaveRequest(
                     id: presetId,
                     name: "\(preset.name) Step \(idx + 1)",
@@ -2902,8 +2911,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                     saveSegmentBounds: true,
                     selectedSegmentsOnly: false,
                     transitionDeciseconds: device.state?.transitionDeciseconds ?? 7
-                ),
-                to: device
+                )
             )
         }
         
@@ -2919,7 +2927,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             shuffle: 0
         )
         
-        _ = try await savePlaylist(playlistRequest, to: device)
+        let rewritten = try await rewritePresetStoreUpsertingRecords(
+            presetRequests: presetRequests,
+            playlistRequests: [playlistRequest],
+            device: device,
+            maxSegmentCount: device.state?.segments.count
+        )
+        guard rewritten else {
+            throw WLEDAPIError.invalidResponse
+        }
 
         if reusableStepIds.isEmpty, !existingStepIds.isEmpty {
             let newIds = Set(presetIds)
@@ -2938,16 +2954,33 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     
     /// Save a WLEDEffectPreset as a WLED preset
     func saveEffectPreset(_ preset: WLEDEffectPreset, to device: WLEDDevice, presetId: Int) async throws -> Int {
+        let colorSlots: [[Int]]? = {
+            guard preset.paletteId == nil,
+                  let stops = preset.gradientStops,
+                  !stops.isEmpty else {
+                return nil
+            }
+            let slotCount = max(1, min(3, stops.count))
+            let gradient = LEDGradient(
+                stops: stops,
+                interpolation: preset.gradientInterpolation ?? .linear
+            )
+            return presetSegmentColors(for: gradient, count: slotCount)
+        }()
         let segmentUpdate = SegmentUpdate(
             id: 0,
+            on: true,
             bri: preset.brightness,
+            col: colorSlots,
             fx: preset.effectId,
             sx: preset.speed,
             ix: preset.intensity,
-            pal: preset.paletteId
+            pal: colorSlots == nil ? preset.paletteId : nil,
+            frz: false
         )
         
         let stateUpdate = WLEDStateUpdate(
+            on: true,
             bri: preset.brightness,
             seg: [segmentUpdate]
         )
@@ -2964,7 +2997,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             customAPICommand: preset.customAPICommand
         )
         
-        try await savePreset(saveRequest, to: device)
+        let rewritten = try await rewritePresetStoreUpsertingRecords(
+            presetRequests: [saveRequest],
+            playlistRequests: [],
+            device: device,
+            maxSegmentCount: device.state?.segments.count
+        )
+        guard rewritten else {
+            throw WLEDAPIError.invalidResponse
+        }
         
         return presetId
     }
@@ -5442,12 +5483,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard (1...250).contains(request.id) else {
             throw WLEDAPIError.invalidConfiguration
         }
-        guard request.customAPICommand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true else {
-            throw WLEDAPIError.invalidConfiguration
-        }
-
         var record: [String: Any] = [:]
-        if let state = request.state {
+        let customCommand = request.customAPICommand?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let customCommand, !customCommand.isEmpty {
+            if let data = customCommand.data(using: .utf8),
+               let jsonObject = try? JSONSerialization.jsonObject(with: data, options: []),
+               let jsonDict = jsonObject as? [String: Any] {
+                record.merge(jsonDict) { _, new in new }
+            } else {
+                record["win"] = customCommand
+            }
+        } else if let state = request.state {
             let stateData = try encoder.encode(state)
             if let stateDict = try JSONSerialization.jsonObject(with: stateData, options: []) as? [String: Any] {
                 record.merge(stateDict) { _, new in new }
