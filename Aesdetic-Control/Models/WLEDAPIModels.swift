@@ -739,11 +739,12 @@ let maxWLEDPresetSlots = 250
 let alexaReservedPresetRange = 1...9
 let appManagedPresetLowerBound = alexaReservedPresetRange.upperBound + 1
 let appManagedPresetRange = appManagedPresetLowerBound...maxWLEDPresetSlots
-let presetSlotReserve = 20
+let presetSlotReserve = 10
 // Legacy quarantine for old preset-store-backed live transitions. New live
 // transitions use WLED native `tt` / state updates and never allocate here.
 let temporaryTransitionReservedPresetLower = 170
 let temporaryTransitionReservedPresetUpper = 250
+let persistentAutomationPresetRange = appManagedPresetRange
 let temporaryTransitionCleanupGraceMinutes = 15.0
 
 enum TransitionGenerationContext: String, Codable {

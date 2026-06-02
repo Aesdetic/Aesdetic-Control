@@ -617,7 +617,7 @@ actor TemporaryTransitionCleanupService {
     private func isDegradedVerificationReadError(_ error: Error) -> Bool {
         if let apiError = error as? WLEDAPIError {
             switch apiError {
-            case .decodingError, .invalidResponse, .deviceBusy, .timeout, .networkError:
+            case .decodingError, .invalidResponse, .deviceBusy, .timeout, .networkError, .presetStoreReadUnstable:
                 return true
             case .httpError(let status):
                 return status >= 500

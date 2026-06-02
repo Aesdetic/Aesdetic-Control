@@ -40,6 +40,7 @@ protocol WLEDAPIServiceProtocol {
     func fetchTimers(for device: WLEDDevice) async throws -> [WLEDTimer]
     func updateTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws
     func disableTimer(slot: Int, device: WLEDDevice) async throws -> Bool
+    func deleteTimerRows(matching candidates: [WLEDTimer], device: WLEDDevice) async throws -> Bool
     
     // Preset-store deletion uses full-file rewrite. Do not use WLED pdel-style mutation.
     func rewritePresetStoreDeletingRecords(playlistIds: [Int], presetIds: [Int], device: WLEDDevice) async throws -> Bool
@@ -65,6 +66,7 @@ protocol WLEDAPIServiceProtocol {
     func fetchPaletteNames(for device: WLEDDevice) async throws -> [String]
     func rebootDevice(_ device: WLEDDevice) async throws
     func isPresetStoreMutationInFlight(deviceId: String) async -> Bool
+    func isPresetStoreReadUnstable(deviceId: String) async -> Bool
     func isPresetStoreDeleteSessionActive(deviceId: String) async -> Bool
     func isStateWriteBackoffActive(deviceId: String) async -> Bool
     func secondsSinceLastPresetStoreMutationEnd(deviceId: String) async -> TimeInterval?
@@ -73,6 +75,10 @@ protocol WLEDAPIServiceProtocol {
 
 extension WLEDAPIServiceProtocol {
     func isPresetStoreDeleteSessionActive(deviceId: String) async -> Bool {
+        false
+    }
+
+    func isPresetStoreReadUnstable(deviceId: String) async -> Bool {
         false
     }
 
@@ -97,6 +103,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     private let urlSession: URLSession
+    private let reportsPresetStoreHealth: Bool
     private let logger = Logger(subsystem: "com.aesdetic.control", category: "APIService")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -106,9 +113,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let maxPresetSegmentCount: Int = 18
     private var presetQueues: [String: Task<Void, Never>] = [:]
     private var presetQueueTokens: [String: Int] = [:]
+    private var timerConfigQueues: [String: Task<Void, Never>] = [:]
+    private var timerConfigQueueTokens: [String: Int] = [:]
     private var presetStoreQueueKeyByDeviceId: [String: String] = [:]
     private var lastPresetStoreMutationEndedAtByQueueKey: [String: Date] = [:]
     private let presetWriteCooldownNanos: UInt64 = 700_000_000
+    private let presetStoreReadSettleWindowSeconds: TimeInterval = 1.5
+    private let timerConfigWriteCooldownNanos: UInt64 = 250_000_000
     private let timerDeleteVerifyRetryAttempts = 4
     private let timerDeleteVerifyInitialDelayMs: UInt64 = 180
     private let timerDeleteVerifyMaxDelayMs: UInt64 = 1_200
@@ -141,6 +152,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private var didLogTimerCodecLegacyFallback = false
     
     private init() {
+        self.reportsPresetStoreHealth = true
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 8.0 // Reduced timeout for better responsiveness
         config.timeoutIntervalForResource = 20.0
@@ -154,6 +166,14 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         self.encoder.outputFormatting = [.prettyPrinted]
         #endif
     }
+
+    #if DEBUG
+    init(testURLSession: URLSession) {
+        self.reportsPresetStoreHealth = false
+        self.urlSession = testURLSession
+        self.encoder.outputFormatting = [.prettyPrinted]
+    }
+    #endif
 
     func enqueuePresetStoreMutation<T>(
         deviceId: String,
@@ -179,6 +199,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return presetQueues[queueKey] != nil
     }
 
+    func isPresetStoreReadUnstable(deviceId: String) async -> Bool {
+        isPresetStoreReadUnstableNow(deviceId: deviceId)
+    }
+
     func isPresetStoreDeleteSessionActive(deviceId: String) async -> Bool {
         activePresetStoreDeleteSessionDeviceIds.contains(deviceId)
     }
@@ -196,6 +220,32 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             return nil
         }
         return max(0, Date().timeIntervalSince(endedAt))
+    }
+
+    private func isPresetStoreReadUnstableNow(deviceId: String) -> Bool {
+        let queueKey = resolvedPresetStoreQueueKey(forDeviceId: deviceId)
+        if presetQueues[queueKey] != nil {
+            return true
+        }
+        guard let endedAt = lastPresetStoreMutationEndedAtByQueueKey[queueKey] else {
+            return false
+        }
+        return Date().timeIntervalSince(endedAt) <= presetStoreReadSettleWindowSeconds
+    }
+
+    private func presetStoreReadUnstableErrorIfNeeded(
+        deviceId: String,
+        catalogName: String
+    ) async -> WLEDAPIError? {
+        guard isPresetStoreReadUnstableNow(deviceId: deviceId) else {
+            return nil
+        }
+        let message = "\(catalogName) catalog read deferred while preset-store mutation is settling."
+        await reportPresetStoreReadUnstable(deviceId: deviceId, message: message)
+        #if DEBUG
+        logger.debug("preset_store.read_unstable device=\(deviceId, privacy: .public) catalog=\(catalogName, privacy: .public)")
+        #endif
+        return .presetStoreReadUnstable(message)
     }
 
     func fetchPresetStoreByteCount(device: WLEDDevice) async -> Int? {
@@ -298,6 +348,57 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         default:
             return false
         }
+    }
+
+    private func enqueueTimerConfigMutation<T>(
+        deviceId: String,
+        label: String,
+        operation: @escaping () async throws -> T
+    ) async throws -> T {
+        let previous = timerConfigQueues[deviceId]
+        let token = (timerConfigQueueTokens[deviceId] ?? 0) + 1
+        timerConfigQueueTokens[deviceId] = token
+        let localLogger = logger
+        let cooldownNanos = timerConfigWriteCooldownNanos
+
+        #if DEBUG
+        logger.debug("timer.config.mutation.begin device=\(deviceId, privacy: .public) label=\(label, privacy: .public)")
+        #endif
+
+        let task = Task<T, Error> {
+            if let previous {
+                _ = await previous.result
+            }
+            do {
+                return try await operation()
+            } catch {
+                #if DEBUG
+                localLogger.error("timer.config.mutation.error device=\(deviceId, privacy: .public) label=\(label, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                #endif
+                throw error
+            }
+        }
+
+        let cooldownTask = Task<T, Error> {
+            let result = try await task.value
+            if cooldownNanos > 0 {
+                try? await Task.sleep(nanoseconds: cooldownNanos)
+            }
+            return result
+        }
+
+        timerConfigQueues[deviceId] = Task { _ = try? await cooldownTask.value }
+        defer {
+            if timerConfigQueueTokens[deviceId] == token {
+                timerConfigQueues.removeValue(forKey: deviceId)
+                timerConfigQueueTokens.removeValue(forKey: deviceId)
+            }
+            #if DEBUG
+            logger.debug("timer.config.mutation.end device=\(deviceId, privacy: .public) label=\(label, privacy: .public)")
+            #endif
+        }
+
+        return try await cooldownTask.value
     }
 
     private func logicalDeviceIds(forPresetStoreQueueKey queueKey: String) -> [String] {
@@ -771,9 +872,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let storeKey = presetStoreQueueKey(for: device)
         do {
             let presets = try await fetchPresetsFromFile(device: device)
-            await MainActor.run {
-                DeviceControlViewModel.shared.notePresetStoreHealthyReadSuccess(deviceId: device.id)
-            }
+            await reportPresetStoreHealthyReadSuccess(deviceId: device.id)
             return presets
         } catch {
             var primaryError = normalizePresetPayloadError(error, device: device)
@@ -781,35 +880,36 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 do {
                     let presets = try await fetchPresetsFromFile(device: device)
-                    await MainActor.run {
-                        DeviceControlViewModel.shared.notePresetStoreHealthyReadSuccess(deviceId: device.id)
-                    }
+                    await reportPresetStoreHealthyReadSuccess(deviceId: device.id)
                     return presets
                 } catch {
                     primaryError = normalizePresetPayloadError(error, device: device)
                 }
             }
 
+            if let readUnstableError = await presetStoreReadUnstableErrorIfNeeded(
+                deviceId: device.id,
+                catalogName: "Preset"
+            ) {
+                throw readUnstableError
+            }
+
             guard !presetJsonEndpointUnsupportedByStoreKey.contains(storeKey),
                   shouldAttemptPresetJsonFallback(after: primaryError) else {
                 let errorDescription = primaryError.localizedDescription
-                await MainActor.run {
-                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                        deviceId: device.id,
-                        message: "Preset catalog read failed: \(errorDescription)"
-                    )
-                }
+                await reportPresetStoreDegradedReadable(
+                    deviceId: device.id,
+                    message: "Preset catalog read failed: \(errorDescription)"
+                )
                 throw primaryError
             }
 
             do {
                 let fallback = try await fetchPresetsFromJsonEndpoint(device: device)
-                await MainActor.run {
-                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                        deviceId: device.id,
-                        message: "Recovered preset read from /json/presets fallback"
-                    )
-                }
+                await reportPresetStoreDegradedReadable(
+                    deviceId: device.id,
+                    message: "Recovered preset read from /json/presets fallback"
+                )
                 return fallback
             } catch {
                 let fallbackError = normalizePresetPayloadError(error, device: device)
@@ -818,21 +918,23 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 }
                 if shouldRetryPresetPayloadRead(after: fallbackError),
                    let fallback = try? await fetchPresetsFromJsonEndpoint(device: device) {
-                    await MainActor.run {
-                        DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                            deviceId: device.id,
-                            message: "Recovered preset read from /json/presets fallback"
-                        )
-                    }
+                    await reportPresetStoreDegradedReadable(
+                        deviceId: device.id,
+                        message: "Recovered preset read from /json/presets fallback"
+                    )
                     return fallback
                 }
-                let errorDescription = primaryError.localizedDescription
-                await MainActor.run {
-                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                        deviceId: device.id,
-                        message: "Preset catalog read failed after fallback: \(errorDescription)"
-                    )
+                if let readUnstableError = await presetStoreReadUnstableErrorIfNeeded(
+                    deviceId: device.id,
+                    catalogName: "Preset"
+                ) {
+                    throw readUnstableError
                 }
+                let errorDescription = primaryError.localizedDescription
+                await reportPresetStoreDegradedReadable(
+                    deviceId: device.id,
+                    message: "Preset catalog read failed after fallback: \(errorDescription)"
+                )
                 throw primaryError
             }
         }
@@ -863,9 +965,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let storeKey = presetStoreQueueKey(for: device)
         do {
             let playlists = try await fetchPlaylistsFromPresetsFile(device: device)
-            await MainActor.run {
-                DeviceControlViewModel.shared.notePresetStoreHealthyReadSuccess(deviceId: device.id)
-            }
+            await reportPresetStoreHealthyReadSuccess(deviceId: device.id)
             return playlists
         } catch {
             var primaryError = normalizePresetPayloadError(error, device: device)
@@ -873,35 +973,36 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 do {
                     let playlists = try await fetchPlaylistsFromPresetsFile(device: device)
-                    await MainActor.run {
-                        DeviceControlViewModel.shared.notePresetStoreHealthyReadSuccess(deviceId: device.id)
-                    }
+                    await reportPresetStoreHealthyReadSuccess(deviceId: device.id)
                     return playlists
                 } catch {
                     primaryError = normalizePresetPayloadError(error, device: device)
                 }
             }
 
+            if let readUnstableError = await presetStoreReadUnstableErrorIfNeeded(
+                deviceId: device.id,
+                catalogName: "Playlist"
+            ) {
+                throw readUnstableError
+            }
+
             guard !presetJsonEndpointUnsupportedByStoreKey.contains(storeKey),
                   shouldAttemptPresetJsonFallback(after: primaryError) else {
                 let errorDescription = primaryError.localizedDescription
-                await MainActor.run {
-                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                        deviceId: device.id,
-                        message: "Playlist catalog read failed: \(errorDescription)"
-                    )
-                }
+                await reportPresetStoreDegradedReadable(
+                    deviceId: device.id,
+                    message: "Playlist catalog read failed: \(errorDescription)"
+                )
                 throw primaryError
             }
 
             do {
                 let fallback = try await fetchPlaylistsFromJsonEndpoint(device: device)
-                await MainActor.run {
-                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                        deviceId: device.id,
-                        message: "Recovered playlist read from /json/presets fallback"
-                    )
-                }
+                await reportPresetStoreDegradedReadable(
+                    deviceId: device.id,
+                    message: "Recovered playlist read from /json/presets fallback"
+                )
                 return fallback
             } catch {
                 let fallbackError = normalizePresetPayloadError(error, device: device)
@@ -910,21 +1011,23 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 }
                 if shouldRetryPresetPayloadRead(after: fallbackError),
                    let fallback = try? await fetchPlaylistsFromJsonEndpoint(device: device) {
-                    await MainActor.run {
-                        DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                            deviceId: device.id,
-                            message: "Recovered playlist read from /json/presets fallback"
-                        )
-                    }
+                    await reportPresetStoreDegradedReadable(
+                        deviceId: device.id,
+                        message: "Recovered playlist read from /json/presets fallback"
+                    )
                     return fallback
                 }
-                let errorDescription = primaryError.localizedDescription
-                await MainActor.run {
-                    DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
-                        deviceId: device.id,
-                        message: "Playlist catalog read failed after fallback: \(errorDescription)"
-                    )
+                if let readUnstableError = await presetStoreReadUnstableErrorIfNeeded(
+                    deviceId: device.id,
+                    catalogName: "Playlist"
+                ) {
+                    throw readUnstableError
                 }
+                let errorDescription = primaryError.localizedDescription
+                await reportPresetStoreDegradedReadable(
+                    deviceId: device.id,
+                    message: "Playlist catalog read failed after fallback: \(errorDescription)"
+                )
                 throw primaryError
             }
         }
@@ -1032,15 +1135,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             )
         }
 
-        // If firmware returns a full logical array, treat it as positional.
-        if rawTimersArray.count >= wledTimerSlotCount {
-            for (offset, timerDict) in rawTimersArray.prefix(wledTimerSlotCount).enumerated() {
-                timers[offset] = makeTimer(from: timerDict, slot: offset)
-            }
-            return timers
-        }
-
-        // Sparse decode:
+        // WLED serializes timers as a compact vector, not fixed slot IDs.
+        // Decode into the app's logical slots without trusting array position.
+        //
         // - regular timers are packed into slots 0...7
         // - hour=255 -> slot 8 (sunrise)
         // - hour=254 -> slot 9 (sunset)
@@ -1051,6 +1148,24 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
         for timerDict in rawTimersArray {
             let hour = timerDict["hour"] as? Int ?? 0
+            let macroId = timerDict["macro"] as? Int ?? 0
+            let minute = timerDict["min"] as? Int ?? 0
+            let days = timerDict["dow"] as? Int ?? 0x7F
+            let enabled = (timerDict["en"] as? Bool)
+                ?? ((timerDict["en"] as? Int ?? 0) != 0)
+            let start = timerDict["start"] as? [String: Any]
+            let end = timerDict["end"] as? [String: Any]
+            let hasDateRange = start != nil || end != nil
+
+            // WLED can serialize sunrise/sunset marker rows with macro=0.
+            // They do not execute anything and should not occupy app timer slots.
+            if macroId == 0,
+               !hasDateRange,
+               days == 0x7F,
+               minute == 0,
+               (hour == 254 || hour == 255 || (!enabled && hour == 0)) {
+                continue
+            }
 
             if hour == 255 {
                 if !didAssignSunrise {
@@ -1071,8 +1186,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 continue
             }
 
-            guard nextRegularSlot < 8 else { continue }
-            timers[nextRegularSlot] = makeTimer(from: timerDict, slot: nextRegularSlot)
+            if nextRegularSlot < 8 {
+                timers[nextRegularSlot] = makeTimer(from: timerDict, slot: nextRegularSlot)
+            } else {
+                let extraSlot = wledTimerSlotCount + (nextRegularSlot - 8)
+                timers.append(makeTimer(from: timerDict, slot: extraSlot))
+            }
             nextRegularSlot += 1
         }
 
@@ -1157,9 +1276,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )
         normalizedById[timerUpdate.id] = updatedTimer
 
-        return (0..<wledTimerSlotCount).map { slot in
+        let logicalTimers = (0..<wledTimerSlotCount).map { slot in
             normalizedById[slot] ?? defaultWLEDTimer(slot: slot)
         }
+        let extraTimers = currentTimers
+            .filter { $0.id >= wledTimerSlotCount }
+            .sorted { $0.id < $1.id }
+        return logicalTimers + extraTimers
     }
 
     private func legacyMergeTimersApplyingUpdate(
@@ -1235,8 +1358,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             highestSlotToEncode = max(highestSlotToEncode ?? forcedSlot, forcedSlot)
         }
 
+        let extraRows = timers
+            .filter { $0.id >= wledTimerSlotCount && timerHasPersistedMeaning($0, slot: $0.id) }
+            .sorted { $0.id < $1.id }
+            .map(timerPayload)
+
         guard let highestSlotToEncode else {
-            return []
+            return extraRows
         }
 
         // Encode positionally through the highest used slot so slot indices remain stable.
@@ -1245,7 +1373,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         for slot in 0...highestSlotToEncode {
             let timer = timerById[slot] ?? defaultWLEDTimer(slot: slot)
             var item: [String: Any] = [
-                "en": timer.enabled,
+                "en": timer.enabled ? 1 : 0,
                 "hour": timer.hour,
                 "min": timer.minute,
                 "macro": timer.macroId,
@@ -1260,7 +1388,113 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             encoded.append(item)
         }
 
-        return encoded
+        return encoded + extraRows
+    }
+
+    private func encodePersistedWLEDTimerRowsForConfig(_ timers: [WLEDTimer]) -> [[String: Any]] {
+        timers
+            .sorted { $0.id < $1.id }
+            .filter { timerHasPersistedMeaning($0, slot: $0.id) }
+            .map(timerPayload)
+    }
+
+    private func timerPayload(_ timer: WLEDTimer) -> [String: Any] {
+        var item: [String: Any] = [
+            "en": timer.enabled ? 1 : 0,
+            "hour": timer.hour,
+            "min": timer.minute,
+            "macro": timer.macroId,
+            "dow": timer.days
+        ]
+        if let startMonth = timer.startMonth, let startDay = timer.startDay {
+            item["start"] = ["mon": startMonth, "day": startDay]
+        }
+        if let endMonth = timer.endMonth, let endDay = timer.endDay {
+            item["end"] = ["mon": endMonth, "day": endDay]
+        }
+        return item
+    }
+
+    private func applyTimersArray(_ timersArray: [[String: Any]], to root: inout [String: Any]) {
+        var timers = root["timers"] as? [String: Any] ?? [:]
+        timers["ins"] = timersArray
+        root["timers"] = timers
+    }
+
+    private func timerConfigReadModifyWritePayload(
+        _ timersArray: [[String: Any]],
+        device: WLEDDevice
+    ) async throws -> [String: Any] {
+        var configPayload = try await fetchRawConfig(for: device)
+        applyTimersArray(timersArray, to: &configPayload)
+        if var cfg = configPayload["cfg"] as? [String: Any] {
+            applyTimersArray(timersArray, to: &cfg)
+            configPayload["cfg"] = cfg
+        }
+        _ = enforceColorGammaCorrection(in: &configPayload)
+        return configPayload
+    }
+
+    private func normalizedTimerDateWindow(for timer: WLEDTimer) -> (startMonth: Int?, startDay: Int?, endMonth: Int?, endDay: Int?) {
+        let values = [timer.startMonth, timer.startDay, timer.endMonth, timer.endDay].map { max(0, $0 ?? 0) }
+        if values.allSatisfy({ $0 == 0 }) {
+            return (nil, nil, nil, nil)
+        }
+        guard let startMonth = timer.startMonth,
+              let startDay = timer.startDay,
+              let endMonth = timer.endMonth,
+              let endDay = timer.endDay else {
+            return (nil, nil, nil, nil)
+        }
+        if startMonth == 1 && startDay == 1 && endMonth == 12 && endDay == 31 {
+            return (nil, nil, nil, nil)
+        }
+        return (startMonth, startDay, endMonth, endDay)
+    }
+
+    private func timerDeleteIdentity(_ timer: WLEDTimer, includeSlot: Bool) -> String {
+        let window = normalizedTimerDateWindow(for: timer)
+        let slotPrefix = includeSlot ? "\(timer.id)|" : ""
+        return "\(slotPrefix)\(timer.enabled ? 1 : 0)|\(timer.hour)|\(timer.minute)|\(timer.days)|\(timer.macroId)|\(window.startMonth ?? 0)|\(window.startDay ?? 0)|\(window.endMonth ?? 0)|\(window.endDay ?? 0)"
+    }
+
+    private enum TimerRowsDeletePlan {
+        case noMatches
+        case rewrite([WLEDTimer])
+        case ambiguous([WLEDTimer])
+    }
+
+    private func timerRowsAfterDeleting(candidates: [WLEDTimer], from currentTimers: [WLEDTimer]) -> TimerRowsDeletePlan {
+        let meaningfulCandidates = candidates.filter {
+            timerHasPersistedMeaning($0, slot: $0.id)
+        }
+        guard !meaningfulCandidates.isEmpty else {
+            return .noMatches
+        }
+
+        let exactKeys = Set(meaningfulCandidates.map { timerDeleteIdentity($0, includeSlot: true) })
+        let fieldKeys = Set(meaningfulCandidates.map { timerDeleteIdentity($0, includeSlot: false) })
+        let afterExactDelete = currentTimers.filter {
+            !exactKeys.contains(timerDeleteIdentity($0, includeSlot: true))
+        }
+        if afterExactDelete.count != currentTimers.count {
+            return .rewrite(afterExactDelete)
+        }
+
+        // WLED compacts timer rows when empty rows are omitted. If the row shifted,
+        // fall back to field identity, but only when the match is unambiguous.
+        let fieldMatches = currentTimers.filter {
+            fieldKeys.contains(timerDeleteIdentity($0, includeSlot: false))
+        }
+        guard !fieldMatches.isEmpty else {
+            return .noMatches
+        }
+        guard fieldMatches.count <= meaningfulCandidates.count else {
+            return .ambiguous(fieldMatches)
+        }
+
+        let matchIds = Set(fieldMatches.map(\.id))
+        return .rewrite(currentTimers.filter { !matchIds.contains($0.id) })
     }
     
     /// Fetch all timer configurations from a WLED device
@@ -1311,6 +1545,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     ///   - device: The target WLED device
     /// - Throws: WLEDAPIError if the request fails
     func updateTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws {
+        try await enqueueTimerConfigMutation(deviceId: device.id, label: "timer.update") { [self] in
+            try await updateTimerUnlocked(timerUpdate, on: device)
+        }
+    }
+
+    private func updateTimerUnlocked(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws {
         guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
             throw WLEDAPIError.invalidURL
         }
@@ -1375,20 +1615,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             forceIncludeThroughSlot: forceIncludeThroughSlot
         )
         
-        // Send update
         var httpRequest = URLRequest(url: url)
         httpRequest.httpMethod = "POST"
         httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Use read-modify-write for /json/cfg so unrelated settings (gamma, LED preferences, etc.) are preserved
-        // even on firmware variants that are less tolerant of partial config payloads.
-        var configPayload = try await fetchRawConfig(for: device)
-        configPayload["timers"] = ["ins": timersArray]
-        if var cfg = configPayload["cfg"] as? [String: Any] {
-            cfg["timers"] = ["ins": timersArray]
-            configPayload["cfg"] = cfg
-        }
-        _ = enforceColorGammaCorrection(in: &configPayload)
+        let configPayload = try await timerConfigReadModifyWritePayload(timersArray, device: device)
         httpRequest.httpBody = try JSONSerialization.data(withJSONObject: configPayload, options: [])
         
         let (_, response) = try await urlSession.data(for: httpRequest)
@@ -1407,6 +1637,41 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         forceIncludeThroughSlot: Int? = nil
     ) -> [[String: Any]] {
         encodeWLEDTimersForConfig(timers, forceIncludeThroughSlot: forceIncludeThroughSlot)
+    }
+
+    func _encodePersistedWLEDTimerRowsForTesting(_ timers: [WLEDTimer]) -> [[String: Any]] {
+        encodePersistedWLEDTimerRowsForConfig(timers)
+    }
+
+    func _timerRowsAfterDeletingForTesting(
+        candidates: [WLEDTimer],
+        currentTimers: [WLEDTimer]
+    ) -> [WLEDTimer]? {
+        switch timerRowsAfterDeleting(candidates: candidates, from: currentTimers) {
+        case .noMatches:
+            return currentTimers
+        case .rewrite(let remaining):
+            return remaining
+        case .ambiguous:
+            return nil
+        }
+    }
+
+    func _timerRowsDeletePayloadForTesting(
+        remainingTimers: [WLEDTimer],
+        deletedCandidates: [WLEDTimer]
+    ) -> (rows: [[String: Any]], forceClearedSlot: Int?) {
+        timerRowsDeletePayload(
+            remainingTimers: remainingTimers,
+            deletedCandidates: deletedCandidates
+        )
+    }
+
+    func _timerRowsMatchExpectedForTesting(
+        currentTimers: [WLEDTimer],
+        expectedRemainingTimers: [WLEDTimer]
+    ) -> Bool {
+        timerRowsMatchExpected(currentTimers, expectedRemainingTimers: expectedRemainingTimers)
     }
 
     func _mergeTimersApplyingUpdateForTesting(
@@ -1540,8 +1805,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         context: String
     ) async throws -> Bool {
         let totalAttempts = max(1, attempts)
-        var delayMs = max(UInt64(1), initialDelayMs)
+        let settleDelayMs = max(UInt64(1), initialDelayMs)
+        var delayMs = min(settleDelayMs * 2, self.timerDeleteVerifyMaxDelayMs)
         var lastError: Error?
+
+        try? await Task.sleep(nanoseconds: settleDelayMs * 1_000_000)
 
         for attempt in 1...totalAttempts {
             do {
@@ -1679,6 +1947,174 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         #endif
         logger.info("timer.delete.cleared device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
         return true
+    }
+
+    func deleteTimerRows(matching candidates: [WLEDTimer], device: WLEDDevice) async throws -> Bool {
+        try await enqueueTimerConfigMutation(deviceId: device.id, label: "timer.rows_delete") { [self] in
+            try await deleteTimerRowsUnlocked(matching: candidates, device: device)
+        }
+    }
+
+    private func deleteTimerRowsUnlocked(matching candidates: [WLEDTimer], device: WLEDDevice) async throws -> Bool {
+        guard !candidates.isEmpty else {
+            return true
+        }
+        let currentTimers = try await fetchTimers(for: device)
+        let remainingTimers: [WLEDTimer]
+        switch timerRowsAfterDeleting(candidates: candidates, from: currentTimers) {
+        case .noMatches:
+            logger.info(
+                "timer.rows_delete.no_match device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public)"
+            )
+            return true
+        case .rewrite(let timers):
+            remainingTimers = timers
+        case .ambiguous(let matches):
+            logger.error(
+                "timer.rows_delete.ambiguous device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public) matches=\(matches.map(\.id), privacy: .public)"
+            )
+            return false
+        }
+
+        let deletePayload = timerRowsDeletePayload(
+            remainingTimers: remainingTimers,
+            deletedCandidates: candidates
+        )
+        let forceClearedSlotDescription = deletePayload.forceClearedSlot.map(String.init) ?? "nil"
+        logger.info(
+            "timer.rows_delete.write_plan device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public) remainingRows=\(remainingTimers.count, privacy: .public) encodedRows=\(deletePayload.rows.count, privacy: .public) forceClearedSlot=\(forceClearedSlotDescription, privacy: .public)"
+        )
+        do {
+            try await writeTimerRows(deletePayload.rows, device: device)
+        } catch {
+            logger.error(
+                "timer.rows_delete.write_failed device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            throw error
+        }
+
+        let verified = try await verifyTimerRowsRewriteWithBackoff(
+            expectedRemainingTimers: remainingTimers,
+            on: device,
+            attempts: timerDeleteVerifyRetryAttempts,
+            initialDelayMs: timerDeleteVerifyInitialDelayMs
+        )
+        if !verified {
+            logger.warning(
+                "timer.rows_delete.verify_failed device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public) attempts=\(self.timerDeleteVerifyRetryAttempts, privacy: .public)"
+            )
+            return false
+        }
+
+        logger.info(
+            "timer.rows_delete.success device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public)"
+        )
+        return true
+    }
+
+    private func timerRowsDeletePayload(
+        remainingTimers: [WLEDTimer],
+        deletedCandidates: [WLEDTimer]
+    ) -> (rows: [[String: Any]], forceClearedSlot: Int?) {
+        let hasRemainingPersistedTimers = remainingTimers.contains {
+            timerHasPersistedMeaning($0, slot: $0.id)
+        }
+        let deletedSlot = deletedCandidates
+            .map(\.id)
+            .filter { (0..<wledTimerSlotCount).contains($0) }
+            .max()
+        let forceClearedSlot: Int?
+        if hasRemainingPersistedTimers {
+            forceClearedSlot = deletedSlot
+        } else {
+            // WLED can ignore a single cleared row when deleting the final compacted
+            // timer. Force the full app timer surface to cleared placeholders so the
+            // device wipes the remaining row instead of keeping it.
+            forceClearedSlot = wledTimerSlotCount - 1
+        }
+
+        // WLED applies incoming timer rows positionally and does not reliably clear
+        // omitted old rows. Deletes must therefore send explicit cleared placeholders
+        // through the deleted slot, otherwise shifted/compacted rows can leave stale
+        // timers behind as duplicates.
+        let rows = encodeWLEDTimersForConfig(
+            remainingTimers,
+            forceIncludeThroughSlot: forceClearedSlot
+        )
+        return (rows, forceClearedSlot)
+    }
+
+    private func writeTimerRows(_ timersArray: [[String: Any]], device: WLEDDevice) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let configPayload = try await timerConfigReadModifyWritePayload(timersArray, device: device)
+        request.httpBody = try JSONSerialization.data(withJSONObject: configPayload, options: [])
+
+        let (_, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, device: device)
+    }
+
+    private func timerIdentityCounts(_ timers: [WLEDTimer], includeSlot: Bool) -> [String: Int] {
+        timers
+            .filter { timerHasPersistedMeaning($0, slot: $0.id) }
+            .reduce(into: [:]) { counts, timer in
+                counts[timerDeleteIdentity(timer, includeSlot: includeSlot), default: 0] += 1
+            }
+    }
+
+    private func timerRowsMatchExpected(_ currentTimers: [WLEDTimer], expectedRemainingTimers: [WLEDTimer]) -> Bool {
+        timerIdentityCounts(currentTimers, includeSlot: false) == timerIdentityCounts(expectedRemainingTimers, includeSlot: false)
+    }
+
+    private func verifyTimerRowsRewriteWithBackoff(
+        expectedRemainingTimers: [WLEDTimer],
+        on device: WLEDDevice,
+        attempts: Int,
+        initialDelayMs: UInt64
+    ) async throws -> Bool {
+        let settleDelayMs = max(UInt64(1), initialDelayMs)
+        var delayMs = min(settleDelayMs * 2, timerDeleteVerifyMaxDelayMs)
+        var lastError: Error?
+
+        try? await Task.sleep(nanoseconds: settleDelayMs * 1_000_000)
+
+        for attempt in 1...max(1, attempts) {
+            do {
+                let timers = try await fetchTimers(for: device)
+                if timerRowsMatchExpected(timers, expectedRemainingTimers: expectedRemainingTimers) {
+                    return true
+                }
+                lastError = nil
+                if attempt < attempts {
+                    logger.debug(
+                        "timer.rows_delete.verify_remaining_mismatch device=\(device.id, privacy: .public) expected=\(self.timerIdentityCounts(expectedRemainingTimers, includeSlot: false), privacy: .public) actual=\(self.timerIdentityCounts(timers, includeSlot: false), privacy: .public) attempt=\(attempt, privacy: .public)/\(attempts, privacy: .public)"
+                    )
+                }
+            } catch {
+                lastError = error
+                if attempt >= attempts || !isTransientTimerVerificationError(error) {
+                    throw error
+                }
+                logger.debug(
+                    "timer.rows_delete.verify_error device=\(device.id, privacy: .public) attempt=\(attempt, privacy: .public)/\(attempts, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
+            }
+
+            if attempt < attempts {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                delayMs = min(delayMs * 2, timerDeleteVerifyMaxDelayMs)
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        return false
     }
 
     private func isTimerSlotEffectivelyCleared(_ timer: WLEDTimer, slot: Int) -> Bool {
@@ -2666,10 +3102,42 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         context: String,
         reason: String
     ) async {
+        guard reportsPresetStoreHealth else { return }
+
         await MainActor.run {
             DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
                 deviceId: device.id,
                 message: "\(context): \(reason)"
+            )
+        }
+    }
+
+    private func reportPresetStoreHealthyReadSuccess(deviceId: String) async {
+        guard reportsPresetStoreHealth else { return }
+
+        await MainActor.run {
+            DeviceControlViewModel.shared.notePresetStoreHealthyReadSuccess(deviceId: deviceId)
+        }
+    }
+
+    private func reportPresetStoreDegradedReadable(deviceId: String, message: String) async {
+        guard reportsPresetStoreHealth else { return }
+
+        await MainActor.run {
+            DeviceControlViewModel.shared.notePresetStoreDegradedReadable(
+                deviceId: deviceId,
+                message: message
+            )
+        }
+    }
+
+    private func reportPresetStoreReadUnstable(deviceId: String, message: String) async {
+        guard reportsPresetStoreHealth else { return }
+
+        await MainActor.run {
+            DeviceControlViewModel.shared.notePresetStoreReadUnstable(
+                deviceId: deviceId,
+                message: message
             )
         }
     }
@@ -2967,22 +3435,14 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             )
             return presetSegmentColors(for: gradient, count: slotCount)
         }()
-        let segmentUpdate = SegmentUpdate(
-            id: 0,
-            on: true,
-            bri: preset.brightness,
-            col: colorSlots,
-            fx: preset.effectId,
-            sx: preset.speed,
-            ix: preset.intensity,
-            pal: colorSlots == nil ? preset.paletteId : nil,
-            frz: false
-        )
-        
-        let stateUpdate = WLEDStateUpdate(
-            on: true,
-            bri: preset.brightness,
-            seg: [segmentUpdate]
+        let stateUpdate = segmentedEffectPresetState(
+            device: device,
+            brightness: preset.brightness,
+            colorSlots: colorSlots,
+            effectId: preset.effectId,
+            speed: preset.speed,
+            intensity: preset.intensity,
+            paletteId: colorSlots == nil ? preset.paletteId : nil
         )
         
         let saveRequest = WLEDPresetSaveRequest(
@@ -3750,7 +4210,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             throw WLEDAPIError.invalidConfiguration
         }
 
-        if let directBody = directPresetApplyBody(
+        if let directBody = await directPresetApplyBody(
             presetId: presetId,
             device: device,
             transitionDeciseconds: transitionDeciseconds
@@ -3768,12 +4228,16 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             }
         }
 
-        let stateUpdate = WLEDStateUpdate(
-            transitionDeciseconds: transitionDeciseconds,
-            ps: presetId,
-            lor: 0
-        )
-        let response = try await updateState(for: device, state: stateUpdate)
+        var body: [String: Any] = [
+            "on": true,
+            "ps": presetId,
+            "lor": 0,
+            "v": true
+        ]
+        if let transitionDeciseconds {
+            body["tt"] = min(max(0, transitionDeciseconds), maxWLEDTransitionDeciseconds)
+        }
+        let response = try await postState(device, body: body)
         return response.state
     }
     
@@ -4588,7 +5052,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return try parsePlaylistsFromPresets(data: data)
     }
 
-    private func fetchPresetRecordPayload(id: Int, device: WLEDDevice) async throws -> [String: Any] {
+    func fetchPresetRecordPayload(id: Int, device: WLEDDevice) async throws -> [String: Any] {
         if let cached = cachedPresetRecordPayload(id: id, device: device) {
             return cached
         }
@@ -4625,17 +5089,29 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         presetId: Int,
         device: WLEDDevice,
         transitionDeciseconds: Int?
-    ) -> [String: Any]? {
-        guard var payload = cachedPresetRecordPayload(id: presetId, device: device) else {
+    ) async -> [String: Any]? {
+        let storedPayload: [String: Any]
+        if let cached = cachedPresetRecordPayload(id: presetId, device: device) {
+            storedPayload = cached
+        } else if let fetched = try? await fetchPresetRecordPayload(id: presetId, device: device) {
+            storedPayload = fetched
+        } else {
             return nil
         }
-        guard payload["playlist"] == nil else {
-            return nil
-        }
+
+        var payload = storedPayload
+        let isPlaylist = payload["playlist"] != nil
         payload.removeValue(forKey: "n")
         payload.removeValue(forKey: "ql")
-        payload["pd"] = presetId
+        payload.removeValue(forKey: "aesdetic")
+        if !isPlaylist {
+            payload["pd"] = presetId
+        }
+        if payload["on"] == nil {
+            payload["on"] = true
+        }
         payload["lor"] = 0
+        payload["v"] = true
         if let transitionDeciseconds {
             payload["tt"] = min(max(0, transitionDeciseconds), maxWLEDTransitionDeciseconds)
         }
@@ -4846,7 +5322,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     private func parseJSONObjectDictionaryStrict(from data: Data) throws -> [String: Any] {
-        let sanitized = sanitizePresetPayloadBytes(data)
+        let baseSanitized = sanitizePresetPayloadBytes(data)
+        let permissive = sanitizePresetPayloadBytesPermissive(baseSanitized)
+        let sanitized = permissive.data
         do {
             let json = try JSONSerialization.jsonObject(with: sanitized, options: [])
             guard let dictionary = json as? [String: Any] else {
@@ -4854,8 +5332,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             }
             return dictionary
         } catch {
-            // Strict mode intentionally mirrors firmware expectations: if payload is malformed,
-            // treat the catalog as unreadable instead of trying to heal bytes in-memory.
+            // Strict mode may drop invalid bytes outside JSON strings, but it must not
+            // recover partial roots or tail garbage. Verification needs the whole file valid.
             throw wrappedPresetPayloadError(error)
         }
     }
@@ -5245,6 +5723,105 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )
     }
 
+    private func segmentedEffectPresetState(
+        device: WLEDDevice,
+        brightness: Int,
+        colorSlots: [[Int]]?,
+        effectId: Int,
+        speed: Int?,
+        intensity: Int?,
+        paletteId: Int?
+    ) -> WLEDStateUpdate {
+        let existingSegments = device.state?.segments ?? []
+        let boundedSegments = existingSegments.enumerated().compactMap { index, segment -> (Int, Int, Int, Segment)? in
+            guard let start = segment.start,
+                  let stop = segment.stop,
+                  stop > start else {
+                return nil
+            }
+            return (segment.id ?? index, start, stop, segment)
+        }
+
+        let updates: [SegmentUpdate]
+        if !boundedSegments.isEmpty {
+            updates = boundedSegments.map { item in
+                let (id, start, stop, baseSegment) = item
+                return SegmentUpdate(
+                    id: id,
+                    start: start,
+                    stop: stop,
+                    grp: baseSegment.grp ?? 1,
+                    spc: baseSegment.spc ?? 0,
+                    ofs: baseSegment.ofs ?? 0,
+                    on: true,
+                    bri: baseSegment.bri ?? 255,
+                    col: colorSlots,
+                    cct: nil,
+                    fx: effectId,
+                    sx: speed ?? baseSegment.sx ?? 128,
+                    ix: intensity ?? baseSegment.ix ?? 128,
+                    pal: paletteId,
+                    c1: baseSegment.c1 ?? 128,
+                    c2: baseSegment.c2 ?? 128,
+                    c3: baseSegment.c3 ?? 16,
+                    sel: baseSegment.sel ?? true,
+                    rev: baseSegment.rev ?? false,
+                    mi: baseSegment.mi ?? false,
+                    cln: baseSegment.cln,
+                    o1: baseSegment.o1 ?? false,
+                    o2: baseSegment.o2 ?? false,
+                    o3: baseSegment.o3 ?? false,
+                    si: baseSegment.si ?? 0,
+                    m12: baseSegment.m12 ?? 0,
+                    setId: baseSegment.setId ?? 0,
+                    name: baseSegment.name ?? "",
+                    frz: false
+                )
+            }
+        } else {
+            let maxStop = existingSegments.compactMap { $0.stop }.filter { $0 > 0 }.max()
+            let sumLen = existingSegments.compactMap { $0.len }.reduce(0, +)
+            let totalLEDs = max(1, maxStop ?? (sumLen > 0 ? sumLen : 1))
+            updates = [
+                SegmentUpdate(
+                    id: 0,
+                    start: 0,
+                    stop: totalLEDs,
+                    len: totalLEDs,
+                    on: true,
+                    bri: 255,
+                    col: colorSlots,
+                    cct: nil,
+                    fx: effectId,
+                    sx: speed ?? 128,
+                    ix: intensity ?? 128,
+                    pal: paletteId,
+                    c1: 128,
+                    c2: 128,
+                    c3: 16,
+                    sel: true,
+                    rev: false,
+                    mi: false,
+                    o1: false,
+                    o2: false,
+                    o3: false,
+                    si: 0,
+                    m12: 0,
+                    setId: 0,
+                    name: "",
+                    frz: false
+                )
+            ]
+        }
+
+        return WLEDStateUpdate(
+            on: true,
+            bri: brightness,
+            seg: updates,
+            mainSegment: device.state?.mainSegment
+        )
+    }
+
     private enum PlaylistTimingUnit: String {
         case deciseconds
     }
@@ -5305,8 +5882,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             }
         }
 
-        let transitions = durations.map { durationUnits in
-            durationUnits > 0 ? min(maxWLEDPlaylistTransitionDeciseconds, durationUnits) : 0
+        let transitions = durations.enumerated().map { index, durationUnits in
+            guard index > 0 else { return 0 }
+            return durationUnits > 0 ? min(maxWLEDPlaylistTransitionDeciseconds, durationUnits) : 0
         }
         let effectiveDurationSeconds = Double(durations.reduce(0, +)) / unitScale
         return PlaylistStepPlan(
@@ -5483,6 +6061,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard (1...250).contains(request.id) else {
             throw WLEDAPIError.invalidConfiguration
         }
+
         var record: [String: Any] = [:]
         let customCommand = request.customAPICommand?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let customCommand, !customCommand.isEmpty {
@@ -5773,34 +6352,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         
         // Fetch existing config so we preserve user LED preferences (gamma/correction/etc.)
         var configPayload = try await fetchRawConfig(for: device)
-        var hw = configPayload["hw"] as? [String: Any] ?? [:]
-        var led = hw["led"] as? [String: Any] ?? [:]
-        led["total"] = config.ledCount
-        led["maxpwr"] = config.maxTotalCurrent
-        led["rgbwm"] = config.autoWhiteMode
-        led["abl"] = config.enableABL
-        hw["led"] = led
-        configPayload["hw"] = hw
-        
-        var leds = configPayload["leds"] as? [[String: Any]] ?? []
-        if leds.isEmpty {
-            leds = [[:]]
+        applyLEDConfiguration(config, to: &configPayload)
+        if var cfg = configPayload["cfg"] as? [String: Any] {
+            applyLEDConfiguration(config, to: &cfg)
+            configPayload["cfg"] = cfg
         }
-        var first = leds[0]
-        first["pin"] = [config.gpioPin]
-        first["len"] = config.ledCount
-        first["type"] = config.stripType
-        first["co"] = config.colorOrder
-        first["start"] = config.startLED
-        first["skip"] = config.skipFirstLEDs
-        first["rev"] = config.reverseDirection
-        first["rf"] = config.offRefresh
-        first["aw"] = config.autoWhiteMode
-        first["la"] = config.maxCurrentPerLED
-        first["ma"] = config.maxTotalCurrent
-        first["per"] = config.usePerOutputLimiter
-        leds[0] = first
-        configPayload["leds"] = leds
         _ = enforceColorGammaCorrection(in: &configPayload)
         
         do {
@@ -5812,6 +6368,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         do {
             let (data, response) = try await urlSession.data(for: request)
             try validateHTTPResponse(response, device: device)
+            try await verifyLEDConfigurationApplied(config, for: device)
             
             // Handle empty response for successful POST requests
             if data.isEmpty {
@@ -5822,6 +6379,99 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         } catch {
             throw handleError(error, device: device)
         }
+    }
+
+    private func applyLEDConfiguration(_ config: LEDConfiguration, to root: inout [String: Any]) {
+        var hw = root["hw"] as? [String: Any] ?? [:]
+        var led = hw["led"] as? [String: Any] ?? [:]
+        let effectiveMaxPower = config.enableABL ? config.maxTotalCurrent : 0
+
+        led["total"] = config.ledCount
+        led["maxpwr"] = effectiveMaxPower
+        led["rgbwm"] = config.globalAutoWhiteMode
+        led["cct"] = config.whiteBalanceCorrection
+        led["cr"] = config.calculateCCTFromRGB
+        led["ic"] = config.cctICUsed
+        led["cb"] = min(max(config.cctBlending, -100), 100)
+        led["fps"] = min(max(config.targetFPS, 0), 250)
+
+        var ins = led["ins"] as? [[String: Any]] ?? []
+        if ins.isEmpty {
+            ins = [[:]]
+        }
+
+        var first = ins[0]
+        first["pin"] = [config.gpioPin]
+        first["len"] = config.ledCount
+        first["type"] = config.stripType
+        first["order"] = config.colorOrder
+        first["start"] = config.startLED
+        first["skip"] = config.skipFirstLEDs
+        first["rev"] = config.reverseDirection
+        first["ref"] = config.offRefresh
+        first["rgbwm"] = config.autoWhiteMode
+        first["ledma"] = config.maxCurrentPerLED
+        first["maxpwr"] = effectiveMaxPower
+        first["freq"] = config.signalFrequency
+        first["drv"] = config.driverType
+        first["per"] = config.usePerOutputLimiter
+
+        ins[0] = first
+        led["ins"] = ins
+        hw["led"] = led
+        root["hw"] = hw
+
+        let gammaValue = min(max(config.gammaValue, 0.1), 3.0)
+        var light = root["light"] as? [String: Any] ?? [:]
+        var gamma = light["gc"] as? [String: Any] ?? [:]
+        gamma["val"] = gammaValue
+        gamma["col"] = config.gammaCorrectColor ? gammaValue : 1.0
+        gamma["bri"] = config.gammaCorrectBrightness ? gammaValue : 1.0
+        light["gc"] = gamma
+        light["scale-bri"] = min(max(config.globalBrightnessFactor, 1), 255)
+        light["pal-mode"] = config.paletteBlendMode
+        light["aseg"] = config.autoSegments
+        root["light"] = light
+    }
+
+    private func verifyLEDConfigurationApplied(_ expected: LEDConfiguration, for device: WLEDDevice) async throws {
+        let attempts = 5
+        var lastObserved: LEDConfiguration?
+
+        for attempt in 0..<attempts {
+            if attempt > 0 {
+                let delayNanos = UInt64(250 + (attempt * 150)) * 1_000_000
+                try? await Task.sleep(nanoseconds: delayNanos)
+            }
+
+            let observed = try await getLEDConfiguration(for: device)
+            lastObserved = observed
+            if ledConfiguration(observed, matchesAppliedFieldsOf: expected) {
+                return
+            }
+        }
+
+        #if DEBUG
+        if let lastObserved {
+            logger.warning("LED config verify failed for \(device.name, privacy: .public). expected len=\(expected.ledCount) type=\(expected.stripType) pin=\(expected.gpioPin) skip=\(expected.skipFirstLEDs) gamma=\(expected.gammaValue, privacy: .public) observed len=\(lastObserved.ledCount) type=\(lastObserved.stripType) pin=\(lastObserved.gpioPin) skip=\(lastObserved.skipFirstLEDs) gamma=\(lastObserved.gammaValue, privacy: .public)")
+        }
+        #endif
+        throw WLEDAPIError.invalidConfiguration
+    }
+
+    private func ledConfiguration(_ observed: LEDConfiguration, matchesAppliedFieldsOf expected: LEDConfiguration) -> Bool {
+        let gammaMatches = abs(observed.gammaValue - min(max(expected.gammaValue, 0.1), 3.0)) < 0.06
+        return observed.stripType == expected.stripType
+            && observed.gpioPin == expected.gpioPin
+            && observed.ledCount == expected.ledCount
+            && observed.skipFirstLEDs == expected.skipFirstLEDs
+            && observed.autoWhiteMode == expected.autoWhiteMode
+            && observed.maxCurrentPerLED == expected.maxCurrentPerLED
+            && observed.maxTotalCurrent == (expected.enableABL ? expected.maxTotalCurrent : 0)
+            && observed.enableABL == expected.enableABL
+            && observed.gammaCorrectColor == expected.gammaCorrectColor
+            && observed.gammaCorrectBrightness == expected.gammaCorrectBrightness
+            && gammaMatches
     }
     
     /// Get current LED configuration from a WLED device
@@ -5841,10 +6491,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 throw WLEDAPIError.invalidResponse
             }
 
-            let hw = json["hw"] as? [String: Any]
+            let root = (json["cfg"] as? [String: Any]) ?? json
+            let hw = root["hw"] as? [String: Any]
             let led = hw?["led"] as? [String: Any] ?? [:]
             let ledIns = led["ins"] as? [[String: Any]] ?? []
-            let legacyIns = json["leds"] as? [[String: Any]] ?? []
+            let legacyIns = root["leds"] as? [[String: Any]] ?? []
             let allBuses = !ledIns.isEmpty ? ledIns : legacyIns
 
             #if DEBUG
@@ -5898,12 +6549,31 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let autoWhiteMode = selectedBus?["rgbwm"] as? Int
                 ?? led["rgbwm"] as? Int
                 ?? 0
+            let globalAutoWhiteMode = decodeInt(led["rgbwm"]) ?? 255
+            let signalFrequency = decodeInt(selectedBus?["freq"]) ?? 0
+            let driverType = decodeInt(selectedBus?["drv"]) ?? 0
             let maxCurrentPerLED = selectedBus?["ledma"] as? Int ?? 55
             let maxTotalCurrent = selectedBus?["maxpwr"] as? Int
                 ?? led["maxpwr"] as? Int
                 ?? 3850
             let usePerOutputLimiter = selectedBus?["per"] as? Bool ?? false
-            let enableABL = led["abl"] as? Bool ?? true
+            let light = root["light"] as? [String: Any] ?? [:]
+            let whiteBalanceCorrection = decodeBool(led["cct"]) ?? false
+            let calculateCCTFromRGB = decodeBool(led["cr"]) ?? false
+            let cctICUsed = decodeBool(led["ic"]) ?? false
+            let cctBlending = decodeInt(led["cb"]) ?? 0
+            let globalBrightnessFactor = decodeInt(light["scale-bri"]) ?? 100
+            let targetFPS = decodeInt(led["fps"]) ?? 42
+            let paletteBlendMode = decodeInt(light["pal-mode"]) ?? 0
+            let autoSegments = decodeBool(light["aseg"]) ?? false
+            let gamma = light["gc"] as? [String: Any] ?? [:]
+            let parsedGammaValue = decodeDouble(gamma["val"]) ?? 2.2
+            let gammaValue = (0.1...3.0).contains(parsedGammaValue) ? parsedGammaValue : 1.0
+            let colorGammaValue = decodeDouble(gamma["col"]) ?? gammaValue
+            let brightnessGammaValue = decodeDouble(gamma["bri"]) ?? 1.0
+            let gammaCorrectColor = abs(colorGammaValue - 1.0) > 0.0001
+            let gammaCorrectBrightness = abs(brightnessGammaValue - 1.0) > 0.0001
+            let enableABL = maxTotalCurrent > 0
             let cctRangeSource = led["cct"] ?? selectedBus?["cct"]
             let (cctMin, cctMax): (Int?, Int?) = {
                 if let range = cctRangeSource as? [Int], range.count >= 2 {
@@ -5934,12 +6604,26 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 reverseDirection: reverseDirection,
                 offRefresh: offRefresh,
                 autoWhiteMode: autoWhiteMode,
+                globalAutoWhiteMode: globalAutoWhiteMode,
+                signalFrequency: signalFrequency,
+                driverType: driverType,
                 cctKelvinMin: cctMin,
                 cctKelvinMax: cctMax,
                 maxCurrentPerLED: maxCurrentPerLED,
                 maxTotalCurrent: maxTotalCurrent,
                 usePerOutputLimiter: usePerOutputLimiter,
-                enableABL: enableABL
+                enableABL: enableABL,
+                whiteBalanceCorrection: whiteBalanceCorrection,
+                calculateCCTFromRGB: calculateCCTFromRGB,
+                cctICUsed: cctICUsed,
+                cctBlending: cctBlending,
+                globalBrightnessFactor: globalBrightnessFactor,
+                targetFPS: targetFPS,
+                paletteBlendMode: paletteBlendMode,
+                autoSegments: autoSegments,
+                gammaCorrectColor: gammaCorrectColor,
+                gammaCorrectBrightness: gammaCorrectBrightness,
+                gammaValue: gammaValue
             )
         } catch {
             throw handleError(error, device: device)
@@ -5979,12 +6663,26 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             reverseDirection: currentConfig.reverseDirection,
             offRefresh: currentConfig.offRefresh,
             autoWhiteMode: currentConfig.autoWhiteMode,
+            globalAutoWhiteMode: currentConfig.globalAutoWhiteMode,
+            signalFrequency: currentConfig.signalFrequency,
+            driverType: currentConfig.driverType,
             cctKelvinMin: currentConfig.cctKelvinMin,
             cctKelvinMax: currentConfig.cctKelvinMax,
             maxCurrentPerLED: currentConfig.maxCurrentPerLED,
             maxTotalCurrent: maxCurrent ?? currentConfig.maxTotalCurrent,
             usePerOutputLimiter: currentConfig.usePerOutputLimiter,
-            enableABL: enableABL ?? currentConfig.enableABL
+            enableABL: enableABL ?? currentConfig.enableABL,
+            whiteBalanceCorrection: currentConfig.whiteBalanceCorrection,
+            calculateCCTFromRGB: currentConfig.calculateCCTFromRGB,
+            cctICUsed: currentConfig.cctICUsed,
+            cctBlending: currentConfig.cctBlending,
+            globalBrightnessFactor: currentConfig.globalBrightnessFactor,
+            targetFPS: currentConfig.targetFPS,
+            paletteBlendMode: currentConfig.paletteBlendMode,
+            autoSegments: currentConfig.autoSegments,
+            gammaCorrectColor: currentConfig.gammaCorrectColor,
+            gammaCorrectBrightness: currentConfig.gammaCorrectBrightness,
+            gammaValue: currentConfig.gammaValue
         )
         
         return try await updateLEDConfiguration(updatedConfig, for: device)

@@ -15,7 +15,7 @@ struct DeviceDetailView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
     @State private var selectedTab: String = "Light"
-    
+
     // State variables for new features
     @State private var showSettings: Bool = false
     @State private var settingsInitialCategory: ComprehensiveSettingsView.SettingsCategory = .overview
@@ -82,10 +82,14 @@ struct DeviceDetailView: View {
             return tab
         }
     }
-    
+
     // Use coordinated power state from ViewModel
     private var currentPowerState: Bool {
         return viewModel.getCurrentPowerState(for: activeDevice.id)
+    }
+
+    private var isStatusOnline: Bool {
+        activeDevice.isOnline || isToggling
     }
 
     private var activeDevice: WLEDDevice {
@@ -154,7 +158,8 @@ struct DeviceDetailView: View {
     }
 
     private var isAutomationMutationLocked: Bool {
-        !automationStore.deletingAutomationIds.isEmpty
+        automationStore.hasAnyDeletionInProgress
+            || automationStore.hasOnDeviceSyncInProgress(for: activeDeviceIds)
     }
 
     private var rebootWaitRemainingSeconds: Int {
@@ -172,7 +177,7 @@ struct DeviceDetailView: View {
     private var isRunningInPreview: Bool {
         ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
     }
-    
+
     var body: some View {
         fullDetailBody
     }
@@ -187,9 +192,6 @@ struct DeviceDetailView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
                     .background(detailContainerBackground)
-                    .overlay(alignment: .bottom) {
-                        detailDockFade
-                    }
                     .clipShape(RoundedRectangle(cornerRadius: detailCardCornerRadius, style: .continuous))
                     .disabled(isRebootWaitActive || requiresProductSetup)
                 bannerOverlay(topInset: topInset)
@@ -301,53 +303,6 @@ struct DeviceDetailView: View {
             } message: {
                 Text("The device will restart and go offline briefly.")
             }
-            .sheet(isPresented: $showAddAutomation, onDismiss: {
-                pendingAutomationTemplate = nil
-                editingAutomation = nil
-                automationEditorDefaultName = nil
-            }) {
-                let deviceScenes = scenesStore.scenes.filter { activeDeviceIds.contains($0.deviceId) }
-                let effectOptions = viewModel.colorSafeEffectOptions(for: activeDevice)
-                let prefill = pendingAutomationTemplate.map {
-                    $0.prefill(for: AutomationTemplate.Context(
-                        device: activeDevice,
-                        availableDevices: viewModel.devices,
-                        defaultGradient: viewModel.automationGradient(for: activeDevice)
-                    ))
-                }
-                let allowSceneAction = {
-                    guard let editing = editingAutomation else { return false }
-                    if case .scene = editing.action {
-                        return true
-                    }
-                    return false
-                }()
-                AddAutomationDialog(
-                    device: activeDevice,
-                    scenes: deviceScenes,
-                    effectOptions: effectOptions,
-                    availableDevices: viewModel.devices,
-                    viewModel: viewModel,
-                    defaultName: automationEditorDefaultName,
-                    editingAutomation: editingAutomation,
-                    templatePrefill: prefill,
-                    allowSceneAction: allowSceneAction
-                ) { automation in
-                    let saved: Bool
-                    if editingAutomation != nil {
-                        automationStore.update(automation)
-                        saved = true
-                    } else {
-                        saved = automationStore.add(automation)
-                    }
-                    if saved {
-                        editingAutomation = nil
-                        automationEditorDefaultName = nil
-                        pendingAutomationTemplate = nil
-                    }
-                    return saved
-                }
-            }
             .sheet(isPresented: $showEditDeviceInfo) {
                 EditDeviceInfoDialog(device: activeDevice)
                     .environmentObject(viewModel)
@@ -394,7 +349,7 @@ struct DeviceDetailView: View {
             }
         }
     }
-    
+
     private var backgroundLayer: some View {
         Color.clear
         .ignoresSafeArea()
@@ -410,7 +365,7 @@ struct DeviceDetailView: View {
         guard onClose != nil else { return 0 }
         return (1 - min(1, max(0, presentationProgress))) * 18
     }
-    
+
     private var contentLayer: some View {
         VStack(spacing: 0) {
             if onClose != nil {
@@ -426,65 +381,51 @@ struct DeviceDetailView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, onClose == nil ? 20 : 10)
                 .padding(.bottom, 10)
-            
+
             tabNavigationBar
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
                 .padding(.bottom, 2)
-            
-            ScrollView {
-                tabContent
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                    .padding(.bottom, onClose == nil ? 16 : 152)
+
+            if showAddAutomation {
+                GeometryReader { proxy in
+                    embeddedAutomationEditor
+                        .id(automationEditorIdentity)
+                        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
+                .padding(.bottom, onClose == nil ? 0 : 88)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .move(edge: .leading).combined(with: .opacity)
+                ))
+            } else {
+                ScrollView {
+                    tabContent
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .padding(.bottom, onClose == nil ? 16 : 152)
+                }
+                .frame(maxHeight: .infinity)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .leading).combined(with: .opacity),
+                    removal: .move(edge: .trailing).combined(with: .opacity)
+                ))
             }
-            .frame(maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(detailContentOpacity)
         .offset(y: detailContentOffset)
         .allowsHitTesting(detailContentOpacity > 0.82)
         .contentShape(Rectangle())
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: showAddAutomation)
         .onTapGesture {
             dismissColorPicker = true
         }
     }
 
-    @ViewBuilder
-    private var detailDockFade: some View {
-        if onClose != nil {
-            ZStack {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .mask(
-                        LinearGradient(
-                            colors: [
-                                .clear,
-                                .black.opacity(0.82),
-                                .black
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-
-                LinearGradient(
-                    colors: [
-                        .clear,
-                        Color.white.opacity(0.10),
-                        Color.black.opacity(0.12)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .frame(height: 156)
-            .opacity(detailContentOpacity)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        }
-    }
-    
     private func bannerOverlay(topInset: CGFloat) -> some View {
         Group {
             if let error = viewModel.currentError {
@@ -628,7 +569,7 @@ struct DeviceDetailView: View {
         .transition(.identity)
         .zIndex(4)
     }
-    
+
     private func errorAction(for error: DeviceControlViewModel.WLEDError) -> (() -> Void)? {
         switch error {
         case .deviceOffline, .timeout:
@@ -641,9 +582,9 @@ struct DeviceDetailView: View {
             return nil
         }
     }
-    
+
     private var condensedHeader: some View {
-        let isDeviceOnline = viewModel.isDeviceOnline(activeDevice) || isToggling
+        let isDeviceOnline = isStatusOnline
         return HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(activeDevice.name)
@@ -928,18 +869,18 @@ struct DeviceDetailView: View {
                 .clipShape(shape)
             )
     }
-    
+
     private var statusDot: some View {
         Circle()
-            .fill((viewModel.isDeviceOnline(activeDevice) || isToggling) ? Color.white : Color.clear)
+            .fill(isStatusOnline ? Color.white : Color.clear)
             .overlay(
                 Circle()
                     .stroke(Color.white.opacity(0.95), lineWidth: 1.4)
             )
             .frame(width: 8, height: 8)
-            .shadow(color: Color.white.opacity((viewModel.isDeviceOnline(activeDevice) || isToggling) ? 0.35 : 0.0), radius: 4, x: 0, y: 0)
+            .shadow(color: Color.white.opacity(isStatusOnline ? 0.35 : 0.0), radius: 4, x: 0, y: 0)
     }
-    
+
     @ViewBuilder
     private func activeRunStatusChip(_ run: ActiveRunStatus) -> some View {
         let isCancelArmed = armedCancelRunId == run.id
@@ -1030,14 +971,14 @@ struct DeviceDetailView: View {
             confirmCancel()
         }
     }
-    
+
     private var powerButtonContent: some View {
         ZStack {
             Image(systemName: "power")
                 .font(AppTypography.style(.title3))
                 .foregroundColor(currentPowerState ? .black : .white)
                 .opacity(isToggling ? 0.7 : 1.0)
-            
+
             if isToggling {
                 ProgressView()
                     .scaleEffect(0.8)
@@ -1093,7 +1034,7 @@ struct DeviceDetailView: View {
                 .stroke(Color.white.opacity(currentPowerState ? 0 : 0.24), lineWidth: 1)
         )
     }
-    
+
     private func togglePower() {
         let targetState = !currentPowerState
         viewModel.setUIOptimisticState(deviceId: activeDevice.id, isOn: targetState)
@@ -1176,34 +1117,37 @@ struct DeviceDetailView: View {
             }
         }
     }
-    
-    
+
+
     // MARK: - Tab Navigation Bar
-    
+
     private var tabNavigationBar: some View {
         HStack(spacing: 4) {
             ForEach(tabItems, id: \.title) { tabItem in
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            selectedTab = tabItem.title
-                        }
-                    }) {
-                        VStack(spacing: 4) {
-                            Image(systemName: tabItem.icon)
-                                .font(AppTypography.style(.title3, weight: .medium))
-                                .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(0.4))
-                            
-                            Text(tabItem.title)
-                                .font(AppTypography.style(.caption, weight: .medium))
-                                .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(0.4))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.76)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 48)
-                        .contentShape(Rectangle())
+                let isLockedByEditor = showAddAutomation && tabItem.title != "Automations"
+                Button(action: {
+                    guard !isLockedByEditor else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = tabItem.title
                     }
+                }) {
+                    VStack(spacing: 4) {
+                        Image(systemName: tabItem.icon)
+                            .font(AppTypography.style(.title3, weight: .medium))
+                            .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(isLockedByEditor ? 0.22 : 0.4))
+
+                        Text(tabItem.title)
+                            .font(AppTypography.style(.caption, weight: .medium))
+                            .foregroundColor(selectedTab == tabItem.title ? .white : .white.opacity(isLockedByEditor ? 0.22 : 0.4))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.76)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
                 .buttonStyle(.plain)
+                .disabled(isLockedByEditor)
                 .accessibilityLabel(tabItem.title)
                 .accessibilityHint("Shows the \(tabItem.title.lowercased()) controls.")
             }
@@ -1211,7 +1155,7 @@ struct DeviceDetailView: View {
         .padding(.bottom, 10)
         .background(Color.clear)
     }
-    
+
     private var tabItems: [(title: String, icon: String)] {
         [
             ("Light", "sun.max"),
@@ -1220,9 +1164,9 @@ struct DeviceDetailView: View {
             ("Sync", "arrow.triangle.2.circlepath")
         ]
     }
-    
+
     // MARK: - Tab Content
-    
+
     @ViewBuilder
     private var tabContent: some View {
         switch selectedTab {
@@ -1238,7 +1182,54 @@ struct DeviceDetailView: View {
             EmptyView()
         }
     }
-    
+
+    private var embeddedAutomationEditor: some View {
+        let deviceScenes = scenesStore.scenes.filter { activeDeviceIds.contains($0.deviceId) }
+        let effectOptions = viewModel.colorSafeEffectOptions(for: activeDevice)
+        let prefill = pendingAutomationTemplate.map {
+            $0.prefill(for: AutomationTemplate.Context(
+                device: activeDevice,
+                availableDevices: viewModel.devices,
+                defaultGradient: viewModel.automationGradient(for: activeDevice)
+            ))
+        }
+        let allowSceneAction = {
+            guard let editing = editingAutomation else { return false }
+            if case .scene = editing.action {
+                return true
+            }
+            return false
+        }()
+
+        return AddAutomationDialog(
+            device: activeDevice,
+            scenes: deviceScenes,
+            effectOptions: effectOptions,
+            availableDevices: viewModel.devices,
+            viewModel: viewModel,
+            defaultName: automationEditorDefaultName,
+            editingAutomation: editingAutomation,
+            templatePrefill: prefill,
+            allowSceneAction: allowSceneAction,
+            presentationStyle: .embedded,
+            onCancel: closeAutomationEditor
+        ) { automation in
+            let saved: Bool
+            if editingAutomation != nil {
+                saved = automationStore.update(automation)
+            } else {
+                saved = automationStore.add(automation)
+            }
+            if saved {
+                editingAutomation = nil
+                automationEditorDefaultName = nil
+                pendingAutomationTemplate = nil
+            }
+            return saved
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var colorsTabContent: some View {
         VStack(spacing: 16) {
             primaryControlSection
@@ -1249,10 +1240,10 @@ struct DeviceDetailView: View {
                viewModel.hasMultipleSegments(for: activeDevice) {
                 segmentPicker
             }
-            
+
             // Transition Section
             transitionSection
-            
+
             // Effects Section
             effectsSection
         }
@@ -1267,9 +1258,9 @@ struct DeviceDetailView: View {
         }
         return viewModel.preferredSegmentId(for: activeDevice)
     }
-    
+
     // MARK: - Segment Picker
-    
+
     private var segmentPicker: some View {
         VStack(spacing: 8) {
             HStack {
@@ -1278,7 +1269,7 @@ struct DeviceDetailView: View {
                     .foregroundColor(.white.opacity(0.7))
                 Spacer()
             }
-            
+
             // Segmented control for segment selection
             Picker("Segment", selection: $selectedSegmentId) {
                 ForEach(0..<viewModel.getSegmentCount(for: activeDevice), id: \.self) { segmentId in
@@ -1300,7 +1291,7 @@ struct DeviceDetailView: View {
                 .fill(Color.white.opacity(0.05))
         )
     }
-    
+
     private var presetsTabContent: some View {
         PresetsListView(
             device: activeDevice,
@@ -1309,12 +1300,12 @@ struct DeviceDetailView: View {
         )
             .environmentObject(viewModel)
     }
-    
+
     private var automationTabContent: some View {
         VStack(alignment: .leading, spacing: 20) {
             automationShortcutsSection
             automationsHeader
-            
+
             if deviceAutomations.isEmpty {
                 automationEmptyState
             } else {
@@ -1327,7 +1318,7 @@ struct DeviceDetailView: View {
                             scenes: scenesStore.scenes,
                             isNext: nextAutomationID == automation.id,
                             isDeleting: isDeleting,
-                            isDeleteDisabled: automationStore.hasAnyDeletionInProgress && !isDeleting,
+                            isDeleteDisabled: isDeleting,
                             deletionProgress: automationStore.deletionProgress(for: automation.id),
                             isRunning: runStatus != nil,
                             runningProgress: runStatus?.progress,
@@ -1358,7 +1349,7 @@ struct DeviceDetailView: View {
             }
         }
     }
-    
+
     private var automationShortcutsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -1409,7 +1400,7 @@ struct DeviceDetailView: View {
                 .opacity((isAutomationMutationLocked || shortcutMenuAutomations.isEmpty) ? 0.45 : 1.0)
                 .accessibilityLabel("Add shortcut")
             }
-            
+
             if shortcutAutomations.isEmpty {
                 Text("Pin automations with the heart icon for quick toggles.")
                     .font(AppTypography.style(.caption, weight: .medium))
@@ -1444,7 +1435,7 @@ struct DeviceDetailView: View {
             }
         }
     }
-    
+
     private var automationsHeader: some View {
         HStack(alignment: .center) {
             Text("Automations")
@@ -1465,7 +1456,7 @@ struct DeviceDetailView: View {
         }
         .padding(.top, 6)
     }
-    
+
     private var automationEmptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "clock")
@@ -1490,13 +1481,13 @@ struct DeviceDetailView: View {
                 )
         )
     }
-    
+
     private var deviceAutomations: [Automation] {
         automationStore.automations.filter { automation in
             automation.targets.deviceIds.contains(where: activeDeviceIds.contains)
         }
     }
-    
+
     private var shortcutAutomations: [Automation] {
         let pinned = deviceAutomations.filter { $0.metadata.pinnedToShortcuts ?? false }
         guard let nextId = nextAutomationID else { return pinned }
@@ -1521,7 +1512,7 @@ struct DeviceDetailView: View {
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
     }
-    
+
     private var upcomingAutomation: (automation: Automation, date: Date?)? {
         if let scheduled = automationStore.upcomingAutomationInfo,
            scheduled.automation.targets.deviceIds.contains(where: activeDeviceIds.contains) {
@@ -1545,14 +1536,14 @@ struct DeviceDetailView: View {
         }
         return nil
     }
-    
+
     private func infoDescription(for info: (automation: Automation, date: Date?)) -> String {
         if let date = info.date {
             return "\(info.automation.trigger.displayName) · \(date.formatted(date: .omitted, time: .shortened))"
         }
         return "\(info.automation.trigger.displayName) · next event"
     }
-    
+
     private var nextAutomationID: UUID? {
         upcomingAutomation?.automation.id
     }
@@ -1562,15 +1553,15 @@ struct DeviceDetailView: View {
         guard status.kind == .automation, status.title == automation.name else { return nil }
         return status
     }
-    
+
     private func startRename() {
         showEditDeviceInfo = true
     }
-    
+
     private var defaultAutomationName: String {
         "Automation \(automationStore.automations.count + 1)"
     }
-    
+
     private func automation(from prefill: AutomationTemplate.Prefill, templateName: String, context: AutomationTemplate.Context) -> Automation? {
         guard let trigger = buildTrigger(from: prefill.trigger),
               let action = buildAction(from: prefill.action, context: context) else {
@@ -1600,7 +1591,7 @@ struct DeviceDetailView: View {
             metadata: metadata
         )
     }
-    
+
     private func buildTrigger(from prefillTrigger: AutomationTemplate.Prefill.Trigger) -> AutomationTrigger? {
         switch prefillTrigger {
         case .time(let hour, let minute, let weekdays):
@@ -1619,7 +1610,7 @@ struct DeviceDetailView: View {
             return .sunset(trigger)
         }
     }
-    
+
     private func buildAction(from prefillAction: AutomationTemplate.Prefill.Action, context: AutomationTemplate.Context) -> AutomationAction? {
         switch prefillAction {
         case .gradient(let gradient, let brightness, let fadeDuration):
@@ -1648,13 +1639,13 @@ struct DeviceDetailView: View {
             )
         }
     }
-    
+
     private func toggleAutomationEnabled(_ automation: Automation) {
         var updated = automation
         updated.enabled.toggle()
         automationStore.update(updated)
     }
-    
+
     private func toggleAutomationShortcut(_ automation: Automation, pinned: Bool) {
         var updated = automation
         var metadata = automation.metadata
@@ -1678,27 +1669,57 @@ struct DeviceDetailView: View {
         case .gradient(let payload):
             return payload.powerOn ? "Color · \(automation.summary)" : "Power · Off"
         case .transition:
-            return "Transition · \(automation.summary)"
+            let summary = automation.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            if summary.lowercased().hasPrefix("transition") {
+                return summary
+            }
+            return "Transition · \(summary)"
         case .effect(let payload):
             return "Animation · \(payload.effectName ?? "Effect \(payload.effectId)")"
         case .directState:
             return "Custom state"
         }
     }
-    
+
     private func startAutomationCreation(using template: AutomationTemplate? = nil) {
         guard !isAutomationMutationLocked else { return }
+        selectedTab = "Automations"
         pendingAutomationTemplate = template
         editingAutomation = nil
         automationEditorDefaultName = template?.name ?? defaultAutomationName
-        showAddAutomation = true
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            showAddAutomation = true
+        }
     }
-    
+
     private func editAutomation(_ automation: Automation) {
+        guard !isAutomationMutationLocked else { return }
+        selectedTab = "Automations"
         editingAutomation = automation
         automationEditorDefaultName = automation.name
         pendingAutomationTemplate = nil
-        showAddAutomation = true
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            showAddAutomation = true
+        }
+    }
+
+    private func closeAutomationEditor() {
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            showAddAutomation = false
+        }
+        pendingAutomationTemplate = nil
+        editingAutomation = nil
+        automationEditorDefaultName = nil
+    }
+
+    private var automationEditorIdentity: String {
+        if let editingAutomation {
+            return "edit-\(editingAutomation.id.uuidString)"
+        }
+        if let pendingAutomationTemplate {
+            return "template-\(pendingAutomationTemplate.id)-\(activeDevice.id)"
+        }
+        return "create-\(activeDevice.id)"
     }
 
     private var syncTargetDevices: [WLEDDevice] {
@@ -1717,7 +1738,7 @@ struct DeviceDetailView: View {
         }
         return "Live-syncing to \(syncTargetCount) device\(syncTargetCount == 1 ? "" : "s")"
     }
-    
+
     private var syncTabContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -1749,7 +1770,11 @@ struct DeviceDetailView: View {
                             VStack(alignment: .leading, spacing: 7) {
                                 HStack(spacing: 6) {
                                     Circle()
-                                        .fill(target.isOnline ? Color.green : Color.orange)
+                                        .fill(target.isOnline ? Color.white : Color.clear)
+                                        .overlay(
+                                            Circle()
+                                                .stroke((isSelected ? Color.black : Color.white).opacity(0.82), lineWidth: 1)
+                                        )
                                         .frame(width: 6, height: 6)
                                     Text(target.name)
                                         .font(AppTypography.style(.caption, weight: .semibold))
@@ -1918,7 +1943,7 @@ struct DeviceDetailView: View {
             }
         }
     }
-    
+
     // MARK: - Preset Rename Handling
 
     private func startPresetRename(_ context: PresetRenameContext) {
@@ -1928,14 +1953,14 @@ struct DeviceDetailView: View {
             isPresetRenameFieldFocused = true
         }
     }
-    
+
     private func applyPresetRename(_ newName: String, for context: PresetRenameContext) {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             cancelPresetRename()
             return
         }
-        
+
         let store = PresetsStore.shared
         var presetRenameTargets: [(device: WLEDDevice, id: Int)] = []
         var playlistRenameTargets: [(device: WLEDDevice, id: Int)] = []
@@ -1943,7 +1968,7 @@ struct DeviceDetailView: View {
             viewModel.devices.first(where: { $0.id == deviceId })
                 ?? (activeDevice.id == deviceId ? activeDevice : nil)
         }
-        
+
         switch context {
         case .color(let preset):
             guard preset.name != trimmed else { break }
@@ -1984,7 +2009,7 @@ struct DeviceDetailView: View {
             guard name != trimmed else { break }
             playlistRenameTargets.append((targetDevice, playlistId))
         }
-        
+
         cancelPresetRename()
         guard !presetRenameTargets.isEmpty || !playlistRenameTargets.isEmpty else { return }
         Task {
@@ -1996,13 +2021,13 @@ struct DeviceDetailView: View {
             }
         }
     }
-    
+
     private func cancelPresetRename() {
         isPresetRenameFieldFocused = false
         presetRenameContext = nil
         presetRenameEditedName = ""
     }
-    
+
     private func resetAnimationModesIfNeeded() {
         guard !didResetAnimationModes else { return }
         didResetAnimationModes = true
@@ -2016,14 +2041,14 @@ struct DeviceDetailView: View {
         print("colors_tab.on_appear ui_only")
         #endif
     }
-    
+
     // MARK: - Colors Tab Helper Views
-    
+
     private var gradientAEditor: some View {
         UnifiedColorPane(device: activeDevice, dismissColorPicker: $dismissColorPicker, segmentId: effectiveSegmentId)
             .environmentObject(viewModel)
     }
-    
+
     private var effectsSection: some View {
         EffectsPane(
             device: activeDevice,
@@ -2040,7 +2065,7 @@ struct DeviceDetailView: View {
         )
         .environmentObject(viewModel)
     }
-    
+
     private var transitionSection: some View {
         TransitionPane(
             device: activeDevice,
@@ -2057,7 +2082,7 @@ struct DeviceDetailView: View {
         )
         .environmentObject(viewModel)
     }
-    
+
 }
 
 private struct DeviceDetailPresentationModifier: ViewModifier {
@@ -2124,9 +2149,10 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
         return AutomationStore.shared.add(automation)
     }
 
-    func update(_ automation: Automation, syncOnDevice: Bool = true) {
-        guard !isRunningInPreview else { return }
-        AutomationStore.shared.update(automation, syncOnDevice: syncOnDevice)
+    @discardableResult
+    func update(_ automation: Automation, syncOnDevice: Bool = true) -> Bool {
+        guard !isRunningInPreview else { return false }
+        return AutomationStore.shared.update(automation, syncOnDevice: syncOnDevice)
     }
 
     func delete(id: UUID) {
@@ -2154,6 +2180,10 @@ private final class DeviceDetailAutomationStoreBridge: ObservableObject {
 
     var hasAnyDeletionInProgress: Bool {
         AutomationStore.shared.hasAnyDeletionInProgress
+    }
+
+    func hasOnDeviceSyncInProgress(for deviceIds: Set<String>) -> Bool {
+        AutomationStore.shared.hasOnDeviceSyncInProgress(for: deviceIds)
     }
 }
 
@@ -2233,29 +2263,23 @@ private struct ShortcutAutomationChip: View {
     private var chipStroke: Color {
         Color.white.opacity(colorScheme == .dark ? 0.18 : 0.24)
     }
-    
+
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(automation.name)
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                    Spacer(minLength: 6)
-                    if isNext {
-                        nextBadge
-                            .allowsHitTesting(false)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(automation.name)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
 
                 Text(actionDescription)
                     .font(AppTypography.style(.caption2, weight: .medium))
                     .foregroundColor(.white.opacity(0.72))
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
+                    .padding(.trailing, 40)
             }
-            .frame(width: 168, alignment: .leading)
+            .frame(width: 168, height: 38, alignment: .topLeading)
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(
@@ -2266,6 +2290,14 @@ private struct ShortcutAutomationChip: View {
                             .stroke(chipStroke, lineWidth: 1)
                     )
             )
+            .overlay(alignment: .bottomTrailing) {
+                if isNext {
+                    nextBadge
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 8)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
@@ -2279,11 +2311,11 @@ private struct ShortcutAutomationChip: View {
 
     private var nextBadge: some View {
         Text("Next")
-            .font(AppTypography.style(.caption2, weight: .semibold))
+            .font(AppTypography.style(.caption2, weight: .medium))
             .foregroundColor(.white.opacity(0.94))
             .lineLimit(1)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
             .background(
                 Capsule(style: .continuous)
                     .fill(Color.white.opacity(0.14))

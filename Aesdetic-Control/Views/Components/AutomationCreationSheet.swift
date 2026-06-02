@@ -3,6 +3,7 @@ import SwiftUI
 struct AutomationCreationSheet: View {
     @Binding var builderDevice: WLEDDevice?
     @Binding var pendingTemplate: AutomationTemplate?
+    @Binding var editingAutomation: Automation?
     @Binding var isPresented: Bool
     
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
@@ -20,6 +21,32 @@ struct AutomationCreationSheet: View {
                     .buttonStyle(.borderedProminent)
             }
             .padding()
+        } else if let editing = editingAutomation {
+            let targetIds = Set(editing.targets.deviceIds)
+            let device = builderDevice
+                ?? deviceViewModel.devices.first(where: { targetIds.contains($0.id) })
+                ?? deviceViewModel.devices.first!
+            let scenes = scenesStore.scenes.filter { targetIds.contains($0.deviceId) || $0.deviceId == device.id }
+            let effects = deviceViewModel.colorSafeEffectOptions(for: device)
+            AddAutomationDialog(
+                device: device,
+                scenes: scenes,
+                effectOptions: effects,
+                availableDevices: deviceViewModel.devices,
+                viewModel: deviceViewModel,
+                defaultName: editing.name,
+                editingAutomation: editing
+            ) { automation in
+                AutomationStore.shared.update(automation)
+            }
+            .id("edit-\(editing.id.uuidString)-\(device.id)")
+            .onDisappear {
+                if !isPresented {
+                    builderDevice = nil
+                    pendingTemplate = nil
+                    editingAutomation = nil
+                }
+            }
         } else if let device = builderDevice {
             let scenes = scenesStore.scenes.filter { $0.deviceId == device.id }
             let effects = deviceViewModel.colorSafeEffectOptions(for: device)
@@ -40,10 +67,12 @@ struct AutomationCreationSheet: View {
             ) { automation in
                 AutomationStore.shared.add(automation)
             }
+            .id("create-\(device.id)-\(pendingTemplate?.id ?? "custom")")
             .onDisappear {
                 if !isPresented {
                     builderDevice = nil
                     pendingTemplate = nil
+                    editingAutomation = nil
                 }
             }
         } else {

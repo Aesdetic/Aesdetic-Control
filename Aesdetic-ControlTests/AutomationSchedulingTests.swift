@@ -47,4 +47,132 @@ struct AutomationSchedulingTests {
         let trigger = try JSONDecoder().decode(SolarTrigger.self, from: Data(legacyJSON.utf8))
         #expect(trigger.weekdays == WeekdayMask.allDaysSunFirst)
     }
+
+    @MainActor
+    @Test("On-device schedule preview warns when a timed automation overlaps another automation")
+    func testOnDeviceScheduleOverlapWarning() async {
+        let store = AutomationStore.shared
+        let original = store.automations
+        defer { store.automations = original }
+
+        let deviceId = "overlap-warning-device-\(UUID().uuidString)"
+        let calendar = Calendar.current
+        let now = Date()
+        let firstTime = calendar.date(byAdding: .minute, value: 1, to: now) ?? now.addingTimeInterval(60)
+        let secondTime = calendar.date(byAdding: .minute, value: 3, to: now) ?? now.addingTimeInterval(180)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+
+        let firstAutomation = Automation(
+            name: "Morning Fade",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: formatter.string(from: firstTime),
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            action: .transition(
+                TransitionActionPayload(
+                    startGradient: LEDGradient(stops: [
+                        GradientStop(position: 0.0, hexColor: "FFA000"),
+                        GradientStop(position: 1.0, hexColor: "FFFFFF")
+                    ]),
+                    startBrightness: 128,
+                    endGradient: LEDGradient(stops: [
+                        GradientStop(position: 0.0, hexColor: "FFFFFF"),
+                        GradientStop(position: 1.0, hexColor: "59A4FF")
+                    ]),
+                    endBrightness: 128,
+                    durationSeconds: 600
+                )
+            ),
+            targets: AutomationTargets(deviceIds: [deviceId]),
+            metadata: AutomationMetadata(runOnDevice: true)
+        )
+
+        let secondAutomation = Automation(
+            name: "Sleep Off",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: formatter.string(from: secondTime),
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            action: .preset(PresetActionPayload(presetId: 1, paletteName: nil, durationSeconds: nil)),
+            targets: AutomationTargets(deviceIds: [deviceId]),
+            metadata: AutomationMetadata(runOnDevice: true)
+        )
+
+        store.automations = [firstAutomation, secondAutomation]
+
+        let warning = await store.previewOnDeviceScheduleOverlapWarning(for: firstAutomation)
+        #expect(warning?.contains("Sleep Off") == true)
+        #expect(warning?.contains("interrupt") == true)
+    }
+
+    @MainActor
+    @Test("On-device schedule preview warns when a new automation interrupts an already-running transition")
+    func testOnDeviceScheduleOverlapWarningIncludesRunningWindow() async {
+        let store = AutomationStore.shared
+        let original = store.automations
+        defer { store.automations = original }
+
+        let deviceId = "running-overlap-warning-device-\(UUID().uuidString)"
+        let calendar = Calendar.current
+        let now = Date()
+        let runningStart = calendar.date(byAdding: .minute, value: -2, to: now) ?? now.addingTimeInterval(-120)
+        let interruptTime = calendar.date(byAdding: .minute, value: 2, to: now) ?? now.addingTimeInterval(120)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+
+        let runningTransition = Automation(
+            name: "Running Fade",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: formatter.string(from: runningStart),
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            action: .transition(
+                TransitionActionPayload(
+                    startGradient: LEDGradient(stops: [
+                        GradientStop(position: 0.0, hexColor: "FFA000"),
+                        GradientStop(position: 1.0, hexColor: "FFFFFF")
+                    ]),
+                    startBrightness: 128,
+                    endGradient: LEDGradient(stops: [
+                        GradientStop(position: 0.0, hexColor: "FFFFFF"),
+                        GradientStop(position: 1.0, hexColor: "59A4FF")
+                    ]),
+                    endBrightness: 128,
+                    durationSeconds: 600
+                )
+            ),
+            targets: AutomationTargets(deviceIds: [deviceId]),
+            metadata: AutomationMetadata(runOnDevice: true)
+        )
+
+        let interruptingAutomation = Automation(
+            name: "Device Off",
+            trigger: .specificTime(
+                TimeTrigger(
+                    time: formatter.string(from: interruptTime),
+                    weekdays: WeekdayMask.allDaysSunFirst,
+                    timezoneIdentifier: TimeZone.current.identifier
+                )
+            ),
+            action: .preset(PresetActionPayload(presetId: 1, paletteName: nil, durationSeconds: nil)),
+            targets: AutomationTargets(deviceIds: [deviceId]),
+            metadata: AutomationMetadata(runOnDevice: true)
+        )
+
+        store.automations = [runningTransition]
+
+        let warning = await store.previewOnDeviceScheduleOverlapWarning(for: interruptingAutomation)
+        #expect(warning?.contains("Running Fade") == true)
+        #expect(warning?.contains("interrupt") == true)
+    }
 }

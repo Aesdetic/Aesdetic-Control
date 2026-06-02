@@ -244,6 +244,28 @@ class WLEDConnectionMonitor: ObservableObject {
             await initiateReconnection(device)
         }
     }
+
+    func markDeviceUnavailableWithoutRetry(_ device: WLEDDevice, reason: String) {
+        recordConnectionAttempt(deviceId: device.id, success: false, error: nil)
+        consecutiveFailures[device.id] = max(1, consecutiveFailures[device.id, default: 0])
+
+        let wasOnline = deviceHealthStatus[device.id] != false
+        deviceHealthStatus[device.id] = false
+        reconnectionStatus[device.id] = reason
+        postConnectRecoveryTasks[device.id]?.cancel()
+        postConnectRecoveryTasks.removeValue(forKey: device.id)
+        hasCompletedPostConnectRecovery.remove(device.id)
+
+        if wasOnline {
+            logger.info(
+                "Device marked unavailable without retry: \(device.name, privacy: .public) (\(device.id, privacy: .public)) reason=\(reason, privacy: .public)"
+            )
+        }
+
+        Task {
+            await updateDeviceInCoreData(device, isOnline: false, response: nil)
+        }
+    }
     
     /// Perform immediate health checks for all registered devices
     func performImmediateHealthChecks() async {
@@ -692,7 +714,9 @@ class WLEDConnectionMonitor: ObservableObject {
     private func updateDeviceInCoreData(_ device: WLEDDevice, isOnline: Bool, response: WLEDResponse?) async {
         var updatedDevice = device
         updatedDevice.isOnline = isOnline
-        updatedDevice.lastSeen = Date()
+        if isOnline {
+            updatedDevice.lastSeen = Date()
+        }
         
         if let response = response {
             updatedDevice.brightness = response.state.brightness

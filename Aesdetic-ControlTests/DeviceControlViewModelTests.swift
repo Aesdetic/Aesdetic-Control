@@ -451,7 +451,8 @@ struct DeviceControlViewModelTests {
         #expect(plan.durations.count == plan.steps)
         #expect(plan.transitions.count == plan.steps)
         #expect(plan.durations.allSatisfy { $0 > 0 })
-        #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+        #expect(plan.transitions.first == 0)
+        #expect(zip(plan.durations.dropFirst(), plan.transitions.dropFirst()).allSatisfy { duration, transition in
             transition == duration
         })
     }
@@ -477,13 +478,14 @@ struct DeviceControlViewModelTests {
         #expect(plan.padDeciseconds == 3)
         #expect(plan.timingModeLabel.contains("boundary-compensated"))
         #expect(plan.durations.count == plan.transitions.count)
-        #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+        #expect(plan.transitions.first == 0)
+        #expect(zip(plan.durations.dropFirst(), plan.transitions.dropFirst()).allSatisfy { duration, transition in
             if duration >= 4 {
                 return transition == duration - 3
             }
             return transition >= 1 && transition <= duration
         })
-        #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+        #expect(zip(plan.durations.dropFirst(), plan.transitions.dropFirst()).allSatisfy { duration, transition in
             duration == 0 || transition < duration
         })
     }
@@ -511,7 +513,8 @@ struct DeviceControlViewModelTests {
                 durationSeconds: seconds,
                 generatedTimingMode: .boundaryCompensated(padDeciseconds: 3)
             )
-            #expect(zip(plan.durations, plan.transitions).allSatisfy { duration, transition in
+            #expect(plan.transitions.first == 0)
+            #expect(zip(plan.durations.dropFirst(), plan.transitions.dropFirst()).allSatisfy { duration, transition in
                 guard duration > 0 else { return transition == 0 }
                 return transition >= 1 && transition <= duration
             })
@@ -531,8 +534,8 @@ struct DeviceControlViewModelTests {
         #expect(allocation.stepPresetIds == [11, 12, 13])
     }
 
-    @Test("persistent transition allocation excludes temporary reserved band")
-    func testPersistentTransitionAllocationExcludesTempReservedBand() {
+    @Test("persistent transition allocation uses full app-managed range")
+    func testPersistentTransitionAllocationUsesAppManagedRange() {
         let viewModel = DeviceControlViewModel.shared
         let allocation = viewModel.debugPersistentTransitionIdAllocationForTests(
             usedIds: [],
@@ -540,16 +543,14 @@ struct DeviceControlViewModelTests {
         )
 
         if let playlistId = allocation.playlistId {
-            #expect((10...169).contains(playlistId))
-            #expect(!(170...250).contains(playlistId))
+            #expect((10...250).contains(playlistId))
         } else {
             Issue.record("Expected playlist ID allocation in persistent range")
         }
         if let stepPresetIds = allocation.stepPresetIds {
             #expect(stepPresetIds.count == 5)
             #expect(stepPresetIds == stepPresetIds.sorted())
-            #expect(stepPresetIds.allSatisfy { (10...169).contains($0) })
-            #expect(stepPresetIds.allSatisfy { !(170...250).contains($0) })
+            #expect(stepPresetIds.allSatisfy { (10...250).contains($0) })
         } else {
             Issue.record("Expected step preset ID allocation in persistent range")
         }
@@ -558,8 +559,8 @@ struct DeviceControlViewModelTests {
     @Test("persistent transition allocation fails when no contiguous block exists")
     func testPersistentTransitionAllocationRequiresContiguousBlock() {
         let viewModel = DeviceControlViewModel.shared
-        // Leave odd IDs free only; no contiguous run of length 2 in 10...169.
-        let used = Set((1...169).filter { $0 % 2 == 0 })
+        // Leave odd IDs free only; no contiguous run of length 2 in the app-managed range.
+        let used = Set((1...250).filter { $0 % 2 == 0 })
         let allocation = viewModel.debugPersistentTransitionIdAllocationForTests(
             usedIds: used,
             stepCount: 2

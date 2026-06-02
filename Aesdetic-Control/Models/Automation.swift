@@ -356,6 +356,25 @@ extension AutomationAction {
             return .preset
         }
     }
+
+    var durationSeconds: Double {
+        switch self {
+        case .scene:
+            return 0
+        case .preset(let payload):
+            return max(0, payload.durationSeconds ?? 0)
+        case .playlist:
+            return 0
+        case .gradient(let payload):
+            return max(0, payload.durationSeconds)
+        case .transition(let payload):
+            return max(0, payload.durationSeconds)
+        case .effect:
+            return 0
+        case .directState:
+            return 0
+        }
+    }
 }
 
 struct SceneActionPayload: Codable, Equatable {

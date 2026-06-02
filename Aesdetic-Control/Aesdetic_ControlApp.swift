@@ -10,72 +10,82 @@ import Network
 
 @main
 struct Aesdetic_ControlApp: App {
+    var body: some SwiftUI.Scene {
+        WindowGroup {
+            if AppRuntimeEnvironment.isRunningUnitTests {
+                Color.clear
+            } else {
+                AesdeticRuntimeRoot()
+            }
+        }
+    }
+}
+
+private struct AesdeticRuntimeRoot: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var deviceControlViewModel = DeviceControlViewModel.shared
     @StateObject private var automationViewModel = AutomationViewModel.shared
     @StateObject private var dashboardViewModel = DashboardViewModel.shared
     @StateObject private var wellnessViewModel = WellnessViewModel()
-    
-    let coreDataManager = CoreDataManager.shared
-    
-    var body: some SwiftUI.Scene {
-        WindowGroup {
-            RootContainer()
-                .environmentObject(deviceControlViewModel)
-                .environmentObject(automationViewModel)
-                .environmentObject(dashboardViewModel)
-                .environmentObject(wellnessViewModel)
-                .environment(\.managedObjectContext, coreDataManager.viewContext)
-                .onAppear {
-                    // Configure transparent backgrounds immediately
-                    configureAppearances()
-                    
-                    // CRITICAL: Warm up the sheet presentation system
-                    // This forces iOS to initialize presentation controllers
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                        #if DEBUG
-                        print("✅ Warmed up presentation system")
-                        #endif
+
+    private let coreDataManager = CoreDataManager.shared
+
+    var body: some View {
+        RootContainer()
+            .environmentObject(deviceControlViewModel)
+            .environmentObject(automationViewModel)
+            .environmentObject(dashboardViewModel)
+            .environmentObject(wellnessViewModel)
+            .environment(\.managedObjectContext, coreDataManager.viewContext)
+            .onAppear {
+                // Configure transparent backgrounds immediately
+                configureAppearances()
+
+                // CRITICAL: Warm up the sheet presentation system
+                // This forces iOS to initialize presentation controllers
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                    #if DEBUG
+                    print("✅ Warmed up presentation system")
+                    #endif
+                }
+
+                // Prompt Local Network access immediately
+                LocalNetworkPrompter.shared.trigger()
+
+                // Listen for widget intents
+                setupWidgetNotificationListeners()
+            }
+            .task {
+                // Warm caches shortly after launch to speed up first detail open after reinstall
+                Task.detached { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if let first = deviceControlViewModel.devices.first {
+                        await deviceControlViewModel.prefetchDeviceDetailData(for: first)
                     }
-                    
-                    // Prompt Local Network access immediately
+                }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                switch newPhase {
+                case .active:
+                    // When app becomes active, ensure permission prompt (if still pending)
                     LocalNetworkPrompter.shared.trigger()
-                    
-                    // Listen for widget intents
-                    setupWidgetNotificationListeners()
-                }
-                .task {
-                    // Warm caches shortly after launch to speed up first detail open after reinstall
-                    Task.detached { @MainActor in
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        if let first = deviceControlViewModel.devices.first {
-                            await deviceControlViewModel.prefetchDeviceDetailData(for: first)
-                        }
+
+                    // Immediately check device status when returning to app
+                    Task { @MainActor in
+                        await deviceControlViewModel.checkDeviceStatusOnAppActive()
+                        deviceControlViewModel.resumeRealTimeConnectionsIfNeeded()
                     }
+                case .background:
+                    deviceControlViewModel.pauseRealTimeConnectionsIfNeeded()
+                case .inactive:
+                    break
+                @unknown default:
+                    break
                 }
-                .onChange(of: scenePhase) { _, newPhase in
-                    switch newPhase {
-                    case .active:
-                        // When app becomes active, ensure permission prompt (if still pending)
-                        LocalNetworkPrompter.shared.trigger()
-                        
-                        // Immediately check device status when returning to app
-                        Task { @MainActor in
-                            await deviceControlViewModel.checkDeviceStatusOnAppActive()
-                            deviceControlViewModel.resumeRealTimeConnectionsIfNeeded()
-                        }
-                    case .background:
-                        deviceControlViewModel.pauseRealTimeConnectionsIfNeeded()
-                    case .inactive:
-                        break
-                    @unknown default:
-                        break
-                    }
-                }
-        }
+            }
     }
-    
+
     // MARK: - Appearance Configuration
     private func configureAppearances() {
         // Keep tab bar visuals neutral; actual tab bar is hidden in SwiftUI.

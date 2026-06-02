@@ -708,19 +708,21 @@ final class DeviceCleanupManager: ObservableObject {
             guard includeDeadLetter || item.deadLetteredAt == nil else { return false }
             guard deviceId == nil || item.deviceId == deviceId else { return false }
             guard source == nil || item.source == source else { return false }
-            return !item.ids.isEmpty
+            return hasPendingDeleteContent(item)
         }
     }
 
     func hasPendingPresetStoreDeletes(
+        source: PendingDeviceDelete.DeleteSource? = nil,
         deviceId: String? = nil,
         includeDeadLetter: Bool = false
     ) -> Bool {
         pendingDeletes.contains { item in
             guard includeDeadLetter || item.deadLetteredAt == nil else { return false }
             guard deviceId == nil || item.deviceId == deviceId else { return false }
+            guard source == nil || item.source == source else { return false }
             guard item.type == .preset || item.type == .playlist || item.type == .presetStore else { return false }
-            return !item.ids.isEmpty
+            return hasPendingDeleteContent(item)
         }
     }
 
@@ -740,10 +742,16 @@ final class DeviceCleanupManager: ObservableObject {
             pendingDeletes.compactMap { item -> String? in
                 guard includeDeadLetter || item.deadLetteredAt == nil else { return nil }
                 guard source == nil || item.source == source else { return nil }
-                guard !item.ids.isEmpty else { return nil }
+                guard hasPendingDeleteContent(item) else { return nil }
                 return item.deviceId
             }
         )
+    }
+
+    private func hasPendingDeleteContent(_ item: PendingDeviceDelete) -> Bool {
+        if !item.ids.isEmpty { return true }
+        guard item.type == .presetStore else { return false }
+        return !(item.playlistIds ?? []).isEmpty || !(item.presetIds ?? []).isEmpty
     }
 
     /// Remove specific IDs from active queue entries.

@@ -15,6 +15,7 @@ struct AutomationEffectEditor: View {
     @Binding var intensity: Int
     @Binding var gradient: LEDGradient
     @Binding var selectedEffectPresetId: UUID?
+    let isInline: Bool
     
     // Preview state
     @State private var previewEnabled: Bool = false
@@ -67,8 +68,10 @@ struct AutomationEffectEditor: View {
     }
     
     var body: some View {
-        VStack(spacing: 16) {
-            headerRow
+        VStack(spacing: isInline ? 14 : 16) {
+            if !isInline {
+                headerRow
+            }
             effectPresetSelector
             effectPicker
             gradientSection
@@ -78,15 +81,17 @@ struct AutomationEffectEditor: View {
             previewSection
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
+        .padding(.vertical, isInline ? 0 : 16)
+        .background {
+            if !isInline {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            }
+        }
         .onChange(of: effectId) { _, newId in
             // Update gradient for new slot count when effect changes
             updateGradientForSlotCount()
@@ -120,7 +125,7 @@ struct AutomationEffectEditor: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     @ViewBuilder
@@ -140,7 +145,7 @@ struct AutomationEffectEditor: View {
                     .padding(.vertical, 4)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     
@@ -158,6 +163,7 @@ struct AutomationEffectEditor: View {
                     interpolation: preset.gradientInterpolation ?? .linear
                 )
             }
+            selectedEffectPresetId = preset.id
             
             if previewEnabled {
                 Task {
@@ -209,7 +215,7 @@ struct AutomationEffectEditor: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     @ViewBuilder
@@ -266,7 +272,7 @@ struct AutomationEffectEditor: View {
                     colorWheelView(selectedId: selectedId)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         } else {
             // Single color mode
             VStack(alignment: .leading, spacing: 8) {
@@ -293,7 +299,7 @@ struct AutomationEffectEditor: View {
                     colorWheelView(selectedId: selectedId)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     
@@ -416,7 +422,7 @@ struct AutomationEffectEditor: View {
                     }
                 }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     @ViewBuilder
@@ -453,7 +459,7 @@ struct AutomationEffectEditor: View {
                 )
                 .tint(.white)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     
@@ -491,27 +497,13 @@ struct AutomationEffectEditor: View {
                 )
                 .tint(.white)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     
     @ViewBuilder
     private var previewSection: some View {
-        if previewEnabled && isApplyingEffect {
-            Button(action: stopPreview) {
-                Text("Stop Preview")
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.12))
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-        }
+        EmptyView()
     }
     
     // MARK: - Helper Functions

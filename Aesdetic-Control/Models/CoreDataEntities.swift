@@ -429,7 +429,7 @@ extension WellnessEntryEntity {
             sleepTime: sleepTime,
             wokeOnTime: wokeOnTime,
             sunriseLampUsed: sunriseLampUsed,
-            sunriseHelped: SunriseHelped(rawValue: sunriseHelped) ?? .yes,
+            sunriseHelped: SunriseHelped(rawValue: sunriseHelped) ?? .unsure,
             identityIntentionText: identityIntentionText,
             intentionText: intentionText,
             smallestNextStepText: smallestNextStepText,

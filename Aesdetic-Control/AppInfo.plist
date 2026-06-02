@@ -27,6 +27,8 @@
 	<array>
 		<string>_wled._tcp</string>
 	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Aesdetic Control can add and update time-blocked wellness tasks in your calendar.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Aesdetic Control can add time-blocked wellness tasks to your calendar.</string>
 	<key>NSHealthShareUsageDescription</key>
@@ -35,6 +37,8 @@
 	<string>Aesdetic Control needs local network access to discover and control WLED devices on your network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your approximate location (city-level) is checked once to calculate sunrise and sunset times for automations.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Aesdetic Control can create and update wellness task reminders.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Aesdetic Control can create reminders for your wellness tasks.</string>
 	<key>UILaunchStoryboardName</key>

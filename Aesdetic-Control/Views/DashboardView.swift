@@ -605,7 +605,7 @@ struct ScenesAutomationsSection: View {
     @StateObject private var usageStore = DashboardShortcutUsageStore.shared
     @StateObject private var favoritesStore = SceneFavoritesStore.shared
     @StateObject private var presetFavoritesStore = PresetFavoritesStore.shared
-    private let pillRowHeight: CGFloat = 38
+    private let sceneShortcutRowHeight: CGFloat = 64
     private let sectionHorizontalPadding: CGFloat = 20
     private var headingTextColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.94) : DashboardPalette.primaryText
@@ -627,12 +627,11 @@ struct ScenesAutomationsSection: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
                     ForEach(displayedSceneShortcuts) { item in
-                        AppGlassPillButton(
+                        DashboardAutomationShortcutChip(
                             title: item.title,
-                            isSelected: false,
-                            size: .compact,
-                            useControlGlassRecipe: true,
-                            useAppleSelectedStyle: true,
+                            description: sceneShortcutDescription(for: item),
+                            isEnabled: true,
+                            isNext: false,
                             action: {
                                 usageStore.increment(key: item.usageKey)
                                 handleSceneShortcut(item)
@@ -647,55 +646,12 @@ struct ScenesAutomationsSection: View {
                 }
                 .padding(.horizontal, sectionHorizontalPadding)
             }
-            .frame(height: pillRowHeight)
+            .frame(height: sceneShortcutRowHeight)
             .scrollIndicators(.hidden)
             .scrollContentBackground(.hidden)
             .background(Color.clear)
             .scrollClipDisabled()
             
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Automations")
-                    .font(DashboardTypography.sectionTitle)
-                    .foregroundColor(headingTextColor)
-
-                Spacer()
-
-                AddAutomationButton(compact: true)
-            }
-            .padding(.horizontal, sectionHorizontalPadding)
-            
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 8) {
-                    ForEach(displayedAutomations) { automation in
-                        AppGlassPillButton(
-                            title: automation.name,
-                            isSelected: automation.enabled,
-                            size: .compact,
-                            useControlGlassRecipe: true,
-                            useAppleSelectedStyle: true,
-                            action: {
-                                usageStore.increment(key: "automation:\(automation.id.uuidString)")
-                                onToggle(automation)
-                            }
-                        )
-                        .contextMenu {
-                            Button((automation.metadata.pinnedToShortcuts ?? false) ? "Unfavorite" : "Favorite") {
-                                var updated = automation
-                                var metadata = updated.metadata
-                                metadata.pinnedToShortcuts = !(automation.metadata.pinnedToShortcuts ?? false)
-                                updated.metadata = metadata
-                                AutomationStore.shared.update(updated, syncOnDevice: false)
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, sectionHorizontalPadding)
-            }
-            .frame(height: pillRowHeight)
-            .scrollIndicators(.hidden)
-            .scrollContentBackground(.hidden)
-            .background(Color.clear)
-            .scrollClipDisabled()
         }
         .background(Color.clear)
     }
@@ -734,21 +690,14 @@ struct ScenesAutomationsSection: View {
         }
         return favorites.isEmpty ? Array(sorted.prefix(3)) : sorted
     }
-    
-    private var displayedAutomations: [Automation] {
-        let favorites = automations.filter { $0.metadata.pinnedToShortcuts ?? false }
-        let base = favorites.isEmpty ? automations : favorites
-        let sorted = base.sorted { lhs, rhs in
-            let lhsCount = usageStore.count(for: "automation:\(lhs.id.uuidString)")
-            let rhsCount = usageStore.count(for: "automation:\(rhs.id.uuidString)")
-            if lhsCount != rhsCount {
-                return lhsCount > rhsCount
-            }
-            let lhsDate = lhs.lastTriggered ?? lhs.updatedAt
-            let rhsDate = rhs.lastTriggered ?? rhs.updatedAt
-            return lhsDate > rhsDate
+
+    private func sceneShortcutDescription(for item: SceneShortcutItem) -> String {
+        switch item.kind {
+        case .sceneGroup:
+            return "Scene"
+        case .preset:
+            return "Color Preset"
         }
-        return favorites.isEmpty ? Array(sorted.prefix(3)) : sorted
     }
     
     private func applySceneGroup(_ scene: SceneGroup) {
@@ -826,6 +775,91 @@ struct ScenesAutomationsSection: View {
         let usageKey: String
         let kind: Kind
         let isFavorite: Bool
+    }
+}
+
+private struct DashboardAutomationShortcutChip: View {
+    let title: String
+    let description: String
+    let isEnabled: Bool
+    let isNext: Bool
+    let action: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var chipFill: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(isEnabled ? 0.12 : 0.08)
+            : Color.white.opacity(isEnabled ? 0.22 : 0.16)
+    }
+
+    private var chipStroke: Color {
+        Color.white.opacity(colorScheme == .dark ? 0.18 : 0.24)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Text(description)
+                    .font(AppTypography.style(.caption2, weight: .medium))
+                    .foregroundColor(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .padding(.trailing, isNext ? 40 : 0)
+            }
+            .frame(width: 168, height: 38, alignment: .topLeading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(chipBackground)
+            .overlay(alignment: .bottomTrailing) {
+                if isNext {
+                    nextBadge
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 8)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var chipBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        if isEnabled {
+            shape
+                .fill(Color.clear)
+                .appLiquidGlass(role: .card, cornerRadius: 16)
+        } else {
+            shape
+                .fill(chipFill)
+                .overlay(
+                    shape
+                        .stroke(chipStroke, lineWidth: 1)
+                )
+        }
+    }
+
+    private var nextBadge: some View {
+        Text("Next")
+            .font(AppTypography.style(.caption2, weight: .medium))
+            .foregroundColor(.white.opacity(0.94))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.14))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+            )
     }
 }
 
@@ -1395,6 +1429,7 @@ struct AddAutomationButton: View {
     @State private var showAddAutomation = false
     @State private var builderDevice: WLEDDevice?
     @State private var pendingTemplate: AutomationTemplate?
+    @State private var editingAutomation: Automation?
     @ObservedObject private var automationStore = AutomationStore.shared
     var compact: Bool = false
     @Environment(\.colorScheme) private var colorScheme
@@ -1422,10 +1457,12 @@ struct AddAutomationButton: View {
         .sheet(isPresented: $showAddAutomation, onDismiss: {
             builderDevice = nil
             pendingTemplate = nil
+            editingAutomation = nil
         }) {
             AutomationCreationSheet(
                 builderDevice: $builderDevice,
                 pendingTemplate: $pendingTemplate,
+                editingAutomation: $editingAutomation,
                 isPresented: $showAddAutomation
             )
         }

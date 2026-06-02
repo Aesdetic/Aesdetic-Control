@@ -27,6 +27,7 @@ struct UnifiedColorPane: View {
     @State private var stopWhiteLevels: [UUID: Double] = [:]  // Track white level (0-1) for each stop
     @State private var isSavingPreset = false
     @State private var showSaveSuccess = false
+    @State private var saveFeedbackTrigger: Int = 0
     @State private var showSavePresetDialog = false
     @State private var isAdjustingBrightness = false
     @State private var lastBrightnessSet: Date? = nil  // Track when brightness was last set by user
@@ -46,6 +47,10 @@ struct UnifiedColorPane: View {
     
     private var activeDevice: WLEDDevice {
         liveDevice ?? device
+    }
+
+    private var isPresetWriteLocked: Bool {
+        viewModel.presetWriteInProgress.contains(device.id)
     }
     
     init(
@@ -405,6 +410,7 @@ struct UnifiedColorPane: View {
             applyImmediateWorkItem?.cancel()
             activeGradientApplyTask?.cancel()
         }
+        .sensorySuccess(trigger: saveFeedbackTrigger)
         .sheet(isPresented: $showSavePresetDialog) {
             SaveColorPresetDialog(
                 device: activeDevice,
@@ -422,6 +428,7 @@ struct UnifiedColorPane: View {
 
     private func savePresetButton(title: String) -> some View {
         Button(action: {
+            guard viewModel.shouldAllowInteractivePresetSaveTap(for: device.id) else { return }
             if advancedUIEnabled {
                 showSavePresetDialog = true
             } else {
@@ -436,31 +443,32 @@ struct UnifiedColorPane: View {
                         .scaleEffect(0.7)
                         .tint(.white)
                 } else if showSaveSuccess {
-                    Image(systemName: "checkmark.circle")
+                    Image(systemName: "checkmark.circle.fill")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white)
+                        .foregroundColor(.green.opacity(0.95))
                 } else {
                     Image(systemName: "plus.circle")
                         .font(AppTypography.style(.caption))
                 }
-                Text(title)
+                Text(showSaveSuccess ? "Saved" : title)
                     .font(AppTypography.style(.caption, weight: .semibold))
             }
-            .foregroundColor(.white.opacity(0.9))
+            .foregroundColor(showSaveSuccess ? Color.black.opacity(0.82) : .white.opacity(0.9))
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
             .background(
                 Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.12))
+                    .fill(showSaveSuccess ? Color.white.opacity(0.92) : Color.white.opacity(0.12))
                     .overlay(
                         Capsule(style: .continuous)
-                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                            .stroke(showSaveSuccess ? Color.green.opacity(0.95) : Color.white.opacity(0.16), lineWidth: showSaveSuccess ? 1.5 : 1)
                     )
             )
+            .shadow(color: showSaveSuccess ? Color.green.opacity(0.38) : Color.clear, radius: 10, x: 0, y: 4)
         }
         .buttonStyle(.plain)
-        .disabled(isSavingPreset || automationStore.hasAnyDeletionInProgress)
-        .opacity((isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
+        .disabled(isSavingPreset || isPresetWriteLocked || automationStore.hasAnyDeletionInProgress)
+        .opacity((isSavingPreset || isPresetWriteLocked || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
     }
 
     private var perLedToggleSection: some View {
@@ -826,10 +834,17 @@ private extension UnifiedColorPane {
     }
 
     func saveColorPreset(_ presetInput: ColorPreset) async {
-        guard !automationStore.hasAnyDeletionInProgress else { return }
+        guard !automationStore.hasAnyDeletionInProgress,
+              viewModel.shouldAllowInteractivePresetSaveTap(for: device.id) else { return }
         await MainActor.run {
+            viewModel.beginInteractivePresetWrite(for: device.id)
             isSavingPreset = true
             showSaveSuccess = false
+        }
+        defer {
+            Task { @MainActor in
+                viewModel.endInteractivePresetWrite(for: device.id)
+            }
         }
         var preset = presetInput
 
@@ -841,6 +856,9 @@ private extension UnifiedColorPane {
                 preset.wledPresetIds = ids
                 preset.wledPresetId = savedId
                 PresetsStore.shared.addColorPreset(preset)
+                viewModel.markPresetSaveHighlight(.color, id: preset.id, for: device.id)
+                saveFeedbackTrigger += 1
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
                 isSavingPreset = false
                 showSaveSuccess = true
             }

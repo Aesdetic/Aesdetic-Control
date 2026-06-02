@@ -80,6 +80,9 @@ struct ProductSetupFlowView: View {
         let maxTotalCurrent: Int
         let enableABL: Bool
         let initialBrightness: Int
+        let gammaCorrectColor: Bool
+        let gammaCorrectBrightness: Bool
+        let gammaValue: Double
     }
 
     private struct ProductOption: Identifiable {
@@ -107,7 +110,10 @@ struct ProductSetupFlowView: View {
                 autoWhiteMode: 2,
                 maxTotalCurrent: 3800,
                 enableABL: true,
-                initialBrightness: 170
+                initialBrightness: 170,
+                gammaCorrectColor: true,
+                gammaCorrectBrightness: false,
+                gammaValue: 2.8
             )
         )
 
@@ -127,7 +133,10 @@ struct ProductSetupFlowView: View {
                 autoWhiteMode: 2,
                 maxTotalCurrent: 3200,
                 enableABL: true,
-                initialBrightness: 160
+                initialBrightness: 160,
+                gammaCorrectColor: true,
+                gammaCorrectBrightness: false,
+                gammaValue: 2.8
             )
         )
 
@@ -218,6 +227,7 @@ struct ProductSetupFlowView: View {
     @State private var isApplying: Bool = false
     @State private var localError: String?
     @State private var showLocationSettingsAlert: Bool = false
+    @State private var showsAdvancedLEDRecommendation: Bool = false
 
     init(
         device: WLEDDevice,
@@ -577,29 +587,42 @@ struct ProductSetupFlowView: View {
     private var ledPreferencesStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let recommendation = selectedProduct.recommendation {
-                infoPanel(title: "Recommended Configuration") {
+                infoPanel(title: "Recommended Lamp Profile") {
                     VStack(spacing: 10) {
                         infoRow(label: "Product", value: selectedProduct.title)
-                        infoRow(label: "Strip Type", value: "SK6812/WS2814 RGBW")
-                        infoRow(label: "Data GPIO", value: "\(recommendation.gpioPin)")
                         infoRow(label: "Length", value: "\(recommendation.ledCount) LEDs")
-                        infoRow(label: "Skip First LEDs", value: "\(recommendation.skipFirstLEDs)")
-                        infoRow(label: "Current / LED", value: "\(recommendation.maxCurrentPerLED) mA")
-                        infoRow(label: "Auto White", value: autoWhiteDisplayName(recommendation.autoWhiteMode))
-                        infoRow(label: "Max Current", value: "\(recommendation.maxTotalCurrent) mA")
-                        infoRow(label: "Auto Brightness Limiter", value: recommendation.enableABL ? "Enabled" : "Disabled")
-                        infoRow(label: "Initial Brightness", value: "\(recommendation.initialBrightness)")
+                        infoRow(label: "Power Safety", value: recommendation.enableABL ? "On" : "Off")
+                        infoRow(label: "Color Smoothing", value: recommendation.gammaCorrectColor ? "On, \(gammaDisplay(recommendation.gammaValue))" : "Off")
+                        infoRow(label: "White Balance", value: autoWhiteDisplayName(recommendation.autoWhiteMode))
+                        infoRow(label: "Startup Brightness", value: "\(recommendation.initialBrightness)")
+
+                        DisclosureGroup(isExpanded: $showsAdvancedLEDRecommendation) {
+                            VStack(spacing: 10) {
+                                infoRow(label: "Strip Type", value: "SK6812/WS2814 RGBW")
+                                infoRow(label: "Data GPIO", value: "\(recommendation.gpioPin)")
+                                infoRow(label: "Skip First LEDs", value: "\(recommendation.skipFirstLEDs)")
+                                infoRow(label: "Current / LED", value: "\(recommendation.maxCurrentPerLED) mA")
+                                infoRow(label: "Max Current", value: "\(recommendation.maxTotalCurrent) mA")
+                                infoRow(label: "Brightness Gamma", value: recommendation.gammaCorrectBrightness ? "On" : "Off")
+                            }
+                            .padding(.top, 8)
+                        } label: {
+                            Text("Advanced details")
+                                .font(AppTypography.style(.caption, weight: .semibold))
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                        .tint(theme.textSecondary)
                     }
                 }
 
-                Text("These settings are applied using WLED's native `/json/cfg` LED configuration path without touching Wi-Fi keys.")
+                Text("These settings are applied directly to the lamp controller without changing saved Wi-Fi credentials.")
                     .font(AppTypography.style(.caption))
                     .foregroundStyle(theme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 infoPanel(title: "Custom WLED") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Your current LED/controller settings will be preserved. Open native WLED LED settings if you want to tune strip type, count, GPIO, and power manually.")
+                        Text("Your current LED/controller settings will be preserved. Open advanced LED settings if you want to tune strip type, count, GPIO, and power manually.")
                             .font(AppTypography.style(.subheadline))
                             .foregroundStyle(theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -609,7 +632,7 @@ struct ProductSetupFlowView: View {
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "safari")
-                                Text("Open WLED LED Settings")
+                                Text("Open LED Settings")
                             }
                             .font(AppTypography.style(.subheadline, weight: .semibold))
                             .foregroundColor(.black)
@@ -846,7 +869,7 @@ struct ProductSetupFlowView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
-                            setupBullet("Uses WLED native Alexa support")
+                            setupBullet("Uses built-in Alexa support")
                             setupBullet("Auto-fills up to 9 eligible favorites")
                             setupBullet("You will finish in the Alexa app with Discover Devices")
                         }
@@ -1647,15 +1670,17 @@ struct ProductSetupFlowView: View {
             } else {
                 try await applyRecommendedLEDPreferences(to: live)
                 await applyInitialSunriseColor(to: live)
+            }
+
+            if !skipAutomationCreation {
+                try await createOrUpdateWakeAutomation(for: live)
+            }
+            if !isCustomProduct {
                 await viewModel.completeAesdeticOnboardingSetup(
                     live,
                     productType: selectedProduct.productType,
                     variantId: selectedProduct.id
                 )
-            }
-
-            if !skipAutomationCreation {
-                try await createOrUpdateWakeAutomation(for: live)
             }
             closeFlow()
         } catch {
@@ -1691,7 +1716,18 @@ struct ProductSetupFlowView: View {
             maxCurrentPerLED: recommendation.maxCurrentPerLED,
             maxTotalCurrent: recommendation.maxTotalCurrent,
             usePerOutputLimiter: current.usePerOutputLimiter,
-            enableABL: recommendation.enableABL
+            enableABL: recommendation.enableABL,
+            whiteBalanceCorrection: current.whiteBalanceCorrection,
+            calculateCCTFromRGB: current.calculateCCTFromRGB,
+            cctICUsed: current.cctICUsed,
+            cctBlending: current.cctBlending,
+            globalBrightnessFactor: current.globalBrightnessFactor,
+            targetFPS: current.targetFPS,
+            paletteBlendMode: current.paletteBlendMode,
+            autoSegments: current.autoSegments,
+            gammaCorrectColor: recommendation.gammaCorrectColor,
+            gammaCorrectBrightness: recommendation.gammaCorrectBrightness,
+            gammaValue: recommendation.gammaValue
         )
 
         _ = try await service.updateLEDConfiguration(updated, for: device)
@@ -1815,7 +1851,11 @@ struct ProductSetupFlowView: View {
         }
 
         if store.automations.contains(where: { $0.id == draft.id }) {
-            store.update(draft)
+            guard store.update(draft) else {
+                throw SetupError.invalidOnDeviceSchedule(
+                    "Automation could not be updated because the device is busy syncing. Please wait a moment and try again."
+                )
+            }
         } else {
             guard store.add(draft) else {
                 throw SetupError.invalidOnDeviceSchedule(
@@ -1834,6 +1874,10 @@ struct ProductSetupFlowView: View {
         case 4: return "Maximum"
         default: return "Mode \(mode)"
         }
+    }
+
+    private func gammaDisplay(_ value: Double) -> String {
+        String(format: "%.1f", min(max(value, 0.1), 3.0))
     }
 
     private func isUnknownWiFiValue(_ value: String) -> Bool {

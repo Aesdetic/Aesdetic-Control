@@ -24,6 +24,7 @@ enum WLEDAPIError: LocalizedError {
     case unsupportedOperation(String)
     case deviceBusy(String)
     case invalidConfiguration
+    case presetStoreReadUnstable(String)
     case presetStoreUnreadable(String)
     case presetStoreDeleteIncomplete(String)
     
@@ -55,10 +56,12 @@ enum WLEDAPIError: LocalizedError {
             return "Device '\(deviceName)' is busy processing another request"
         case .invalidConfiguration:
             return "Invalid API configuration. Check your settings."
-        case .presetStoreUnreadable(let reason):
-            return "Preset store is unreadable. Delaying destructive changes. \(reason)"
-        case .presetStoreDeleteIncomplete(let reason):
-            return "Preset store delete did not fully complete. \(reason)"
+        case .presetStoreReadUnstable:
+            return "The device is finishing the last save or delete. Please wait a moment and try again."
+        case .presetStoreUnreadable:
+            return "The device could not confirm saved presets yet. No destructive changes were made. Please try again in a moment."
+        case .presetStoreDeleteIncomplete:
+            return "The device could not confirm the delete. Please refresh and try again."
         }
     }
     
@@ -72,10 +75,12 @@ enum WLEDAPIError: LocalizedError {
             return "The device may be experiencing issues. Try restarting the device."
         case .maxRetriesExceeded, .deviceBusy:
             return "Wait a moment and try again. The device may be temporarily busy."
+        case .presetStoreReadUnstable:
+            return "Wait a moment for the current save or delete to finish, then retry."
         case .presetStoreUnreadable:
-            return "Wait for the device to settle, then retry. If this keeps happening, reboot WLED and try again."
+            return "Wait for the device to settle, then retry. If this keeps happening, restart the lamp and try again."
         case .presetStoreDeleteIncomplete:
-            return "Retry delete. The device accepted some delete commands but still reported leftover preset-store records."
+            return "Refresh the saves list before trying the delete again."
         case .invalidURL, .invalidConfiguration:
             return "Check your device settings and network configuration."
         case .unsupportedOperation:
@@ -100,8 +105,9 @@ enum WLEDAPIError: LocalizedError {
         case .unsupportedOperation: return 1010
         case .deviceBusy: return 1011
         case .invalidConfiguration: return 1012
-        case .presetStoreUnreadable: return 1013
-        case .presetStoreDeleteIncomplete: return 1014
+        case .presetStoreReadUnstable: return 1013
+        case .presetStoreUnreadable: return 1014
+        case .presetStoreDeleteIncomplete: return 1015
         }
     }
     
@@ -109,6 +115,8 @@ enum WLEDAPIError: LocalizedError {
     var isRetryable: Bool {
         switch self {
         case .networkError, .timeout, .deviceBusy:
+            return true
+        case .presetStoreReadUnstable:
             return true
         case .presetStoreUnreadable:
             return true

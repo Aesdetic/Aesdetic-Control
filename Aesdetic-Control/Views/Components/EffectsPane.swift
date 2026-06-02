@@ -15,6 +15,7 @@ struct EffectsPane: View {
     @State private var isLoadingMetadata = false
     @State private var isSavingPreset = false
     @State private var showSaveSuccess = false
+    @State private var saveFeedbackTrigger: Int = 0
     @State private var showSavePresetDialog = false
     @State private var effectSelectionId: Int = 0
     @State private var effectGradient: LEDGradient = EffectsPane.defaultEffectGradient
@@ -396,6 +397,7 @@ struct EffectsPane: View {
                 onActivate()
             }
         }
+        .sensorySuccess(trigger: saveFeedbackTrigger)
         .sheet(isPresented: $showSavePresetDialog) {
             SaveEffectPresetDialog(
                 device: device,
@@ -441,7 +443,8 @@ struct EffectsPane: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(isApplyingEffect || effectOptions.isEmpty)
+                .disabled(isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress || effectOptions.isEmpty)
+                .opacity((isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress || effectOptions.isEmpty) ? 0.45 : 1.0)
 
                 Text("Animations")
                     .font(AppTypography.style(.headline))
@@ -463,28 +466,29 @@ struct EffectsPane: View {
                                     .scaleEffect(0.7)
                                     .tint(.white)
                             } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle")
+                                Image(systemName: "checkmark.circle.fill")
                                     .font(AppTypography.style(.caption))
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.green.opacity(0.95))
                             } else {
                                 Image(systemName: "plus.circle")
                                     .font(AppTypography.style(.caption))
                             }
-                            Text("Save Animation")
+                            Text(showSaveSuccess ? "Saved" : "Save Animation")
                                 .lineLimit(1)
                                 .font(AppTypography.style(.caption, weight: .semibold))
                         }
-                        .foregroundColor(.white.opacity(0.9))
+                        .foregroundColor(showSaveSuccess ? Color.black.opacity(0.82) : .white.opacity(0.9))
                         .padding(.horizontal, 11)
                         .padding(.vertical, 7)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(Color.white.opacity(0.12))
+                                .fill(showSaveSuccess ? Color.white.opacity(0.92) : Color.white.opacity(0.12))
                                 .overlay(
                                     Capsule(style: .continuous)
-                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                        .stroke(showSaveSuccess ? Color.green.opacity(0.95) : Color.white.opacity(0.16), lineWidth: showSaveSuccess ? 1.5 : 1)
                                 )
                         )
+                        .shadow(color: showSaveSuccess ? Color.green.opacity(0.38) : Color.clear, radius: 10, x: 0, y: 4)
                     }
                     .buttonStyle(.plain)
                     .disabled(isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress)
@@ -1023,7 +1027,7 @@ private extension EffectsPane {
     }
 
     func preparedGradientForSlotCount(_ gradient: LEDGradient, slotCount: Int) -> LEDGradient {
-        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        let sortedStops = normalizedSourceStopsForSlotCount(gradient.stops, slotCount: slotCount)
         if slotCount <= 1 {
             let hex = sortedStops.first?.hexColor ?? "FFFFFF"
             return LEDGradient(stops: [GradientStop(position: 0.0, hexColor: hex)])
@@ -1041,6 +1045,31 @@ private extension EffectsPane {
             return GradientStop(position: t, hexColor: color.toHex())
         }
         return LEDGradient(stops: generatedStops)
+    }
+
+    func normalizedSourceStopsForSlotCount(_ stops: [GradientStop], slotCount: Int) -> [GradientStop] {
+        let sortedStops = stops.sorted { $0.position < $1.position }
+        guard slotCount <= 2,
+              sortedStops.count > max(2, slotCount),
+              let last = sortedStops.last,
+              isBlackHex(last.hexColor) else {
+            return sortedStops
+        }
+
+        let withoutTrailingBlack = sortedStops.dropLast()
+        guard withoutTrailingBlack.count >= max(1, slotCount),
+              withoutTrailingBlack.contains(where: { !isBlackHex($0.hexColor) }) else {
+            return sortedStops
+        }
+
+        #if DEBUG
+        print("[EffectsPane] Dropping trailing black placeholder while preparing \(slotCount)-slot effect gradient: \(sortedStops.map { $0.hexColor })")
+        #endif
+        return Array(withoutTrailingBlack)
+    }
+
+    func isBlackHex(_ hex: String) -> Bool {
+        hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased() == "000000"
     }
 
     func optionIndex(for parameterIndex: Int) -> Int? {
@@ -1477,7 +1506,14 @@ private extension EffectsPane {
     }
 
     func saveEffectPreset(_ presetInput: WLEDEffectPreset) async {
-        guard !automationStore.hasAnyDeletionInProgress else { return }
+        guard !automationStore.hasAnyDeletionInProgress,
+              viewModel.shouldAllowInteractivePresetSaveTap(for: device.id) else { return }
+        viewModel.beginInteractivePresetWrite(for: device.id)
+        defer {
+            Task { @MainActor in
+                viewModel.endInteractivePresetWrite(for: device.id)
+            }
+        }
         isSavingPreset = true
         showSaveSuccess = false
         var preset = presetInput
@@ -1486,6 +1522,9 @@ private extension EffectsPane {
             await MainActor.run {
                 preset.wledPresetId = savedId
                 PresetsStore.shared.addEffectPreset(preset)
+                viewModel.markPresetSaveHighlight(.effect, id: preset.id, for: device.id)
+                saveFeedbackTrigger += 1
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
                 isSavingPreset = false
                 showSaveSuccess = true
             }

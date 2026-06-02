@@ -1097,7 +1097,7 @@ final class AutomationModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAutomationStoreDeletionStateIncludesQueuedAutomationDeletes() {
+    func testAutomationStoreDeletionStateDoesNotTreatQueuedCleanupAsActiveDelete() {
         let cleanup = DeviceCleanupManager.shared
         let store = AutomationStore.shared
         let deviceId = "cleanup-store-lock-\(UUID().uuidString)"
@@ -1115,8 +1115,12 @@ final class AutomationModelTests: XCTestCase {
             verificationRequired: true
         )
 
-        XCTAssertTrue(store.isDeletionInProgress(for: deviceId))
-        XCTAssertTrue(store.hasAnyDeletionInProgress)
+        XCTAssertTrue(cleanup.hasPendingDeletes(source: .automation, deviceId: deviceId))
+        XCTAssertFalse(
+            store.isDeletionInProgress(for: deviceId),
+            "Queued cleanup should not block unrelated preset/transition actions as an active automation delete"
+        )
+        XCTAssertFalse(store.hasAnyDeletionInProgress)
     }
 
     @MainActor
@@ -1142,11 +1146,11 @@ final class AutomationModelTests: XCTestCase {
             cleanup.hasPendingPresetStoreDeletes(deviceId: deviceId),
             "Expected generic preset-store pending delete debt to be visible"
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             store.isDeletionInProgress(for: deviceId),
-            "Expected device deletion-in-progress lock while any preset-store cleanup is queued"
+            "Unknown-source preset-store cleanup should be serialized by the cleanup queue, not shown as automation deletion"
         )
-        XCTAssertTrue(store.hasAnyDeletionInProgress)
+        XCTAssertFalse(store.hasAnyDeletionInProgress)
     }
 
     func testSelectTimerSlotDoesNotReuseActionableMacroWhenDisabled() {

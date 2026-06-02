@@ -17,9 +17,10 @@ struct AutomationColorEditor: View {
     @Binding var temperature: Double?
     @Binding var whiteLevel: Double?
     let showFadeControls: Bool
+    let isInline: Bool
     
     // Preview state
-    @State private var previewEnabled: Bool = true
+    @State private var previewEnabled: Bool = false
     @State private var gradientPreviewTask: Task<Void, Never>?
     @State private var brightnessPreviewTask: Task<Void, Never>?
     
@@ -34,8 +35,10 @@ struct AutomationColorEditor: View {
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     
     var body: some View {
-        VStack(spacing: 16) {
-            headerRow
+        VStack(spacing: isInline ? 14 : 16) {
+            if !isInline {
+                headerRow
+            }
             powerSection
             if powerOn {
                 brightnessSection
@@ -51,15 +54,17 @@ struct AutomationColorEditor: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
+        .padding(.vertical, isInline ? 0 : 16)
+        .background {
+            if !isInline {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            }
+        }
         .onChange(of: previewEnabled) { _, enabled in
             if enabled {
                 if powerOn {
@@ -84,12 +89,12 @@ struct AutomationColorEditor: View {
             }
         }
         .onAppear {
-            previewEnabled = true
             hydrateStopMapsIfNeeded()
         }
         .onChange(of: advancedUIEnabled) { _, enabled in
             if !enabled {
-                previewEnabled = true
+                previewEnabled = false
+                cancelPreviewTasks()
             }
         }
         .onDisappear {
@@ -125,7 +130,7 @@ struct AutomationColorEditor: View {
                     .padding(.vertical, 4)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     
@@ -144,6 +149,7 @@ struct AutomationColorEditor: View {
             } ?? [:]
             temperature = stopTemperatures.values.first
             whiteLevel = stopWhiteLevels.values.first
+            selectedPresetId = preset.id
             
             if previewEnabled {
                 scheduleGradientPreview(gradient)
@@ -229,7 +235,7 @@ struct AutomationColorEditor: View {
                 .disabled(isSavingPreset)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
 
     private var powerSection: some View {
@@ -260,7 +266,7 @@ struct AutomationColorEditor: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     private var brightnessSection: some View {
@@ -280,7 +286,7 @@ struct AutomationColorEditor: View {
                     }
                 }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
 
     private var powerOffSummary: some View {
@@ -296,7 +302,7 @@ struct AutomationColorEditor: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     @ViewBuilder
@@ -317,7 +323,7 @@ struct AutomationColorEditor: View {
                     .padding(.horizontal, 2)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     
@@ -354,7 +360,7 @@ struct AutomationColorEditor: View {
             onStopsChanged: handleStopsChanged
         )
         .frame(height: 56)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     private func handleTapStop(id: UUID) {
@@ -479,7 +485,7 @@ struct AutomationColorEditor: View {
             onDismiss: { showWheel = false }
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     private func handleColorChange(selectedId: UUID, color: Color, temperature: Double?, whiteLevel: Double?) {
@@ -540,7 +546,7 @@ struct AutomationColorEditor: View {
                 .foregroundColor(.white.opacity(0.9))
         }
         .toggleStyle(SwitchToggleStyle(tint: .white))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
         
         if enableFade {
             VStack(alignment: .leading, spacing: 8) {
@@ -554,7 +560,7 @@ struct AutomationColorEditor: View {
                 Slider(value: $fadeDuration, in: 5...300, step: 5)
                     .tint(.white)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     

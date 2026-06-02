@@ -127,6 +127,18 @@ struct ActiveRunStatus: Equatable {
     }
 }
 
+struct SavedPresetHighlight: Equatable {
+    enum Kind: String, Equatable {
+        case color
+        case transition
+        case effect
+    }
+
+    let kind: Kind
+    let id: UUID
+    let savedAt: Date
+}
+
 struct TransitionDraftSession: Equatable {
     var gradientA: LEDGradient
     var gradientB: LEDGradient
@@ -476,6 +488,7 @@ class DeviceControlViewModel: ObservableObject {
     // Active run tracking (automations/transitions)
     @Published var activeRunStatus: [String: ActiveRunStatus] = [:]
     @Published private(set) var presetWriteInProgress: Set<String> = []
+    @Published private(set) var recentPresetSaveHighlightByDeviceId: [String: SavedPresetHighlight] = [:]
     @Published private(set) var transitionCleanupInProgress: Set<String> = []
     @Published private(set) var transitionCleanupPendingCountByDeviceId: [String: Int] = [:]
     @Published private(set) var transitionCleanupBacklogCountByDeviceId: [String: Int] = [:]
@@ -488,6 +501,8 @@ class DeviceControlViewModel: ObservableObject {
     @Published private(set) var rebootWaitActiveByDeviceId: Set<String> = []
     @Published private(set) var rebootWaitRemainingSecondsByDeviceId: [String: Int] = [:]
     private var transitionCancelLockUntil: [String: Date] = [:]
+    private var presetWriteReleaseTokensByDeviceId: [String: UUID] = [:]
+    private var presetHighlightClearTasksByDeviceId: [String: Task<Void, Never>] = [:]
     private var savedTransitionDefaults: [String: Int?] = [:]
     private var savedTransitionDefaultRunIds: [String: UUID] = [:]
     private var playlistUnsupportedDevices: Set<String> = []
@@ -530,6 +545,7 @@ class DeviceControlViewModel: ObservableObject {
         case playlistStartFailed
         case playlistInvalidOrMissingSteps
         case legacyTempRangeIds
+        case legacyPlaylistTiming
         case busyTimeout
         case shortDurationDirectApply
     }
@@ -562,6 +578,7 @@ class DeviceControlViewModel: ObservableObject {
         case missingPlaylistRecord
         case missingStepPresets([Int])
         case legacyTempRangeIds
+        case legacyPlaylistTiming
         case unknownReadFailure
     }
     
@@ -1011,6 +1028,40 @@ class DeviceControlViewModel: ObservableObject {
             || appManagedSegmentLayouts[deviceId] != nil
     }
 
+    private func shouldUseAppManagedSegments(for device: WLEDDevice, ledCount: Int? = nil) -> Bool {
+        guard allowsAppManagedSegments(for: device.id) else { return false }
+        if shouldUseAppManagedSegments(for: device.id) {
+            return true
+        }
+        return desiredAppManagedSegmentCount(for: device, ledCount: ledCount) > 1
+    }
+
+    private func appManagedSegmentCapacity(for device: WLEDDevice, ledCount: Int? = nil) -> Int {
+        let totalLEDs = max(1, ledCount ?? totalLEDCount(for: device))
+        if let cached = deviceMaxSegmentCounts[device.id], cached > 0 {
+            return max(1, min(totalLEDs, cached))
+        }
+
+        let liveCount = max(0, device.state?.segments.count ?? 0)
+        let storedPreferred = UserDefaults.standard.integer(forKey: activeSegmentCountKey(for: device.id))
+        if storedPreferred > 1 {
+            return max(1, min(totalLEDs, max(storedPreferred, liveCount)))
+        }
+
+        // If an external controller collapses WLED to one segment before we have
+        // cached `maxseg`, still restore the app's default segmented layout.
+        return max(1, min(totalLEDs, max(defaultSegmentCountFloor, liveCount)))
+    }
+
+    private func desiredAppManagedSegmentCount(for device: WLEDDevice, ledCount: Int? = nil) -> Int {
+        let capacity = appManagedSegmentCapacity(for: device, ledCount: ledCount)
+        let storedPreferred = UserDefaults.standard.integer(forKey: activeSegmentCountKey(for: device.id))
+        if storedPreferred > 0 {
+            return min(max(1, storedPreferred), capacity)
+        }
+        return defaultAutoSegmentCount(maxUsableSegments: capacity)
+    }
+
     private func clampedTransitionDeciseconds(for durationSeconds: Double?) -> Int? {
         guard let durationSeconds else { return nil }
         let deciseconds = Int((durationSeconds * 10.0).rounded())
@@ -1160,7 +1211,8 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
 
-        let transitions = durations.map { durationUnits in
+        let transitions = durations.enumerated().map { index, durationUnits in
+            guard index > 0 else { return 0 }
             switch generatedTimingMode {
             case .fullBlend:
                 return durationUnits > 0 ? min(durationUnits, maxWLEDPlaylistTransitionDeciseconds) : 0
@@ -1192,9 +1244,9 @@ class DeviceControlViewModel: ObservableObject {
         presetSlotStatus[device.id]?.used ?? presetsCache[device.id]?.count ?? 0
     }
 
-    private func usedAppManagedPresetCount(for device: WLEDDevice) -> Int {
+    private func usedAppManagedPresetCount(for device: WLEDDevice, range: ClosedRange<Int> = appManagedPresetRange) -> Int {
         let presets = presetsCache[device.id] ?? []
-        return presets.filter { appManagedPresetRange.contains($0.id) }.count
+        return presets.filter { range.contains($0.id) }.count
     }
 
     private func sampledTransitionDelta(
@@ -1221,6 +1273,11 @@ class DeviceControlViewModel: ObservableObject {
     private func baseLegSeconds(for delta: TransitionVisualDelta, context: TransitionGenerationContext) -> Double {
         let highDelta = delta.maxRGBDelta >= 96 || delta.brightnessDelta >= 80
         let mediumDelta = delta.maxRGBDelta >= 42 || delta.brightnessDelta >= 35
+        if context == .persistentAutomation {
+            if highDelta { return 45 }
+            if mediumDelta { return maxWLEDPlaylistTransitionSeconds }
+            return maxWLEDPlaylistTransitionSeconds
+        }
         if highDelta { return 120 }
         if mediumDelta { return 180 }
         return 240
@@ -1233,16 +1290,14 @@ class DeviceControlViewModel: ObservableObject {
     }
 
     private func candidateLegSeconds(baseLegSeconds: Double, context: TransitionGenerationContext) -> [Double] {
+        if context == .persistentAutomation {
+            let candidates = [baseLegSeconds, maxWLEDPlaylistTransitionSeconds]
+            return Array(Set(candidates))
+                .filter { $0 >= baseLegSeconds - 0.001 }
+                .sorted()
+        }
         let all = [120.0, 180.0, 240.0, 300.0]
         return all.filter { $0 >= baseLegSeconds - 0.001 }
-    }
-
-    private func persistentAutomationMaxSteps(for durationSeconds: Double) -> Int {
-        let minutes = max(0.0, durationSeconds) / 60.0
-        if minutes <= 10 { return 10 }
-        if minutes <= 20 { return 12 }
-        if minutes <= 35 { return 16 }
-        return 21
     }
 
     private func maxDurationSeconds(forSlots slots: Int, legSeconds: Double) -> Double {
@@ -1294,8 +1349,9 @@ class DeviceControlViewModel: ObservableObject {
             endBrightness: endBrightness
         )
         let baseLeg = baseLegSeconds(for: delta, context: context)
-        let used = min(appManagedPresetRange.count, max(0, usedPresetCountOverride ?? usedAppManagedPresetCount(for: device)))
-        let available = max(0, appManagedPresetRange.count - used - presetSlotReserve)
+        let capacityRange = context == .persistentAutomation ? persistentAutomationPresetRange : appManagedPresetRange
+        let used = min(capacityRange.count, max(0, usedPresetCountOverride ?? usedAppManagedPresetCount(for: device, range: capacityRange)))
+        let available = max(0, capacityRange.count - used - presetSlotReserve)
         let safeGuaranteeCount = max(1, automationGuaranteeCount)
         let perAutomationBudget = context == .persistentAutomation ? available / safeGuaranteeCount : nil
 
@@ -1304,11 +1360,8 @@ class DeviceControlViewModel: ObservableObject {
         var chosenSteps = playlistSteps(
             for: clampedDuration,
             legSeconds: chosenLeg,
-            clampToTransitionLimit: context != .persistentAutomation
+            clampToTransitionLimit: true
         )
-        if context == .persistentAutomation {
-            chosenSteps = min(chosenSteps, persistentAutomationMaxSteps(for: clampedDuration))
-        }
         var chosenSlots = chosenSteps + 1
         var fitsBudget = true
 
@@ -1319,14 +1372,11 @@ class DeviceControlViewModel: ObservableObject {
                     let steps = playlistSteps(
                         for: clampedDuration,
                         legSeconds: candidate,
-                        clampToTransitionLimit: context != .persistentAutomation
+                        clampToTransitionLimit: true
                     )
-                    let cappedSteps = context == .persistentAutomation
-                        ? min(steps, persistentAutomationMaxSteps(for: clampedDuration))
-                        : steps
-                    let slots = cappedSteps + 1
+                    let slots = steps + 1
                     chosenLeg = candidate
-                    chosenSteps = cappedSteps
+                    chosenSteps = steps
                     chosenSlots = slots
                     fitsBudget = slots <= budget
                     if fitsBudget {
@@ -1519,8 +1569,7 @@ class DeviceControlViewModel: ObservableObject {
         usedIds: Set<Int>,
         stepCount: Int
     ) -> (playlistId: Int?, stepPresetIds: [Int]?) {
-        let persistentAllowedUpper = max(appManagedPresetLowerBound, temporaryTransitionReservedPresetLower - 1)
-        let persistentAllowedRange = appManagedPresetLowerBound...persistentAllowedUpper
+        let persistentAllowedRange = persistentAutomationPresetRange
         let playlistId = availableFrontmostPlaylistId(excluding: usedIds, range: persistentAllowedRange)
         var exclusion = usedIds
         if let playlistId {
@@ -2395,7 +2444,7 @@ class DeviceControlViewModel: ObservableObject {
     
     private init() {
         let isRunningInPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
-        if isRunningInPreview {
+        if isRunningInPreview || AppRuntimeEnvironment.isRunningUnitTests {
             UserDefaults.standard.register(defaults: [
                 "forceCCTSlider": true
             ])
@@ -2669,7 +2718,7 @@ class DeviceControlViewModel: ObservableObject {
 
                     if newEffectState.isEnabled,
                        fxValue != 0,
-                       let effectStops = effectGradientStops(from: segment),
+                       let effectStops = effectGradientStops(from: segment, deviceId: stateUpdate.deviceId),
                        !effectStops.isEmpty {
                         updateEffectGradient(LEDGradient(stops: effectStops), for: updatedDevice)
                         if shouldAdoptEffectGradientAsMain(deviceId: stateUpdate.deviceId, effectStops: effectStops) {
@@ -3485,6 +3534,37 @@ class DeviceControlViewModel: ObservableObject {
             Task {
                 await refreshLEDPreferencesIfNeeded(for: devices[index])
             }
+        }
+    }
+
+    private func markDeviceOfflineForLocalAvailability(
+        _ device: WLEDDevice,
+        reason: String,
+        retry: Bool,
+        respectRealtimeConnection: Bool = true
+    ) {
+        if respectRealtimeConnection, webSocketManager.isDeviceConnected(device.id) {
+            return
+        }
+
+        var offlineDevice = devices.first(where: { $0.id == device.id }) ?? device
+        offlineDevice.isOnline = false
+        uiToggleStates.removeValue(forKey: device.id)
+
+        if let index = devices.firstIndex(where: { $0.id == device.id }) {
+            let wasOnline = devices[index].isOnline
+            devices[index] = offlineDevice
+            WidgetDataSync.shared.syncDevice(offlineDevice)
+            if wasOnline {
+                appendDiagnostics("Device status: \(offlineDevice.name) is offline (\(reason))")
+            }
+            objectWillChange.send()
+        }
+
+        if retry {
+            connectionMonitor.markDeviceUnreachable(offlineDevice, reason: reason)
+        } else {
+            connectionMonitor.markDeviceUnavailableWithoutRetry(offlineDevice, reason: reason)
         }
     }
 
@@ -4417,7 +4497,14 @@ class DeviceControlViewModel: ObservableObject {
             // However, if device is turning ON, WLED might restore its own state from memory
             // So we still don't send col - let gradient restoration handle colors immediately after
             let stateUpdate: WLEDStateUpdate
-            if hasPersistedGradient {
+            if !updatedDevice.isOn {
+                stateUpdate = WLEDStateUpdate(
+                    on: false,
+                    transitionDeciseconds: transitionDeciseconds,
+                    pl: playlistStopValue,
+                    lor: 0
+                )
+            } else if hasPersistedGradient {
                 // Only send power and brightness - don't send color
                 // Gradient will be restored immediately after power-on completes
                 // This prevents WLED from showing its restored colors before our gradient
@@ -4574,7 +4661,15 @@ class DeviceControlViewModel: ObservableObject {
     
     func refreshDeviceState(_ device: WLEDDevice) async {
         // Skip refresh for off-subnet devices to avoid timeouts/energy drain
-        if !isIPInCurrentSubnets(device.ipAddress) { return }
+        if !isIPInCurrentSubnets(device.ipAddress) {
+            markDeviceOfflineForLocalAvailability(
+                device,
+                reason: "Not reachable on this network",
+                retry: false,
+                respectRealtimeConnection: false
+            )
+            return
+        }
         do {
             let response = try await apiService.getState(for: device)
             await handlePresetModificationIfNeeded(response, device: device)
@@ -4725,7 +4820,7 @@ class DeviceControlViewModel: ObservableObject {
                     if let effectState = segmentStates[segmentIdentifier],
                        effectState.isEnabled,
                        effectState.effectId != 0,
-                       let effectStops = effectGradientStops(from: segment),
+                       let effectStops = effectGradientStops(from: segment, deviceId: device.id),
                        !effectStops.isEmpty {
                         self.updateEffectGradient(LEDGradient(stops: effectStops), for: device)
                         if shouldAdoptEffectGradientAsMain(deviceId: device.id, effectStops: effectStops) {
@@ -4765,8 +4860,22 @@ class DeviceControlViewModel: ObservableObject {
             
         } catch {
             let mappedError = mapToWLEDError(error, device: device)
-            if case .deviceOffline = mappedError {
+            switch mappedError {
+            case .deviceOffline:
+                markDeviceOfflineForLocalAvailability(
+                    device,
+                    reason: "Device is offline",
+                    retry: true
+                )
                 presentError(mappedError)
+            case .timeout:
+                markDeviceOfflineForLocalAvailability(
+                    device,
+                    reason: "Connection timed out",
+                    retry: true
+                )
+            default:
+                break
             }
         }
     }
@@ -5741,7 +5850,7 @@ class DeviceControlViewModel: ObservableObject {
             let responseState: WLEDState
             if fullStrip {
                 let totalLEDs = totalLEDCount(for: currentDevice)
-                let useAppSegments = shouldUseAppManagedSegments(for: device.id)
+                let useAppSegments = shouldUseAppManagedSegments(for: currentDevice, ledCount: totalLEDs)
                 let manualSegments = usesManualSegmentation(for: device.id)
                 var updates: [SegmentUpdate] = []
                 if useAppSegments {
@@ -6272,10 +6381,12 @@ class DeviceControlViewModel: ObservableObject {
                 return .apiError(message: apiError.errorDescription ?? "HTTP error")
             case .invalidConfiguration:
                 return .apiError(message: "Invalid configuration. Check API settings.")
-            case .presetStoreUnreadable(let reason):
-                return .apiError(message: "Preset store temporarily unreadable: \(reason)")
-            case .presetStoreDeleteIncomplete(let reason):
-                return .apiError(message: "Preset-store delete incomplete: \(reason)")
+            case .presetStoreReadUnstable:
+                return .apiError(message: "The lamp is finishing the last save or delete. Please wait a moment and try again.")
+            case .presetStoreUnreadable:
+                return .apiError(message: "The lamp could not confirm saved presets yet. No destructive changes were made. Please try again in a moment.")
+            case .presetStoreDeleteIncomplete:
+                return .apiError(message: "The lamp could not confirm the delete. Please refresh and try again.")
             }
         }
         if let urlError = error as? URLError {
@@ -6350,7 +6461,7 @@ class DeviceControlViewModel: ObservableObject {
         // This matches WLED's recommended approach for solid colors
         let firstColorHex = sortedStops.first?.hexColor
         let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == firstColorHex }
-        let appManagedSegments = shouldUseAppManagedSegments(for: device.id)
+        let appManagedSegments = shouldUseAppManagedSegments(for: device, ledCount: ledCount)
         let manualSegments = usesManualSegmentation(for: device.id)
         let willUseSegmented = isSolidColor
             ? (preferSegments || appManagedSegments || manualSegments)
@@ -6589,7 +6700,7 @@ class DeviceControlViewModel: ObservableObject {
         // CRITICAL: Use sortedStops consistently (not unsorted stops) for code consistency and correctness
         // This ensures gradient colors are sampled in the correct order matching temperature collection
         let gradient = LEDGradient(stops: sortedStops, interpolation: interpolation)
-        let resolvedLedCount = (shouldUseAppManagedSegments(for: device.id) || usesManualSegmentation(for: device.id))
+        let resolvedLedCount = (shouldUseAppManagedSegments(for: device, ledCount: ledCount) || usesManualSegmentation(for: device.id))
             ? totalLEDCount(for: device)
             : max(1, ledCount)
         let frame = GradientSampler.sample(gradient, ledCount: resolvedLedCount, interpolation: interpolation)
@@ -6664,8 +6775,8 @@ class DeviceControlViewModel: ObservableObject {
 
     private func segmentCount(for device: WLEDDevice, ledCount: Int) -> Int {
         guard ledCount > 0 else { return 0 }
-        let maxUsable = maximumUsableSegmentCount(for: device)
-        let preferred = preferredActiveSegmentCount(for: device)
+        let maxUsable = appManagedSegmentCapacity(for: device, ledCount: ledCount)
+        let preferred = desiredAppManagedSegmentCount(for: device, ledCount: ledCount)
         return min(max(1, preferred), maxUsable)
     }
 
@@ -6967,14 +7078,14 @@ class DeviceControlViewModel: ObservableObject {
         )
     }
 
-    private func effectGradientStops(from segment: Segment) -> [GradientStop]? {
+    private func effectGradientStops(from segment: Segment, deviceId: String? = nil) -> [GradientStop]? {
         guard let colors = segment.colors, !colors.isEmpty else { return nil }
-        let rgbColors: [Color] = colors.compactMap { raw in
+        let rgbColors: [Color] = Array(colors.prefix(DeviceControlViewModel.maxEffectColorSlots)).compactMap { raw in
             guard raw.count >= 3 else { return nil }
             return Color.color(fromRGBArray: raw)
         }
         guard !rgbColors.isEmpty else { return nil }
-        let limited = Array(rgbColors.prefix(3))
+        let limited = sanitizedLiveEffectColors(rgbColors, deviceId: deviceId)
         let positions: [Double]
         switch limited.count {
         case 1:
@@ -6991,6 +7102,43 @@ class DeviceControlViewModel: ObservableObject {
         return zip(positions, limited).map { position, color in
             GradientStop(position: position, hexColor: color.toHex())
         }
+    }
+
+    private func sanitizedLiveEffectColors(_ colors: [Color], deviceId: String?) -> [Color] {
+        guard let deviceId,
+              colors.count > 1,
+              isBlackColor(colors.last),
+              let rememberedStops = rememberedEffectGradientStops(forLiveHydration: deviceId),
+              let rememberedLast = rememberedStops.sorted(by: { $0.position < $1.position }).last,
+              !isBlackHex(rememberedLast.hexColor) else {
+            return colors
+        }
+
+        #if DEBUG
+        print("[Effects][Gradient] Ignoring trailing black live color slot for device=\(deviceId); keeping remembered effect gradient \(rememberedStops.map { $0.hexColor })")
+        #endif
+        return rememberedStops
+            .sorted { $0.position < $1.position }
+            .map { $0.color }
+    }
+
+    private func rememberedEffectGradientStops(forLiveHydration deviceId: String) -> [GradientStop]? {
+        if let stops = latestEffectGradientStops[deviceId], !stops.isEmpty {
+            return stops
+        }
+        if let persisted = loadPersistedEffectGradient(for: deviceId), !persisted.isEmpty {
+            return persisted
+        }
+        return nil
+    }
+
+    private func isBlackColor(_ color: Color?) -> Bool {
+        guard let color else { return false }
+        return color.toRGBArray().prefix(3).allSatisfy { $0 == 0 }
+    }
+
+    private func isBlackHex(_ hex: String) -> Bool {
+        hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")).uppercased() == "000000"
     }
 
     private typealias SegmentColorSample = (start: Int, stop: Int?, hex: String)
@@ -7840,6 +7988,9 @@ class DeviceControlViewModel: ObservableObject {
             return false
         }
         let message = (lastPresetStoreHealthMessageByDeviceId[deviceId] ?? "").lowercased()
+        if message.contains("read-unstable") || message.contains("settling") {
+            return false
+        }
         return message.contains("timed out")
             || message.contains("timeout")
             || message.contains("network")
@@ -8061,6 +8212,11 @@ class DeviceControlViewModel: ObservableObject {
         let playlistTransitions: [Int]
     }
 
+    enum TransitionPlaylistAssetKind {
+        case automation
+        case transitionPreset
+    }
+
     func createTransitionPlaylist(
         device: WLEDDevice,
         from: LEDGradient,
@@ -8077,7 +8233,8 @@ class DeviceControlViewModel: ObservableObject {
         startTemperature: Double? = nil,
         endTemperature: Double? = nil,
         startWhiteLevel: Double? = nil,
-        endWhiteLevel: Double? = nil
+        endWhiteLevel: Double? = nil,
+        assetKind: TransitionPlaylistAssetKind = .automation
     ) async -> TransitionPlaylistResult? {
         guard persist else {
             #if DEBUG
@@ -8085,8 +8242,16 @@ class DeviceControlViewModel: ObservableObject {
             #endif
             return nil
         }
-        let autoStepPrefix = "Automation Step "
-        let autoTransitionPrefix = "Automation Transition "
+        let stepPrefix: String
+        let generatedPlaylistPrefix: String
+        switch assetKind {
+        case .automation:
+            stepPrefix = "Automation Step "
+            generatedPlaylistPrefix = "Automation Transition "
+        case .transitionPreset:
+            stepPrefix = "Transition Step "
+            generatedPlaylistPrefix = "Transition "
+        }
         #if DEBUG
         let effectiveOperationId = debugOperationId
             ?? runId.map { "run-\($0.uuidString.prefix(8))" }
@@ -8182,7 +8347,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         let clampedDuration = min(maxWLEDPlaylistDurationSeconds, max(0.0, durationSeconds))
         let requestedDeciseconds = clampedDuration > 0 ? max(1, Int(round(clampedDuration * 10.0))) : 0
-        let minStepCountForTiming = requestedDeciseconds > 0 && context != .persistentAutomation
+        let minStepCountForTiming = requestedDeciseconds > 0
             ? max(1, Int(ceil(Double(requestedDeciseconds) / Double(maxWLEDPlaylistTransitionDeciseconds))))
             : 1
         let keyframes = cullNearDuplicateKeyframes(rawKeyframes, minimumCount: minStepCountForTiming)
@@ -8192,7 +8357,7 @@ class DeviceControlViewModel: ObservableObject {
             timingUnit: timingUnit,
             fixedSteps: stepCount,
             generatedTimingMode: .boundaryCompensated(padDeciseconds: 3),
-            enforceTransitionLimitStepCount: context != .persistentAutomation
+            enforceTransitionLimitStepCount: true
         )
         #if DEBUG
         let budgetText = stepProfile.perAutomationBudget.map(String.init) ?? "n/a"
@@ -8201,8 +8366,7 @@ class DeviceControlViewModel: ObservableObject {
         #endif
 
         let playlistSlotCount = 1
-        let persistentAllowedUpper = max(appManagedPresetLowerBound, temporaryTransitionReservedPresetLower - 1)
-        let persistentAllowedRange = appManagedPresetLowerBound...persistentAllowedUpper
+        let persistentAllowedRange = persistentAutomationPresetRange
         let persistentRangeContains: (Int) -> Bool = { persistentAllowedRange.contains($0) }
 
         let existingStepIds = (existingStepPresetIds ?? []).filter { (1...250).contains($0) }
@@ -8215,10 +8379,10 @@ class DeviceControlViewModel: ObservableObject {
                 && (!persist || persistentRangeContains($0))
         } ?? false
         let requiredSlots = (canReuseStepPresets ? 0 : stepCount) + (canReusePlaylistId ? 0 : playlistSlotCount)
-        if persist && !hasPresetCapacity(for: device, requiredSlots: requiredSlots, presets: existingPresets) {
+        if persist && !hasPresetCapacity(for: device, requiredSlots: requiredSlots, presets: existingPresets, range: persistentAllowedRange) {
             #if DEBUG
-            let appManagedUsed = existingPresets.filter { appManagedPresetRange.contains($0.id) }.count
-            let remaining = max(0, appManagedPresetRange.count - appManagedUsed)
+            let appManagedUsed = existingPresets.filter { persistentAllowedRange.contains($0.id) }.count
+            let remaining = max(0, persistentAllowedRange.count - appManagedUsed)
             print("⚠️ Playlist creation blocked: remaining=\(remaining), reserve=\(presetSlotReserve), required=\(requiredSlots) for \(device.name).")
             #endif
             return nil
@@ -8291,13 +8455,9 @@ class DeviceControlViewModel: ObservableObject {
         print("transition.playlist_build.ids device=\(device.id)\(operationContext) persist=\(persist) playlist=\(playlistId) stepIds=\(stepPresetIds)")
         #endif
 
-        await MainActor.run {
-            _ = presetWriteInProgress.insert(device.id)
-        }
+        beginInteractivePresetWrite(for: device.id)
         defer {
-            Task { @MainActor in
-                presetWriteInProgress.remove(device.id)
-            }
+            endInteractivePresetWrite(for: device.id)
         }
 
         let shouldCleanupStepPresets = needsStepIds
@@ -8397,7 +8557,7 @@ class DeviceControlViewModel: ObservableObject {
             )
             let request = WLEDPresetSaveRequest(
                 id: presetId,
-                name: "\(autoStepPrefix)\(presetId)",
+                name: "\(stepPrefix)\(presetId)",
                 quickLoad: nil,
                 state: state,
                 // Use default async preset serialization path (omit `o=true`) to
@@ -8438,7 +8598,7 @@ class DeviceControlViewModel: ObservableObject {
         }
         let durations = stepPlan.durations
         let transitions = stepPlan.transitions
-        let playlistName = label?.isEmpty == false ? label! : "\(autoTransitionPrefix)\(playlistId)"
+        let playlistName = label?.isEmpty == false ? label! : "\(generatedPlaylistPrefix)\(playlistId)"
         let playlistRequest = WLEDPlaylistSaveRequest(
             id: playlistId,
             name: playlistName,
@@ -8581,7 +8741,8 @@ class DeviceControlViewModel: ObservableObject {
             startTemperature: preset.temperatureA,
             endTemperature: preset.temperatureB,
             startWhiteLevel: preset.whiteLevelA,
-            endWhiteLevel: preset.whiteLevelB
+            endWhiteLevel: preset.whiteLevelB,
+            assetKind: .transitionPreset
         )
 
         guard let result else { return nil }
@@ -8775,6 +8936,12 @@ class DeviceControlViewModel: ObservableObject {
         if playlist.presets.contains(where: { (temporaryTransitionReservedPresetLower...temporaryTransitionReservedPresetUpper).contains($0) }) {
             return .legacyTempRangeIds
         }
+        // WLED playlist `transition[]` describes the fade into each entry.
+        // The first entry must start immediately; otherwise replay spends time
+        // transitioning into the start color, which feels like lag.
+        if (playlist.transition.first ?? 0) > 0 {
+            return .legacyPlaylistTiming
+        }
 
         let expectedStepIds = preset.wledStepPresetIds?.isEmpty == false
             ? (preset.wledStepPresetIds ?? [])
@@ -8829,10 +8996,38 @@ class DeviceControlViewModel: ObservableObject {
             || syncState == .needsMigration
 
         // Fast path: for synced presets with a valid stored playlist, replay immediately.
-        // This matches WLED's direct playlist start semantics and avoids unnecessary pre-cancel lag.
+        // Validate playlist timing first so older app-generated playlists with
+        // non-zero first transitions are rebuilt instead of replaying with lag.
         if syncState == .synced,
            let playlistId = replayPreset.wledPlaylistId,
            !transitionPresetUsesReservedTempIds(replayPreset) {
+            let validation = await validateStoredTransitionPresetPlaylist(replayPreset, device: device)
+            switch validation {
+            case .valid:
+                break
+            case .legacyPlaylistTiming:
+                await markTransitionPresetPendingSync(
+                    replayPreset,
+                    error: "Stored playlist uses legacy timing; rebuilding with immediate start"
+                )
+                #if DEBUG
+                print("transition_preset.apply.legacy_playlist_timing playlistId=\(playlistId)")
+                #endif
+                return await rebuildTransitionPreset(replayPreset, device: device, reason: .legacyPlaylistTiming)
+            case .legacyTempRangeIds:
+                await markTransitionPresetNeedsMigration(replayPreset)
+                return await rebuildTransitionPreset(replayPreset, device: device, reason: .legacyTempRangeIds)
+            case .missingStepPresets(let ids):
+                await markTransitionPresetSyncFailure(replayPreset, error: "Missing step presets: \(ids)")
+                return await rebuildTransitionPreset(replayPreset, device: device, reason: .playlistInvalidOrMissingSteps)
+            case .missingPlaylistRecord:
+                await markTransitionPresetSyncFailure(replayPreset, error: "Missing playlist record")
+                return await rebuildTransitionPreset(replayPreset, device: device, reason: .playlistStartFailed)
+            case .missingPlaylistId:
+                return await rebuildTransitionPreset(replayPreset, device: device, reason: .missingWLEDPlaylistId)
+            case .unknownReadFailure:
+                break
+            }
             #if DEBUG
             print("transition_preset.apply.fast_replay_attempt device=\(deviceId)\(operationContext) playlistId=\(playlistId)")
             #endif
@@ -8942,6 +9137,15 @@ class DeviceControlViewModel: ObservableObject {
                 print("transition_preset.apply.legacy_temp_range_ids playlistId=\(playlistId)")
                 #endif
                 return await rebuildTransitionPreset(preset, device: device, reason: .legacyTempRangeIds)
+            case .legacyPlaylistTiming:
+                await markTransitionPresetPendingSync(
+                    replayPreset,
+                    error: "Stored playlist uses legacy timing; rebuilding with immediate start"
+                )
+                #if DEBUG
+                print("transition_preset.apply.legacy_playlist_timing playlistId=\(playlistId)")
+                #endif
+                return await rebuildTransitionPreset(preset, device: device, reason: .legacyPlaylistTiming)
             case .missingStepPresets(let ids):
                 await markTransitionPresetSyncFailure(replayPreset, error: "Missing step presets: \(ids)")
                 #if DEBUG
@@ -9109,7 +9313,9 @@ class DeviceControlViewModel: ObservableObject {
             endStopTemperatures: endTemps,
             endStopWhiteLevels: endWhites
         )
-        if fallbackReason == .legacyTempRangeIds || fallbackReason == .playlistInvalidOrMissingSteps {
+        if fallbackReason == .legacyTempRangeIds
+            || fallbackReason == .legacyPlaylistTiming
+            || fallbackReason == .playlistInvalidOrMissingSteps {
             await markTransitionPresetPendingSync(
                 preset,
                 error: "WLED playlist replay invalid; rebuilt locally and pending re-sync"
@@ -9656,6 +9862,41 @@ class DeviceControlViewModel: ObservableObject {
         }
     }
 
+    func beginInteractivePresetWrite(for deviceId: String) {
+        presetWriteReleaseTokensByDeviceId.removeValue(forKey: deviceId)
+        _ = presetWriteInProgress.insert(deviceId)
+    }
+
+    func endInteractivePresetWrite(for deviceId: String, releaseDelay: TimeInterval = 0.7) {
+        let token = UUID()
+        presetWriteReleaseTokensByDeviceId[deviceId] = token
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, releaseDelay) * 1_000_000_000))
+            guard let self,
+                  self.presetWriteReleaseTokensByDeviceId[deviceId] == token else { return }
+            self.presetWriteReleaseTokensByDeviceId.removeValue(forKey: deviceId)
+            self.presetWriteInProgress.remove(deviceId)
+        }
+    }
+
+    func markPresetSaveHighlight(_ kind: SavedPresetHighlight.Kind, id: UUID, for deviceId: String) {
+        let highlight = SavedPresetHighlight(kind: kind, id: id, savedAt: Date())
+        recentPresetSaveHighlightByDeviceId[deviceId] = highlight
+        presetHighlightClearTasksByDeviceId[deviceId]?.cancel()
+        presetHighlightClearTasksByDeviceId[deviceId] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard let self,
+                  self.recentPresetSaveHighlightByDeviceId[deviceId] == highlight else { return }
+            self.recentPresetSaveHighlightByDeviceId.removeValue(forKey: deviceId)
+            self.presetHighlightClearTasksByDeviceId.removeValue(forKey: deviceId)
+        }
+    }
+
+    func isRecentPresetSaveHighlight(_ kind: SavedPresetHighlight.Kind, id: UUID, for deviceId: String) -> Bool {
+        guard let highlight = recentPresetSaveHighlightByDeviceId[deviceId] else { return false }
+        return highlight.kind == kind && highlight.id == id
+    }
+
     private func waitForInteractivePresetWriteWindow(deviceId: String, timeout: TimeInterval = 90.0) async {
         guard presetWriteInProgress.contains(deviceId) else { return }
         #if DEBUG
@@ -9722,7 +9963,7 @@ class DeviceControlViewModel: ObservableObject {
     }
 
     func shouldAllowInteractivePresetSaveTap(for deviceId: String) -> Bool {
-        !isTransitionPresetButtonDisabled(for: deviceId)
+        transitionPresetSaveAvailability(for: deviceId) == .ready
     }
 
     func transitionPresetSaveBlockReasonDebug(for deviceId: String) -> String? {
@@ -9833,6 +10074,14 @@ class DeviceControlViewModel: ObservableObject {
         if previous != presetStoreHealthByDeviceId[deviceId] {
             print("preset_store.health.changed device=\(deviceId) state=degradedReadable")
         }
+        #endif
+    }
+
+    func notePresetStoreReadUnstable(deviceId: String, message: String) {
+        lastPresetStoreHealthEventByDeviceId[deviceId] = Date()
+        lastPresetStoreHealthMessageByDeviceId[deviceId] = "read-unstable: \(message)"
+        #if DEBUG
+        print("preset_store.health.read_unstable device=\(deviceId)")
         #endif
     }
 
@@ -10948,6 +11197,13 @@ class DeviceControlViewModel: ObservableObject {
     func isDeletingPlaylistRecord(_ playlistId: Int, for device: WLEDDevice) -> Bool {
         deletingPlaylistRecordIdsByDevice[device.id, default: []].contains(playlistId)
     }
+
+    func isDeletingColorPreset(_ preset: ColorPreset, for device: WLEDDevice) -> Bool {
+        let presetIds = colorPresetDeleteTargetIds(preset, fallbackDevice: device)
+        return presetIds.contains { deviceId, presetId in
+            deletingPresetRecordIdsByDevice[deviceId, default: []].contains(presetId)
+        }
+    }
     
     func nextPresetId(for device: WLEDDevice) -> Int? {
         nextAppManagedPresetId(excluding: Set(presets(for: device).map { $0.id }))
@@ -11400,50 +11656,52 @@ class DeviceControlViewModel: ObservableObject {
         _ presetId: Int,
         to device: WLEDDevice,
         transitionDeciseconds: Int? = nil,
-        preferWebSocketFirst: Bool = true,
+        preferWebSocketFirst: Bool = false,
         markInteraction: Bool = true
     ) async -> Bool {
         if markInteraction {
             markUserInteraction(device.id)
         }
-        if preferWebSocketFirst, webSocketManager.isDeviceConnected(device.id) {
-            let wsState = WLEDStateUpdate(
-                on: true,
-                transitionDeciseconds: transitionDeciseconds,
-                ps: presetId,
-                lor: 0
-            )
-            let wsDispatched = await webSocketManager.sendStateUpdateAwaitingDispatch(
-                wsState,
-                to: device.id,
-                timeout: 0.35
-            )
-            if wsDispatched {
-                #if DEBUG
-                print("✅ Preset WS dispatch for \(device.name): presetId=\(presetId)")
-                #endif
-                clearError()
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                    guard let self,
-                          let refreshed = self.devices.first(where: { $0.id == device.id }) else { return }
-                    await self.refreshDeviceState(refreshed)
-                }
-                return true
-            }
-            #if DEBUG
-            print("⚠️ Preset WS dispatch failed for \(device.name): presetId=\(presetId), falling back to HTTP")
-            #endif
-        }
         do {
             let state = try await apiService.applyPreset(presetId, to: device, transitionDeciseconds: transitionDeciseconds)
             updateDevice(device.id, with: state)
             clearError()
+            schedulePresetApplyReadback(for: device, delayNanoseconds: 350_000_000)
             return true
         } catch {
+            if preferWebSocketFirst, webSocketManager.isDeviceConnected(device.id) {
+                let wsState = WLEDStateUpdate(
+                    on: true,
+                    transitionDeciseconds: transitionDeciseconds,
+                    ps: presetId,
+                    lor: 0
+                )
+                let wsDispatched = await webSocketManager.sendStateUpdateAwaitingDispatch(
+                    wsState,
+                    to: device.id,
+                    timeout: 0.35
+                )
+                if wsDispatched {
+                    #if DEBUG
+                    print("✅ Preset WS fallback dispatch for \(device.name): presetId=\(presetId)")
+                    #endif
+                    clearError()
+                    schedulePresetApplyReadback(for: device, delayNanoseconds: 500_000_000)
+                    return true
+                }
+            }
             let mappedError = mapToWLEDError(error, device: device)
             presentError(mappedError)
             return false
+        }
+    }
+
+    private func schedulePresetApplyReadback(for device: WLEDDevice, delayNanoseconds: UInt64) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard let self,
+                  let refreshed = self.devices.first(where: { $0.id == device.id }) else { return }
+            await self.refreshDeviceState(refreshed)
         }
     }
 
@@ -11452,7 +11710,7 @@ class DeviceControlViewModel: ObservableObject {
             preset.id,
             to: device,
             transitionDeciseconds: transitionDeciseconds,
-            preferWebSocketFirst: true,
+            preferWebSocketFirst: false,
             markInteraction: true
         )
     }
@@ -11497,13 +11755,14 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
         do {
-            let deleted = try await apiService.rewritePresetStoreDeletingRecords(
+            let deleted = try await rewritePresetStoreDeletingRecordsWithJournal(
                 playlistIds: [],
                 presetIds: [presetId],
-                device: device
+                device: device,
+                debugLabel: "preset_record.delete"
             )
             guard deleted else {
-                presentError(.apiError(message: "Preset delete could not be verified on device. Please retry once preset storage is readable."))
+                presentError(.apiError(message: "The lamp could not confirm the delete yet. Please refresh Saves and try again."))
                 return false
             }
             await refreshPresets(for: device)
@@ -11514,6 +11773,131 @@ class DeviceControlViewModel: ObservableObject {
             let mappedError = mapToWLEDError(error, device: device)
             presentError(mappedError)
             return false
+        }
+    }
+
+    private func rewritePresetStoreDeletingRecordsWithJournal(
+        playlistIds: [Int],
+        presetIds: [Int],
+        device: WLEDDevice,
+        debugLabel: String
+    ) async throws -> Bool {
+        let normalizedPlaylistIds = Array(Set(playlistIds.filter { (1...250).contains($0) })).sorted()
+        let normalizedPresetIds = Array(Set(presetIds.filter { (1...250).contains($0) })).sorted()
+        guard !normalizedPlaylistIds.isEmpty || !normalizedPresetIds.isEmpty else {
+            return true
+        }
+
+        DeviceCleanupManager.shared.enqueuePresetStoreDelete(
+            deviceId: device.id,
+            playlistIds: normalizedPlaylistIds,
+            presetIds: normalizedPresetIds,
+            verificationRequired: true
+        )
+        #if DEBUG
+        print("\(debugLabel).journaled device=\(device.id) playlists=\(normalizedPlaylistIds) presets=\(normalizedPresetIds)")
+        #endif
+
+        let deleted = try await apiService.rewritePresetStoreDeletingRecords(
+            playlistIds: normalizedPlaylistIds,
+            presetIds: normalizedPresetIds,
+            device: device
+        )
+        guard deleted else {
+            return false
+        }
+
+        if !normalizedPlaylistIds.isEmpty {
+            DeviceCleanupManager.shared.removeIds(type: .playlist, deviceId: device.id, ids: normalizedPlaylistIds)
+        }
+        if !normalizedPresetIds.isEmpty {
+            DeviceCleanupManager.shared.removeIds(type: .preset, deviceId: device.id, ids: normalizedPresetIds)
+        }
+        #if DEBUG
+        print("\(debugLabel).journal_cleared device=\(device.id) playlists=\(normalizedPlaylistIds) presets=\(normalizedPresetIds)")
+        #endif
+        return true
+    }
+
+    @discardableResult
+    func deleteColorPreset(_ preset: ColorPreset, for device: WLEDDevice) async -> Bool {
+        guard !AutomationStore.shared.isDeletionInProgress(for: device.id) else {
+            presentError(.apiError(message: "Please wait for automation deletion to finish before deleting a saved color."))
+            return false
+        }
+        let targets = colorPresetDeleteTargets(preset, fallbackDevice: device)
+        guard !targets.isEmpty else {
+            clearError()
+            return true
+        }
+
+        var allConfirmed = true
+        var enqueuedOfflineDeletes: [(deviceId: String, presetId: Int)] = []
+
+        for target in targets {
+            if let targetDevice = target.device {
+                let deleted = await deletePresetRecord(target.presetId, for: targetDevice)
+                if !deleted {
+                    allConfirmed = false
+                }
+            } else {
+                DeviceCleanupManager.shared.enqueue(
+                    type: .preset,
+                    deviceId: target.deviceId,
+                    ids: [target.presetId]
+                )
+                enqueuedOfflineDeletes.append((deviceId: target.deviceId, presetId: target.presetId))
+            }
+        }
+
+        guard allConfirmed else {
+            return false
+        }
+
+        if !enqueuedOfflineDeletes.isEmpty {
+            #if DEBUG
+            print("color_preset.delete.offline_cleanup_enqueued preset=\(preset.id.uuidString) targets=\(enqueuedOfflineDeletes)")
+            #endif
+        }
+        clearError()
+        return true
+    }
+
+    private func colorPresetDeleteTargetIds(
+        _ preset: ColorPreset,
+        fallbackDevice: WLEDDevice
+    ) -> [(deviceId: String, presetId: Int)] {
+        if let idsByDevice = preset.wledPresetIds, !idsByDevice.isEmpty {
+            var seen = Set<String>()
+            var ordered: [(String, Int)] = []
+            if let currentPresetId = idsByDevice[fallbackDevice.id] {
+                ordered.append((fallbackDevice.id, currentPresetId))
+                seen.insert(fallbackDevice.id)
+            }
+            for (deviceId, presetId) in idsByDevice.sorted(by: { $0.key < $1.key }) where !seen.contains(deviceId) {
+                ordered.append((deviceId, presetId))
+                seen.insert(deviceId)
+            }
+            return ordered.filter { appManagedPresetRange.contains($0.1) }
+        }
+        if let legacyId = preset.wledPresetId, appManagedPresetRange.contains(legacyId) {
+            return [(fallbackDevice.id, legacyId)]
+        }
+        return []
+    }
+
+    private func colorPresetDeleteTargets(
+        _ preset: ColorPreset,
+        fallbackDevice: WLEDDevice
+    ) -> [(deviceId: String, presetId: Int, device: WLEDDevice?)] {
+        colorPresetDeleteTargetIds(preset, fallbackDevice: fallbackDevice).map { deviceId, presetId in
+            let targetDevice: WLEDDevice?
+            if deviceId == fallbackDevice.id {
+                targetDevice = fallbackDevice
+            } else {
+                targetDevice = devices.first(where: { $0.id == deviceId && $0.isOnline })
+            }
+            return (deviceId: deviceId, presetId: presetId, device: targetDevice)
         }
     }
 
@@ -11529,13 +11913,14 @@ class DeviceControlViewModel: ObservableObject {
             }
         }
         do {
-            let deleted = try await apiService.rewritePresetStoreDeletingRecords(
+            let deleted = try await rewritePresetStoreDeletingRecordsWithJournal(
                 playlistIds: [playlist.id],
                 presetIds: [],
-                device: device
+                device: device,
+                debugLabel: "playlist_record.delete"
             )
             guard deleted else {
-                presentError(.apiError(message: "Playlist delete could not be verified on device. Please retry once preset storage is readable."))
+                presentError(.apiError(message: "The lamp could not confirm the playlist delete yet. Please refresh Saves and try again."))
                 return false
             }
             clearPendingPlaylistRename(deviceId: device.id, playlistId: playlist.id)
@@ -11701,6 +12086,147 @@ class DeviceControlViewModel: ObservableObject {
 
     func isPlaylistRenamePending(_ playlistId: Int, for device: WLEDDevice) -> Bool {
         pendingPlaylistRenameIdsByDevice[device.id]?.contains(playlistId) ?? false
+    }
+
+    @discardableResult
+    func deleteTransitionPreset(_ preset: TransitionPreset, for device: WLEDDevice) async -> Bool {
+        guard !AutomationStore.shared.isDeletionInProgress(for: device.id) else {
+            presentError(.apiError(message: "Please wait for automation deletion to finish before deleting a transition."))
+            return false
+        }
+        markUserInteraction(device.id)
+
+        let livePlaylists: [WLEDPlaylist]
+        do {
+            livePlaylists = try await apiService.fetchPlaylists(for: device)
+        } catch {
+            if preset.wledPlaylistId == nil {
+                presentError(mapToWLEDError(error, device: device))
+                return false
+            }
+            livePlaylists = []
+        }
+
+        let playlist: WLEDPlaylist?
+        let playlistId: Int?
+        if let storedId = preset.wledPlaylistId {
+            playlistId = storedId
+            playlist = livePlaylists.first(where: { $0.id == storedId })
+        } else {
+            let matches = livePlaylists.filter {
+                appManagedPresetRange.contains($0.id)
+                    && presetStoreNamesMatch($0.name, preset.name)
+            }
+            guard matches.count <= 1 else {
+                presentError(.apiError(message: "Multiple matching transition records were found on the device. Rename one and retry."))
+                return false
+            }
+            playlist = matches.first
+            playlistId = matches.first?.id
+        }
+
+        guard let resolvedPlaylistId = playlistId else {
+            clearError()
+            return true
+        }
+
+        let stepPresetIds: [Int]
+        if let storedStepIds = preset.wledStepPresetIds, !storedStepIds.isEmpty {
+            stepPresetIds = storedStepIds
+        } else if let playlist {
+            stepPresetIds = playlist.presets
+        } else {
+            presentError(.apiError(message: "Transition delete needs to refresh the device playlist before removing it. Please retry."))
+            return false
+        }
+
+        do {
+            let deleted = try await rewritePresetStoreDeletingRecordsWithJournal(
+                playlistIds: [resolvedPlaylistId],
+                presetIds: stepPresetIds,
+                device: device,
+                debugLabel: "transition_preset.delete"
+            )
+            guard deleted else {
+                presentError(.apiError(message: "The lamp could not confirm the transition delete yet. Please refresh Saves and try again."))
+                return false
+            }
+            clearPendingPlaylistRename(deviceId: device.id, playlistId: resolvedPlaylistId)
+            await refreshPlaylists(for: device)
+            await refreshPresets(for: device)
+            clearError()
+            #if DEBUG
+            print("transition_preset.delete.verified device=\(device.id) playlist=\(resolvedPlaylistId) stepIds=\(stepPresetIds)")
+            #endif
+            return true
+        } catch {
+            presentError(mapToWLEDError(error, device: device))
+            return false
+        }
+    }
+
+    @discardableResult
+    func deleteEffectPreset(_ preset: WLEDEffectPreset, for device: WLEDDevice) async -> Bool {
+        guard !AutomationStore.shared.isDeletionInProgress(for: device.id) else {
+            presentError(.apiError(message: "Please wait for automation deletion to finish before deleting an animation."))
+            return false
+        }
+        markUserInteraction(device.id)
+
+        let presetId: Int?
+        if let storedId = preset.wledPresetId {
+            presetId = storedId
+        } else {
+            let livePresets: [WLEDPreset]
+            do {
+                livePresets = try await apiService.fetchPresets(for: device)
+            } catch {
+                presentError(mapToWLEDError(error, device: device))
+                return false
+            }
+            let matches = livePresets.filter {
+                appManagedPresetRange.contains($0.id)
+                    && presetStoreNamesMatch($0.name, preset.name)
+                    && ($0.segment?.fx == nil || $0.segment?.fx == preset.effectId)
+            }
+            guard matches.count <= 1 else {
+                presentError(.apiError(message: "Multiple matching animation records were found on the device. Rename one and retry."))
+                return false
+            }
+            presetId = matches.first?.id
+        }
+
+        guard let resolvedPresetId = presetId else {
+            clearError()
+            return true
+        }
+
+        do {
+            let deleted = try await rewritePresetStoreDeletingRecordsWithJournal(
+                playlistIds: [],
+                presetIds: [resolvedPresetId],
+                device: device,
+                debugLabel: "effect_preset.delete"
+            )
+            guard deleted else {
+                presentError(.apiError(message: "The lamp could not confirm the animation delete yet. Please refresh Saves and try again."))
+                return false
+            }
+            await refreshPresets(for: device)
+            await refreshPlaylists(for: device)
+            clearError()
+            #if DEBUG
+            print("effect_preset.delete.verified device=\(device.id) preset=\(resolvedPresetId)")
+            #endif
+            return true
+        } catch {
+            presentError(mapToWLEDError(error, device: device))
+            return false
+        }
+    }
+
+    private func presetStoreNamesMatch(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.trimmingCharacters(in: .whitespacesAndNewlines) == rhs.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     func savePreset(name: String, quickLoadTag: String? = nil, for device: WLEDDevice, presetId: Int? = nil) async {
@@ -11907,16 +12433,46 @@ extension DeviceControlViewModel {
         )
     }
 
-    private func hasPresetCapacity(for device: WLEDDevice, requiredSlots: Int, presets: [WLEDPreset]? = nil) -> Bool {
+    private func hasPresetCapacity(
+        for device: WLEDDevice,
+        requiredSlots: Int,
+        presets: [WLEDPreset]? = nil,
+        range: ClosedRange<Int> = appManagedPresetRange
+    ) -> Bool {
         let currentPresets = presets ?? presetsCache[device.id] ?? []
-        let used = currentPresets.filter { appManagedPresetRange.contains($0.id) }.count
-        let remaining = max(0, appManagedPresetRange.count - used)
+        let used = currentPresets.filter { range.contains($0.id) }.count
+        let remaining = max(0, range.count - used)
         let available = max(0, remaining - presetSlotReserve)
         return available >= requiredSlots
     }
 
     func presetSlotAvailability(for device: WLEDDevice) -> PresetSlotAvailability? {
         presetSlotStatus[device.id]
+    }
+
+    func presetSlotAvailability(
+        for device: WLEDDevice,
+        range: ClosedRange<Int>,
+        reserve: Int = presetSlotReserve
+    ) -> PresetSlotAvailability? {
+        guard let currentPresets = presetsCache[device.id] else {
+            return range == appManagedPresetRange ? presetSlotStatus[device.id] : nil
+        }
+        guard !currentPresets.isEmpty || presetSlotStatus[device.id] != nil else {
+            return nil
+        }
+        let used = currentPresets.filter { range.contains($0.id) }.count
+        let total = range.count
+        let remaining = max(0, total - used)
+        let safeReserve = max(0, min(reserve, total))
+        let available = max(0, remaining - safeReserve)
+        return PresetSlotAvailability(
+            used: used,
+            remaining: remaining,
+            reserve: safeReserve,
+            available: available,
+            total: total
+        )
     }
 
     func requiredPresetSlotsForTransition(durationSeconds: Double, device: WLEDDevice) -> Int {

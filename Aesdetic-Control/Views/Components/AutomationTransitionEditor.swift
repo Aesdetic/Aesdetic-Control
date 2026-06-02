@@ -17,6 +17,7 @@ struct AutomationTransitionEditor: View {
     @Binding var startWhiteLevel: Double?
     @Binding var endTemperature: Double?
     @Binding var endWhiteLevel: Double?
+    @Binding var selectedTransitionPresetId: UUID?
     let transitionProfile: TransitionStepProfile?
     let automationGuaranteeCount: Int
     let maxDurationMinutes: Int
@@ -24,9 +25,10 @@ struct AutomationTransitionEditor: View {
     let expectedStartDate: Date?
     let expectedEndDate: Date?
     let expectedTimeZone: TimeZone
+    let isInline: Bool
     
     // Preview state
-    @State private var previewEnabled: Bool = true
+    @State private var previewEnabled: Bool = false
     
     // Internal UI state
     @State private var selectedA: UUID? = nil
@@ -40,10 +42,11 @@ struct AutomationTransitionEditor: View {
     @State private var stopWhiteLevelsB: [UUID: Double] = [:]
     @State private var selectedStartPresetId: UUID?
     @State private var selectedEndPresetId: UUID?
-    @State private var selectedTransitionPresetId: UUID?
     @State private var durationMinutesPart: Int = 1
     @State private var durationSecondsPart: Int = 0
     @State private var isApplyingTransition: Bool = false
+    @State private var isApplyingTransitionPreset: Bool = false
+    @State private var isSyncingDurationParts: Bool = false
     @State private var previewTask: Task<Void, Never>?
     @State private var lastPreviewTarget: GradientTarget = .end
 
@@ -59,13 +62,15 @@ struct AutomationTransitionEditor: View {
         startWhiteLevel: Binding<Double?>,
         endTemperature: Binding<Double?>,
         endWhiteLevel: Binding<Double?>,
+        selectedTransitionPresetId: Binding<UUID?> = .constant(nil),
         transitionProfile: TransitionStepProfile? = nil,
         automationGuaranteeCount: Int = 5,
         maxDurationMinutes: Int = TransitionDurationPicker.maxMinutes,
         showsDurationRecommendationGuide: Bool = true,
         expectedStartDate: Date? = nil,
         expectedEndDate: Date? = nil,
-        expectedTimeZone: TimeZone = .current
+        expectedTimeZone: TimeZone = .current,
+        isInline: Bool = false
     ) {
         self.viewModel = viewModel
         self.device = device
@@ -78,6 +83,7 @@ struct AutomationTransitionEditor: View {
         self._startWhiteLevel = startWhiteLevel
         self._endTemperature = endTemperature
         self._endWhiteLevel = endWhiteLevel
+        self._selectedTransitionPresetId = selectedTransitionPresetId
         self.transitionProfile = transitionProfile
         self.automationGuaranteeCount = automationGuaranteeCount
         self.maxDurationMinutes = max(0, maxDurationMinutes)
@@ -85,6 +91,7 @@ struct AutomationTransitionEditor: View {
         self.expectedStartDate = expectedStartDate
         self.expectedEndDate = expectedEndDate
         self.expectedTimeZone = expectedTimeZone
+        self.isInline = isInline
     }
     
     private var allowedSecondValues: [Int] {
@@ -112,8 +119,10 @@ struct AutomationTransitionEditor: View {
     }
     
     var body: some View {
-        VStack(spacing: 16) {
-            headerRow
+        VStack(spacing: isInline ? 18 : 16) {
+            if !isInline {
+                headerRow
+            }
             transitionPresetSelector
             durationSection
             startSection
@@ -121,17 +130,18 @@ struct AutomationTransitionEditor: View {
             previewSection
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
+        .padding(.vertical, isInline ? 0 : 16)
+        .background {
+            if !isInline {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            }
+        }
         .onAppear {
-            previewEnabled = true
             // Initialize duration from durationSeconds
             updateDurationFromSeconds(durationSeconds)
             hydrateStopMapsIfNeeded()
@@ -148,7 +158,8 @@ struct AutomationTransitionEditor: View {
         }
         .onChange(of: advancedUIEnabled) { _, enabled in
             if !enabled {
-                previewEnabled = true
+                previewEnabled = false
+                cancelPreview()
             }
         }
         .onDisappear {
@@ -182,7 +193,7 @@ struct AutomationTransitionEditor: View {
                 .padding(.vertical, 4)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     @ViewBuilder
@@ -202,13 +213,14 @@ struct AutomationTransitionEditor: View {
                     .padding(.vertical, 4)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, isInline ? 0 : 16)
         }
     }
     
     private func transitionPresetChip(preset: TransitionPreset) -> some View {
         let isSelected = selectedTransitionPresetId == preset.id
         return Button {
+            isApplyingTransitionPreset = true
             selectedTransitionPresetId = preset.id
             startGradient = preset.gradientA
             endGradient = preset.gradientB
@@ -231,6 +243,11 @@ struct AutomationTransitionEditor: View {
             startWhiteLevel = preset.whiteLevelA
             endTemperature = preset.temperatureB
             endWhiteLevel = preset.whiteLevelB
+            selectedTransitionPresetId = preset.id
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                isApplyingTransitionPreset = false
+            }
             
             if previewEnabled {
                 schedulePreview(target: .end)
@@ -330,9 +347,11 @@ struct AutomationTransitionEditor: View {
             if showsDurationRecommendationGuide {
                 durationRecommendationGuide
             }
-            transitionPlanningSummary
+            if !isInline {
+                transitionPlanningSummary
+            }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
 
     private var durationRecommendationGuide: some View {
@@ -446,6 +465,7 @@ struct AutomationTransitionEditor: View {
             Slider(value: $startBrightness, in: 0...255, step: 1)
                 .tint(.white)
                 .onChange(of: startBrightness) { _, _ in
+                    clearTransitionPresetSelectionForManualEdit()
                     if previewEnabled {
                         schedulePreview(target: .start)
                     }
@@ -463,6 +483,7 @@ struct AutomationTransitionEditor: View {
                     }
                 },
                 onTapAnywhere: { t, _ in
+                    clearTransitionPresetSelectionForManualEdit()
                     let color = GradientSampler.sampleColor(at: t, stops: startGradient.stops, interpolation: startGradient.interpolation)
                     let new = GradientStop(position: t, hexColor: color.toHex())
                     var updatedStops = startGradient.stops
@@ -514,6 +535,7 @@ struct AutomationTransitionEditor: View {
                     }
                 },
                 onStopsChanged: { stops, phase in
+                    clearTransitionPresetSelectionForManualEdit()
                     startGradient = LEDGradient(stops: stops, interpolation: startGradient.interpolation)
                     let stopIds = Set(stops.map { $0.id })
                     stopTemperaturesA = stopTemperaturesA.filter { stopIds.contains($0.key) }
@@ -535,7 +557,7 @@ struct AutomationTransitionEditor: View {
                 colorWheelView(selectedId: selectedId, target: .start)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     private var endSection: some View {
@@ -565,6 +587,7 @@ struct AutomationTransitionEditor: View {
             Slider(value: $endBrightness, in: 0...255, step: 1)
                 .tint(.white)
                 .onChange(of: endBrightness) { _, _ in
+                    clearTransitionPresetSelectionForManualEdit()
                     if previewEnabled {
                         schedulePreview(target: .end)
                     }
@@ -582,6 +605,7 @@ struct AutomationTransitionEditor: View {
                     }
                 },
                 onTapAnywhere: { t, _ in
+                    clearTransitionPresetSelectionForManualEdit()
                     let color = GradientSampler.sampleColor(at: t, stops: endGradient.stops, interpolation: endGradient.interpolation)
                     let new = GradientStop(position: t, hexColor: color.toHex())
                     var updatedStops = endGradient.stops
@@ -633,6 +657,7 @@ struct AutomationTransitionEditor: View {
                     }
                 },
                 onStopsChanged: { stops, phase in
+                    clearTransitionPresetSelectionForManualEdit()
                     endGradient = LEDGradient(stops: stops, interpolation: endGradient.interpolation)
                     let stopIds = Set(stops.map { $0.id })
                     stopTemperaturesB = stopTemperaturesB.filter { stopIds.contains($0.key) }
@@ -654,7 +679,7 @@ struct AutomationTransitionEditor: View {
                 colorWheelView(selectedId: selectedId, target: .end)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isInline ? 0 : 16)
     }
     
     @ViewBuilder
@@ -679,6 +704,7 @@ struct AutomationTransitionEditor: View {
         let isSelected = (target == .start && selectedStartPresetId == preset.id) || 
                         (target == .end && selectedEndPresetId == preset.id)
         return Button {
+            clearTransitionPresetSelectionForManualEdit()
             if target == .start {
                 selectedStartPresetId = preset.id
                 startGradient = LEDGradient(stops: preset.gradientStops, interpolation: preset.gradientInterpolation ?? .linear)
@@ -748,6 +774,7 @@ struct AutomationTransitionEditor: View {
             autoWhiteEnabled: viewModel.isAutoWhiteEnabled(for: device),
             cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, whiteLevel in
+                clearTransitionPresetSelectionForManualEdit()
                 if target == .start {
                     guard let idx = startGradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }
                     var updatedStops = startGradient.stops
@@ -801,6 +828,7 @@ struct AutomationTransitionEditor: View {
                 }
             },
             onRemove: {
+                clearTransitionPresetSelectionForManualEdit()
                 if target == .start {
                     if startGradient.stops.count > 1 {
                         var updatedStops = startGradient.stops
@@ -837,35 +865,30 @@ struct AutomationTransitionEditor: View {
     
     @ViewBuilder
     private var previewSection: some View {
-        if previewEnabled && isApplyingTransition {
-            Button(action: cancelPreview) {
-                Text("Stop Preview")
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.12))
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-        }
+        EmptyView()
     }
     
     // MARK: - Helper Functions
     
     private func updateDurationFromSeconds(_ seconds: Double) {
         let total = clampedDurationTotalSeconds(seconds)
-        durationMinutesPart = total / 60
-        durationSecondsPart = total % 60
+        let minutes = total / 60
+        let secondsPart = total % 60
+        guard durationMinutesPart != minutes || durationSecondsPart != secondsPart || Double(total) != seconds else { return }
+        isSyncingDurationParts = true
+        durationMinutesPart = minutes
+        durationSecondsPart = secondsPart
         if Double(total) != seconds {
             durationSeconds = Double(total)
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            isSyncingDurationParts = false
         }
     }
     
     private func updateDurationToSeconds() {
+        clearTransitionPresetSelectionForManualEdit()
         if durationMinutesPart > maxDurationMinutes {
             durationMinutesPart = maxDurationMinutes
         }
@@ -877,6 +900,11 @@ struct AutomationTransitionEditor: View {
         }
         durationSecondsPart = max(0, min(durationSecondsPart, 59))
         durationSeconds = Double(totalDurationSeconds(minutes: durationMinutesPart, seconds: durationSecondsPart))
+    }
+
+    private func clearTransitionPresetSelectionForManualEdit() {
+        guard !isApplyingTransitionPreset, !isSyncingDurationParts else { return }
+        selectedTransitionPresetId = nil
     }
 
     private func formatDuration(_ seconds: Double) -> String {

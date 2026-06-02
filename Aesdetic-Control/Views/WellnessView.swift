@@ -12,6 +12,7 @@ import CoreLocation
 struct WellnessView: View {
     @EnvironmentObject private var viewModel: WellnessViewModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedDate: Date = Date()
     @State private var entry: WellnessEntrySnapshot = .empty(for: Date())
     @State private var isLoadingEntry: Bool = false
@@ -35,7 +36,8 @@ struct WellnessView: View {
 
     private let weatherSummary = "23C Sunny"
     private let showInspoBackgroundPreview = false
-    private let showDecorativeTree = true
+    private let showDecorativeTree = false
+    private var appTheme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
     private var topSafeAreaInset: CGFloat {
         guard let windowScene = UIApplication.shared.connectedScenes.first(where: { $0 is UIWindowScene }) as? UIWindowScene,
               let window = windowScene.windows.first(where: { $0.isKeyWindow }) else {
@@ -142,33 +144,47 @@ struct WellnessView: View {
     }
 
     private var dayStripHeader: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
+                    Text("Wellness")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(appTheme.textSecondary)
+                        .textCase(.uppercase)
+                        .tracking(0.8)
                     Text(dayTitle)
-                        .font(AppTypography.display(size: 40, weight: .bold, relativeTo: .largeTitle))
-                        .foregroundColor(WellnessTheme.textPrimary)
+                        .font(AppTypography.display(size: 38, weight: .bold, relativeTo: .largeTitle))
+                        .foregroundColor(appTheme.textPrimary)
                     Text(dateSubtitle)
                         .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(WellnessTheme.textSecondary)
+                        .foregroundColor(appTheme.textSecondary)
                 }
                 Spacer()
                 Button(action: { isDatePickerPresented = true }) {
                     Image(systemName: "calendar")
-                        .font(AppTypography.style(.title3, weight: .semibold))
-                        .foregroundColor(WellnessTheme.textPrimary)
+                        .font(AppTypography.style(.headline, weight: .semibold))
+                        .foregroundColor(AppTheme.controlForeground(for: colorScheme, isActive: true))
+                        .frame(width: 44, height: 44)
+                        .background(
+                            Circle()
+                                .fill(AppTheme.controlFillStyle(for: colorScheme, isActive: true))
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.controlStroke(for: colorScheme, isActive: true), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.bottom, 2)
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         ForEach(dayStripItems) { item in
                             switch item {
                             case .day(let day):
                                 let dayNumber = Calendar.current.component(.day, from: day)
+                                let selected = isSelected(day)
                                 Button(action: {
                                     withAnimation(.easeInOut(duration: 0.25)) {
                                         contentMode = .daily
@@ -177,14 +193,16 @@ struct WellnessView: View {
                                 }) {
                                     Text("\(dayNumber)")
                                         .font(AppTypography.style(.footnote, weight: .semibold))
-                                        .foregroundColor(isSelected(day) ? WellnessTheme.textPrimary : WellnessTheme.textSecondary)
-                                        .frame(width: 30, height: 24)
-                                        .padding(.vertical, 6)
-                                        .overlay(alignment: .bottom) {
-                                            Rectangle()
-                                                .fill(isSelected(day) ? WellnessTheme.textPrimary : Color.clear)
-                                                .frame(height: 2)
-                                        }
+                                        .foregroundColor(selected ? AppTheme.controlForeground(for: colorScheme, isActive: true) : appTheme.textSecondary)
+                                        .frame(width: 34, height: 32)
+                                        .background(
+                                            Capsule(style: .continuous)
+                                                .fill(selected ? AppTheme.controlFillStyle(for: colorScheme, isActive: true) : AnyShapeStyle(appTheme.surfaceMuted.opacity(0.36)))
+                                        )
+                                        .overlay(
+                                            Capsule(style: .continuous)
+                                                .stroke(selected ? AppTheme.controlStroke(for: colorScheme, isActive: true) : appTheme.cardStrokeOuter.opacity(0.45), lineWidth: 1)
+                                        )
                                 }
                                 .buttonStyle(.plain)
                                 .contentShape(Rectangle())
@@ -197,10 +215,16 @@ struct WellnessView: View {
                                 }) {
                                     Image(systemName: "chart.bar")
                                         .font(AppTypography.style(.caption, weight: .semibold))
-                                        .foregroundColor(WellnessTheme.textSecondary)
-                                        .frame(width: 28, height: 28)
-                                        .background(WellnessTheme.surfaceStrong)
-                                        .clipShape(Circle())
+                                        .foregroundColor(appTheme.textSecondary)
+                                        .frame(width: 34, height: 32)
+                                        .background(
+                                            Capsule(style: .continuous)
+                                                .fill(appTheme.surfaceMuted.opacity(0.36))
+                                        )
+                                        .overlay(
+                                            Capsule(style: .continuous)
+                                                .stroke(appTheme.cardStrokeOuter.opacity(0.45), lineWidth: 1)
+                                        )
                                 }
                                 .buttonStyle(.plain)
                                 .id(weekKey(for: weekEnd))
@@ -213,10 +237,16 @@ struct WellnessView: View {
                                 }) {
                                     Image(systemName: "calendar")
                                         .font(AppTypography.style(.caption, weight: .semibold))
-                                        .foregroundColor(WellnessTheme.textSecondary)
-                                        .frame(width: 28, height: 28)
-                                        .background(WellnessTheme.surfaceStrong)
-                                        .clipShape(Circle())
+                                        .foregroundColor(appTheme.textSecondary)
+                                        .frame(width: 34, height: 32)
+                                        .background(
+                                            Capsule(style: .continuous)
+                                                .fill(appTheme.surfaceMuted.opacity(0.36))
+                                        )
+                                        .overlay(
+                                            Capsule(style: .continuous)
+                                                .stroke(appTheme.cardStrokeOuter.opacity(0.45), lineWidth: 1)
+                                        )
                                 }
                                 .buttonStyle(.plain)
                                 .id(monthKey(for: monthStart))
@@ -237,8 +267,14 @@ struct WellnessView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, topSafeAreaInset + 12)
-        .padding(.bottom, 18)
-        .background(Color.clear.ignoresSafeArea(edges: .top))
+        .padding(.bottom, 14)
+        .background(
+            AppCardBackground(
+                style: AppCardStyles.glass(for: colorScheme, tone: .inactive, cornerRadius: 0)
+            )
+            .ignoresSafeArea(edges: .top)
+            .opacity(0.92)
+        )
     }
 
     private var morningCheckinContent: some View {
@@ -309,7 +345,20 @@ struct WellnessView: View {
                     .font(AppTypography.style(.footnote, weight: .semibold))
                     .foregroundColor(WellnessTheme.textSecondary)
                 Spacer()
-                CheckDot(isOn: entry.sunriseLampUsed)
+                Button(action: { entry.sunriseLampUsed.toggle() }) {
+                    CheckDot(isOn: entry.sunriseLampUsed)
+                }
+                .buttonStyle(.plain)
+                .disabled(entry.isLocked)
+            }
+
+            if entry.sunriseLampUsed {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Did it help?")
+                        .font(AppTypography.style(.footnote, weight: .semibold))
+                        .foregroundColor(WellnessTheme.textSecondary)
+                    CapsulePicker(options: SunriseHelped.allCases, selection: $entry.sunriseHelped, isLocked: entry.isLocked)
+                }
             }
 
         }
@@ -429,7 +478,7 @@ struct WellnessView: View {
     }
 
     private var dailySections: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             stackedSection(
                 id: "morning",
                 title: "Morning check-in",
@@ -490,6 +539,8 @@ struct WellnessView: View {
                 tomorrowPlanContent
             }
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
 
     private func stackedSection(
@@ -510,21 +561,21 @@ struct WellnessView: View {
                 }
             }) {
                 HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(title)
                             .font(AppTypography.style(.headline, weight: .semibold))
-                            .foregroundColor(WellnessTheme.textPrimary)
+                            .foregroundColor(appTheme.textPrimary)
 
                         Text(subtitle)
                             .font(AppTypography.style(.footnote))
-                            .foregroundColor(subtitleColor)
+                            .foregroundColor(appTheme.textSecondary)
                             .lineSpacing(1.5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
                         .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(WellnessTheme.textSecondary)
+                        .foregroundColor(appTheme.textSecondary)
                         .padding(.top, 3)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -538,17 +589,19 @@ struct WellnessView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, verticalPadding)
+        .padding(.horizontal, 18)
+        .padding(.vertical, isExpanded.wrappedValue ? max(18, verticalPadding - 2) : 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(background)
-        .overlay(alignment: .top) {
-            if showsTopSeparator {
-                Rectangle()
-                    .fill(WellnessTheme.sectionSeparator)
-                    .frame(height: 0.5)
-            }
-        }
+        .background(
+            AppCardBackground(
+                style: AppCardStyles.glass(
+                    for: colorScheme,
+                    tone: isExpanded.wrappedValue ? .active : .inactive,
+                    cornerRadius: 22
+                )
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .animation(.easeInOut(duration: 0.28), value: isExpanded.wrappedValue)
         .id(id)
     }
@@ -631,12 +684,14 @@ struct WellnessView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(WellnessTheme.sectionSand)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(WellnessTheme.sectionSeparator)
-                .frame(height: 0.5)
-        }
+        .background(
+            AppCardBackground(
+                style: AppCardStyles.glass(for: colorScheme, tone: .active, cornerRadius: 22)
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
 
     private func autoScrollIfNeeded(previous: [Bool], current: [Bool], proxy: ScrollViewProxy) {

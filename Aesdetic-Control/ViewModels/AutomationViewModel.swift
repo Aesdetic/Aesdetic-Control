@@ -29,6 +29,10 @@ class AutomationViewModel: ObservableObject {
             .assign(to: \.automations, on: self)
             .store(in: &cancellables)
 
+        if AppRuntimeEnvironment.isRunningUnitTests {
+            return
+        }
+
         DeviceControlViewModel.shared.$devices
             .map { devices in
                 devices

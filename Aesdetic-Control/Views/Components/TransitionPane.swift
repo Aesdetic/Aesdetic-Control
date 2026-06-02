@@ -37,6 +37,7 @@ struct TransitionPane: View {
     @State private var selectedEndPresetId: UUID?
     @State private var isApplyingTransition: Bool = false
     @State private var isCancellingTransition: Bool = false
+    @State private var saveFeedbackTrigger: Int = 0
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     @AppStorage("perLedTransitionsEnabled") private var perLedTransitionsEnabled: Bool = false
 
@@ -95,6 +96,10 @@ struct TransitionPane: View {
     private var hasActiveTransitionRun: Bool {
         activeTransitionId != nil
     }
+
+    private var isPresetWriteLocked: Bool {
+        viewModel.presetWriteInProgress.contains(device.id)
+    }
     
     private var durationTotalSeconds: Double {
         Double(transitionPickerDurationSeconds())
@@ -106,14 +111,15 @@ struct TransitionPane: View {
 
     private var isTransitionLoading: Bool {
         guard let status = viewModel.activeRunStatus[device.id], status.kind == .transition else {
-            return viewModel.presetWriteInProgress.contains(device.id)
+            return false
         }
-        return status.title == "Loading..." || viewModel.presetWriteInProgress.contains(device.id)
+        return status.title == "Loading..."
     }
 
     private var isPresetButtonDisabled: Bool {
         isSavingPreset
             || automationStore.hasAnyDeletionInProgress
+            || isPresetWriteLocked
             || viewModel.isTransitionPresetButtonDisabled(for: device.id)
     }
 
@@ -144,6 +150,7 @@ struct TransitionPane: View {
         let base = paneCardContent
         let runtimeBound = applyRuntimeModifiers(to: base)
         applyDraftPersistenceModifiers(to: runtimeBound)
+            .sensorySuccess(trigger: saveFeedbackTrigger)
     }
 
     @ViewBuilder
@@ -477,6 +484,8 @@ struct TransitionPane: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(isSavingPreset || isApplyingTransition || isCancellingTransition || viewModel.isTransitionCleanupInProgress(for: device.id) || automationStore.hasAnyDeletionInProgress)
+                .opacity((isSavingPreset || isApplyingTransition || isCancellingTransition || viewModel.isTransitionCleanupInProgress(for: device.id) || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
 
                 Text("Transition")
                     .font(AppTypography.style(.headline))
@@ -496,27 +505,28 @@ struct TransitionPane: View {
                                     .scaleEffect(0.7)
                                     .tint(.white)
                             } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle")
+                                Image(systemName: "checkmark.circle.fill")
                                     .font(AppTypography.style(.caption))
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.green.opacity(0.95))
                             } else {
                                 Image(systemName: "plus.circle")
                                     .font(AppTypography.style(.caption))
                             }
-                            Text("Save Transition")
+                            Text(showSaveSuccess ? "Saved" : "Save Transition")
                                 .font(AppTypography.style(.caption, weight: .semibold))
                         }
-                        .foregroundColor(.white.opacity(0.9))
+                        .foregroundColor(showSaveSuccess ? Color.black.opacity(0.82) : .white.opacity(0.9))
                         .padding(.horizontal, 11)
                         .padding(.vertical, 7)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(Color.white.opacity(0.12))
+                                .fill(showSaveSuccess ? Color.white.opacity(0.92) : Color.white.opacity(0.12))
                                 .overlay(
                                     Capsule(style: .continuous)
-                                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                                        .stroke(showSaveSuccess ? Color.green.opacity(0.95) : Color.white.opacity(0.16), lineWidth: showSaveSuccess ? 1.5 : 1)
                                 )
                         )
+                        .shadow(color: showSaveSuccess ? Color.green.opacity(0.38) : Color.clear, radius: 10, x: 0, y: 4)
                     }
                     .buttonStyle(.plain)
                     .disabled(isPresetButtonDisabled)
@@ -1426,6 +1436,9 @@ private extension TransitionPane {
                 preset.lastWLEDSyncError = nil
                 preset.lastWLEDSyncAt = Date()
                 PresetsStore.shared.addTransitionPreset(preset)
+                viewModel.markPresetSaveHighlight(.transition, id: preset.id, for: device.id)
+                saveFeedbackTrigger += 1
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
                 isSavingPreset = false
                 showSaveSuccess = true
                 persistDraftSession()
@@ -1457,6 +1470,9 @@ private extension TransitionPane {
                 preset.lastWLEDSyncError = "Deferred WLED sync"
                 preset.lastWLEDSyncAt = nil
                 PresetsStore.shared.addTransitionPreset(preset)
+                viewModel.markPresetSaveHighlight(.transition, id: preset.id, for: device.id)
+                saveFeedbackTrigger += 1
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
                 isSavingPreset = false
                 showSaveSuccess = true
                 persistDraftSession()
