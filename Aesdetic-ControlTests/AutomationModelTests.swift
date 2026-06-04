@@ -432,6 +432,81 @@ final class AutomationModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCleanupQueueCoalescesRapidPresetStoreDeletes() async {
+        let cleanup = DeviceCleanupManager.shared
+        let deviceId = "cleanup-test-coalesce-\(UUID().uuidString)"
+        let playlistId = 211
+        let presetIds = [212, 213]
+        defer {
+            cleanup.removeIds(type: .presetStore, deviceId: deviceId, ids: [playlistId] + presetIds)
+        }
+
+        cleanup.enqueuePresetStoreDelete(
+            deviceId: deviceId,
+            playlistIds: [playlistId],
+            presetIds: [presetIds[0]],
+            verificationRequired: true
+        )
+        guard let firstEntry = cleanup.pendingDeletes.first(where: {
+            $0.type == .presetStore
+                && $0.deviceId == deviceId
+                && $0.deadLetteredAt == nil
+        }) else {
+            return XCTFail("Expected first preset-store cleanup entry")
+        }
+        let firstNextAttemptAt = firstEntry.nextAttemptAt
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        cleanup.enqueuePresetStoreDelete(
+            deviceId: deviceId,
+            playlistIds: [],
+            presetIds: [presetIds[1]],
+            verificationRequired: true
+        )
+
+        let entries = cleanup.pendingDeletes.filter {
+            $0.type == .presetStore
+                && $0.deviceId == deviceId
+                && $0.deadLetteredAt == nil
+        }
+        XCTAssertEqual(entries.count, 1, "Expected rapid preset-store deletes to merge into one rewrite entry")
+        guard let entry = entries.first else { return }
+        XCTAssertEqual(entry.playlistIds, [playlistId])
+        XCTAssertEqual(entry.presetIds, presetIds)
+        XCTAssertEqual(entry.ids, [playlistId] + presetIds)
+        XCTAssertTrue(entry.verificationRequired)
+        if let firstNextAttemptAt, let mergedNextAttemptAt = entry.nextAttemptAt {
+            XCTAssertGreaterThanOrEqual(
+                mergedNextAttemptAt.timeIntervalSince(firstNextAttemptAt),
+                0,
+                "Expected the coalesce window to stay open for the later rapid delete"
+            )
+        } else {
+            XCTFail("Expected coalesced preset-store delete to have a nextAttemptAt")
+        }
+    }
+
+    @MainActor
+    func testPresetStoreReadableDegradeIsThresholded() {
+        let viewModel = DeviceControlViewModel.shared
+        let deviceId = "preset-store-health-threshold-\(UUID().uuidString)"
+        defer {
+            viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId)
+        }
+
+        viewModel.debugClearPresetStoreHealthForTests(deviceId: deviceId)
+        viewModel.notePresetStoreDegradedReadable(deviceId: deviceId, message: "transient settling read")
+        XCTAssertNotEqual(
+            viewModel.presetStoreHealthByDeviceId[deviceId],
+            .degradedReadable,
+            "Expected one transient readable-degrade event to stay out of user-facing degraded health"
+        )
+
+        viewModel.notePresetStoreDegradedReadable(deviceId: deviceId, message: "second settling read")
+        XCTAssertEqual(viewModel.presetStoreHealthByDeviceId[deviceId], .degradedReadable)
+    }
+
+    @MainActor
     func testCleanupDeadLetterPresetStoreDeletesScopesIds() {
         let cleanup = DeviceCleanupManager.shared
         let deviceId = "cleanup-deadletter-\(UUID().uuidString)"

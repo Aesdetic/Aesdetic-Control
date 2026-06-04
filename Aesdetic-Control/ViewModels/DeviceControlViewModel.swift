@@ -503,6 +503,9 @@ class DeviceControlViewModel: ObservableObject {
     private var transitionCancelLockUntil: [String: Date] = [:]
     private var presetWriteReleaseTokensByDeviceId: [String: UUID] = [:]
     private var presetHighlightClearTasksByDeviceId: [String: Task<Void, Never>] = [:]
+    private var presetStoreReadableDegradeCandidatesByDeviceId: [String: (firstAt: Date, count: Int)] = [:]
+    private let presetStoreReadableDegradeMinCount = 2
+    private let presetStoreReadableDegradeMinDuration: TimeInterval = 3.0
     private var savedTransitionDefaults: [String: Int?] = [:]
     private var savedTransitionDefaultRunIds: [String: UUID] = [:]
     private var playlistUnsupportedDevices: Set<String> = []
@@ -1614,6 +1617,7 @@ class DeviceControlViewModel: ObservableObject {
         lastPresetStoreHealthMessageByDeviceId.removeValue(forKey: deviceId)
         lastPresetStoreHealthEventByDeviceId.removeValue(forKey: deviceId)
         presetStoreFailureEventsByDeviceId.removeValue(forKey: deviceId)
+        presetStoreReadableDegradeCandidatesByDeviceId.removeValue(forKey: deviceId)
     }
 
     func debugShouldAllowPresetStoreMutationForTests(deviceId: String) async -> Bool {
@@ -10065,7 +10069,24 @@ class DeviceControlViewModel: ObservableObject {
     func notePresetStoreDegradedReadable(deviceId: String, message: String) {
         let now = Date()
         let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
+        var candidate = presetStoreReadableDegradeCandidatesByDeviceId[deviceId] ?? (firstAt: now, count: 0)
+        if now.timeIntervalSince(candidate.firstAt) > 30 {
+            candidate = (firstAt: now, count: 0)
+        }
+        candidate.count += 1
+        presetStoreReadableDegradeCandidatesByDeviceId[deviceId] = candidate
         if previous != .unsafeWritesPaused {
+            let passedThreshold =
+                candidate.count >= presetStoreReadableDegradeMinCount
+                    || now.timeIntervalSince(candidate.firstAt) >= presetStoreReadableDegradeMinDuration
+            guard passedThreshold else {
+                lastPresetStoreHealthEventByDeviceId[deviceId] = now
+                lastPresetStoreHealthMessageByDeviceId[deviceId] = "readable-degrade-deferred: \(message)"
+                #if DEBUG
+                print("preset_store.health.degraded_readable_deferred device=\(deviceId) count=\(candidate.count)")
+                #endif
+                return
+            }
             presetStoreHealthByDeviceId[deviceId] = .degradedReadable
         }
         lastPresetStoreHealthEventByDeviceId[deviceId] = now
@@ -10087,6 +10108,7 @@ class DeviceControlViewModel: ObservableObject {
 
     func notePresetStoreHealthyReadSuccess(deviceId: String) {
         guard !isPresetStoreWritePauseActive(for: deviceId) else { return }
+        presetStoreReadableDegradeCandidatesByDeviceId.removeValue(forKey: deviceId)
         let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
         if previous != .healthy {
             presetStoreHealthByDeviceId[deviceId] = .healthy
@@ -10154,6 +10176,7 @@ class DeviceControlViewModel: ObservableObject {
 
     private func markPresetStoreHealthyWriteSuccess(deviceId: String) {
         presetStoreFailureEventsByDeviceId[deviceId] = []
+        presetStoreReadableDegradeCandidatesByDeviceId.removeValue(forKey: deviceId)
         presetStoreWritePauseUntilByDeviceId.removeValue(forKey: deviceId)
         let previous = presetStoreHealthByDeviceId[deviceId] ?? .healthy
         presetStoreHealthByDeviceId[deviceId] = .healthy
@@ -11798,21 +11821,15 @@ class DeviceControlViewModel: ObservableObject {
         print("\(debugLabel).journaled device=\(device.id) playlists=\(normalizedPlaylistIds) presets=\(normalizedPresetIds)")
         #endif
 
-        let deleted = try await apiService.rewritePresetStoreDeletingRecords(
+        let deleted = await DeviceCleanupManager.shared.waitForPresetStoreDeleteCompletion(
+            device: device,
             playlistIds: normalizedPlaylistIds,
-            presetIds: normalizedPresetIds,
-            device: device
+            presetIds: normalizedPresetIds
         )
         guard deleted else {
             return false
         }
 
-        if !normalizedPlaylistIds.isEmpty {
-            DeviceCleanupManager.shared.removeIds(type: .playlist, deviceId: device.id, ids: normalizedPlaylistIds)
-        }
-        if !normalizedPresetIds.isEmpty {
-            DeviceCleanupManager.shared.removeIds(type: .preset, deviceId: device.id, ids: normalizedPresetIds)
-        }
         #if DEBUG
         print("\(debugLabel).journal_cleared device=\(device.id) playlists=\(normalizedPlaylistIds) presets=\(normalizedPresetIds)")
         #endif

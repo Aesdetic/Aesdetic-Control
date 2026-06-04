@@ -121,7 +121,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let presetStoreReadSettleWindowSeconds: TimeInterval = 1.5
     private let timerConfigWriteCooldownNanos: UInt64 = 250_000_000
     private let timerDeleteVerifyRetryAttempts = 4
-    private let timerDeleteVerifyInitialDelayMs: UInt64 = 180
+    private let timerDeleteVerifyInitialDelayMs: UInt64 = 350
     private let timerDeleteVerifyMaxDelayMs: UInt64 = 1_200
     private var activePresetStoreDeleteSessionDeviceIds: Set<String> = []
     
