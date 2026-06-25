@@ -159,6 +159,7 @@ struct ProductSetupFlowView: View {
         case invalidDeviceName
         case noWeekdaysSelected
         case invalidOnDeviceSchedule(String)
+        case ledSegmentLayoutFailed
 
         var errorDescription: String? {
             switch self {
@@ -170,6 +171,8 @@ struct ProductSetupFlowView: View {
                 return "Select at least one day for your wake automation."
             case .invalidOnDeviceSchedule(let message):
                 return message
+            case .ledSegmentLayoutFailed:
+                return "Could not finish LED segment setup. Please wait for the device to reconnect and try setup again."
             }
         }
     }
@@ -207,6 +210,7 @@ struct ProductSetupFlowView: View {
     @State private var setupSmartHomeMessage: String?
     @State private var setupSmartHomeMessageIsError: Bool = false
     @State private var showSetupAlexaDiscoveryInstructions: Bool = false
+    @State private var setupAlexaIntegrationSupported: Bool = true
 
     @State private var wakeTriggerMode: WakeTriggerMode = .sunrise
     @State private var wakeTime: Date
@@ -848,8 +852,16 @@ struct ProductSetupFlowView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Enable Alexa Control", isOn: $setupAlexaEnabled)
                         .settingsToggleStyle()
+                        .disabled(!setupAlexaIntegrationSupported)
 
-                    if setupAlexaEnabled {
+                    if !setupAlexaIntegrationSupported {
+                        Text("This WLED firmware build does not include Alexa support.")
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                            .foregroundStyle(theme.status.negative)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if setupAlexaEnabled && setupAlexaIntegrationSupported {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Alexa Name")
                                 .font(AppTypography.style(.caption, weight: .semibold))
@@ -871,10 +883,10 @@ struct ProductSetupFlowView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             setupBullet("Uses built-in Alexa support")
                             setupBullet("Auto-fills up to 9 eligible favorites")
-                            setupBullet("You will finish in the Alexa app with Discover Devices")
+                            setupBullet("Usually needs Echo-style discovery after saving")
                         }
-                    } else {
-                        Text("You can set up Alexa later from Device Settings > Integrations.")
+                    } else if setupAlexaIntegrationSupported {
+                        Text("You can set up Alexa later from Device Settings > Integrations. If you do not have an Echo device, use Home Assistant as the bridge path instead.")
                             .font(AppTypography.style(.subheadline))
                             .foregroundStyle(theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -899,8 +911,32 @@ struct ProductSetupFlowView: View {
                     }
 
                     if showSetupAlexaDiscoveryInstructions {
-                        AlexaDiscoveryInstructionsView()
+                        AlexaDiscoveryInstructionsView(deviceName: setupAlexaName)
                     }
+                }
+            }
+            .task(id: activeDevice.id) {
+                await loadSetupAlexaSupport()
+            }
+
+            infoPanel(title: "Home Assistant") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("The recommended bridge for Apple Home, Alexa, Google, and Home Assistant automations after this lamp joins your Wi-Fi.")
+                        .font(AppTypography.style(.subheadline))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        setupBullet("Home Assistant usually discovers WLED on the same network")
+                        setupBullet("Add the WLED integration manually if discovery does not appear")
+                        setupBullet("Keep the main light and hide segment entities")
+                        setupBullet("Expose only the main light to other smart homes")
+                    }
+
+                    Text("Finish product setup here, then open Device Settings > Integrations for the guided Home Assistant checklist.")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
@@ -1611,6 +1647,19 @@ struct ProductSetupFlowView: View {
             return true
         }
 
+        guard setupAlexaIntegrationSupported else {
+            setupAlexaEnabled = false
+            setupSmartHomeMessage = "This WLED firmware build does not include Alexa support."
+            setupSmartHomeMessageIsError = true
+            SmartHomeIntegrationStore.shared.setStatus(
+                .unsupported,
+                for: .alexa,
+                deviceId: activeDevice.id,
+                message: setupSmartHomeMessage
+            )
+            return false
+        }
+
         let name = trimmedSetupAlexaName
         guard !name.isEmpty else {
             setupSmartHomeMessage = "Add a name Alexa can discover."
@@ -1642,42 +1691,76 @@ struct ProductSetupFlowView: View {
         return false
     }
 
+    private func loadSetupAlexaSupport() async {
+        do {
+            let settings = try await WLEDAPIService.shared.fetchAlexaIntegrationSettings(for: activeDevice)
+            setupAlexaIntegrationSupported = settings.isSupported
+            if settings.isSupported {
+                SmartHomeIntegrationStore.shared.setStatus(
+                    settings.isEnabled ? .enabled : .notSetUp,
+                    for: .alexa,
+                    deviceId: activeDevice.id
+                )
+            } else {
+                setupAlexaEnabled = false
+                showSetupAlexaDiscoveryInstructions = false
+                setupSmartHomeMessage = "This WLED firmware build does not include Alexa support."
+                setupSmartHomeMessageIsError = true
+                SmartHomeIntegrationStore.shared.setStatus(
+                    .unsupported,
+                    for: .alexa,
+                    deviceId: activeDevice.id,
+                    message: setupSmartHomeMessage
+                )
+            }
+        } catch {
+            setupAlexaIntegrationSupported = true
+        }
+    }
+
     private func applySetup(skipAutomationCreation: Bool) async {
         guard !trimmedDeviceName.isEmpty else {
             localError = SetupError.invalidDeviceName.localizedDescription
             return
         }
 
-        let live = activeDevice
+        var setupTarget = activeDevice
         isApplying = true
         defer { isApplying = false }
 
         do {
-            if trimmedDeviceName != live.name {
-                await viewModel.renameDevice(live, to: trimmedDeviceName)
+            if trimmedDeviceName != setupTarget.name {
+                await viewModel.renameDevice(setupTarget, to: trimmedDeviceName)
                 if viewModel.currentError != nil {
                     localError = viewModel.currentError?.message
                     return
                 }
+                setupTarget = activeDevice
             }
 
-            await applyDeviceRoomLocationIfNeeded(to: live)
+            await applyDeviceRoomLocationIfNeeded(to: setupTarget)
+            setupTarget = activeDevice
 
             if isCustomProduct {
-                await viewModel.setDeviceSetupMode(live, generic: true)
+                await viewModel.setDeviceSetupMode(setupTarget, generic: true)
                 closeFlow()
                 return
             } else {
-                try await applyRecommendedLEDPreferences(to: live)
-                await applyInitialSunriseColor(to: live)
+                try await applyRecommendedLEDPreferences(to: setupTarget)
+                setupTarget = activeDevice
+                try await applyRecommendedSegmentLayout(to: setupTarget)
+                setupTarget = activeDevice
+                await applyInitialSunriseColor(to: setupTarget)
+                setupTarget = activeDevice
             }
 
             if !skipAutomationCreation {
-                try await createOrUpdateWakeAutomation(for: live)
+                try await createOrUpdateWakeAutomation(for: setupTarget)
+                setupTarget = activeDevice
             }
             if !isCustomProduct {
                 await viewModel.completeAesdeticOnboardingSetup(
-                    live,
+                    setupTarget,
                     productType: selectedProduct.productType,
                     variantId: selectedProduct.id
                 )
@@ -1732,6 +1815,36 @@ struct ProductSetupFlowView: View {
 
         _ = try await service.updateLEDConfiguration(updated, for: device)
         await viewModel.refreshLEDPreferences(for: device)
+    }
+
+    private func applyRecommendedSegmentLayout(to device: WLEDDevice) async throws {
+        var target = device
+        for attempt in 0..<3 {
+            await viewModel.refreshDeviceState(target)
+            target = activeDevice
+            let recommendedCount = viewModel.preferredActiveSegmentCount(for: target)
+            guard recommendedCount > 1 else { return }
+
+            #if DEBUG
+            print("setup.segments.apply.begin device=\(target.id) count=\(recommendedCount) attempt=\(attempt + 1)")
+            #endif
+            if await viewModel.applyActiveSegmentCount(recommendedCount, for: target) {
+                #if DEBUG
+                print("setup.segments.apply.success device=\(target.id) count=\(recommendedCount)")
+                #endif
+                return
+            }
+
+            if attempt < 2 {
+                try await Task.sleep(nanoseconds: UInt64(500 + (attempt * 250)) * 1_000_000)
+                target = activeDevice
+            }
+        }
+
+        #if DEBUG
+        print("setup.segments.apply.failed device=\(device.id)")
+        #endif
+        throw SetupError.ledSegmentLayoutFailed
     }
 
     private func applyInitialSunriseColor(to device: WLEDDevice) async {

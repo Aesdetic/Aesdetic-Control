@@ -18,7 +18,15 @@ struct SolarOffsetArcSlider: View {
     @State private var solarTimeZone: TimeZone = .current
     @State private var coordinateSignature: String = ""
     @State private var locationUnavailable: Bool = false
-    
+
+    private struct SolarStar: Identifiable {
+        let id: Int
+        let x: CGFloat
+        let y: CGFloat
+        let size: CGFloat
+        let opacity: Double
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
@@ -56,7 +64,18 @@ struct SolarOffsetArcSlider: View {
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
-                
+
+                // Sun sphere positioned on the arc
+                let sunPosition = calculateSunPositionOnArc(
+                    center: arcCenter,
+                    radius: arcRadius,
+                    offset: offsetMinutes
+                )
+
+                nightStarsOverlay(width: width, height: height)
+                    .opacity(nightSkyOpacity(normalizedOffset: normalized))
+                    .allowsHitTesting(false)
+
                 // Shallow arc (1/4 height) with fading endpoints using Canvas
                 Canvas { context, size in
                     let startAngle: Double = 150.0
@@ -92,51 +111,46 @@ struct SolarOffsetArcSlider: View {
                         linePath.move(to: CGPoint(x: x1, y: y1))
                         linePath.addLine(to: CGPoint(x: x2, y: y2))
                         
-                        context.stroke(linePath, with: .color(.white.opacity(opacity)), lineWidth: 2)
+                        context.stroke(linePath, with: .color(.white.opacity(opacity * 0.68)), lineWidth: 1.6)
                     }
                 }
                 .frame(width: width, height: height)
                 .allowsHitTesting(false) // Don't block drag gestures
-                
-                // Sun sphere positioned on the arc
-                let sunPosition = calculateSunPositionOnArc(
-                    center: arcCenter,
-                    radius: arcRadius,
-                    offset: offsetMinutes
-                )
-                
+
                 ZStack {
-                    // Outer glow (reduced)
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color.white.opacity(0.2),
-                                    Color.white.opacity(0.1),
+                                    Color.white.opacity(0.18),
+                                    Color.white.opacity(0.06),
                                     Color.clear
                                 ],
                                 center: .center,
                                 startRadius: 8,
-                                endRadius: 20
+                                endRadius: 18
                             )
                         )
-                        .frame(width: 40, height: 40)
+                        .frame(width: 36, height: 36)
                     
-                    // Sun sphere (more white, less glow)
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color.white,
-                                    Color.white.opacity(0.8)
+                                    Color.white.opacity(0.96),
+                                    Color.white.opacity(0.74)
                                 ],
                                 center: .center,
                                 startRadius: 0,
                                 endRadius: 10
                             )
                         )
-                        .frame(width: 22, height: 22)
-                        .shadow(color: .white.opacity(0.4), radius: 4)
+                        .frame(width: 20, height: 20)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                        )
+                        .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 2)
                 }
                 .position(sunPosition)
                 
@@ -165,8 +179,8 @@ struct SolarOffsetArcSlider: View {
                                 .foregroundColor(.white.opacity(0.7))
                         }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 10)
                     
                     Spacer()
                     
@@ -201,7 +215,7 @@ struct SolarOffsetArcSlider: View {
                         }
                         Spacer()
                     }
-                    .padding(.bottom, 2)
+                    .padding(.bottom, 4)
                 }
                 .frame(width: width, height: height)
                 .allowsHitTesting(false) // Text overlays shouldn't block gestures
@@ -253,51 +267,75 @@ struct SolarOffsetArcSlider: View {
         var stops: [Gradient.Stop] = []
         
         if eventType == .sunrise {
-            // Sunrise gradient: Golden hour persists until +30 min, then transitions to blue
-            // -120 to -40 min: Deep night → Golden (starting to turn red)
-            // -40 to 0 min: Golden → Red/Orange (peak at sunrise)
-            // 0 to +30 min: Golden hour (keep golden/orange)
-            // +30 to +60 min: Transition golden → light blue
-            // +60 to +120 min: Light blue → Day blue → Afternoon blue (NO BLACK!)
             stops = [
-                // -120 min: Deep night
-                .init(color: Color(red: 0.043, green: 0.086, blue: 0.169), location: 0.0),      // #0B162B
-                // -60 min: Pre-dawn, starting golden
-                .init(color: Color(red: 0.102, green: 0.192, blue: 0.282), location: 0.25),   // #1A3148
-                // -40 min: Golden, starting to turn red
-                .init(color: Color(red: 0.949, green: 0.623, blue: 0.019), location: 0.4),    // #F29F05
-                // At sunrise (0 min): Peak golden/orange
-                .init(color: Color(red: 0.949, green: 0.529, blue: 0.019), location: 0.5),     // #F28705 (at sunrise)
-                // +30 min: Still in golden hour
-                .init(color: Color(red: 0.827, green: 0.4, blue: 0.15), location: 0.625),      // Warm golden
-                // +60 min: Transitioning to blue
-                .init(color: Color(red: 0.45, green: 0.55, blue: 0.65), location: 0.8),        // Sky blue
-                // +120 min: Afternoon blue (NOT black!)
-                .init(color: Color(red: 0.45, green: 0.6, blue: 0.7), location: 1.0)          // Day blue
+                .init(color: Color(red: 0.050, green: 0.075, blue: 0.150), location: 0.0),
+                .init(color: Color(red: 0.110, green: 0.185, blue: 0.285), location: 0.22),
+                .init(color: Color(red: 0.425, green: 0.345, blue: 0.430), location: 0.36),
+                .init(color: Color(red: 0.780, green: 0.470, blue: 0.350), location: 0.48),
+                .init(color: Color(red: 0.940, green: 0.650, blue: 0.390), location: 0.58),
+                .init(color: Color(red: 0.635, green: 0.700, blue: 0.740), location: 0.78),
+                .init(color: Color(red: 0.455, green: 0.650, blue: 0.760), location: 1.0)
             ]
         } else {
-            // Sunset gradient: Light blue (before sunset) → Golden hour → Evening → Night
             stops = [
-                // -120 min: Light blue (daytime)
-                .init(color: Color(red: 0.45, green: 0.6, blue: 0.7), location: 0.0),          // Day blue
-                // -60 min: Bright blue
-                .init(color: Color(red: 0.5, green: 0.65, blue: 0.75), location: 0.25),        // Bright blue
-                // -40 min: Transitioning from blue to golden
-                .init(color: Color(red: 0.55, green: 0.65, blue: 0.7), location: 0.45),       // Blue-white
-                // At sunset (0 min): Golden hour
-                .init(color: Color(red: 0.7, green: 0.45, blue: 0.35), location: 0.5),         // Orange (at sunset)
-                // +30 min: Still golden
-                .init(color: Color(red: 0.85, green: 0.55, blue: 0.4), location: 0.625),       // Bright golden
-                // +60 min: Evening transition
-                .init(color: Color(red: 0.5, green: 0.35, blue: 0.38), location: 0.83),        // Evening red-orange
-                // +120 min: Deep night
-                .init(color: Color(red: 0.05, green: 0.08, blue: 0.15), location: 1.0)         // Deep night
+                .init(color: Color(red: 0.455, green: 0.645, blue: 0.750), location: 0.0),
+                .init(color: Color(red: 0.625, green: 0.730, blue: 0.775), location: 0.22),
+                .init(color: Color(red: 0.820, green: 0.675, blue: 0.500), location: 0.42),
+                .init(color: Color(red: 0.805, green: 0.445, blue: 0.340), location: 0.54),
+                .init(color: Color(red: 0.565, green: 0.330, blue: 0.465), location: 0.68),
+                .init(color: Color(red: 0.210, green: 0.180, blue: 0.330), location: 0.84),
+                .init(color: Color(red: 0.050, green: 0.070, blue: 0.145), location: 1.0)
             ]
         }
         
         return stops
     }
-    
+
+    @ViewBuilder
+    private func nightStarsOverlay(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            ForEach(Self.starField) { star in
+                Circle()
+                    .fill(Color.white.opacity(star.opacity))
+                    .frame(width: star.size, height: star.size)
+                    .position(x: width * star.x, y: height * star.y)
+            }
+        }
+        .frame(width: width, height: height)
+    }
+
+    private func nightSkyOpacity(normalizedOffset: Double) -> Double {
+        switch eventType {
+        case .sunrise:
+            return smoothFade(from: 0.36, to: 0.12, value: normalizedOffset) * 0.92
+        case .sunset:
+            return smoothFade(from: 0.70, to: 0.92, value: normalizedOffset) * 0.92
+        }
+    }
+
+    private func smoothFade(from start: Double, to end: Double, value: Double) -> Double {
+        let progress: Double
+        if end >= start {
+            progress = min(1, max(0, (value - start) / (end - start)))
+        } else {
+            progress = min(1, max(0, (value - end) / (start - end)))
+        }
+        let eased = progress * progress * (3 - 2 * progress)
+        return end >= start ? eased : 1 - eased
+    }
+
+    private static let starField: [SolarStar] = [
+        SolarStar(id: 0, x: 0.12, y: 0.20, size: 1.8, opacity: 0.58),
+        SolarStar(id: 1, x: 0.23, y: 0.34, size: 1.2, opacity: 0.42),
+        SolarStar(id: 2, x: 0.32, y: 0.17, size: 1.4, opacity: 0.46),
+        SolarStar(id: 3, x: 0.48, y: 0.28, size: 1.1, opacity: 0.38),
+        SolarStar(id: 4, x: 0.64, y: 0.19, size: 1.6, opacity: 0.52),
+        SolarStar(id: 5, x: 0.78, y: 0.33, size: 1.2, opacity: 0.40),
+        SolarStar(id: 6, x: 0.88, y: 0.22, size: 1.5, opacity: 0.48),
+        SolarStar(id: 7, x: 0.18, y: 0.48, size: 1.0, opacity: 0.32),
+        SolarStar(id: 8, x: 0.72, y: 0.47, size: 1.0, opacity: 0.30)
+    ]
+
     // MARK: - Helper Properties
     
     private var offsetDescription: String {

@@ -1,10 +1,16 @@
 import SwiftUI
+import PhotosUI
 
-/// Settings view for controlling real-time device synchronization features
+/// Settings view for controls exposed from the Devices page gear button.
 struct RealTimeSettingsView: View {
     @ObservedObject var viewModel: DeviceControlViewModel
     @Environment(\.dismiss) private var dismiss
     @AppStorage("AppAppearance.selection") private var appearanceSelection = AppAppearance.system.rawValue
+    @AppStorage(AppBackgroundPreference.selectedChoiceKey) private var selectedBackground = AppBackgroundChoice.defaultChoice.rawValue
+    @AppStorage(AppBackgroundPreference.customVersionKey) private var customBackgroundVersion: Double = 0
+    @State private var selectedBackgroundPhotoItem: PhotosPickerItem?
+    @State private var isImportingBackgroundPhoto = false
+    @State private var backgroundImportError: String?
     
     var body: some View {
         NavigationStack {
@@ -18,9 +24,63 @@ struct RealTimeSettingsView: View {
                     }
                     .pickerStyle(.segmented)
                 } header: {
-                    Text("Appearance Testing")
+                    Text("Appearance")
                 } footer: {
-                    Text("Temporarily override the app appearance while tuning the glass and layout.")
+                    Text("Control the app color mode and backdrop used behind the glass interface.")
+                }
+
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(AppBackgroundChoice.suggestedChoices) { choice in
+                                backgroundChoiceButton(for: choice)
+                            }
+
+                            if AppBackgroundPreference.customBackgroundExists {
+                                backgroundChoiceButton(for: .custom)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 0))
+
+                    PhotosPicker(
+                        selection: $selectedBackgroundPhotoItem,
+                        matching: .images,
+                        photoLibrary: .shared()
+                    ) {
+                        Label(
+                            AppBackgroundPreference.customBackgroundExists ? "Change My Photo" : "Choose My Photo",
+                            systemImage: "photo.on.rectangle.angled"
+                        )
+                    }
+                    .disabled(isImportingBackgroundPhoto)
+
+                    if isImportingBackgroundPhoto {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Preparing photo...")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if let backgroundImportError {
+                        Text(backgroundImportError)
+                            .font(AppTypography.style(.caption))
+                            .foregroundColor(.red)
+                    }
+
+                    if AppBackgroundPreference.customBackgroundExists {
+                        Button(role: .destructive) {
+                            removeCustomBackground()
+                        } label: {
+                            Label("Remove My Photo", systemImage: "trash")
+                        }
+                    }
+                } header: {
+                    Text("App Background")
+                } footer: {
+                    Text("Suggested backgrounds are tuned for readable glass. Custom photos are copied into the app and softened automatically.")
                 }
 
                 // MARK: - Real-Time Controls Section
@@ -136,7 +196,7 @@ struct RealTimeSettingsView: View {
                     Text("About Real-Time Updates")
                 }
             }
-            .navigationTitle("Real-Time Settings")
+            .navigationTitle("Device Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -147,9 +207,92 @@ struct RealTimeSettingsView: View {
                 }
             }
         }
+        .onChange(of: selectedBackgroundPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                await importBackgroundPhoto(from: newItem)
+            }
+        }
     }
     
     // MARK: - Helper Views
+
+    @ViewBuilder
+    private func backgroundChoiceButton(for choice: AppBackgroundChoice) -> some View {
+        let isSelected = selectedBackgroundChoice == choice
+
+        Button {
+            selectedBackground = choice.rawValue
+            backgroundImportError = nil
+        } label: {
+            VStack(alignment: .leading, spacing: 7) {
+                backgroundThumbnail(for: choice)
+                    .frame(width: 86, height: 118)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(isSelected ? Color.accentColor : Color.white.opacity(0.18), lineWidth: isSelected ? 2 : 1)
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundStyle(.white, Color.accentColor)
+                                .padding(6)
+                        }
+                    }
+
+                Text(choice.title)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .frame(width: 86, alignment: .leading)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Use \(choice.title) app background")
+    }
+
+    @ViewBuilder
+    private func backgroundThumbnail(for choice: AppBackgroundChoice) -> some View {
+        ZStack {
+            if choice == .neutral {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.953, green: 0.949, blue: 0.941),
+                        Color(red: 0.825, green: 0.799, blue: 0.765)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            } else if choice == .custom, let image = AppBackgroundPreference.image(for: .custom) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if let assetName = choice.assetName {
+                Image(assetName)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.18)
+            }
+
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.14)
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.08),
+                    Color.clear,
+                    Color.black.opacity(0.14)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .clipped()
+    }
     
     @ViewBuilder
     private var connectionStatusIndicator: some View {
@@ -249,6 +392,42 @@ struct RealTimeSettingsView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var selectedBackgroundChoice: AppBackgroundChoice {
+        AppBackgroundChoice(rawValue: selectedBackground) ?? .defaultChoice
+    }
+
+    @MainActor
+    private func importBackgroundPhoto(from item: PhotosPickerItem) async {
+        isImportingBackgroundPhoto = true
+        backgroundImportError = nil
+        defer {
+            isImportingBackgroundPhoto = false
+            selectedBackgroundPhotoItem = nil
+        }
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                backgroundImportError = "That photo could not be loaded."
+                return
+            }
+
+            try AppBackgroundPreference.saveCustomBackground(from: data)
+            customBackgroundVersion = Date().timeIntervalSince1970
+            selectedBackground = AppBackgroundChoice.custom.rawValue
+        } catch {
+            backgroundImportError = error.localizedDescription
+        }
+    }
+
+    private func removeCustomBackground() {
+        AppBackgroundPreference.deleteCustomBackground()
+        customBackgroundVersion = Date().timeIntervalSince1970
+        if selectedBackgroundChoice == .custom {
+            selectedBackground = AppBackgroundChoice.defaultChoice.rawValue
+        }
+        backgroundImportError = nil
     }
 }
 

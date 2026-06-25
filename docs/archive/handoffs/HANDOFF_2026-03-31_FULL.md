@@ -279,5 +279,4 @@ Primary pattern in this thread:
 
 Use this exact prompt in a new Codex thread:
 
-"Read `/Users/ryan/Documents/Aesdetic-Control/HANDOFF_2026-03-31_FULL.md`, assume current stable target is commit `d8dcb60`, continue from section 11 open follow-up items, and prioritize automation delete reliability + presets.json safety."
-
+"Read `/Users/ryan/Documents/Aesdetic-Control/docs/archive/handoffs/HANDOFF_2026-03-31_FULL.md`, treat it as historical context, then read `/Users/ryan/Documents/Aesdetic-Control/docs/current/AUTOMATION_SYSTEM_OVERVIEW.md` and prioritize current automation delete reliability + presets.json safety."

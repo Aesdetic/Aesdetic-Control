@@ -262,6 +262,7 @@ struct AppOverviewCard: View {
     var dividerColorOverride: Color? = nil
     var valueFontOverride: Font? = nil
     var labelFontOverride: Font? = nil
+    var height: CGFloat = 68
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -281,7 +282,7 @@ struct AppOverviewCard: View {
                 }
             }
         }
-        .frame(height: 68)
+        .frame(height: height)
 
         switch style {
         case .systemGlass(let tint, let interactive):

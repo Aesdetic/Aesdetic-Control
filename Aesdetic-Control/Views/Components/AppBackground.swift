@@ -2,26 +2,39 @@ import SwiftUI
 import UIKit
 
 struct AppBackground: View {
-    private static let alpineImage = UIImage(named: "AlpinePhotoBackground")
+    @AppStorage(AppBackgroundPreference.selectedChoiceKey) private var selectedBackground = AppBackgroundChoice.defaultChoice.rawValue
+    @AppStorage(AppBackgroundPreference.customVersionKey) private var customBackgroundVersion: Double = 0
     var includePhoto: Bool = true
 
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let height = proxy.size.height
+            let backgroundChoice = resolvedBackgroundChoice
 
             ZStack {
                 // Always render a full-canvas base first, so we never fall through to
                 // an opaque system/window color during transient layout passes.
                 neutralGlassLayer(width: width, height: height)
 
-                if includePhoto, let alpineImage = Self.alpineImage {
-                    photoLayer(image: alpineImage, width: width, height: height)
+                if includePhoto,
+                   backgroundChoice.usesPhotoLayer,
+                   let backgroundImage = AppBackgroundPreference.image(for: backgroundChoice) {
+                    photoLayer(image: backgroundImage, width: width, height: height)
                 }
             }
             .ignoresSafeArea()
         }
         .allowsHitTesting(false)
+    }
+
+    private var resolvedBackgroundChoice: AppBackgroundChoice {
+        let choice = AppBackgroundChoice(rawValue: selectedBackground) ?? .defaultChoice
+        if choice == .custom && !AppBackgroundPreference.customBackgroundExists {
+            return .defaultChoice
+        }
+        _ = customBackgroundVersion
+        return choice
     }
 
     private func photoLayer(image: UIImage, width: CGFloat, height: CGFloat) -> some View {

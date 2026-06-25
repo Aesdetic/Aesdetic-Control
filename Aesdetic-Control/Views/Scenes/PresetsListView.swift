@@ -120,7 +120,7 @@ struct PresetsListView: View {
                             expectedDurationSeconds: nil,
                             transitionDeciseconds: nil,
                             runKind: .effect,
-                            preferWebSocketFirst: true
+                            preferWebSocketFirst: false
                         )
                     }
                 },
@@ -372,13 +372,18 @@ struct PresetsListView: View {
                             // Try WLED preset ID first (if synced), otherwise apply directly
                             let presetId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId
                             if let presetId = presetId {
-                                _ = await viewModel.applyPresetId(
+                                await viewModel.noteColorPresetApplied(preset, to: device)
+                                let applied = await viewModel.applyPresetId(
                                     presetId,
                                     to: device,
                                     transitionDeciseconds: 7,
-                                    preferWebSocketFirst: true
+                                    preferWebSocketFirst: false
                                 )
+                                if !applied {
+                                    await viewModel.refreshDeviceState(device)
+                                }
                             } else {
+                                await viewModel.noteColorPresetApplied(preset, to: device)
                                 // Apply preset directly using gradient stops and brightness
                                 let ledCount = viewModel.totalLEDCount(for: device)
                                 
@@ -399,16 +404,11 @@ struct PresetsListView: View {
                                     ledCount: ledCount,
                                     stopTemperatures: stopTemperatures,
                                     stopWhiteLevels: stopWhiteLevels,
+                                    interpolation: preset.gradientInterpolation ?? .linear,
+                                    brightness: preset.includeBrightness == false ? nil : preset.brightness,
+                                    on: true,
                                     transitionDurationSeconds: 0.7,
                                     preferSegmented: true
-                                )
-                                
-                                // Apply brightness via API
-                                let apiService = WLEDAPIService.shared
-                                _ = try? await apiService.setBrightness(
-                                    for: device,
-                                    brightness: preset.brightness,
-                                    transitionDeciseconds: 7
                                 )
                             }
                         }
@@ -518,14 +518,18 @@ struct PresetsListView: View {
                                 // Saved WLED preset state is the source of truth for animations:
                                 // it preserves firmware-specific fx/sx/ix/pal behavior better than
                                 // reconstructing an effect from app-side preview data.
-                                if let presetId = preset.wledPresetId,
-                                   await viewModel.applyPresetId(
-                                    presetId,
-                                    to: device,
-                                    transitionDeciseconds: 0,
-                                    preferWebSocketFirst: true
-                                   ) {
-                                    return
+                                if let presetId = preset.wledPresetId {
+                                    await viewModel.noteEffectPresetApplied(preset, to: device)
+                                    let applied = await viewModel.applyPresetId(
+                                        presetId,
+                                        to: device,
+                                        transitionDeciseconds: 0,
+                                        preferWebSocketFirst: false
+                                    )
+                                    if applied {
+                                        return
+                                    }
+                                    await viewModel.refreshDeviceState(device)
                                 }
 
                                 if let stops = preset.gradientStops, !stops.isEmpty {
@@ -541,6 +545,7 @@ struct PresetsListView: View {
                                         device: device,
                                         includeAllEffects: true
                                     )
+                                    await viewModel.noteEffectPresetApplied(preset, to: device)
                                 } else {
                                     // Apply effect directly
                                     let apiService = WLEDAPIService.shared
@@ -562,6 +567,7 @@ struct PresetsListView: View {
                                         seg: [segmentUpdate]
                                     )
                                     _ = try? await apiService.updateState(for: device, state: stateUpdate)
+                                    await viewModel.noteEffectPresetApplied(preset, to: device)
                                 }
                             }
                         }, onEdit: {
@@ -643,7 +649,7 @@ struct PresetsListView: View {
                                                     expectedDurationSeconds: nil,
                                                     transitionDeciseconds: nil,
                                                     runKind: .automation,
-                                                    preferWebSocketFirst: true
+                                                    preferWebSocketFirst: false
                                                 )
                                             }
                                         },
@@ -680,7 +686,7 @@ struct PresetsListView: View {
                                                     preset.id,
                                                     to: device,
                                                     transitionDeciseconds: nil,
-                                                    preferWebSocketFirst: true
+                                                    preferWebSocketFirst: false
                                                 )
                                             }
                                         },
@@ -802,7 +808,7 @@ struct PresetsListView: View {
                                         preset.id,
                                         to: device,
                                         transitionDeciseconds: nil,
-                                        preferWebSocketFirst: true
+                                        preferWebSocketFirst: false
                                     )
                                 }
                             }
@@ -904,7 +910,7 @@ struct PresetsListView: View {
                                         expectedDurationSeconds: nil,
                                         transitionDeciseconds: nil,
                                         runKind: .effect,
-                                        preferWebSocketFirst: true
+                                        preferWebSocketFirst: false
                                     )
                                 }
                             }

@@ -88,18 +88,6 @@ private struct AesdeticRuntimeRoot: View {
 
     // MARK: - Appearance Configuration
     private func configureAppearances() {
-        // Keep tab bar visuals neutral; actual tab bar is hidden in SwiftUI.
-        let tabAppearance = UITabBarAppearance()
-        tabAppearance.configureWithTransparentBackground()
-        tabAppearance.backgroundColor = UIColor.clear
-        UITabBar.appearance().standardAppearance = tabAppearance
-        UITabBar.appearance().scrollEdgeAppearance = tabAppearance
-        UITabBar.appearance().isHidden = true
-        
-        // Also configure TabView container background
-        UITabBar.appearance().backgroundColor = UIColor.clear
-        UITabBar.appearance().barTintColor = UIColor.clear
-        
         // Make NavigationBar background transparent
         let navAppearance = UINavigationBarAppearance()
         navAppearance.configureWithTransparentBackground()
@@ -113,6 +101,8 @@ private struct AesdeticRuntimeRoot: View {
         UITableView.appearance().backgroundColor = .clear
         UICollectionView.appearance().backgroundColor = .clear
 
+        configureLegacyTabBarAppearanceIfNeeded()
+
         // Keep window transparent so shared AppBackground is always visible.
         DispatchQueue.main.async {
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
@@ -122,7 +112,33 @@ private struct AesdeticRuntimeRoot: View {
             }
         }
     }
-    
+
+    private func configureLegacyTabBarAppearanceIfNeeded() {
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        guard osVersion.majorVersion <= 26 else { return }
+
+        let tabAppearance = UITabBarAppearance()
+        tabAppearance.configureWithTransparentBackground()
+        tabAppearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+        tabAppearance.backgroundColor = UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor.black.withAlphaComponent(0.18)
+                : UIColor.white.withAlphaComponent(0.16)
+        }
+        tabAppearance.shadowColor = UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor.white.withAlphaComponent(0.12)
+                : UIColor.black.withAlphaComponent(0.10)
+        }
+
+        let tabBar = UITabBar.appearance()
+        tabBar.standardAppearance = tabAppearance
+        tabBar.scrollEdgeAppearance = tabAppearance
+        tabBar.backgroundColor = UIColor.clear
+        tabBar.barTintColor = UIColor.clear
+        tabBar.isTranslucent = true
+    }
+
     // MARK: - Widget Notification Listeners
     
     private func setupWidgetNotificationListeners() {
@@ -163,4 +179,5 @@ private struct AesdeticRuntimeRoot: View {
             }
         }
     }
+
 }

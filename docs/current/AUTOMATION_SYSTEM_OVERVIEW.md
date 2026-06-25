@@ -1,6 +1,6 @@
 # Automation System Overview
 
-Last updated: 2026-04-30 (Asia/Hong_Kong)
+Last updated: 2026-06-04 (Asia/Hong_Kong)
 
 ## Production Status
 
@@ -15,6 +15,9 @@ What is working now:
 - A single automation delete is allowed at a time so multiple delete bursts cannot overload WLED storage.
 - Automation creation is blocked while automation delete is in progress.
 - Preset tab color/effect/playlist deletes use the full rewrite path, not direct `pdel`.
+- Rapid preset-store delete taps are coalesced before the full rewrite so color/effect/transition/preset deletes do not overload `presets.json`.
+- Preset-store read/decode failures during active mutation or short settle windows are treated as busy/read-unstable before becoming user-facing degraded health.
+- Final cleanup logs report clean per-device queue state when pending preset/timer work has settled.
 - Device-side backup files are not left on WLED; backups are local app files only.
 
 Important remaining product limitation:
@@ -91,11 +94,16 @@ Queue item types:
 
 Queue behavior:
 - Per-device delete leases serialize queue processing and immediate deletes.
+- New preset-store delete requests default to a short coalescing window before processing.
+- Rapid `.presetStore` requests for the same device merge playlist and preset IDs and keep the coalescing window open for the latest rapid tap.
+- A scheduled process task wakes the queue when the coalescing deadline arrives.
 - Preset-store entries are processed one per queue pass.
+- Save delete flows can wait for their journaled preset-store IDs to leave the active queue before removing local UI rows.
 - Retry uses capped backoff.
 - Preset-store unreadable hard stops move entries to dead-letter instead of repeatedly writing into a corrupted/unreadable store.
 - Legacy automation timer queue entries are dropped on load because raw WLED timer slots require live ownership proof.
 - Combined `.presetStore` entries participate in active-ID checks and queue pruning so newly-created IDs are not later deleted by stale queued work.
+- When no active queue work remains, `cleanup.device.final_state` logs pending delete, preset-store, timer, dead-letter, and health state.
 
 ## Preset Store Rewrite Design
 
@@ -126,6 +134,12 @@ Backup policy:
 - No `presets-aesdetic-backup.json` is kept on WLED.
 - This avoids consuming WLED flash space with backup files.
 
+Read stability policy:
+- Preset/playlist validation is paused while a preset-store mutation is active or settling.
+- A single transient decode failure during mutation/settle is logged as deferred readable-degrade instead of immediately degrading user-facing health.
+- Repeated readable failures or a sustained failure window can still move the device to degraded readable health.
+- Write-side failures and unreadable hard stops remain strict: unsafe writes pause or dead-letter cleanup rather than guessing.
+
 ## Paths That Did Not Work
 
 Rejected path: repeated `pdel` deletes.
@@ -155,12 +169,15 @@ Automation delete:
 - One automation delete at a time globally.
 - Other automation delete buttons are disabled while one delete is active.
 - Creation is blocked while delete is active.
-- Preset/effect/color saves are blocked while automation delete is active.
+- Preset/effect/color save and delete mutations are blocked or queued while conflicting preset/timer mutation work is active.
+- Live light controls remain usable during preset/timer mutation work.
 
 Preset-store operations:
 - `WLEDAPIService` serializes preset-store operations by device key.
 - `DeviceCleanupManager` also uses a per-device delete lease.
 - Queue helpers track combined `.presetStore` entries so stale queued cleanup cannot silently delete newly-created IDs.
+- Rapid save/preset deletes are merged by `DeviceCleanupManager.enqueuePresetStoreDelete(...)`.
+- Background preset/playlist validation pauses during mutation and settle windows.
 
 On-device sync:
 - Creation is blocked only when target device IDs overlap an in-flight on-device sync.
@@ -192,9 +209,10 @@ Automation rows:
 - Offline/unreachable retry state is surfaced to the user.
 
 Preset tab:
-- Transition preset delete enqueues one combined playlist plus step preset full-rewrite cleanup.
-- Color/effect preset delete enqueues full-rewrite preset cleanup.
+- Transition preset delete enqueues one combined playlist plus step preset full-rewrite cleanup and waits for verified device cleanup before removing the local row.
+- Color/effect preset delete enqueues full-rewrite preset cleanup and waits for verified device cleanup before removing the local row.
 - Direct playlist delete uses `DeviceControlViewModel.deletePlaylist`, which calls full rewrite.
+- If the preset store is busy, user-facing errors should explain that device saves are still finishing. Technical reasons belong in logs or advanced diagnostics.
 
 ## Test Checklist
 
@@ -212,6 +230,7 @@ Concurrency:
 2. Try deleting automation B; it should be disabled or blocked.
 3. Try creating automation C; save should be blocked.
 4. After A finishes, B/C actions should be available again.
+5. While delete is running, confirm light controls still work.
 
 Offline/retry:
 1. Create automation and wait until ready.
@@ -227,12 +246,15 @@ Preset tab:
 2. Verify playlist and step preset IDs are gone from `presets.json`.
 3. Delete a normal preset.
 4. Verify `presets.json` remains valid.
+5. Rapid-delete multiple color/effect/transition saves within the short coalescing window.
+6. Confirm logs show `cleanup.preset_store_delete.coalesced` and local rows disappear only after device cleanup.
 
 Stress:
 1. Create/delete/create several automations back-to-back.
 2. Verify no invalid bytes in `presets.json`.
 3. Verify no stale automation preset IDs remain.
 4. Verify WLED `/edit` has no app backup file.
+5. Confirm `cleanup.device.final_state` appears with pending counts at `0` and `health=healthy`.
 
 ## Current Code Anchors
 
@@ -251,8 +273,12 @@ Important functions:
 - `AutomationStore.cleanupDeviceEntriesOnOnlineDevice(...)`
 - `AutomationStore.resumePersistedAutomationDeletes()`
 - `DeviceCleanupManager.enqueuePresetStoreDelete(...)`
+- `DeviceCleanupManager.waitForPresetStoreDeleteCompletion(...)`
 - `DeviceCleanupManager.activeDeleteIds(...)`
 - `DeviceCleanupManager.removeIds(...)`
 - `WLEDAPIService.rewritePresetStoreUpsertingRecords(...)`
 - `WLEDAPIService.rewritePresetStoreDeletingRecords(...)`
 - `DeviceControlViewModel.createTransitionPlaylist(... persist: true)`
+- `DeviceControlViewModel.deleteColorPreset(...)`
+- `DeviceControlViewModel.deleteTransitionPreset(...)`
+- `DeviceControlViewModel.deleteEffectPreset(...)`

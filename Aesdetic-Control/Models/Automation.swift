@@ -74,6 +74,36 @@ struct Automation: Codable, Identifiable, Equatable {
     }
 }
 
+enum AutomationDefaultNaming {
+    static let baseName = "Routine"
+    private static let legacyBaseNames = ["Automation"]
+
+    static func defaultName(for automations: [Automation]) -> String {
+        "\(baseName) \(lowestAvailableNumber(in: automations.map(\.name)))"
+    }
+
+    static func lowestAvailableNumber(in names: [String]) -> Int {
+        let generatedBaseNames = [baseName] + legacyBaseNames
+        let usedNumbers = Set(names.compactMap { name -> Int? in
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let matchingBaseName = generatedBaseNames.first(where: { trimmed.hasPrefix("\($0) ") }) else {
+                return nil
+            }
+            let suffix = String(trimmed.dropFirst(matchingBaseName.count + 1))
+            guard let number = Int(suffix), number > 0, suffix == "\(number)" else {
+                return nil
+            }
+            return number
+        })
+
+        var candidate = 1
+        while usedNumbers.contains(candidate) {
+            candidate += 1
+        }
+        return candidate
+    }
+}
+
 // MARK: - Trigger Definitions
 
 enum AutomationTrigger: Codable, Equatable {

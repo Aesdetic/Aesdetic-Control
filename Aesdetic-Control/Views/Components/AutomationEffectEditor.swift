@@ -16,9 +16,10 @@ struct AutomationEffectEditor: View {
     @Binding var gradient: LEDGradient
     @Binding var selectedEffectPresetId: UUID?
     let isInline: Bool
+    let externalPreviewEnabled: Binding<Bool>?
     
     // Preview state
-    @State private var previewEnabled: Bool = false
+    @State private var localPreviewEnabled: Bool = false
     @State private var isApplyingEffect: Bool = false
     
     // Internal UI state
@@ -66,16 +67,44 @@ struct AutomationEffectEditor: View {
     private var effectPresets: [WLEDEffectPreset] {
         presetsStore.effectPresets(for: device.id)
     }
+
+    init(
+        viewModel: DeviceControlViewModel,
+        device: WLEDDevice,
+        effectOptions: [EffectMetadata],
+        effectId: Binding<Int>,
+        brightness: Binding<Double>,
+        speed: Binding<Int>,
+        intensity: Binding<Int>,
+        gradient: Binding<LEDGradient>,
+        selectedEffectPresetId: Binding<UUID?>,
+        isInline: Bool,
+        externalPreviewEnabled: Binding<Bool>? = nil
+    ) {
+        self.viewModel = viewModel
+        self.device = device
+        self.effectOptions = effectOptions
+        self._effectId = effectId
+        self._brightness = brightness
+        self._speed = speed
+        self._intensity = intensity
+        self._gradient = gradient
+        self._selectedEffectPresetId = selectedEffectPresetId
+        self.isInline = isInline
+        self.externalPreviewEnabled = externalPreviewEnabled
+    }
     
     var body: some View {
-        VStack(spacing: isInline ? 14 : 16) {
+        VStack(spacing: isInline ? 12 : 16) {
             if !isInline {
                 headerRow
             }
             effectPresetSelector
             effectPicker
-            gradientSection
-            brightnessSection
+            VStack(spacing: isInline ? 6 : 8) {
+                gradientSection
+                brightnessSection
+            }
             speedSection
             intensitySection
             previewSection
@@ -97,7 +126,11 @@ struct AutomationEffectEditor: View {
             updateGradientForSlotCount()
         }
         .onChange(of: previewEnabled) { _, enabled in
-            if !enabled && isApplyingEffect {
+            if enabled {
+                Task {
+                    await previewEffect()
+                }
+            } else {
                 stopPreview()
             }
         }
@@ -112,7 +145,7 @@ struct AutomationEffectEditor: View {
                 .foregroundColor(.white)
             Spacer()
             
-            Toggle(isOn: $previewEnabled) {
+            Toggle(isOn: previewToggleBinding) {
                 HStack(spacing: 4) {
                     Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
                         .font(AppTypography.style(.caption2))
@@ -131,19 +164,14 @@ struct AutomationEffectEditor: View {
     @ViewBuilder
     private var effectPresetSelector: some View {
         if !effectPresets.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Saved Effects")
-                    .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(effectPresets) { preset in
-                            effectPresetChip(preset: preset)
-                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(effectPresets) { preset in
+                        effectPresetChip(preset: preset)
                     }
-                    .padding(.vertical, 4)
                 }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
             }
             .padding(.horizontal, isInline ? 0 : 16)
         }
@@ -171,31 +199,39 @@ struct AutomationEffectEditor: View {
                 }
             }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(preset.name)
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                
-                Text("Effect \(preset.effectId)")
-                    .font(AppTypography.style(.caption2))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-            .padding(8)
-            .frame(width: 120, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.2) : Color.white.opacity(0.08))
-            )
+            effectPresetSwatch(preset: preset, isSelected: isSelected)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.name), effect \(preset.effectId)")
+    }
+
+    private func effectPresetSwatch(preset: WLEDEffectPreset, isSelected: Bool) -> some View {
+        ZStack {
+            effectPresetGradient(preset: preset)
+                .opacity(0.72)
+
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.16 + Double(index) * 0.07))
+                        .frame(width: 2, height: CGFloat(7 + index * 2))
+                }
+            }
+
+            presetSwatchHighlight(cornerRadius: 6)
+            presetSwatchSelection(isSelected: isSelected, cornerRadius: 6)
+        }
+        .frame(width: 48, height: 18)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.0), radius: 4, x: 0, y: 2)
+        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
     
     private var effectPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Animation")
                 .font(AppTypography.style(.footnote, weight: .semibold))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(.white.opacity(0.78))
             
             if effectOptions.isEmpty {
                 Text("No gradient-friendly animations available for this device.")
@@ -224,7 +260,7 @@ struct AutomationEffectEditor: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Gradient")
                     .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(.white.opacity(0.78))
                 
                 GradientBar(
                     gradient: $gradient,
@@ -278,7 +314,7 @@ struct AutomationEffectEditor: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Color")
                     .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(.white.opacity(0.78))
                 
                 Button(action: {
                     selectedStopId = gradient.stops.first?.id ?? UUID()
@@ -306,12 +342,13 @@ struct AutomationEffectEditor: View {
     @ViewBuilder
     private var colorPresetSelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 ForEach(colorPresets) { preset in
                     colorPresetChip(preset: preset)
                 }
             }
             .padding(.horizontal, 2)
+            .padding(.vertical, 2)
         }
         .padding(.top, 4)
     }
@@ -334,19 +371,70 @@ struct AutomationEffectEditor: View {
                 }
             }
         } label: {
-            LinearGradient(
-                gradient: Gradient(colors: preset.gradientStops.map { Color(hex: $0.hexColor) }),
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .frame(width: 60, height: 24)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
-            )
+            presetSwatchGradient(stops: preset.gradientStops)
+                .opacity(0.72)
+                .frame(width: 48, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(presetSwatchHighlight(cornerRadius: 6))
+                .overlay(presetSwatchSelection(isSelected: isSelected, cornerRadius: 6))
+                .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.0), radius: 4, x: 0, y: 2)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(preset.name)
+    }
+
+    private func effectPresetGradient(preset: WLEDEffectPreset) -> LinearGradient {
+        if let stops = preset.gradientStops, !stops.isEmpty {
+            return presetSwatchGradient(stops: stops)
+        }
+
+        let hue = Double((preset.effectId * 37) % 360) / 360.0
+        return LinearGradient(
+            colors: [
+                Color(hue: hue, saturation: 0.78, brightness: 0.96),
+                Color(hue: (hue + 0.12).truncatingRemainder(dividingBy: 1), saturation: 0.68, brightness: 0.78)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private func presetSwatchGradient(stops: [GradientStop]) -> LinearGradient {
+        let colors = stops.isEmpty ? [Color.white.opacity(0.8), Color.white.opacity(0.35)] : stops.map { Color(hex: $0.hexColor) }
+        return LinearGradient(
+            gradient: Gradient(colors: colors),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private func presetSwatchSelection(isSelected: Bool, cornerRadius: CGFloat) -> some View {
+        ZStack(alignment: .center) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(isSelected ? 0.52 : 0.12), lineWidth: isSelected ? 1.5 : 1)
+
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(AppTypography.style(.caption2, weight: .bold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .shadow(color: Color.black.opacity(0.22), radius: 2, x: 0, y: 1)
+            }
+        }
+    }
+
+    private func presetSwatchHighlight(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.18),
+                        Color.white.opacity(0.02)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
     }
     
     @ViewBuilder
@@ -407,10 +495,12 @@ struct AutomationEffectEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Brightness")
-                    .foregroundColor(.white.opacity(0.8))
+                    .font(AppTypography.style(.footnote, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.78))
                 Spacer()
                 Text("\(Int(brightness))%")
-                    .foregroundColor(.white.opacity(0.8))
+                    .font(AppTypography.style(.caption, weight: .medium))
+                    .foregroundColor(.white.opacity(0.68))
             }
             Slider(value: $brightness, in: 1...255, step: 1)
                 .tint(.white)
@@ -431,10 +521,12 @@ struct AutomationEffectEditor: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text(speedLabel)
-                        .foregroundColor(.white.opacity(0.8))
+                        .font(AppTypography.style(.footnote, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.78))
                     Spacer()
                     Text("\(Int(currentSpeedValue))")
-                        .foregroundColor(.white.opacity(0.8))
+                        .font(AppTypography.style(.caption, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
                 }
                 Slider(
                     value: Binding(
@@ -469,10 +561,12 @@ struct AutomationEffectEditor: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text(intensityLabel)
-                        .foregroundColor(.white.opacity(0.8))
+                        .font(AppTypography.style(.footnote, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.78))
                     Spacer()
                     Text("\(Int(currentIntensityValue))")
-                        .foregroundColor(.white.opacity(0.8))
+                        .font(AppTypography.style(.caption, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
                 }
                 Slider(
                     value: Binding(
@@ -503,7 +597,43 @@ struct AutomationEffectEditor: View {
     
     @ViewBuilder
     private var previewSection: some View {
-        EmptyView()
+        if isInline && externalPreviewEnabled == nil {
+            HStack {
+                Spacer(minLength: 0)
+                Toggle(isOn: previewToggleBinding) {
+                    HStack(spacing: 5) {
+                        Image(systemName: previewEnabled ? "eye.fill" : "eye")
+                            .font(AppTypography.style(.caption2, weight: .semibold))
+                        Text("Preview")
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                    }
+                }
+                .toggleStyle(.button)
+                .tint(previewEnabled ? .white.opacity(0.24) : .white.opacity(0.12))
+                .foregroundColor(.white.opacity(previewEnabled ? 0.96 : 0.78))
+                .clipShape(Capsule(style: .continuous))
+            }
+        }
+    }
+
+    private var previewEnabled: Bool {
+        get {
+            externalPreviewEnabled?.wrappedValue ?? localPreviewEnabled
+        }
+        nonmutating set {
+            if let externalPreviewEnabled {
+                externalPreviewEnabled.wrappedValue = newValue
+            } else {
+                localPreviewEnabled = newValue
+            }
+        }
+    }
+
+    private var previewToggleBinding: Binding<Bool> {
+        Binding(
+            get: { previewEnabled },
+            set: { previewEnabled = $0 }
+        )
     }
     
     // MARK: - Helper Functions

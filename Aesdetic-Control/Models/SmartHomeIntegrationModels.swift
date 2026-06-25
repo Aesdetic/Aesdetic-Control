@@ -32,6 +32,7 @@ enum SmartHomeIntegrationKind: String, Codable, CaseIterable, Identifiable {
 
 enum SmartHomeIntegrationState: String, Codable {
     case notSetUp
+    case inProgress
     case enabled
     case needsSync
     case conflict
@@ -42,12 +43,89 @@ enum SmartHomeIntegrationState: String, Codable {
     var displayName: String {
         switch self {
         case .notSetUp: return "Not Set Up"
+        case .inProgress: return "In Progress"
         case .enabled: return "Enabled"
         case .needsSync: return "Needs Sync"
         case .conflict: return "Needs Review"
         case .failed: return "Failed"
         case .unsupported: return "Unsupported"
         case .requiresBridge: return "Requires Bridge"
+        }
+    }
+}
+
+struct HomeAssistantSetupState: Codable, Equatable {
+    var deviceId: String
+    var isWLEDAdded: Bool
+    var isMainLightKept: Bool
+    var areSegmentsDisabled: Bool
+    var isHomeKitBridgeConfigured: Bool
+    var homeAssistantURL: String?
+    var mainEntityName: String?
+    var updatedAt: Date
+
+    init(
+        deviceId: String,
+        isWLEDAdded: Bool = false,
+        isMainLightKept: Bool = false,
+        areSegmentsDisabled: Bool = false,
+        isHomeKitBridgeConfigured: Bool = false,
+        homeAssistantURL: String? = nil,
+        mainEntityName: String? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.deviceId = deviceId
+        self.isWLEDAdded = isWLEDAdded
+        self.isMainLightKept = isMainLightKept
+        self.areSegmentsDisabled = areSegmentsDisabled
+        self.isHomeKitBridgeConfigured = isHomeKitBridgeConfigured
+        self.homeAssistantURL = homeAssistantURL
+        self.mainEntityName = mainEntityName
+        self.updatedAt = updatedAt
+    }
+
+    var hasStartedSetup: Bool {
+        isWLEDAdded
+            || isMainLightKept
+            || areSegmentsDisabled
+            || isHomeKitBridgeConfigured
+            || !(homeAssistantURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(mainEntityName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    var isReadyForBridge: Bool {
+        isWLEDAdded && isMainLightKept && areSegmentsDisabled
+    }
+
+    var isFullySetUp: Bool {
+        isReadyForBridge && isHomeKitBridgeConfigured
+    }
+
+    var integrationState: SmartHomeIntegrationState {
+        if isFullySetUp {
+            return .enabled
+        }
+        if isWLEDAdded && isMainLightKept && !areSegmentsDisabled {
+            return .conflict
+        }
+        if hasStartedSetup {
+            return .inProgress
+        }
+        return .notSetUp
+    }
+
+    var integrationMessage: String {
+        switch integrationState {
+        case .enabled:
+            return "Home Assistant bridge setup is marked complete."
+        case .conflict:
+            return "Segment entities still need review. Hide them in Home Assistant and keep the main light."
+        case .inProgress:
+            return "Finish the Home Assistant checklist, then expose only the main light to Apple Home, Alexa, or Google."
+        case .notSetUp:
+            return "Use Home Assistant's native WLED integration; Aesdetic will guide segment cleanup."
+        default:
+            return "Home Assistant setup uses the native WLED integration."
         }
     }
 }

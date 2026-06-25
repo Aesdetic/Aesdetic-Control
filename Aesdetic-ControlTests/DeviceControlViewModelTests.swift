@@ -45,6 +45,88 @@ struct DeviceControlViewModelTests {
         }
         return condition()
     }
+
+    // MARK: - Smart Home Integration State Tests
+
+    @Test("Home Assistant setup state derives checklist status")
+    func testHomeAssistantSetupStateDerivesChecklistStatus() {
+        let deviceId = "ha-status-\(UUID().uuidString)"
+
+        let empty = HomeAssistantSetupState(deviceId: deviceId)
+        #expect(empty.integrationState == .notSetUp)
+
+        let started = HomeAssistantSetupState(deviceId: deviceId, isWLEDAdded: true)
+        #expect(started.integrationState == .inProgress)
+
+        let needsReview = HomeAssistantSetupState(
+            deviceId: deviceId,
+            isWLEDAdded: true,
+            isMainLightKept: true,
+            areSegmentsDisabled: false
+        )
+        #expect(needsReview.integrationState == .conflict)
+
+        let readyForBridge = HomeAssistantSetupState(
+            deviceId: deviceId,
+            isWLEDAdded: true,
+            isMainLightKept: true,
+            areSegmentsDisabled: true
+        )
+        #expect(readyForBridge.integrationState == .inProgress)
+
+        let complete = HomeAssistantSetupState(
+            deviceId: deviceId,
+            isWLEDAdded: true,
+            isMainLightKept: true,
+            areSegmentsDisabled: true,
+            isHomeKitBridgeConfigured: true
+        )
+        #expect(complete.integrationState == .enabled)
+    }
+
+    @Test("Home Assistant setup state preserves optional details")
+    func testHomeAssistantSetupStateCodable() throws {
+        let setup = HomeAssistantSetupState(
+            deviceId: "ha-codable-\(UUID().uuidString)",
+            isWLEDAdded: true,
+            isMainLightKept: true,
+            areSegmentsDisabled: true,
+            isHomeKitBridgeConfigured: false,
+            homeAssistantURL: "http://homeassistant.local:8123",
+            mainEntityName: "light.bedroom_lights",
+            updatedAt: Date(timeIntervalSince1970: 1_720_000_000)
+        )
+
+        let data = try JSONEncoder().encode(setup)
+        let decoded = try JSONDecoder().decode(HomeAssistantSetupState.self, from: data)
+
+        #expect(decoded == setup)
+        #expect(decoded.integrationState == .inProgress)
+    }
+
+    @Test("Smart home store derives Home Assistant status without changing Alexa")
+    func testSmartHomeStoreHomeAssistantStatusDoesNotChangeAlexa() {
+        let store = SmartHomeIntegrationStore.shared
+        let deviceId = "ha-store-\(UUID().uuidString)"
+
+        store.setHomeAssistantSetup(
+            HomeAssistantSetupState(
+                deviceId: deviceId,
+                isWLEDAdded: true,
+                isMainLightKept: true,
+                areSegmentsDisabled: true,
+                isHomeKitBridgeConfigured: true
+            )
+        )
+
+        let homeAssistantStatus = store.status(for: .homeAssistant, deviceId: deviceId)
+        let alexaStatus = store.status(for: .alexa, deviceId: deviceId)
+
+        #expect(homeAssistantStatus.state == .enabled)
+        #expect(homeAssistantStatus.message?.contains("Home Assistant") == true)
+        #expect(alexaStatus.state == .notSetUp)
+        #expect(alexaStatus.message == "Set up Alexa to control power, brightness, color, and favorite presets.")
+    }
     
     // MARK: - Capability Caching Tests
     
@@ -631,10 +713,10 @@ struct DeviceControlViewModelTests {
         #expect(counts.after == 3)
     }
 
-    @Test("automation planner coarsens by budget and blocks when still over")
+    @Test("automation planner uses balanced storage and blocks only on actual slot capacity")
     func testAutomationTransitionPlannerBudgeting() {
         let viewModel = DeviceControlViewModel.shared
-        let device = createTestDevice(id: "budget-test")
+        let device = createTestDevice(id: "capacity-test")
         let start = LEDGradient(stops: [
             GradientStop(position: 0, hexColor: "0000FF"),
             GradientStop(position: 1, hexColor: "FFFFFF")
@@ -654,9 +736,11 @@ struct DeviceControlViewModelTests {
             usedPresetCount: 0,
             device: device
         )
-        #expect(used0.fitsBudget == true)
-        #expect(used0.legSeconds == 45)
-        #expect(used0.perAutomationBudget == 46)
+        #expect(used0.fitsStorage == true)
+        #expect(used0.qualityLabel == .balanced)
+        #expect(used0.legSeconds == 65)
+        #expect(used0.slotsRequired == 30)
+        #expect(used0.availableSlots == appManagedPresetRange.count - presetSlotReserve)
 
         let used80 = viewModel.debugTransitionPlanForTests(
             durationSeconds: 1800,
@@ -668,24 +752,44 @@ struct DeviceControlViewModelTests {
             usedPresetCount: 80,
             device: device
         )
-        #expect(used80.fitsBudget == true)
+        #expect(used80.fitsStorage == true)
         #expect(used80.legSeconds == 65)
-        #expect(used80.perAutomationBudget == 30)
+        #expect(used80.availableSlots == appManagedPresetRange.count - 80 - presetSlotReserve)
         #expect(used80.slotsRequired == 30)
 
-        let used140 = viewModel.debugTransitionPlanForTests(
+        let usedNearFull = viewModel.debugTransitionPlanForTests(
             durationSeconds: 1800,
             startGradient: start,
             endGradient: end,
             startBrightness: 64,
             endBrightness: 255,
             context: .persistentAutomation,
-            usedPresetCount: 140,
+            usedPresetCount: appManagedPresetRange.count - presetSlotReserve - 26,
             device: device
         )
-        #expect(used140.fitsBudget == false)
-        #expect(used140.legSeconds == 65)
-        #expect(used140.perAutomationBudget == 18)
+        #expect(usedNearFull.fitsStorage == false)
+        #expect(usedNearFull.qualityLabel == .balanced)
+        #expect(usedNearFull.legSeconds == 65)
+        #expect(usedNearFull.availableSlots == 26)
+        #expect(usedNearFull.slotsRequired == 30)
+    }
+
+    @Test("preset slot availability protects reserve near WLED slot limit")
+    func testPresetSlotAvailabilityProtectsReserveNearLimit() {
+        let viewModel = DeviceControlViewModel.shared
+        let device = createTestDevice(id: "near-limit-capacity-\(UUID().uuidString)")
+        let usedIds = Array(appManagedPresetRange.prefix(appManagedPresetRange.count - presetSlotReserve - 1))
+        let presets = usedIds.map {
+            WLEDPreset(id: $0, name: "Preset \($0)", quickLoad: nil, segment: nil, state: nil)
+        }
+        viewModel.debugSetPresetCacheForTests(deviceId: device.id, presets: presets)
+        defer { viewModel.debugSetPresetCacheForTests(deviceId: device.id, presets: nil) }
+
+        let availability = viewModel.presetSlotAvailability(for: device, range: appManagedPresetRange)
+
+        #expect(availability?.remaining == presetSlotReserve + 1)
+        #expect(availability?.available == 1)
+        #expect(availability?.reserve == presetSlotReserve)
     }
 
     @Test("preset-store mutation guard blocks writes while paused")

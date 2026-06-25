@@ -70,6 +70,7 @@ protocol WLEDAPIServiceProtocol {
     func isPresetStoreDeleteSessionActive(deviceId: String) async -> Bool
     func isStateWriteBackoffActive(deviceId: String) async -> Bool
     func secondsSinceLastPresetStoreMutationEnd(deviceId: String) async -> TimeInterval?
+    func fetchDeviceTimeSettings(for device: WLEDDevice) async throws -> WLEDDeviceTimeSettings
     func updateDeviceTimeSettings(for device: WLEDDevice, timeZone: TimeZone, coordinate: CLLocationCoordinate2D?) async throws
 }
 
@@ -123,6 +124,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let timerDeleteVerifyRetryAttempts = 4
     private let timerDeleteVerifyInitialDelayMs: UInt64 = 350
     private let timerDeleteVerifyMaxDelayMs: UInt64 = 1_200
+    private let presetStoreRewriteScratchReserveBytes = 9_000
+    private let presetStoreMinimumLowWatermarkBytes = 16 * 1024
+    private let presetStoreMaximumLowWatermarkBytes = 64 * 1024
     private var activePresetStoreDeleteSessionDeviceIds: Set<String> = []
     
     // Performance optimization: Request batching and caching
@@ -2264,16 +2268,18 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
         let id = resolved["id"] as? [String: Any] ?? [:]
         let interfaces = resolved["if"] as? [String: Any] ?? [:]
-        let va = interfaces["va"] as? [String: Any] ?? [:]
+        let va = interfaces["va"] as? [String: Any]
 
         let invocationName = decodeString(id["inv"]) ?? device.name
-        let isEnabled = decodeBool(va["alexa"]) ?? false
-        let presetCount = clampAlexaPresetCount(decodeInt(va["p"]) ?? 0)
+        let isSupported = va != nil
+        let isEnabled = decodeBool(va?["alexa"]) ?? false
+        let presetCount = clampAlexaPresetCount(decodeInt(va?["p"]) ?? 0)
 
         return WLEDAlexaIntegrationSettings(
             isEnabled: isEnabled,
             invocationName: invocationName,
-            exposedPresetCount: presetCount
+            exposedPresetCount: presetCount,
+            isSupported: isSupported
         )
     }
 
@@ -2284,6 +2290,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
 
         var configPayload = try await fetchRawConfig(for: device)
+        guard supportsAlexaIntegration(in: configPayload) else {
+            throw WLEDAPIError.unsupportedOperation("Alexa")
+        }
         applyAlexaIntegrationSettings(settings, to: &configPayload)
         if var cfg = configPayload["cfg"] as? [String: Any] {
             applyAlexaIntegrationSettings(settings, to: &cfg)
@@ -2311,6 +2320,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         va["p"] = clampAlexaPresetCount(settings.exposedPresetCount)
         interfaces["va"] = va
         root["if"] = interfaces
+    }
+
+    private func supportsAlexaIntegration(in root: [String: Any]) -> Bool {
+        let resolved = (root["cfg"] as? [String: Any]) ?? root
+        guard let interfaces = resolved["if"] as? [String: Any] else { return false }
+        return interfaces["va"] is [String: Any]
     }
 
     private func sanitizedAlexaInvocationName(_ value: String) -> String {
@@ -2729,6 +2744,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             deleting: Set(plan.deleteSlots),
             from: originalData
         )
+        try await ensurePresetStoreFilesystemHeadroom(
+            originalData: originalData,
+            rewrittenData: rewrittenData,
+            device: device,
+            context: "preset_store.alexa_mirror"
+        )
         let originalRecords = try parsePresetPayloadMapById(data: originalData, mode: .strict)
         let originalIds = Set(originalRecords.keys)
         let changedIds = Set(plan.upsertRecords.keys).union(plan.deleteSlots)
@@ -2800,6 +2821,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let preservedIds = originalIds.subtracting(upsertIds)
 
         let rewrittenData = try makePresetStoreRewriteUpserting(records: upsertRecords, from: originalData)
+        try await ensurePresetStoreFilesystemHeadroom(
+            originalData: originalData,
+            rewrittenData: rewrittenData,
+            device: device,
+            context: "preset_store.full_rewrite_create"
+        )
         let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
         let rewrittenIds = Set(rewrittenRecords.keys)
         let missingUpserts = upsertIds.subtracting(rewrittenIds)
@@ -2879,6 +2906,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
 
         let rewrittenData = try makePresetStoreRewriteDeleting(ids: targetIds, from: originalData)
+        try await ensurePresetStoreFilesystemHeadroom(
+            originalData: originalData,
+            rewrittenData: rewrittenData,
+            device: device,
+            context: "preset_store.full_rewrite_delete"
+        )
         let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
         let preflightRemainingTargets = Set(rewrittenRecords.keys).intersection(targetIds)
         guard preflightRemainingTargets.isEmpty else {
@@ -2944,6 +2977,77 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 "preset_store.full_rewrite.local_backup_failed device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
         }
+    }
+
+    private func ensurePresetStoreFilesystemHeadroom(
+        originalData: Data,
+        rewrittenData: Data,
+        device: WLEDDevice,
+        context: String
+    ) async throws {
+        let growthBytes = max(0, rewrittenData.count - originalData.count)
+        guard growthBytes > 0 else {
+            logger.debug(
+                "preset_store.filesystem_headroom.skip_shrinking device=\(device.id, privacy: .public) context=\(context, privacy: .public) originalBytes=\(originalData.count, privacy: .public) rewrittenBytes=\(rewrittenData.count, privacy: .public)"
+            )
+            return
+        }
+
+        guard let fileSystem = await fetchPresetStoreFileSystemInfo(device: device),
+              let usedUnits = fileSystem.spaceUsed,
+              let totalUnits = fileSystem.spaceTotal,
+              totalUnits > 0 else {
+            logger.warning(
+                "preset_store.filesystem_headroom.unavailable device=\(device.id, privacy: .public) context=\(context, privacy: .public) growthBytes=\(growthBytes, privacy: .public)"
+            )
+            return
+        }
+
+        let usedBytes = max(0, usedUnits) * 1_000
+        let totalBytes = max(0, totalUnits) * 1_000
+        let freeBytes = max(0, totalBytes - usedBytes)
+        let lowWatermarkBytes = max(
+            presetStoreMinimumLowWatermarkBytes,
+            min(presetStoreMaximumLowWatermarkBytes, totalBytes / 16)
+        )
+        let scratchBytes = max(originalData.count, rewrittenData.count) + presetStoreRewriteScratchReserveBytes
+        let requiredFreeBytes = max(scratchBytes, growthBytes + lowWatermarkBytes)
+
+        guard freeBytes >= requiredFreeBytes else {
+            logger.warning(
+                "preset_store.filesystem_headroom.blocked device=\(device.id, privacy: .public) context=\(context, privacy: .public) freeBytes=\(freeBytes, privacy: .public) requiredBytes=\(requiredFreeBytes, privacy: .public) originalBytes=\(originalData.count, privacy: .public) rewrittenBytes=\(rewrittenData.count, privacy: .public)"
+            )
+            throw WLEDAPIError.presetStoreInsufficientSpace(
+                "Lamp storage is too low to save safely. Free \(kilobyteDescription(requiredFreeBytes - freeBytes)) more by deleting saved presets or shortening the transition, then try again."
+            )
+        }
+
+        logger.debug(
+            "preset_store.filesystem_headroom.ok device=\(device.id, privacy: .public) context=\(context, privacy: .public) freeBytes=\(freeBytes, privacy: .public) requiredBytes=\(requiredFreeBytes, privacy: .public) growthBytes=\(growthBytes, privacy: .public)"
+        )
+    }
+
+    private func fetchPresetStoreFileSystemInfo(device: WLEDDevice) async -> FileSystemInfo? {
+        guard let url = URL(string: device.jsonEndpoint) else { return nil }
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 6
+
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            let wledResponse = try parseResponse(data: data, device: device)
+            return wledResponse.info.fs
+        } catch {
+            logger.warning(
+                "preset_store.filesystem_headroom.fetch_failed device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    private func kilobyteDescription(_ bytes: Int) -> String {
+        "\(max(1, Int(ceil(Double(max(0, bytes)) / 1_000.0)))) kB"
     }
 
     private func localPresetStoreBackupDirectory() throws -> URL {
@@ -3610,6 +3714,19 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return resolved
     }
 
+    func fetchDeviceTimeSettings(for device: WLEDDevice) async throws -> WLEDDeviceTimeSettings {
+        let config = try await fetchRawConfig(for: device)
+        let interfaces = (config["if"] as? [String: Any])
+            ?? ((config["cfg"] as? [String: Any])?["if"] as? [String: Any])
+            ?? [:]
+        let ntp = interfaces["ntp"] as? [String: Any] ?? [:]
+        let reference = parseSolarReference(from: config)
+        return WLEDDeviceTimeSettings(
+            ntpEnabled: decodeBool(ntp["en"]),
+            timeZone: reference.timeZone
+        )
+    }
+
     /// Update WLED solar reference (if.ntp) using app-provided location/timezone.
     /// This keeps sunrise/sunset timers device-native while removing manual setup friction.
     func updateSolarReference(
@@ -3655,6 +3772,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
         let (_, response) = try await urlSession.data(for: request)
         try validateHTTPResponse(response, device: device)
+        _ = try await postState(
+            device,
+            body: ["time": Int(Date().timeIntervalSince1970)]
+        )
 
         solarReferenceCache[device.id] = (
             coordinate: coordinate,
@@ -3751,6 +3872,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let timeZoneValue = ntp["tz"]
         let offsetSeconds = decodeInt(ntp["offset"])
         let timeZone: TimeZone? = {
+            if let timezoneIndex = decodeInt(timeZoneValue),
+               let identifier = wledTimezoneIdentifier(for: timezoneIndex),
+               let zone = TimeZone(identifier: identifier) {
+                return zone
+            }
             if let identifier = decodeString(timeZoneValue),
                let zone = TimeZone(identifier: identifier) {
                 return zone
@@ -3785,13 +3911,145 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         var interfaces = root["if"] as? [String: Any] ?? [:]
         var ntp = interfaces["ntp"] as? [String: Any] ?? [:]
         ntp["en"] = true
-        ntp["offset"] = timeZone.secondsFromGMT()
+        if let timezoneIndex = wledTimezoneIndex(for: timeZone) {
+            ntp["tz"] = timezoneIndex
+            ntp["offset"] = 0
+        } else {
+            ntp["tz"] = 0
+            ntp["offset"] = wledClampedUTCOffsetSeconds(for: timeZone)
+        }
         if let coordinate {
             ntp["lt"] = coordinate.latitude
             ntp["ln"] = coordinate.longitude
         }
         interfaces["ntp"] = ntp
         root["if"] = interfaces
+    }
+
+    private nonisolated func wledClampedUTCOffsetSeconds(for timeZone: TimeZone) -> Int {
+        min(65_500, max(-65_500, timeZone.secondsFromGMT()))
+    }
+
+    private nonisolated func wledTimezoneIdentifier(for index: Int) -> String? {
+        switch index {
+        case 0: return "Etc/UTC"
+        case 1: return "Europe/London"
+        case 2: return "Europe/Berlin"
+        case 3: return "Europe/Helsinki"
+        case 4: return "America/New_York"
+        case 5: return "America/Chicago"
+        case 6: return "America/Denver"
+        case 7: return "America/Phoenix"
+        case 8: return "America/Los_Angeles"
+        case 9: return "Asia/Hong_Kong"
+        case 10: return "Asia/Tokyo"
+        case 11: return "Australia/Sydney"
+        case 12: return "Pacific/Auckland"
+        case 13: return "Asia/Pyongyang"
+        case 14: return "Asia/Kolkata"
+        case 15: return "America/Regina"
+        case 16: return "Australia/Darwin"
+        case 17: return "Australia/Adelaide"
+        case 18: return "Pacific/Honolulu"
+        case 19: return "Asia/Novosibirsk"
+        case 20: return "America/Anchorage"
+        case 21: return "America/Mexico_City"
+        case 22: return "Asia/Karachi"
+        case 23: return "America/Sao_Paulo"
+        case 24: return "Australia/Perth"
+        default: return nil
+        }
+    }
+
+    private nonisolated func wledTimezoneIndex(for timeZone: TimeZone) -> Int? {
+        let identifier = timeZone.identifier
+        let directMap: [String: Int] = [
+            "Etc/UTC": 0,
+            "UTC": 0,
+            "GMT": 0,
+            "Europe/London": 1,
+            "Europe/Dublin": 1,
+            "Europe/Berlin": 2,
+            "Europe/Paris": 2,
+            "Europe/Rome": 2,
+            "Europe/Madrid": 2,
+            "Europe/Amsterdam": 2,
+            "Europe/Brussels": 2,
+            "Europe/Vienna": 2,
+            "Europe/Zurich": 2,
+            "Europe/Stockholm": 2,
+            "Europe/Oslo": 2,
+            "Europe/Copenhagen": 2,
+            "Europe/Warsaw": 2,
+            "Europe/Prague": 2,
+            "Europe/Budapest": 2,
+            "Europe/Helsinki": 3,
+            "Europe/Athens": 3,
+            "Europe/Bucharest": 3,
+            "Europe/Sofia": 3,
+            "Europe/Tallinn": 3,
+            "Europe/Riga": 3,
+            "Europe/Vilnius": 3,
+            "America/New_York": 4,
+            "America/Detroit": 4,
+            "America/Toronto": 4,
+            "America/Montreal": 4,
+            "America/Indiana/Indianapolis": 4,
+            "America/Chicago": 5,
+            "America/Winnipeg": 5,
+            "America/Menominee": 5,
+            "America/Denver": 6,
+            "America/Edmonton": 6,
+            "America/Boise": 6,
+            "America/Phoenix": 7,
+            "America/Los_Angeles": 8,
+            "America/Vancouver": 8,
+            "America/Tijuana": 8,
+            "Asia/Shanghai": 9,
+            "Asia/Hong_Kong": 9,
+            "Asia/Taipei": 9,
+            "Asia/Macau": 9,
+            "Asia/Manila": 9,
+            "Asia/Singapore": 9,
+            "Asia/Tokyo": 10,
+            "Asia/Seoul": 10,
+            "Australia/Sydney": 11,
+            "Australia/Melbourne": 11,
+            "Australia/Brisbane": 11,
+            "Pacific/Auckland": 12,
+            "Asia/Pyongyang": 13,
+            "Asia/Kolkata": 14,
+            "Asia/Calcutta": 14,
+            "America/Regina": 15,
+            "America/Swift_Current": 15,
+            "Australia/Darwin": 16,
+            "Australia/Adelaide": 17,
+            "Pacific/Honolulu": 18,
+            "Asia/Novosibirsk": 19,
+            "America/Anchorage": 20,
+            "America/Mexico_City": 21,
+            "Asia/Karachi": 22,
+            "America/Sao_Paulo": 23,
+            "America/Bahia": 23,
+            "Australia/Perth": 24
+        ]
+
+        if let direct = directMap[identifier] {
+            return direct
+        }
+
+        switch timeZone.secondsFromGMT() {
+        case 0: return 0
+        case 28_800: return 9
+        case 32_400: return 10
+        case 30_600: return 13
+        case 19_800: return 14
+        case -36_000: return 18
+        case 25_200: return 19
+        case 18_000: return 22
+        case -10_800: return 23
+        default: return nil
+        }
     }
 
     /// Mutates the provided configuration dictionary to update the server name in all known locations.
@@ -4557,7 +4815,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let name = presetDict["n"] as? String ?? "Preset \(id)"
             let quickLoad = decodeQuickLoadTag(presetDict["ql"])
             let segment = parsePresetSegment(from: presetDict["seg"])
-            let stateUpdate = decodeStateUpdate(from: presetDict["win"] as? [String: Any])
+            let stateUpdate = decodePresetStateUpdate(from: presetDict)
             presets.append(
                 WLEDPreset(
                     id: id,
@@ -4658,6 +4916,20 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard let dict, JSONSerialization.isValidJSONObject(dict) else { return nil }
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []) else { return nil }
         return try? decoder.decode(WLEDStateUpdate.self, from: data)
+    }
+
+    private func decodePresetStateUpdate(from presetDict: [String: Any]) -> WLEDStateUpdate? {
+        if let nestedState = decodeStateUpdate(from: presetDict["win"] as? [String: Any]) {
+            return nestedState
+        }
+
+        let stateKeys: Set<String> = [
+            "on", "bri", "seg", "udpn", "tt", "transition",
+            "mainseg", "ps", "pl", "nl", "lor", "rb"
+        ]
+        let stateDict = presetDict.filter { stateKeys.contains($0.key) }
+        guard !stateDict.isEmpty else { return nil }
+        return decodeStateUpdate(from: stateDict)
     }
 
     private func parsePresetSegment(from value: Any?) -> SegmentUpdate? {
@@ -5093,9 +5365,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let storedPayload: [String: Any]
         if let cached = cachedPresetRecordPayload(id: presetId, device: device) {
             storedPayload = cached
-        } else if let fetched = try? await fetchPresetRecordPayload(id: presetId, device: device) {
-            storedPayload = fetched
         } else {
+            // Keep tap-to-apply hot; a cold presets.json read can delay the visible preset change.
             return nil
         }
 
@@ -6444,10 +6715,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 try? await Task.sleep(nanoseconds: delayNanos)
             }
 
-            let observed = try await getLEDConfiguration(for: device)
-            lastObserved = observed
-            if ledConfiguration(observed, matchesAppliedFieldsOf: expected) {
-                return
+            do {
+                let observed = try await getLEDConfiguration(for: device)
+                lastObserved = observed
+                if ledConfiguration(observed, matchesAppliedFieldsOf: expected) {
+                    return
+                }
+            } catch let error as WLEDAPIError {
+                guard error.isRetryable, attempt < attempts - 1 else {
+                    throw error
+                }
+                continue
             }
         }
 
@@ -6479,6 +6757,13 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     /// - Returns: Current LED configuration
     /// - Throws: WLEDAPIError if the request fails
     func getLEDConfiguration(for device: WLEDDevice) async throws -> LEDConfiguration {
+        try await getLEDConfiguration(for: device, retryIfEmptyBus: true)
+    }
+
+    private func getLEDConfiguration(
+        for device: WLEDDevice,
+        retryIfEmptyBus: Bool
+    ) async throws -> LEDConfiguration {
         guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
             throw WLEDAPIError.invalidURL
         }
@@ -6497,6 +6782,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let ledIns = led["ins"] as? [[String: Any]] ?? []
             let legacyIns = root["leds"] as? [[String: Any]] ?? []
             let allBuses = !ledIns.isEmpty ? ledIns : legacyIns
+
+            if allBuses.isEmpty {
+                if retryIfEmptyBus {
+                    #if DEBUG
+                    print("🔧 [LED cfg] \(device.name) empty LED bus list; retrying after settle delay")
+                    #endif
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    return try await getLEDConfiguration(for: device, retryIfEmptyBus: false)
+                }
+                throw WLEDAPIError.deviceBusy(device.name)
+            }
 
             #if DEBUG
             if let ledIns = led["ins"] as? [[String: Any]] {

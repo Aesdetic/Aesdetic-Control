@@ -472,6 +472,15 @@ struct WLEDTimerUpdate: Codable {
     }
 }
 
+struct WLEDDeviceTimeSettings: Equatable {
+    let ntpEnabled: Bool?
+    let timeZone: TimeZone?
+
+    var isTimerClockReady: Bool {
+        ntpEnabled == true && timeZone != nil
+    }
+}
+
 /// WLED macro trigger bindings in /json/cfg.
 /// These are native firmware hooks that can execute a preset/playlist macro ID.
 struct WLEDMacroBindings: Equatable {
@@ -498,6 +507,7 @@ struct WLEDAlexaIntegrationSettings: Equatable {
     var isEnabled: Bool
     var invocationName: String
     var exposedPresetCount: Int
+    var isSupported: Bool = true
 }
 
 /// Native WLED integration settings stored in /json/cfg under the "if" tree.
@@ -795,10 +805,9 @@ struct TransitionStepProfile: Equatable {
     let qualityLabel: TransitionStepQualityLabel
     let steps: Int
     let slotsRequired: Int
-    let fitsBudget: Bool
+    let fitsStorage: Bool
     let wasCoarsened: Bool
     let availableSlots: Int?
-    let perAutomationBudget: Int?
     let reserve: Int?
     let maxDurationSecondsAtCurrentQuality: Double?
 }

@@ -31,16 +31,22 @@ Status legend:
 
 5. Automations
    - App automations and basic WLED timer slots stay native.
-   - Full WLED time/macros page remains advanced until time/date/macro parity is completed.
+   - Time & Schedules is a top-level settings path with app automations, sunrise/sunset rows, native WLED timers, and timed light/night-light behavior.
+   - Full WLED time/date/macro parity remains advanced or web fallback where firmware-specific fields are not rebuilt natively.
 
 6. Network & Sync
    - Basic UDP send/receive native.
-   - DMX, E1.31, Art-Net, DDP, MQTT, Hue, and realtime receiver settings remain advanced/web fallback.
+   - MQTT, Hue, E1.31, Art-Net, DMX, and realtime receiver settings are advanced native or web fallback depending on firmware support and customer need.
 
-7. Extensions
+7. Smart Home
+   - Alexa setup is native when the WLED firmware build supports it.
+   - Alexa Favorites can mirror app saves into WLED preset slots for voice discovery.
+   - Home Assistant is the bridge path for Apple Home and Google Home.
+
+8. Extensions
    - Usermods are firmware-specific. Keep web fallback unless a shipped product depends on one.
 
-8. Advanced
+9. Advanced
    - Native OTA lock/update safety controls, backup/restore, reset fallback, filesystem fallback, raw WLED config, and risky hardware settings.
 
 ## Page-by-Page WLED Parity
@@ -51,8 +57,8 @@ Status legend:
 | `/settings/leds` | Light Setup | Guided + Advanced Native + Web Fallback | Core single-output setup is native. Add native multi-output editor before production if products can ship with multiple outputs. Keep buttons/IR/relay advanced. |
 | `/settings/2D` | 2D Layout + Advanced Hardware Setup | Web Fallback | Native detection exists. Add native matrix/panel editor only if product line includes matrix devices. |
 | `/settings/ui` | Controls | Web Fallback | Defer most WLED UI theme/server-page settings. App UI owns the customer experience. |
-| `/settings/sync` | Network & Sync | Advanced Native + Web Fallback | Keep UDP native. Add only the protocols your customers actually use: DDP/E1.31/DMX/MQTT/Hue. |
-| `/settings/time` | Automations | Advanced Native + Web Fallback | Basic timers/macros/night light are native. Planned native: timezone/NTP/geolocation/date range/macro parity. |
+| `/settings/sync` | Network & Sync + Integrations | Advanced Native + Web Fallback | Keep UDP native. MQTT, Hue, E1.31, Art-Net, DMX, Alexa change send/receive, and related protocol settings are advanced native where supported; keep firmware-specific fields behind WLED fallback. |
+| `/settings/time` | Time & Schedules + Automations | Advanced Native + Web Fallback | App automations, sunrise/sunset rows, native WLED timers, and timed light/night light are native. Planned/native-watch items: full timezone/NTP/geolocation/date range/macro parity for every firmware field. |
 | `/settings/um` | Extensions | Web Fallback | Keep dynamic web fallback. Native only for product-required usermods. |
 | `/settings/sec` | Advanced | Native + Web Fallback | OTA lock, WiFi settings lock, ArduinoOTA, same-subnet update restriction, backup links, and JSON restore/import are native. Settings PIN, factory reset, and firmware-specific guarded flows remain WLED fallback. |
 | `/update` | Overview + Advanced | Planned Native + Web Fallback | Update check is native; manual firmware upload stays WLED fallback until the app can verify board/build compatibility and track reboot recovery. |
@@ -63,7 +69,6 @@ Status legend:
 - WiFi production setup: reconnect feedback after IP-changing saves, multi-network credentials if needed, Ethernet if hardware ships with it, and clearer failure recovery when a bad static IP is saved.
 - Firmware update: current/latest version, compatibility warning, upload progress, reboot wait, recovery instructions.
 - Security and backup: add native settings PIN flow only if we can preserve WLED's PIN gate correctly; add safer factory reset confirmation with backup prompt.
-- Firmware update: board/build compatibility detection, upload progress, reboot recovery, and support guidance after failed update.
 - Light setup validation: device capability warnings, GPIO conflict warnings, RGB/RGBW/RGBCCT test workflow, multi-output safety.
 - WLED settings audit view: show which sections are Native, Advanced Native, Web Fallback, or Planned Native.
 
@@ -74,6 +79,7 @@ Status legend:
 - DMX/E1.31/Art-Net/Hue/MQTT unless those are part of the product promise.
 - Full 2D panel editor if the launch product is not a matrix product.
 - Buttons, IR, relay, and color-order overrides if installers configure them.
+- Home Assistant/Apple Home/Google Home setup beyond guidance and bridge instructions.
 
 ## 2D vs 3D Matrix Decision
 

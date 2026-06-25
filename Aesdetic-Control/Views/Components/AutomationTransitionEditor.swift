@@ -19,16 +19,16 @@ struct AutomationTransitionEditor: View {
     @Binding var endWhiteLevel: Double?
     @Binding var selectedTransitionPresetId: UUID?
     let transitionProfile: TransitionStepProfile?
-    let automationGuaranteeCount: Int
     let maxDurationMinutes: Int
     let showsDurationRecommendationGuide: Bool
     let expectedStartDate: Date?
     let expectedEndDate: Date?
     let expectedTimeZone: TimeZone
     let isInline: Bool
+    let externalPreviewEnabled: Binding<Bool>?
     
     // Preview state
-    @State private var previewEnabled: Bool = false
+    @State private var localPreviewEnabled: Bool = false
     
     // Internal UI state
     @State private var selectedA: UUID? = nil
@@ -64,13 +64,13 @@ struct AutomationTransitionEditor: View {
         endWhiteLevel: Binding<Double?>,
         selectedTransitionPresetId: Binding<UUID?> = .constant(nil),
         transitionProfile: TransitionStepProfile? = nil,
-        automationGuaranteeCount: Int = 5,
         maxDurationMinutes: Int = TransitionDurationPicker.maxMinutes,
         showsDurationRecommendationGuide: Bool = true,
         expectedStartDate: Date? = nil,
         expectedEndDate: Date? = nil,
         expectedTimeZone: TimeZone = .current,
-        isInline: Bool = false
+        isInline: Bool = false,
+        externalPreviewEnabled: Binding<Bool>? = nil
     ) {
         self.viewModel = viewModel
         self.device = device
@@ -85,13 +85,13 @@ struct AutomationTransitionEditor: View {
         self._endWhiteLevel = endWhiteLevel
         self._selectedTransitionPresetId = selectedTransitionPresetId
         self.transitionProfile = transitionProfile
-        self.automationGuaranteeCount = automationGuaranteeCount
         self.maxDurationMinutes = max(0, maxDurationMinutes)
         self.showsDurationRecommendationGuide = showsDurationRecommendationGuide
         self.expectedStartDate = expectedStartDate
         self.expectedEndDate = expectedEndDate
         self.expectedTimeZone = expectedTimeZone
         self.isInline = isInline
+        self.externalPreviewEnabled = externalPreviewEnabled
     }
     
     private var allowedSecondValues: [Int] {
@@ -119,7 +119,7 @@ struct AutomationTransitionEditor: View {
     }
     
     var body: some View {
-        VStack(spacing: isInline ? 18 : 16) {
+        VStack(spacing: isInline ? 14 : 16) {
             if !isInline {
                 headerRow
             }
@@ -179,7 +179,7 @@ struct AutomationTransitionEditor: View {
             Spacer()
 
             if advancedUIEnabled {
-                Toggle(isOn: $previewEnabled) {
+                Toggle(isOn: previewToggleBinding) {
                     HStack(spacing: 4) {
                         Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
                             .font(AppTypography.style(.caption2))
@@ -199,19 +199,14 @@ struct AutomationTransitionEditor: View {
     @ViewBuilder
     private var transitionPresetSelector: some View {
         if !transitionPresets.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Saved Transitions")
-                    .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(transitionPresets) { preset in
-                            transitionPresetChip(preset: preset)
-                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(transitionPresets) { preset in
+                        transitionPresetChip(preset: preset)
                     }
-                    .padding(.vertical, 4)
                 }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
             }
             .padding(.horizontal, isInline ? 0 : 16)
         }
@@ -253,55 +248,41 @@ struct AutomationTransitionEditor: View {
                 schedulePreview(target: .end)
             }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    // Start gradient preview
-                    LinearGradient(
-                        gradient: Gradient(colors: preset.gradientA.stops.map { Color(hex: $0.hexColor) }),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: 40, height: 20)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    
-                    Image(systemName: "arrow.right")
-                        .font(AppTypography.style(.caption2))
-                        .foregroundColor(.white.opacity(0.6))
-                    
-                    // End gradient preview
-                    LinearGradient(
-                        gradient: Gradient(colors: preset.gradientB.stops.map { Color(hex: $0.hexColor) }),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: 40, height: 20)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                }
-                
-                Text(preset.name)
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                
-                Text(formatDuration(preset.durationSec))
-                    .font(AppTypography.style(.caption2))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-            .padding(8)
-            .frame(width: 120, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.2) : Color.white.opacity(0.08))
-            )
+            transitionPresetSwatch(preset: preset, isSelected: isSelected)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.name), \(formatDuration(preset.durationSec))")
+    }
+
+    private func transitionPresetSwatch(preset: TransitionPreset, isSelected: Bool) -> some View {
+        ZStack {
+            HStack(spacing: 0) {
+                presetSwatchGradient(stops: preset.gradientA.stops)
+                    .frame(maxWidth: .infinity)
+                presetSwatchGradient(stops: preset.gradientB.stops)
+                    .frame(maxWidth: .infinity)
+            }
+            .opacity(0.72)
+            .frame(width: 64, height: 18)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+            Rectangle()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 1, height: 12)
+
+            presetSwatchHighlight(cornerRadius: 6)
+            presetSwatchSelection(isSelected: isSelected, cornerRadius: 6)
+        }
+        .frame(width: 64, height: 18)
+        .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.0), radius: 4, x: 0, y: 2)
+        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
     
     private var durationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             Text("Duration")
                 .font(AppTypography.style(.footnote, weight: .semibold))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(.white.opacity(0.78))
             
             HStack(spacing: 12) {
                 VStack(spacing: 4) {
@@ -409,7 +390,6 @@ struct AutomationTransitionEditor: View {
     private var transitionPlanningSummary: some View {
         if let profile = transitionProfile {
             VStack(alignment: .leading, spacing: 6) {
-                let budgetText = profile.perAutomationBudget.map { "\($0) slots / automation" } ?? "No budget limit"
                 let quality = profile.qualityLabel.displayName
                 Text("Estimated storage: \(profile.slotsRequired) slots")
                     .font(AppTypography.style(.caption, weight: .semibold))
@@ -417,17 +397,19 @@ struct AutomationTransitionEditor: View {
                 Text("Quality: \(quality) (\(Int(profile.legSeconds))s legs)")
                     .font(AppTypography.style(.caption2))
                     .foregroundColor(.white.opacity(0.7))
-                Text("\(automationGuaranteeCount)-automation budget: \(budgetText)")
-                    .font(AppTypography.style(.caption2))
-                    .foregroundColor(.white.opacity(0.65))
+                if let available = profile.availableSlots {
+                    Text("\(available) slots available after reserve")
+                        .font(AppTypography.style(.caption2))
+                        .foregroundColor(.white.opacity(0.65))
+                }
                 if profile.wasCoarsened {
-                    Text("Auto-adjusted from \(Int(profile.baseLegSeconds))s to \(Int(profile.legSeconds))s legs to fit storage budget.")
+                    Text("Auto-adjusted from \(Int(profile.baseLegSeconds))s to \(Int(profile.legSeconds))s legs to fit storage.")
                         .font(AppTypography.style(.caption2))
                         .foregroundColor(.orange.opacity(0.92))
                 }
-                Text(profile.fitsBudget ? "Fits guaranteed storage budget." : "Exceeds guaranteed storage budget. Reduce duration or free preset slots.")
+                Text(profile.fitsStorage ? "Fits available storage." : "Not enough saved-entry space. Reduce duration or free preset slots.")
                     .font(AppTypography.style(.caption2, weight: .semibold))
-                    .foregroundColor(profile.fitsBudget ? .green.opacity(0.9) : .orange.opacity(0.95))
+                    .foregroundColor(profile.fitsStorage ? .green.opacity(0.9) : .orange.opacity(0.95))
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -439,12 +421,12 @@ struct AutomationTransitionEditor: View {
     }
     
     private var startSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(spacing: 6) {
                     Text("Start")
                         .font(AppTypography.style(.footnote, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.85))
+                        .foregroundColor(.white.opacity(0.78))
                     if let expectedStartLabel {
                         Text(expectedStartLabel)
                             .font(AppTypography.style(.caption2))
@@ -455,10 +437,10 @@ struct AutomationTransitionEditor: View {
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.white.opacity(0.68))
                     Text("\(Int(round(startBrightness/255.0*100)))%")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                        .font(AppTypography.style(.caption, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
                 }
             }
             
@@ -566,7 +548,7 @@ struct AutomationTransitionEditor: View {
                 HStack(spacing: 6) {
                     Text("End")
                         .font(AppTypography.style(.footnote, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.85))
+                        .foregroundColor(.white.opacity(0.78))
                     if let expectedEndLabel {
                         Text(expectedEndLabel)
                             .font(AppTypography.style(.caption2))
@@ -577,10 +559,10 @@ struct AutomationTransitionEditor: View {
                 HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.white.opacity(0.68))
                     Text("\(Int(round(endBrightness/255.0*100)))%")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                        .font(AppTypography.style(.caption, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
                 }
             }
             
@@ -685,12 +667,13 @@ struct AutomationTransitionEditor: View {
     @ViewBuilder
     private func colorPresetSelector(target: GradientTarget) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 ForEach(colorPresets) { preset in
                     colorPresetChip(preset: preset, target: target)
                 }
             }
             .padding(.horizontal, 2)
+            .padding(.vertical, 2)
         }
         .padding(.top, 4)
     }
@@ -735,19 +718,54 @@ struct AutomationTransitionEditor: View {
                 schedulePreview(target: target)
             }
         } label: {
-            LinearGradient(
-                gradient: Gradient(colors: preset.gradientStops.map { Color(hex: $0.hexColor) }),
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .frame(width: 60, height: 24)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
-            )
+            presetSwatchGradient(stops: preset.gradientStops)
+                .opacity(0.72)
+                .frame(width: 48, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(presetSwatchHighlight(cornerRadius: 6))
+                .overlay(presetSwatchSelection(isSelected: isSelected, cornerRadius: 6))
+                .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.0), radius: 4, x: 0, y: 2)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(preset.name)
+    }
+
+    private func presetSwatchGradient(stops: [GradientStop]) -> LinearGradient {
+        let colors = stops.isEmpty ? [Color.white.opacity(0.8), Color.white.opacity(0.35)] : stops.map { Color(hex: $0.hexColor) }
+        return LinearGradient(
+            gradient: Gradient(colors: colors),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private func presetSwatchSelection(isSelected: Bool, cornerRadius: CGFloat) -> some View {
+        ZStack(alignment: .center) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(isSelected ? 0.52 : 0.12), lineWidth: isSelected ? 1.5 : 1)
+
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(AppTypography.style(.caption2, weight: .bold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .shadow(color: Color.black.opacity(0.22), radius: 2, x: 0, y: 1)
+            }
+        }
+    }
+
+    private func presetSwatchHighlight(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.18),
+                        Color.white.opacity(0.02)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
     }
     
     @ViewBuilder
@@ -865,7 +883,43 @@ struct AutomationTransitionEditor: View {
     
     @ViewBuilder
     private var previewSection: some View {
-        EmptyView()
+        if isInline && externalPreviewEnabled == nil {
+            HStack {
+                Spacer(minLength: 0)
+                Toggle(isOn: previewToggleBinding) {
+                    HStack(spacing: 5) {
+                        Image(systemName: previewEnabled ? "eye.fill" : "eye")
+                            .font(AppTypography.style(.caption2, weight: .semibold))
+                        Text("Preview")
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                    }
+                }
+                .toggleStyle(.button)
+                .tint(previewEnabled ? .white.opacity(0.24) : .white.opacity(0.12))
+                .foregroundColor(.white.opacity(previewEnabled ? 0.96 : 0.78))
+                .clipShape(Capsule(style: .continuous))
+            }
+        }
+    }
+
+    private var previewEnabled: Bool {
+        get {
+            externalPreviewEnabled?.wrappedValue ?? localPreviewEnabled
+        }
+        nonmutating set {
+            if let externalPreviewEnabled {
+                externalPreviewEnabled.wrappedValue = newValue
+            } else {
+                localPreviewEnabled = newValue
+            }
+        }
+    }
+
+    private var previewToggleBinding: Binding<Bool> {
+        Binding(
+            get: { previewEnabled },
+            set: { previewEnabled = $0 }
+        )
     }
     
     // MARK: - Helper Functions

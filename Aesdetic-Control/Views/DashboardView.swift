@@ -71,8 +71,11 @@ struct DashboardView: View {
     @State private var navigationPath = NavigationPath()
     @State private var detailPresentation = DeviceDetailPresentationState()
     @State private var detailSourceFrames: [String: CGRect] = [:]
+    @State private var detailTransitionID = UUID()
     @State private var setupDevice: WLEDDevice?
     @State private var detailBackgroundDismissEnabledAt: Date = .distantPast
+    @State private var detailContentRevealProgress: CGFloat = 0
+    @State private var detailContentRevealWorkItem: DispatchWorkItem?
     @GestureState private var detailDragOffset: CGFloat = 0
     
     // MARK: - Performance Optimization Properties
@@ -90,6 +93,7 @@ struct DashboardView: View {
     private let contentHorizontalPadding: CGFloat = 20
     private let sectionSpacing: CGFloat = 20
     private let detailDismissGuardDelay: TimeInterval = 0.45
+    private let detailContentRevealDelay: TimeInterval = 0.20
     private let detailPanelAnimation: Animation = DeviceDetailPresentation.animation
     private let debugHideGreeting = false
     private let debugHideQuote = false
@@ -183,6 +187,7 @@ struct DashboardView: View {
                         if !debugHideScenes {
                             ScenesAutomationsSection(
                                 automations: automationViewModel.automations,
+                                deviceCount: deviceControlViewModel.devices.count,
                                 deviceViewModel: deviceControlViewModel,
                                 onToggle: { automation in
                                     Task { automationViewModel.toggleAutomation(automation) }
@@ -244,6 +249,8 @@ struct DashboardView: View {
                     await refreshData()
                 }
             }
+            .blur(radius: detailBackdropBlurRadius)
+            .animation(.easeInOut(duration: 0.22), value: detailBackdropBlurRadius)
             .coordinateSpace(name: DeviceDetailPresentation.coordinateSpaceName)
             .onPreferenceChange(DeviceDetailSourceFramePreferenceKey.self) { frames in
                 detailSourceFrames = frames
@@ -279,7 +286,8 @@ struct DashboardView: View {
                 let dragOffset = liveDragOffset > 0 ? liveDragOffset : detailPresentation.closingDragOffset
                 let panelTopPadding: CGFloat = 4
                 let panelHorizontalPadding: CGFloat = 8
-                let dockOverlapAllowance: CGFloat = 0
+                let panelBottomClearance: CGFloat = 8
+                let dockOverlapAllowance = max(0, proxy.safeAreaInsets.bottom - panelBottomClearance)
                 let panelWidth = max(1, proxy.size.width - (panelHorizontalPadding * 2))
                 let panelHeight = max(420, proxy.size.height - proxy.safeAreaInsets.bottom - panelTopPadding + dockOverlapAllowance)
                 let panelFrame = CGRect(
@@ -302,7 +310,7 @@ struct DashboardView: View {
                     progress: presentationProgress
                 )
                 ZStack(alignment: .topLeading) {
-                    Color.clear
+                    DeviceDetailBackdrop(isActive: isDetailBackdropActive)
                         .ignoresSafeArea()
                         .allowsHitTesting(canDismissDetailFromBackground && detailPresentation.isPresented && !detailPresentation.isClosing)
                         .onTapGesture {
@@ -315,11 +323,15 @@ struct DashboardView: View {
                         backgroundStyle: .liquidGlass,
                         containerCornerRadius: morphCornerRadius,
                         presentationProgress: presentationProgress,
+                        delaysContentUntilExpanded: true,
+                        contentRevealProgress: detailContentRevealProgress,
                         onClose: { closeDeviceDetail() }
                     )
                     .frame(width: morphFrame.width, height: morphFrame.height, alignment: .top)
+                    .clipShape(RoundedRectangle(cornerRadius: morphCornerRadius, style: .continuous))
+                    .compositingGroup()
                     .position(x: morphFrame.midX, y: morphFrame.midY)
-                    .opacity(Double(0.18 + (0.82 * presentationProgress)))
+                    .opacity(detailShellOpacity(for: presentationProgress))
                     .simultaneousGesture(detailCollapseDragGesture)
                 }
             }
@@ -329,6 +341,20 @@ struct DashboardView: View {
 
     private var canDismissDetailFromBackground: Bool {
         Date() >= detailBackgroundDismissEnabledAt
+    }
+
+    private var detailBackdropBlurRadius: CGFloat {
+        isDetailBackdropActive ? 14 : 0
+    }
+
+    private var isDetailBackdropActive: Bool {
+        detailPresentation.isPresented && !detailPresentation.isClosing
+    }
+
+    private func detailShellOpacity(for progress: CGFloat) -> Double {
+        let normalized = min(1, max(0, (progress - 0.02) / 0.26))
+        let eased = normalized * normalized * (3 - (2 * normalized))
+        return Double(eased)
     }
 
     private var detailCollapseDragGesture: some Gesture {
@@ -490,6 +516,7 @@ struct DashboardView: View {
     private func scenesSection(geometry: GeometryProxy) -> some View {
         ScenesAutomationsSection(
             automations: automationViewModel.automations,
+            deviceCount: deviceControlViewModel.devices.count,
             deviceViewModel: deviceControlViewModel,
             onToggle: { automation in
                 Task { automationViewModel.toggleAutomation(automation) }
@@ -542,25 +569,56 @@ struct DashboardView: View {
     }
 
     private func openDeviceDetail(_ device: WLEDDevice) {
+        if detailPresentation.device?.id == device.id && detailPresentation.isPresented {
+            return
+        }
+
         if deviceControlViewModel.requiresProfileSetup(device) {
             closeDeviceDetail(animated: false)
             setupDevice = device
             return
         }
+        detailContentRevealWorkItem?.cancel()
+        detailContentRevealProgress = 0
+        let transitionID = UUID()
+        detailTransitionID = transitionID
         detailBackgroundDismissEnabledAt = Date().addingTimeInterval(detailDismissGuardDelay)
         detailPresentation.prepare(device: device, sourceFrame: detailSourceFrames[device.id])
         DispatchQueue.main.async {
+            guard detailTransitionID == transitionID else { return }
             withAnimation(detailPanelAnimation) {
                 detailPresentation.isPresented = true
             }
+            scheduleDetailContentReveal(for: device.id, transitionID: transitionID)
         }
     }
 
+    private func scheduleDetailContentReveal(for deviceId: String, transitionID: UUID) {
+        let workItem = DispatchWorkItem {
+            guard detailTransitionID == transitionID,
+                  detailPresentation.device?.id == deviceId,
+                  detailPresentation.isPresented,
+                  !detailPresentation.isClosing else {
+                return
+            }
+            withAnimation(.easeOut(duration: 0.16)) {
+                detailContentRevealProgress = 1
+            }
+        }
+        detailContentRevealWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + detailContentRevealDelay, execute: workItem)
+    }
+
     private func closeDeviceDetail(fromDragOffset dragOffset: CGFloat = 0, animated: Bool = true) {
+        let transitionID = UUID()
+        detailTransitionID = transitionID
+
         guard detailPresentation.device != nil else {
             detailBackgroundDismissEnabledAt = .distantPast
             return
         }
+        detailContentRevealWorkItem?.cancel()
+        detailContentRevealProgress = 0
         guard animated else {
             detailPresentation.reset()
             detailBackgroundDismissEnabledAt = .distantPast
@@ -568,11 +626,16 @@ struct DashboardView: View {
         }
 
         detailPresentation.isClosing = true
+        if let deviceId = detailPresentation.device?.id,
+           let latestSourceFrame = detailSourceFrames[deviceId] {
+            detailPresentation.sourceFrame = latestSourceFrame
+        }
         detailPresentation.closingDragOffset = max(0, dragOffset)
         withAnimation(detailPanelAnimation) {
             detailPresentation.isPresented = false
             detailPresentation.closingDragOffset = 0
         } completion: {
+            guard detailTransitionID == transitionID else { return }
             detailPresentation.reset()
             detailBackgroundDismissEnabledAt = .distantPast
         }
@@ -593,10 +656,11 @@ struct DashboardView: View {
     }
 }
 
-// MARK: - Scenes & Automations Section
+// MARK: - Scenes & Shortcuts Section
 
 struct ScenesAutomationsSection: View {
     let automations: [Automation]
+    let deviceCount: Int
     let deviceViewModel: DeviceControlViewModel
     let onToggle: (Automation) -> Void
     @Environment(\.colorScheme) private var colorScheme
@@ -605,13 +669,24 @@ struct ScenesAutomationsSection: View {
     @StateObject private var usageStore = DashboardShortcutUsageStore.shared
     @StateObject private var favoritesStore = SceneFavoritesStore.shared
     @StateObject private var presetFavoritesStore = PresetFavoritesStore.shared
-    private let sceneShortcutRowHeight: CGFloat = 64
+    private let sceneShortcutRowHeight: CGFloat = 76
     private let sectionHorizontalPadding: CGFloat = 20
     private var headingTextColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.94) : DashboardPalette.primaryText
     }
+    private var shouldShowScenesRow: Bool { deviceCount > 1 }
     
     var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if shouldShowScenesRow {
+                scenesRow
+            }
+            shortcutsRow
+        }
+        .background(Color.clear)
+    }
+
+    private var scenesRow: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Scenes")
@@ -626,19 +701,20 @@ struct ScenesAutomationsSection: View {
             
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
-                    ForEach(displayedSceneShortcuts) { item in
+                    ForEach(displayedSceneItems) { item in
                         DashboardAutomationShortcutChip(
                             title: item.title,
-                            description: sceneShortcutDescription(for: item),
+                            description: "Scene",
+                            iconName: "sparkles",
                             isEnabled: true,
-                            isNext: false,
+                            statusText: "Apply",
                             action: {
                                 usageStore.increment(key: item.usageKey)
                                 handleSceneShortcut(item)
                             }
                         )
                         .contextMenu {
-                            Button(item.isFavorite ? "Unfavorite" : "Favorite") {
+                            Button(item.isFavorite ? "Remove shortcut" : "Add shortcut") {
                                 toggleFavorite(for: item)
                             }
                         }
@@ -655,9 +731,62 @@ struct ScenesAutomationsSection: View {
         }
         .background(Color.clear)
     }
+
+    private var shortcutsRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Shortcuts")
+                    .font(DashboardTypography.sectionTitle)
+                    .foregroundColor(headingTextColor)
+
+                Spacer()
+
+                shortcutAddMenu
+            }
+            .padding(.horizontal, sectionHorizontalPadding)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 8) {
+                    ForEach(displayedShortcutItems) { item in
+                        DashboardAutomationShortcutChip(
+                            title: item.title,
+                            description: sceneShortcutDescription(for: item),
+                            iconName: sceneShortcutIconName(for: item),
+                            isEnabled: sceneShortcutIsEnabled(item),
+                            statusText: sceneShortcutStatusText(for: item),
+                            action: {
+                                usageStore.increment(key: item.usageKey)
+                                handleSceneShortcut(item)
+                            }
+                        )
+                        .contextMenu {
+                            Button(sceneShortcutFavoriteTitle(for: item)) {
+                                toggleFavorite(for: item)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, sectionHorizontalPadding)
+            }
+            .frame(height: sceneShortcutRowHeight)
+            .scrollIndicators(.hidden)
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            .scrollClipDisabled()
+        }
+        .background(Color.clear)
+    }
     
-    private var displayedSceneShortcuts: [SceneShortcutItem] {
-        let sceneItems = scenesStore.scenes.map { scene in
+    private var displayedSceneItems: [SceneShortcutItem] {
+        sortedSceneItems
+    }
+
+    private var displayedShortcutItems: [SceneShortcutItem] {
+        sortedAutomationShortcutItems + sortedFavoriteSceneItems + sortedFavoritePresetItems
+    }
+
+    private var sortedSceneItems: [SceneShortcutItem] {
+        scenesStore.scenes.map { scene in
             SceneShortcutItem(
                 id: "scene:\(scene.id.uuidString)",
                 title: scene.name,
@@ -667,7 +796,19 @@ struct ScenesAutomationsSection: View {
                 isFavorite: favoritesStore.contains(scene.id)
             )
         }
-        let presetItems = presetsStore.colorPresets.map { preset in
+        .sorted { lhs, rhs in
+            return lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    private var sortedFavoriteSceneItems: [SceneShortcutItem] {
+        sortedSceneItems.filter(\.isFavorite)
+    }
+
+    private var sortedFavoritePresetItems: [SceneShortcutItem] {
+        presetsStore.colorPresets
+            .filter { presetFavoritesStore.contains($0.id) }
+            .map { preset in
             SceneShortcutItem(
                 id: "preset:\(preset.id.uuidString)",
                 title: preset.name,
@@ -677,26 +818,168 @@ struct ScenesAutomationsSection: View {
                 isFavorite: presetFavoritesStore.contains(preset.id)
             )
         }
-        let items = sceneItems + presetItems
-        let favorites = items.filter { $0.isFavorite }
-        let base = favorites.isEmpty ? items : favorites
-        let sorted = base.sorted { lhs, rhs in
-            let lhsCount = usageStore.count(for: lhs.usageKey)
-            let rhsCount = usageStore.count(for: rhs.usageKey)
-            if lhsCount != rhsCount {
-                return lhsCount > rhsCount
+            .sorted { lhs, rhs in
+                return lhs.createdAt > rhs.createdAt
             }
-            return lhs.createdAt > rhs.createdAt
+    }
+
+    private var sortedAutomationShortcutItems: [SceneShortcutItem] {
+        automations
+            .filter { $0.metadata.pinnedToShortcuts ?? false }
+            .map { automation in
+                SceneShortcutItem(
+                    id: "automation:\(automation.id.uuidString)",
+                    title: automation.name,
+                    createdAt: automation.updatedAt,
+                    usageKey: "automation:\(automation.id.uuidString)",
+                    kind: .automation(automation),
+                    isFavorite: true
+                )
+            }
+            .sorted { lhs, rhs in
+                return lhs.createdAt > rhs.createdAt
+            }
+    }
+
+    private var menuSceneShortcutCandidates: [SceneGroup] {
+        scenesStore.scenes
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var menuPresetShortcutCandidates: [ColorPreset] {
+        presetsStore.colorPresets
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var menuAutomationShortcutCandidates: [Automation] {
+        automations
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var shortcutAddMenu: some View {
+        Menu {
+            Section("Scenes") {
+                if menuSceneShortcutCandidates.isEmpty {
+                    Button("No scenes yet") {}
+                        .disabled(true)
+                } else {
+                    ForEach(menuSceneShortcutCandidates) { scene in
+                        let isShortcut = favoritesStore.contains(scene.id)
+                        Button {
+                            favoritesStore.toggle(scene.id)
+                        } label: {
+                            Label(
+                                scene.name,
+                                systemImage: shortcutMenuIcon(isSelected: isShortcut, fallback: "sparkles")
+                            )
+                        }
+                    }
+                }
+            }
+
+            Section("Color Presets") {
+                if menuPresetShortcutCandidates.isEmpty {
+                    Button("No color presets yet") {}
+                        .disabled(true)
+                } else {
+                    ForEach(menuPresetShortcutCandidates) { preset in
+                        let isShortcut = presetFavoritesStore.contains(preset.id)
+                        Button {
+                            presetFavoritesStore.toggle(preset.id)
+                        } label: {
+                            Label(
+                                preset.name,
+                                systemImage: shortcutMenuIcon(isSelected: isShortcut, fallback: "paintpalette")
+                            )
+                        }
+                    }
+                }
+            }
+
+            Section("Routines") {
+                if menuAutomationShortcutCandidates.isEmpty {
+                    Button("No routines yet") {}
+                        .disabled(true)
+                } else {
+                    ForEach(menuAutomationShortcutCandidates) { automation in
+                        let isShortcut = automation.metadata.pinnedToShortcuts ?? false
+                        Button {
+                            setAutomationShortcut(automation, pinned: !isShortcut)
+                        } label: {
+                            Label(
+                                automation.name,
+                                systemImage: shortcutMenuIcon(isSelected: isShortcut, fallback: "power")
+                            )
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle")
+                    .font(DashboardTypography.buttonCompact)
+                Text("Add")
+                    .font(DashboardTypography.buttonCompact)
+            }
+            .foregroundColor(colorScheme == .dark ? Color.white.opacity(0.92) : DashboardPalette.primaryText.opacity(0.92))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
-        return favorites.isEmpty ? Array(sorted.prefix(3)) : sorted
+        .buttonStyle(SnappyTapButtonStyle(pressedScale: 0.96, response: 0.16, damping: 0.8))
+        .appLiquidGlass(role: .control)
+        .accessibilityLabel("Add shortcut")
+    }
+
+    private func shortcutMenuIcon(isSelected: Bool, fallback: String) -> String {
+        isSelected ? "checkmark" : fallback
     }
 
     private func sceneShortcutDescription(for item: SceneShortcutItem) -> String {
         switch item.kind {
         case .sceneGroup:
-            return "Scene"
+            return "Apply"
         case .preset:
-            return "Color Preset"
+            return "Color"
+        case .automation(let automation):
+            return automation.summary
+        }
+    }
+
+    private func sceneShortcutIconName(for item: SceneShortcutItem) -> String {
+        switch item.kind {
+        case .sceneGroup:
+            return "sparkles"
+        case .preset:
+            return "paintpalette"
+        case .automation:
+            return "power"
+        }
+    }
+
+    private func sceneShortcutIsEnabled(_ item: SceneShortcutItem) -> Bool {
+        switch item.kind {
+        case .sceneGroup, .preset:
+            return true
+        case .automation(let automation):
+            return automation.enabled
+        }
+    }
+
+    private func sceneShortcutStatusText(for item: SceneShortcutItem) -> String {
+        switch item.kind {
+        case .sceneGroup, .preset:
+            return "Apply"
+        case .automation(let automation):
+            return automation.enabled ? "On" : "Off"
+        }
+    }
+
+    private func sceneShortcutFavoriteTitle(for item: SceneShortcutItem) -> String {
+        switch item.kind {
+        case .automation:
+            return "Remove shortcut"
+        case .sceneGroup, .preset:
+            return item.isFavorite ? "Unfavorite" : "Favorite"
         }
     }
     
@@ -751,6 +1034,8 @@ struct ScenesAutomationsSection: View {
             applySceneGroup(scene)
         case .preset(let preset):
             applyPreset(preset)
+        case .automation(let automation):
+            onToggle(automation)
         }
     }
     
@@ -760,13 +1045,28 @@ struct ScenesAutomationsSection: View {
             favoritesStore.toggle(scene.id)
         case .preset(let preset):
             presetFavoritesStore.toggle(preset.id)
+        case .automation(let automation):
+            var updated = automation
+            var metadata = automation.metadata
+            metadata.pinnedToShortcuts = !(automation.metadata.pinnedToShortcuts ?? false)
+            updated.metadata = metadata
+            AutomationStore.shared.update(updated, syncOnDevice: false)
         }
+    }
+
+    private func setAutomationShortcut(_ automation: Automation, pinned: Bool) {
+        var updated = automation
+        var metadata = automation.metadata
+        metadata.pinnedToShortcuts = pinned
+        updated.metadata = metadata
+        AutomationStore.shared.update(updated, syncOnDevice: false)
     }
     
     private struct SceneShortcutItem: Identifiable {
         enum Kind {
             case sceneGroup(SceneGroup)
             case preset(ColorPreset)
+            case automation(Automation)
         }
         
         let id: String
@@ -781,8 +1081,9 @@ struct ScenesAutomationsSection: View {
 private struct DashboardAutomationShortcutChip: View {
     let title: String
     let description: String
+    let iconName: String
     let isEnabled: Bool
-    let isNext: Bool
+    let statusText: String
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -799,42 +1100,58 @@ private struct DashboardAutomationShortcutChip: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .center, spacing: 6) {
+                    Image(systemName: iconName)
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(.white.opacity(isEnabled ? 0.94 : 0.60))
+                        .frame(width: 18, height: 18)
+
+                    Spacer(minLength: 4)
+
+                    Text(statusText)
+                        .font(AppTypography.style(.caption2, weight: .semibold))
+                        .foregroundColor(.white.opacity(isEnabled ? 0.94 : 0.62))
+                        .lineLimit(1)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(isEnabled ? 0.16 : 0.08))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                                )
+                        )
+                }
+
                 Text(title)
                     .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(.white.opacity(isEnabled ? 0.96 : 0.66))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.78)
 
                 Text(description)
                     .font(AppTypography.style(.caption2, weight: .medium))
-                    .foregroundColor(.white.opacity(0.72))
+                    .foregroundColor(.white.opacity(isEnabled ? 0.72 : 0.50))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .padding(.trailing, isNext ? 40 : 0)
+                    .minimumScaleFactor(0.76)
             }
-            .frame(width: 168, height: 38, alignment: .topLeading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .frame(width: 88, height: 50, alignment: .topLeading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .background(chipBackground)
-            .overlay(alignment: .bottomTrailing) {
-                if isNext {
-                    nextBadge
-                        .padding(.trailing, 10)
-                        .padding(.bottom, 8)
-                        .allowsHitTesting(false)
-                }
-            }
         }
         .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var chipBackground: some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         if isEnabled {
             shape
                 .fill(Color.clear)
-                .appLiquidGlass(role: .card, cornerRadius: 16)
+                .appLiquidGlass(role: .card, cornerRadius: 18)
         } else {
             shape
                 .fill(chipFill)
@@ -843,23 +1160,6 @@ private struct DashboardAutomationShortcutChip: View {
                         .stroke(chipStroke, lineWidth: 1)
                 )
         }
-    }
-
-    private var nextBadge: some View {
-        Text("Next")
-            .font(AppTypography.style(.caption2, weight: .medium))
-            .foregroundColor(.white.opacity(0.94))
-            .lineLimit(1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.14))
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                    )
-            )
     }
 }
 
@@ -996,9 +1296,9 @@ struct DeviceStatsSection: View {
     var body: some View {
         AppOverviewCard(
             metrics: [
-                AppOverviewMetric(value: "\(totalDevices)", label: "Total\nDevices"),
-                AppOverviewMetric(value: "\(activeDevices)", label: "Active\nDevices"),
-                AppOverviewMetric(value: "\(activeAutomations)", label: "Automations\nOn")
+                AppOverviewMetric(value: "\(totalDevices)", label: "Devices"),
+                AppOverviewMetric(value: "\(activeDevices)", label: "Online"),
+                AppOverviewMetric(value: "\(activeAutomations)", label: "Routines")
             ],
             style: .systemGlass(tint: nil, interactive: false),
             cornerRadius: 20,
@@ -1006,7 +1306,8 @@ struct DeviceStatsSection: View {
             labelColorOverride: labelColor,
             dividerColorOverride: dividerColor,
             valueFontOverride: DashboardTypography.metricValue,
-            labelFontOverride: DashboardTypography.metricLabel
+            labelFontOverride: DashboardTypography.metricLabel,
+            height: 60
         )
     }
 }
@@ -1072,7 +1373,7 @@ struct MiniDeviceCard: View {
     private var secondaryTextColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.74) : DashboardPalette.secondaryText.opacity(0.94)
     }
-    private let miniCardCornerRadius: CGFloat = 20
+    private let miniCardCornerRadius: CGFloat = DeviceDetailPresentation.folderSourceCornerRadius
     private var activeRunStatus: ActiveRunStatus? { viewModel.activeRunStatus[device.id] }
     private var requiresSetup: Bool { device.setupState == .pendingSelection }
     
@@ -1080,10 +1381,6 @@ struct MiniDeviceCard: View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomLeading) {
                 Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onTap()
-                    }
 
                 // Product image positioned to peek out from bottom (contained within card)
                 VStack {
@@ -1156,6 +1453,10 @@ struct MiniDeviceCard: View {
                     Spacer()
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onTap()
+            }
         }
         .aspectRatio(1.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
@@ -1186,16 +1487,7 @@ struct MiniDeviceCard: View {
 
     @ViewBuilder
     private var miniCardBackground: some View {
-        if #available(iOS 26.0, *) {
-            Color.clear
-                .glassEffect(.clear, in: .rect(cornerRadius: miniCardCornerRadius))
-        } else {
-            LiquidGlassBackground(
-                cornerRadius: miniCardCornerRadius,
-                tint: nil,
-                clarity: .clear
-            )
-        }
+        FolderGlassContainerBackground(cornerRadius: miniCardCornerRadius, expanded: false)
     }
 
     // MARK: - Product Image Section (SIMPLIFIED - No glow effects)
@@ -1408,7 +1700,7 @@ struct AddSceneButton: View {
             HStack(spacing: compact ? 6 : 8) {
                 Image(systemName: "plus.circle")
                     .font(compact ? DashboardTypography.buttonCompact : DashboardTypography.buttonRegular)
-                Text("Add")
+                Text(compact ? "Scene" : "Add")
                     .font(compact ? DashboardTypography.buttonCompact : DashboardTypography.buttonRegular)
             }
             .foregroundColor(actionTextColor)

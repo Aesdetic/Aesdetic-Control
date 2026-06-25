@@ -18,9 +18,10 @@ struct AutomationColorEditor: View {
     @Binding var whiteLevel: Double?
     let showFadeControls: Bool
     let isInline: Bool
+    let externalPreviewEnabled: Binding<Bool>?
     
     // Preview state
-    @State private var previewEnabled: Bool = false
+    @State private var localPreviewEnabled: Bool = false
     @State private var gradientPreviewTask: Task<Void, Never>?
     @State private var brightnessPreviewTask: Task<Void, Never>?
     
@@ -33,17 +34,53 @@ struct AutomationColorEditor: View {
     @State private var isSavingPreset = false
     @State private var showSaveSuccess = false
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
+
+    init(
+        viewModel: DeviceControlViewModel,
+        device: WLEDDevice,
+        gradient: Binding<LEDGradient>,
+        brightness: Binding<Double>,
+        interpolation: Binding<GradientInterpolation>,
+        fadeDuration: Binding<Double>,
+        enableFade: Binding<Bool>,
+        powerOn: Binding<Bool>,
+        selectedPresetId: Binding<UUID?>,
+        temperature: Binding<Double?>,
+        whiteLevel: Binding<Double?>,
+        showFadeControls: Bool,
+        isInline: Bool,
+        externalPreviewEnabled: Binding<Bool>? = nil
+    ) {
+        self.viewModel = viewModel
+        self.device = device
+        self._gradient = gradient
+        self._brightness = brightness
+        self._interpolation = interpolation
+        self._fadeDuration = fadeDuration
+        self._enableFade = enableFade
+        self._powerOn = powerOn
+        self._selectedPresetId = selectedPresetId
+        self._temperature = temperature
+        self._whiteLevel = whiteLevel
+        self.showFadeControls = showFadeControls
+        self.isInline = isInline
+        self.externalPreviewEnabled = externalPreviewEnabled
+    }
     
     var body: some View {
-        VStack(spacing: isInline ? 14 : 16) {
+        VStack(spacing: isInline ? 12 : 16) {
             if !isInline {
                 headerRow
+            } else if externalPreviewEnabled == nil {
+                inlinePreviewToggle
             }
             powerSection
             if powerOn {
-                brightnessSection
+                VStack(spacing: isInline ? 6 : 8) {
+                    brightnessSection
+                    gradientSection
+                }
                 blendSelector
-                gradientSection
                 presetSelector
                 colorWheel
                 if showFadeControls {
@@ -116,19 +153,14 @@ struct AutomationColorEditor: View {
     @ViewBuilder
     private var presetSelector: some View {
         if !presetsStore.colorPresets.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Saved Colors")
-                    .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(presetsStore.colorPresets) { preset in
-                            presetChip(preset: preset)
-                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(presetsStore.colorPresets) { preset in
+                        presetChip(preset: preset)
                     }
-                    .padding(.vertical, 4)
                 }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
             }
             .padding(.horizontal, isInline ? 0 : 16)
         }
@@ -155,28 +187,54 @@ struct AutomationColorEditor: View {
                 scheduleGradientPreview(gradient)
             }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                LinearGradient(
-                    gradient: Gradient(colors: preset.gradientStops.map { Color(hex: $0.hexColor) }),
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                
-                Text(preset.name)
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-            }
-            .padding(8)
-            .frame(width: 120, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.2) : Color.white.opacity(0.08))
-            )
+            presetSwatchGradient(stops: preset.gradientStops)
+                .opacity(0.72)
+                .frame(width: 48, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(presetSwatchHighlight(cornerRadius: 6))
+                .overlay(presetSwatchSelection(isSelected: isSelected, cornerRadius: 6))
+                .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.0), radius: 4, x: 0, y: 2)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(preset.name)
+    }
+
+    private func presetSwatchGradient(stops: [GradientStop]) -> LinearGradient {
+        let colors = stops.isEmpty ? [Color.white.opacity(0.8), Color.white.opacity(0.35)] : stops.map { Color(hex: $0.hexColor) }
+        return LinearGradient(
+            gradient: Gradient(colors: colors),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private func presetSwatchSelection(isSelected: Bool, cornerRadius: CGFloat) -> some View {
+        ZStack(alignment: .center) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(isSelected ? 0.52 : 0.12), lineWidth: isSelected ? 1.5 : 1)
+
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(AppTypography.style(.caption2, weight: .bold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .shadow(color: Color.black.opacity(0.22), radius: 2, x: 0, y: 1)
+            }
+        }
+    }
+
+    private func presetSwatchHighlight(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.18),
+                        Color.white.opacity(0.02)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
     }
     
     private var headerRow: some View {
@@ -187,7 +245,7 @@ struct AutomationColorEditor: View {
             Spacer()
 
             if advancedUIEnabled {
-                Toggle(isOn: $previewEnabled) {
+                Toggle(isOn: previewToggleBinding) {
                     HStack(spacing: 4) {
                         Image(systemName: previewEnabled ? "eye.fill" : "eye.slash.fill")
                             .font(AppTypography.style(.caption2))
@@ -238,45 +296,151 @@ struct AutomationColorEditor: View {
         .padding(.horizontal, isInline ? 0 : 16)
     }
 
+    private var inlinePreviewToggle: some View {
+        HStack {
+            Spacer(minLength: 0)
+            previewToggleLabel
+        }
+    }
+
+    private var previewToggleLabel: some View {
+        Toggle(isOn: previewToggleBinding) {
+            HStack(spacing: 5) {
+                Image(systemName: previewEnabled ? "eye.fill" : "eye")
+                    .font(AppTypography.style(.caption2, weight: .semibold))
+                Text("Preview")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+            }
+        }
+        .toggleStyle(.button)
+        .tint(previewEnabled ? .white.opacity(0.24) : .white.opacity(0.12))
+        .foregroundColor(.white.opacity(previewEnabled ? 0.96 : 0.78))
+        .clipShape(Capsule(style: .continuous))
+    }
+
+    private var previewEnabled: Bool {
+        get {
+            externalPreviewEnabled?.wrappedValue ?? localPreviewEnabled
+        }
+        nonmutating set {
+            if let externalPreviewEnabled {
+                externalPreviewEnabled.wrappedValue = newValue
+            } else {
+                localPreviewEnabled = newValue
+            }
+        }
+    }
+
+    private var previewToggleBinding: Binding<Bool> {
+        Binding(
+            get: { previewEnabled },
+            set: { previewEnabled = $0 }
+        )
+    }
+
     private var powerSection: some View {
         HStack {
             Text("Power")
-                .foregroundColor(.white)
+                .font(AppTypography.style(.callout, weight: .medium))
+                .foregroundColor(.white.opacity(0.78))
             Spacer()
             Button {
                 powerOn.toggle()
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "power")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                    Text(powerOn ? "ON" : "OFF")
-                        .font(AppTypography.style(.caption, weight: .semibold))
-                }
-                .foregroundColor(powerOn ? .black : .white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(powerOn ? Color.white : Color.white.opacity(0.12))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.white.opacity(0.2), lineWidth: powerOn ? 0 : 1)
-                )
+                Text(powerOn ? "On" : "Off")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(powerOn ? .black.opacity(0.78) : .white.opacity(0.64))
+                    .frame(width: 58, height: 32)
+                    .background(secondaryControlBackground(isActive: powerOn, cornerRadius: 15))
+                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, isInline ? 0 : 16)
     }
+
+    private func automationSegmentBackground(isActive: Bool, cornerRadius: CGFloat = 14) -> some View {
+        ZStack {
+            if isActive {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.clear)
+                    .appLiquidGlass(role: .card, cornerRadius: cornerRadius)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.54),
+                                        Color.white.opacity(0.22),
+                                        Color.clear
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.045))
+                    .background(.ultraThinMaterial.opacity(0.64), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                    )
+            }
+        }
+    }
+
+    private func secondaryControlBackground(isActive: Bool, cornerRadius: CGFloat = 15) -> some View {
+        ZStack {
+            if isActive {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.clear)
+                    .appLiquidGlass(role: .control, cornerRadius: cornerRadius)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.58),
+                                        Color.white.opacity(0.28)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.24), lineWidth: 1)
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.045))
+                    .background(.ultraThinMaterial.opacity(0.64), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                    )
+            }
+        }
+    }
     
     private var brightnessSection: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             HStack {
                 Text("Brightness")
-                    .foregroundColor(.white)
+                    .font(AppTypography.style(.footnote, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.78))
                 Spacer()
                 Text("\(Int(round(brightness/255.0*100)))%")
-                    .foregroundColor(.white.opacity(0.8))
+                    .font(AppTypography.style(.caption, weight: .medium))
+                    .foregroundColor(.white.opacity(0.68))
             }
             Slider(value: $brightness, in: 0...255, step: 1)
                 .tint(.white)
@@ -293,11 +457,11 @@ struct AutomationColorEditor: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "poweroff")
                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(.white.opacity(0.70))
 
             Text("This automation is set to turn the device off. Turn Power on to edit colors.")
                 .font(AppTypography.style(.footnote))
-                .foregroundColor(.white.opacity(0.75))
+                .foregroundColor(.white.opacity(0.64))
                 .multilineTextAlignment(.leading)
 
             Spacer(minLength: 0)
@@ -308,10 +472,11 @@ struct AutomationColorEditor: View {
     @ViewBuilder
     private var blendSelector: some View {
         if advancedUIEnabled, gradient.stops.count >= 2 {
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 HStack {
                     Text("Blend Style")
-                        .foregroundColor(.white)
+                        .font(AppTypography.style(.footnote, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.78))
                     Spacer()
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -543,7 +708,8 @@ struct AutomationColorEditor: View {
     private var fadeSection: some View {
         Toggle(isOn: $enableFade) {
             Text("Fade over time")
-                .foregroundColor(.white.opacity(0.9))
+                .font(AppTypography.style(.footnote, weight: .semibold))
+                .foregroundColor(.white.opacity(0.78))
         }
         .toggleStyle(SwitchToggleStyle(tint: .white))
         .padding(.horizontal, isInline ? 0 : 16)
@@ -552,10 +718,12 @@ struct AutomationColorEditor: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Fade duration")
-                        .foregroundColor(.white.opacity(0.8))
+                        .font(AppTypography.style(.footnote, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.78))
                     Spacer()
                     Text("\(Int(fadeDuration)) sec")
-                        .foregroundColor(.white)
+                        .font(AppTypography.style(.caption, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
                 }
                 Slider(value: $fadeDuration, in: 5...300, step: 5)
                     .tint(.white)

@@ -250,11 +250,9 @@ actor PresetSyncManager {
         for attempt in 1...saveRetryAttempts {
             do {
                 try await operation()
-                let delay = saveBaseDelayNanos * UInt64(attempt)
                 #if DEBUG
-                print("✅ Preset save attempt \(attempt) succeeded, delaying \(Double(delay) / 1_000_000_000.0)s")
+                print("✅ Preset save attempt \(attempt) succeeded")
                 #endif
-                try? await Task.sleep(nanoseconds: delay)
                 return
             } catch {
                 lastError = error

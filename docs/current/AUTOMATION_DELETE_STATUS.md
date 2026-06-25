@@ -1,20 +1,18 @@
 # Automation Delete Status
 
-Last updated: 2026-06-02 (Asia/Hong_Kong)
+Last updated: 2026-06-04 (Asia/Hong_Kong)
 
 ## Current Status
 
-Automation delete is using the production full-rewrite path and the latest manual stress run passed.
+Automation delete is using the production full-rewrite path, rapid preset-store deletes are coalesced, and the latest manual stress runs passed.
 
 Latest verified run:
-- Xcode result: `Run-Aesdetic-Control-2026.06.02_13-04-59-+0800.xcresult`.
+- Xcode result: `Run-Aesdetic-Control-2026.06.03_12-52-55-+0800.xcresult`.
 - Build action succeeded and run action succeeded on Ryan's iPhone.
-- Created 3 color presets: IDs `10`, `11`, and `12`; each uploaded through full `presets.json` rewrite and verified.
-- Created 5 automations; all saved locally, synced to WLED, and reported `On-device schedule updated+verified`.
-- WLED timer rows increased to `cfgInsCount=5`, then returned to `cfgInsCount=0` after delete.
-- Automation delete pipeline summaries succeeded for all 5 automations.
-- Full preset-store delete rewrites succeeded for all automation assets and all 3 color presets.
-- Final live WLED check after the run: `/json/cfg` timers were `[]`, and `presets.json` numeric keys were `[0]`.
+- Rapid color preset, transition, animation/effect, and automation create/delete testing completed successfully.
+- Preset-store delete queue coalesced rapid delete taps into fewer full rewrites.
+- Timer rows were deleted and verified; non-final timer verify errors recovered on retry.
+- Final cleanup logs reported no pending deletes, no pending preset-store work, no pending timers, no dead letters, and healthy preset-store state.
 
 Current result from manual testing:
 - Online automation create/delete works.
@@ -23,12 +21,15 @@ Current result from manual testing:
 - Direct preset automations remove their app-managed preset record.
 - No WLED-side backup file remains on `/edit`; backups are local app files only.
 - Rapid automation delete taps are serialized: one delete runs, later delete taps queue and run afterward.
+- Rapid preset-store delete taps within the coalescing window are merged into one combined `.presetStore` cleanup item.
 - Create/edit and preset/timer mutation actions are blocked or deferred while conflicting mutation work is active.
 - Light controls remain usable during preset/timer mutation work.
 - Offline delete no longer removes local automation metadata too early.
-- Force-quit during pending delete is safe because delete intent is persisted and resumed.
+- Force-quit during pending delete is safe because delete intent and cleanup queue state are persisted and resumed.
 - Color preset delete now waits for verified WLED preset-store deletion before removing the local app row.
 - Transition and effect preset deletes use verified full-rewrite delete paths rather than enqueue-only cleanup.
+- Preset-store decode/read failures during active mutation or settle windows are treated as busy/read-unstable first, not immediately as real degraded health.
+- A final all-clear log is emitted when a device queue is clean.
 
 ## Current Delete Pipeline
 
@@ -43,6 +44,14 @@ Current result from manual testing:
 9. Local automation metadata is removed only after device cleanup succeeds.
 10. Post-delete verification is read-only.
 11. The next queued automation delete starts after the active delete finalizes.
+
+Preset and save delete path:
+1. User deletes a color, effect, transition, or playlist save.
+2. The app blocks or queues the preset-store mutation if another conflicting preset/timer mutation is active.
+3. The delete is journaled into `DeviceCleanupManager`.
+4. Rapid save deletes for the same device are coalesced for a short window.
+5. `DeviceCleanupManager` processes the merged playlist/preset IDs through the verified full-rewrite delete path.
+6. The local save row is removed only after the queued cleanup no longer contains the target IDs.
 
 ## What Changed From The Old Delete Path
 
@@ -67,7 +76,9 @@ New path:
 - No WLED-side backup file.
 - Failed cleanup keeps the automation pending and retries automatically.
 - Rapid delete taps are queued instead of dropped.
+- Rapid preset-store delete taps are coalesced before rewrite.
 - Preset/playlist validation pauses while preset-store writes are in flight or settling.
+- Final all-clear logs make it obvious when cleanup is done and healthy.
 
 ## Pass Signals In Logs
 
@@ -83,6 +94,9 @@ Expected success logs:
 - `preset_store.full_rewrite_delete.success`
 - `automation.delete.pipeline.full_rewrite_success`
 - `automation.delete.pipeline.verify_postdelete_clean`
+- `cleanup.preset_store_delete.enqueued`
+- `cleanup.preset_store_delete.coalesced` when rapid save/preset deletes are merged
+- `cleanup.device.final_state ... pendingDeletes=0 pendingPresetStore=0 pendingTimers=0 ... health=healthy`
 - `Deleted automation:`
 - `Saved 0 automations` after the final automation in a delete burst
 
@@ -94,6 +108,7 @@ Expected retry/offline logs:
 - `timer.rows_delete.verify_remaining_mismatch` on a non-final retry attempt can be transient if followed by `timer.rows_delete.success`
 - `timer.rows_delete.verify_error` on a non-final retry attempt can be transient if followed by `timer.rows_delete.success`
 - `Skipping synced automation validation (preset store settling)` is expected during preset-store mutation/settle windows
+- `preset_store.health.degraded_readable_deferred` is expected when a single transient read/decode issue happens during mutation/settle and has not crossed the health threshold
 
 Failure logs that need investigation:
 - `preset_store.full_rewrite_delete.verify_failed`
@@ -101,19 +116,20 @@ Failure logs that need investigation:
 - `automation.delete.pipeline.full_rewrite_required`
 - `automation.delete.timer.remaining_owned_rows_retry_required`
 - `cleanup.queue_hard_stop_unreadable`
+- `cleanup.preset_store_delete.wait_timeout`
 - `timer.rows_delete.verify_failed`
 - `timer.rows_delete.ambiguous`
 
 Latest run observations:
-- `full_rewrite_create.success`: 8
-- `full_rewrite_delete.success`: 8
-- `timer.rows_delete.success`: 5
-- `automation.delete.pipeline.summary`: 5
-- `automation.delete.pipeline.full_rewrite_success`: 5
+- `cleanup.preset_store_delete.enqueued`: 7
+- `cleanup.preset_store_delete.coalesced`: 6
+- `preset_store.full_rewrite_delete.success`: 14
+- `timer.rows_delete.success`: 7
+- `timer.rows_delete.verify_error`: 2 first-attempt/non-final events, both recovered on retry.
+- `automation.delete.pipeline.summary`: 7
 - `automation.delete.pipeline.verify_postdelete_clean`: 5
-- `timer.rows_delete.verify_remaining_mismatch`: 1, recovered on retry.
-- `timer.rows_delete.verify_error`: 1, recovered on retry.
-- No `preset_store.mutation.error`, no `degraded`, no `corrupt`, and no leftover WLED automation assets.
+- `cleanup.device.final_state`: emitted repeatedly with pending counts at `0`, dead letters at `0`, and `health=healthy`.
+- No `preset_store.full_rewrite_delete.verify_failed`, `preset_store.full_rewrite_delete.error`, `timer.rows_delete.verify_failed`, `cleanup.preset_store_delete.wait_timeout`, `cleanup.queue_hard_stop_unreadable`, or `preset_store.health.recovery_required`.
 
 ## WLED Firmware Notes
 
@@ -136,14 +152,17 @@ These are not blockers, but should be watched in future testing:
 - Large automations should be tested near WLED preset-slot limits.
 - App-side foreground timers are not the reliable sold-product path; WLED-side synced timers are.
 - A non-final timer verification mismatch/decode error is acceptable only when followed by a successful retry.
+- If the app is killed mid-upload, the in-flight HTTP request cannot be guaranteed to complete, but the persisted delete intent/cleanup queue resumes on next launch and verifies before local finalization.
 - Debug memory diagnostics are noisy in launch logs and should be cleaned up or gated before release.
 
 ## Commit Readiness Notes
 
-The automation delete behavior is ready based on the latest manual run and live device verification.
+The automation delete and preset-store cleanup behavior is ready based on the latest manual run, live device verification, focused simulator tests, and commit `4d2f7b3`.
 
-Before commit/push:
-- Commit from a feature branch, not directly from `main`.
-- Keep the commit scope clear because the current working tree includes automation delete hardening, preset delete behavior, UI/editor changes, model changes, and tests.
-- Convert newly-added plain `print(...)` diagnostics to structured logger calls or keep them debug-gated.
-- Run a final build after cleanup. If focused simulator tests hang, record that as a test-environment issue rather than a delete-path failure.
+Already pushed:
+- `4d2f7b3 Coalesce preset-store delete cleanup`
+
+Verification used:
+- Focused tests for rapid preset-store delete coalescing and readable-degrade health thresholding.
+- Simulator build passed.
+- Real-device stress test passed with clean final-state logs.

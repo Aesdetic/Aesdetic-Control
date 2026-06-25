@@ -27,6 +27,7 @@ enum WLEDAPIError: LocalizedError {
     case presetStoreReadUnstable(String)
     case presetStoreUnreadable(String)
     case presetStoreDeleteIncomplete(String)
+    case presetStoreInsufficientSpace(String)
     
     var errorDescription: String? {
         switch self {
@@ -62,6 +63,8 @@ enum WLEDAPIError: LocalizedError {
             return "The device could not confirm saved presets yet. No destructive changes were made. Please try again in a moment."
         case .presetStoreDeleteIncomplete:
             return "The device could not confirm the delete. Please refresh and try again."
+        case .presetStoreInsufficientSpace(let message):
+            return message
         }
     }
     
@@ -81,6 +84,8 @@ enum WLEDAPIError: LocalizedError {
             return "Wait for the device to settle, then retry. If this keeps happening, restart the lamp and try again."
         case .presetStoreDeleteIncomplete:
             return "Refresh the saves list before trying the delete again."
+        case .presetStoreInsufficientSpace:
+            return "Free saved presets, shorten the transition, or reduce saved-entry usage before trying again."
         case .invalidURL, .invalidConfiguration:
             return "Check your device settings and network configuration."
         case .unsupportedOperation:
@@ -108,6 +113,7 @@ enum WLEDAPIError: LocalizedError {
         case .presetStoreReadUnstable: return 1013
         case .presetStoreUnreadable: return 1014
         case .presetStoreDeleteIncomplete: return 1015
+        case .presetStoreInsufficientSpace: return 1016
         }
     }
     
@@ -122,6 +128,8 @@ enum WLEDAPIError: LocalizedError {
             return true
         case .presetStoreDeleteIncomplete:
             return true
+        case .presetStoreInsufficientSpace:
+            return false
         case .httpError(let statusCode):
             return statusCode >= 500 // Only retry server errors
         case .maxRetriesExceeded:

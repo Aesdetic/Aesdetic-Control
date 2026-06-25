@@ -21,6 +21,8 @@ struct AutomationDeletionProgress: Equatable {
 @MainActor
 class AutomationStore: ObservableObject {
     static let shared = AutomationStore()
+    private static let wledPowerOffPresetCommand = "T=0"
+    private static let wledPowerOffPresetSignature = #"{"win":"T=0"}"#
 
     enum OnDeviceTriggerKind {
         case specificTime
@@ -34,7 +36,6 @@ class AutomationStore: ObservableObject {
     @Published private(set) var deletionProgressByAutomationId: [UUID: AutomationDeletionProgress] = [:]
     var hasAnyDeletionInProgress: Bool {
         !deletingAutomationIds.isEmpty
-            || DeviceCleanupManager.shared.hasActiveDeleteLease
     }
     var hasAnyOnDeviceSyncInProgress: Bool {
         !onDeviceSyncInFlightAutomationIds.isEmpty
@@ -126,6 +127,40 @@ class AutomationStore: ObservableObject {
         let deleteTraceId: String
         let playlistIds: [Int]
         let presetIds: [Int]
+    }
+
+    private struct ImportedWLEDActionDescriptor {
+        let action: AutomationAction
+        let actionLabel: String
+        let playlistId: Int?
+        let presetId: Int?
+        let managedPlaylistSignature: String?
+        let managedStepPresetIds: [Int]?
+        let managedPresetSignature: String?
+
+        static func playlist(_ playlist: WLEDPlaylist) -> ImportedWLEDActionDescriptor {
+            ImportedWLEDActionDescriptor(
+                action: .playlist(PlaylistActionPayload(playlistId: playlist.id, playlistName: playlist.name)),
+                actionLabel: playlist.name,
+                playlistId: playlist.id,
+                presetId: nil,
+                managedPlaylistSignature: nil,
+                managedStepPresetIds: nil,
+                managedPresetSignature: nil
+            )
+        }
+
+        static func preset(_ preset: WLEDPreset) -> ImportedWLEDActionDescriptor {
+            ImportedWLEDActionDescriptor(
+                action: .preset(PresetActionPayload(presetId: preset.id, paletteName: preset.name, durationSeconds: nil)),
+                actionLabel: preset.name,
+                playlistId: nil,
+                presetId: preset.id,
+                managedPlaylistSignature: nil,
+                managedStepPresetIds: nil,
+                managedPresetSignature: nil
+            )
+        }
     }
     
     private init() {
@@ -381,12 +416,16 @@ class AutomationStore: ObservableObject {
     }
 
     func isDeletionInProgress(for deviceId: String) -> Bool {
+        if isAutomationDeletionInProgress(for: deviceId) { return true }
+        return DeviceCleanupManager.shared.isDeleteLeaseActive(deviceId: deviceId)
+    }
+
+    func isAutomationDeletionInProgress(for deviceId: String) -> Bool {
         let hasDeletingAutomationOnDevice = automations.contains { automation in
             deletingAutomationIds.contains(automation.id)
                 && automation.targets.deviceIds.contains(deviceId)
         }
-        if hasDeletingAutomationOnDevice { return true }
-        return DeviceCleanupManager.shared.isDeleteLeaseActive(deviceId: deviceId)
+        return hasDeletingAutomationOnDevice
     }
 
     func deletionProgress(for id: UUID) -> AutomationDeletionProgress? {
@@ -1082,23 +1121,33 @@ class AutomationStore: ObservableObject {
 
             let action: AutomationAction
             let actionLabel: String
+            let actionDescriptor: ImportedWLEDActionDescriptor?
             let importedSyncState: AutomationMetadata.WLEDSyncState
             let importedSyncError: String?
             let importedSyncAt: Date?
             if let playlist = playlistById[timer.macroId] {
-                action = .playlist(PlaylistActionPayload(playlistId: playlist.id, playlistName: playlist.name))
-                actionLabel = playlist.name
+                let descriptor = importedWLEDActionDescriptor(
+                    for: playlist,
+                    presetById: presetById,
+                    device: device
+                )
+                actionDescriptor = descriptor
+                action = descriptor.action
+                actionLabel = descriptor.actionLabel
                 importedSyncState = .synced
                 importedSyncError = nil
                 importedSyncAt = now
             } else if let preset = presetById[timer.macroId] {
-                action = .preset(PresetActionPayload(presetId: preset.id, paletteName: preset.name, durationSeconds: nil))
-                actionLabel = preset.name
+                let descriptor = importedWLEDActionDescriptor(for: preset, device: device)
+                actionDescriptor = descriptor
+                action = descriptor.action
+                actionLabel = descriptor.actionLabel
                 importedSyncState = .synced
                 importedSyncError = nil
                 importedSyncAt = now
             } else if playlistCatalogError != nil || presetCatalogError != nil {
                 if let existingAutomation {
+                    actionDescriptor = nil
                     action = existingAutomation.action
                     actionLabel = existingAutomation.summary
                     let preservedState = existingAutomation.metadata.syncState(for: device.id)
@@ -1113,6 +1162,7 @@ class AutomationStore: ObservableObject {
                 } else {
                     // Catalog fetch failed, but timer macro is still actionable.
                     // Import a placeholder row so users can see/control all device automations.
+                    actionDescriptor = nil
                     action = .preset(PresetActionPayload(presetId: timer.macroId, paletteName: nil, durationSeconds: nil))
                     actionLabel = "Macro \(timer.macroId)"
                     importedSyncState = .syncing
@@ -1123,6 +1173,7 @@ class AutomationStore: ObservableObject {
                     )
                 }
             } else {
+                actionDescriptor = nil
                 action = .preset(PresetActionPayload(presetId: timer.macroId, paletteName: nil, durationSeconds: nil))
                 actionLabel = "Preset \(timer.macroId)"
                 importedSyncState = .notSynced
@@ -1158,12 +1209,18 @@ class AutomationStore: ObservableObject {
                     if preserveAuthoredAction {
                         return existingPlaylistId
                     }
+                    if let descriptorPlaylistId = actionDescriptor?.playlistId {
+                        return descriptorPlaylistId
+                    }
                     if case .playlist(let payload) = action { return payload.playlistId }
                     return nil
                 }()
                 let nextPresetId: Int? = {
                     if preserveAuthoredAction {
                         return existingPresetId
+                    }
+                    if let descriptorPresetId = actionDescriptor?.presetId {
+                        return descriptorPresetId
                     }
                     if case .preset(let payload) = action { return payload.presetId }
                     return nil
@@ -1175,18 +1232,46 @@ class AutomationStore: ObservableObject {
                     if let nextPlaylistId {
                         playlistMap[device.id] = nextPlaylistId
                         presetMap.removeValue(forKey: device.id)
-                        existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
+                        existing.metadata.setManagedPlaylistSignature(actionDescriptor?.managedPlaylistSignature, for: device.id)
                         existing.metadata.setManagedPresetSignature(nil, for: device.id)
-                        existing.metadata.setManagedStepPresetIds(nil, for: device.id)
+                        existing.metadata.setManagedStepPresetIds(actionDescriptor?.managedStepPresetIds, for: device.id)
+                        if let signature = actionDescriptor?.managedPlaylistSignature {
+                            existing.metadata.setManagedAssetCheckpoint(
+                                ManagedAutomationAssetCheckpoint(
+                                    playlistId: nextPlaylistId,
+                                    presetId: nil,
+                                    stepPresetIds: actionDescriptor?.managedStepPresetIds ?? [],
+                                    playlistSignature: signature,
+                                    presetSignature: nil
+                                ),
+                                for: device.id
+                            )
+                        } else {
+                            existing.metadata.setManagedAssetCheckpoint(nil, for: device.id)
+                        }
                         if existing.targets.deviceIds.count == 1 {
                             existing.metadata.wledPlaylistId = nextPlaylistId
                         }
                     } else if let nextPresetId {
                         presetMap[device.id] = nextPresetId
                         playlistMap.removeValue(forKey: device.id)
-                        existing.metadata.setManagedPresetSignature(nil, for: device.id)
+                        existing.metadata.setManagedPresetSignature(actionDescriptor?.managedPresetSignature, for: device.id)
                         existing.metadata.setManagedPlaylistSignature(nil, for: device.id)
                         existing.metadata.setManagedStepPresetIds(nil, for: device.id)
+                        if let signature = actionDescriptor?.managedPresetSignature {
+                            existing.metadata.setManagedAssetCheckpoint(
+                                ManagedAutomationAssetCheckpoint(
+                                    playlistId: nil,
+                                    presetId: nextPresetId,
+                                    stepPresetIds: [],
+                                    playlistSignature: nil,
+                                    presetSignature: signature
+                                ),
+                                for: device.id
+                            )
+                        } else {
+                            existing.metadata.setManagedAssetCheckpoint(nil, for: device.id)
+                        }
                         if existing.targets.deviceIds.count == 1 {
                             existing.metadata.wledPlaylistId = nil
                         }
@@ -1247,6 +1332,9 @@ class AutomationStore: ObservableObject {
                     updatedAutomations[index].metadata.lastSyncError(for: device.id) != importedSyncError ||
                     existing.metadata.wledPlaylistId != previousScalarPlaylistId ||
                     existing.metadata.wledTimerSlot != previousScalarTimerSlot ||
+                    (!preserveAuthoredAction && updatedAutomations[index].metadata.managedPlaylistSignature(for: device.id) != actionDescriptor?.managedPlaylistSignature) ||
+                    (!preserveAuthoredAction && updatedAutomations[index].metadata.managedPresetSignature(for: device.id) != actionDescriptor?.managedPresetSignature) ||
+                    (!preserveAuthoredAction && updatedAutomations[index].metadata.managedStepPresetIds(for: device.id) != actionDescriptor?.managedStepPresetIds) ||
                     updatedAutomations[index].metadata.onDeviceStartMonth != importedStartMonth ||
                     updatedAutomations[index].metadata.onDeviceStartDay != importedStartDay ||
                     updatedAutomations[index].metadata.onDeviceEndMonth != importedEndMonth ||
@@ -1257,14 +1345,41 @@ class AutomationStore: ObservableObject {
                     changed = true
                 }
             } else {
-                let playlistId: Int? = {
+                let playlistId: Int? = actionDescriptor?.playlistId ?? {
                     if case .playlist(let payload) = action { return payload.playlistId }
                     return nil
                 }()
                 let playlistMap: [String: Int]? = playlistId.map { [device.id: $0] }
-                let presetMap: [String: Int]? = {
+                let presetId: Int? = actionDescriptor?.presetId ?? {
                     if case .preset(let payload) = action {
-                        return [device.id: payload.presetId]
+                        return payload.presetId
+                    }
+                    return nil
+                }()
+                let presetMap: [String: Int]? = presetId.map { [device.id: $0] }
+                let managedPlaylistMap = actionDescriptor?.managedPlaylistSignature.map { [device.id: $0] }
+                let managedStepPresetMap = actionDescriptor?.managedStepPresetIds.map { [device.id: $0] }
+                let managedPresetMap = actionDescriptor?.managedPresetSignature.map { [device.id: $0] }
+                let checkpoint: ManagedAutomationAssetCheckpoint? = {
+                    if let playlistId,
+                       let signature = actionDescriptor?.managedPlaylistSignature {
+                        return ManagedAutomationAssetCheckpoint(
+                            playlistId: playlistId,
+                            presetId: nil,
+                            stepPresetIds: actionDescriptor?.managedStepPresetIds ?? [],
+                            playlistSignature: signature,
+                            presetSignature: nil
+                        )
+                    }
+                    if let presetId,
+                       let signature = actionDescriptor?.managedPresetSignature {
+                        return ManagedAutomationAssetCheckpoint(
+                            playlistId: nil,
+                            presetId: presetId,
+                            stepPresetIds: [],
+                            playlistSignature: nil,
+                            presetSignature: signature
+                        )
                     }
                     return nil
                 }()
@@ -1276,6 +1391,10 @@ class AutomationStore: ObservableObject {
                     wledPlaylistIdsByDevice: playlistMap,
                     wledPresetIdsByDevice: presetMap,
                     wledTimerSlotsByDevice: [device.id: timer.id],
+                    wledManagedPlaylistSignatureByDevice: managedPlaylistMap,
+                    wledManagedStepPresetIdsByDevice: managedStepPresetMap,
+                    wledManagedPresetSignatureByDevice: managedPresetMap,
+                    wledManagedAssetCheckpointByDevice: checkpoint.map { [device.id: $0] },
                     wledSyncStateByDevice: [device.id: importedSyncState],
                     wledLastSyncErrorByDevice: importedSyncError.map { [device.id: $0] },
                     wledLastSyncAtByDevice: importedSyncAt.map { [device.id: $0] },
@@ -1370,6 +1489,344 @@ class AutomationStore: ObservableObject {
             logger.info("Imported WLED automations for \(device.name, privacy: .public): timers=\(configuredTimers.count)")
         }
     }
+
+    private struct ImportedPresetVisualState {
+        let sourceState: WLEDStateUpdate?
+        let segments: [SegmentUpdate]
+        let brightness: Int
+        let powerOn: Bool
+        let gradient: LEDGradient?
+        let whiteLevel: Double?
+        let effectSegment: SegmentUpdate?
+    }
+
+    private func importedWLEDActionDescriptor(
+        for playlist: WLEDPlaylist,
+        presetById: [Int: WLEDPreset],
+        device: WLEDDevice
+    ) -> ImportedWLEDActionDescriptor {
+        if let transition = reconstructedTransitionAction(
+            from: playlist,
+            presetById: presetById
+        ) {
+            return ImportedWLEDActionDescriptor(
+                action: .transition(transition),
+                actionLabel: playlist.name,
+                playlistId: playlist.id,
+                presetId: nil,
+                managedPlaylistSignature: transitionPayloadSignature(transition),
+                managedStepPresetIds: playlist.presets,
+                managedPresetSignature: nil
+            )
+        }
+
+        return .playlist(playlist)
+    }
+
+    private func importedWLEDActionDescriptor(
+        for preset: WLEDPreset,
+        device: WLEDDevice
+    ) -> ImportedWLEDActionDescriptor {
+        guard Self.isLikelyAppManagedAutomationName(preset.name),
+              let visual = Self.importedPresetVisualState(from: preset) else {
+            return .preset(preset)
+        }
+
+        if let effectSegment = visual.effectSegment,
+           let effectId = effectSegment.fx,
+           effectId > 0 {
+            let payload = EffectActionPayload(
+                effectId: effectId,
+                effectName: preset.name,
+                gradient: visual.gradient,
+                speed: effectSegment.sx ?? 128,
+                intensity: effectSegment.ix ?? 128,
+                paletteId: effectSegment.pal,
+                brightness: visual.brightness,
+                presetId: nil,
+                presetName: preset.name
+            )
+            let desiredState = WLEDStateUpdate(
+                on: true,
+                bri: payload.brightness,
+                seg: [
+                    SegmentUpdate(
+                        id: 0,
+                        bri: payload.brightness,
+                        fx: payload.effectId,
+                        sx: payload.speed,
+                        ix: payload.intensity,
+                        pal: payload.paletteId
+                    )
+                ]
+            )
+            return ImportedWLEDActionDescriptor(
+                action: .effect(payload),
+                actionLabel: preset.name,
+                playlistId: nil,
+                presetId: preset.id,
+                managedPlaylistSignature: nil,
+                managedStepPresetIds: nil,
+                managedPresetSignature: presetSnapshotSignature(desiredState)
+            )
+        }
+
+        guard let gradient = visual.gradient else {
+            return .preset(preset)
+        }
+
+        let payload = GradientActionPayload(
+            gradient: gradient,
+            brightness: visual.powerOn ? visual.brightness : 0,
+            durationSeconds: 0,
+            temperature: nil,
+            whiteLevel: visual.whiteLevel,
+            shouldLoop: false,
+            presetId: nil,
+            presetName: preset.name,
+            powerOn: visual.powerOn
+        )
+        let desiredState: WLEDStateUpdate
+        let desiredSignature: String?
+        if !payload.powerOn || payload.brightness <= 0 {
+            desiredState = WLEDStateUpdate(on: false)
+            desiredSignature = Self.wledPowerOffPresetSignature
+        } else {
+            desiredState = viewModel.presetStateForGradient(
+                device: device,
+                gradient: payload.gradient,
+                brightness: payload.brightness,
+                temperature: payload.temperature,
+                whiteLevel: payload.whiteLevel,
+                includeSegmentBounds: false
+            )
+            desiredSignature = presetSnapshotSignature(desiredState)
+        }
+        return ImportedWLEDActionDescriptor(
+            action: .gradient(payload),
+            actionLabel: preset.name,
+            playlistId: nil,
+            presetId: preset.id,
+            managedPlaylistSignature: nil,
+            managedStepPresetIds: nil,
+            managedPresetSignature: desiredSignature
+        )
+    }
+
+    private func reconstructedTransitionAction(
+        from playlist: WLEDPlaylist,
+        presetById: [Int: WLEDPreset]
+    ) -> TransitionActionPayload? {
+        guard Self.isLikelyAppManagedAutomationName(playlist.name) else { return nil }
+
+        let stepIds = playlist.presets.filter { (1...250).contains($0) }
+        guard stepIds.count >= 2 else { return nil }
+
+        let stepPresets = stepIds.compactMap { presetById[$0] }
+        guard stepPresets.count == stepIds.count,
+              Self.hasAppManagedAutomationStepNames(stepPresets, stepIds: stepIds),
+              let firstPreset = stepPresets.first,
+              let lastPreset = stepPresets.last,
+              let firstVisual = Self.importedPresetVisualState(from: firstPreset),
+              let lastVisual = Self.importedPresetVisualState(from: lastPreset),
+              firstVisual.effectSegment == nil,
+              lastVisual.effectSegment == nil,
+              let startGradient = firstVisual.gradient,
+              let endGradient = lastVisual.gradient else {
+            return nil
+        }
+
+        return TransitionActionPayload(
+            startGradient: startGradient,
+            startBrightness: firstVisual.brightness,
+            startTemperature: nil,
+            startWhiteLevel: firstVisual.whiteLevel,
+            endGradient: endGradient,
+            endBrightness: lastVisual.brightness,
+            endTemperature: nil,
+            endWhiteLevel: lastVisual.whiteLevel,
+            durationSeconds: Self.reconstructedPlaylistDurationSeconds(playlist),
+            shouldLoop: (playlist.repeat ?? 1) != 1,
+            presetId: nil,
+            presetName: playlist.name
+        )
+    }
+
+    private static func hasAppManagedAutomationStepNames(_ presets: [WLEDPreset], stepIds: [Int]) -> Bool {
+        guard presets.count == stepIds.count else { return false }
+        return zip(presets, stepIds).allSatisfy { preset, id in
+            preset.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "automation step \(id)"
+        }
+    }
+
+    private static func isLikelyAppManagedAutomationName(_ name: String) -> Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("automation ")
+    }
+
+    private static func reconstructedPlaylistDurationSeconds(_ playlist: WLEDPlaylist) -> Double {
+        let durationDeciseconds = playlist.duration.reduce(0) { $0 + max(0, $1) }
+        let transitionDeciseconds = playlist.transition.reduce(0) { $0 + max(0, $1) }
+        let resolvedDeciseconds = durationDeciseconds > 0 ? durationDeciseconds : transitionDeciseconds
+        return max(0.1, Double(resolvedDeciseconds) / 10.0)
+    }
+
+    private static func importedPresetVisualState(from preset: WLEDPreset) -> ImportedPresetVisualState? {
+        let sourceState = preset.state
+        let segments: [SegmentUpdate]
+        if let stateSegments = sourceState?.seg, !stateSegments.isEmpty {
+            segments = stateSegments
+        } else if let segment = preset.segment {
+            segments = [segment]
+        } else {
+            segments = []
+        }
+        guard !segments.isEmpty || sourceState != nil else { return nil }
+
+        let effectSegment = segments.first { ($0.fx ?? 0) > 0 }
+        let brightness = max(0, min(255, sourceState?.bri ?? effectSegment?.bri ?? segments.first?.bri ?? 128))
+        let powerOn = (sourceState?.on ?? segments.first?.on) ?? (brightness > 0)
+        let gradient = gradientFromWLEDSegments(segments)
+        let whiteLevel = whiteLevelFromWLEDSegments(segments)
+
+        return ImportedPresetVisualState(
+            sourceState: sourceState,
+            segments: segments,
+            brightness: brightness,
+            powerOn: powerOn,
+            gradient: gradient,
+            whiteLevel: whiteLevel,
+            effectSegment: effectSegment
+        )
+    }
+
+    private static func gradientFromWLEDSegments(_ segments: [SegmentUpdate]) -> LEDGradient? {
+        let samples = segments.compactMap { segment -> (start: Int, stop: Int?, hex: String)? in
+            guard let color = segment.col?.first,
+                  color.count >= 3 else {
+                return nil
+            }
+            return (
+                start: max(0, segment.start ?? 0),
+                stop: segment.stop,
+                hex: hexColor(fromRGB: color)
+            )
+        }
+        guard !samples.isEmpty else { return nil }
+        if samples.count == 1, let only = samples.first {
+            return LEDGradient(stops: [
+                GradientStop(position: 0.0, hexColor: only.hex),
+                GradientStop(position: 1.0, hexColor: only.hex)
+            ])
+        }
+
+        let sorted = samples.sorted { lhs, rhs in
+            if lhs.start == rhs.start {
+                return (lhs.stop ?? 0) < (rhs.stop ?? 0)
+            }
+            return lhs.start < rhs.start
+        }
+        let maxStop = sorted.compactMap(\.stop).max() ?? ((sorted.last?.start ?? 0) + 1)
+        let denominator = max(maxStop - 1, 1)
+        var stops: [GradientStop] = []
+        for (index, sample) in sorted.enumerated() {
+            let fallback = Double(index) / Double(max(1, sorted.count - 1))
+            let positionFromSegment = Double(sample.start) / Double(denominator)
+            let position = positionFromSegment.isFinite
+                ? min(1.0, max(0.0, positionFromSegment))
+                : fallback
+            if let last = stops.last, abs(last.position - position) < 0.0001 {
+                stops.removeLast()
+            }
+            stops.append(GradientStop(position: position, hexColor: sample.hex))
+        }
+        guard !stops.isEmpty else { return nil }
+        if let first = stops.first, first.position > 0 {
+            stops.insert(GradientStop(position: 0.0, hexColor: first.hexColor), at: 0)
+        }
+        if let last = stops.last, last.position < 1 {
+            stops.append(GradientStop(position: 1.0, hexColor: last.hexColor))
+        }
+        if stops.count == 1, let only = stops.first {
+            stops = [
+                GradientStop(position: 0.0, hexColor: only.hexColor),
+                GradientStop(position: 1.0, hexColor: only.hexColor)
+            ]
+        }
+        return LEDGradient(stops: compactImportedGradientStops(stops))
+    }
+
+    private static func compactImportedGradientStops(_ stops: [GradientStop], maxStops: Int = 10) -> [GradientStop] {
+        let sorted = stops.sorted { $0.position < $1.position }
+        guard sorted.count > maxStops else { return sorted }
+        let stride = Double(sorted.count - 1) / Double(maxStops - 1)
+        return (0..<maxStops).map { index in
+            sorted[min(sorted.count - 1, Int(round(Double(index) * stride)))]
+        }
+    }
+
+    private static func whiteLevelFromWLEDSegments(_ segments: [SegmentUpdate]) -> Double? {
+        let whiteValues = segments.compactMap { segment -> Int? in
+            guard let color = segment.col?.first, color.count >= 4 else { return nil }
+            return max(0, min(255, color[3]))
+        }
+        guard let maxWhite = whiteValues.max(), maxWhite > 0 else { return nil }
+        return Double(maxWhite) / 255.0
+    }
+
+    private static func hexColor(fromRGB values: [Int]) -> String {
+        let r = max(0, min(255, values[0]))
+        let g = max(0, min(255, values[1]))
+        let b = max(0, min(255, values[2]))
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+
+    #if DEBUG
+    static func _reconstructedImportedWLEDActionForTesting(
+        playlist: WLEDPlaylist,
+        presetById: [Int: WLEDPreset]
+    ) -> AutomationAction? {
+        AutomationStore.shared.reconstructedTransitionAction(
+            from: playlist,
+            presetById: presetById
+        ).map(AutomationAction.transition)
+    }
+
+    static func _reconstructedImportedWLEDActionForTesting(preset: WLEDPreset) -> AutomationAction? {
+        guard isLikelyAppManagedAutomationName(preset.name),
+              let visual = importedPresetVisualState(from: preset) else {
+            return nil
+        }
+        if let effectSegment = visual.effectSegment,
+           let effectId = effectSegment.fx,
+           effectId > 0 {
+            return .effect(
+                EffectActionPayload(
+                    effectId: effectId,
+                    effectName: preset.name,
+                    gradient: visual.gradient,
+                    speed: effectSegment.sx ?? 128,
+                    intensity: effectSegment.ix ?? 128,
+                    paletteId: effectSegment.pal,
+                    brightness: visual.brightness,
+                    presetName: preset.name
+                )
+            )
+        }
+        guard let gradient = visual.gradient else { return nil }
+        return .gradient(
+            GradientActionPayload(
+                gradient: gradient,
+                brightness: visual.powerOn ? visual.brightness : 0,
+                durationSeconds: 0,
+                whiteLevel: visual.whiteLevel,
+                presetName: preset.name,
+                powerOn: visual.powerOn
+            )
+        )
+    }
+    #endif
 
     private func importedTemplateId(deviceId: String, slot: Int) -> String {
         "\(importedAutomationTemplatePrefix)\(deviceId).\(slot)"
@@ -3173,6 +3630,27 @@ class AutomationStore: ObservableObject {
         canonicalJSONSignature(for: state)
     }
 
+    private func automationPresetCustomAPICommand(for automation: Automation) -> String? {
+        switch automation.action {
+        case .gradient(let payload):
+            return (!payload.powerOn || payload.brightness <= 0) ? Self.wledPowerOffPresetCommand : nil
+        case .directState(let payload):
+            return payload.brightness <= 0 ? Self.wledPowerOffPresetCommand : nil
+        case .scene, .effect, .transition, .preset, .playlist:
+            return nil
+        }
+    }
+
+    private func automationManagedPresetSignature(
+        for automation: Automation,
+        state: WLEDStateUpdate
+    ) -> String? {
+        if automationPresetCustomAPICommand(for: automation) != nil {
+            return Self.wledPowerOffPresetSignature
+        }
+        return presetSnapshotSignature(state)
+    }
+
     private enum OnDeviceActionTarget {
         case macro(id: Int, managed: Bool, signature: String?, managedStepPresetIds: [Int]?)
     }
@@ -3275,7 +3753,7 @@ class AutomationStore: ObservableObject {
             return false
         case .gradient, .directState, .effect, .scene:
             guard let state = automationPresetState(for: automation, device: device),
-                  presetSnapshotSignature(state) == automation.metadata.managedPresetSignature(for: device.id),
+                  automationManagedPresetSignature(for: automation, state: state) == automation.metadata.managedPresetSignature(for: device.id),
                   let presetId = storedPresetId(for: automation, deviceId: device.id),
                   (1...250).contains(presetId),
                   !isPresetQueuedForDelete(presetId, deviceId: device.id) else {
@@ -3291,9 +3769,10 @@ class AutomationStore: ObservableObject {
         for automation: Automation,
         device: WLEDDevice,
         state: WLEDStateUpdate,
+        customAPICommand: String?,
+        desiredSignature: String?,
         label: String
     ) async -> Int? {
-        let desiredSignature = presetSnapshotSignature(state)
         let storedSignature = automation.metadata.managedPresetSignature(for: device.id)
         let existingStoredId = storedPresetId(for: automation, deviceId: device.id)
         if let existing = existingStoredId {
@@ -3344,7 +3823,8 @@ class AutomationStore: ObservableObject {
                 state: state,
                 includeBrightness: true,
                 saveSegmentBounds: false,
-                selectedSegmentsOnly: false
+                selectedSegmentsOnly: false,
+                customAPICommand: customAPICommand
             )
             guard await rewritePresetSnapshotWithRetry(request, device: device) else {
                 return nil
@@ -3361,7 +3841,7 @@ class AutomationStore: ObservableObject {
         switch automation.action {
         case .gradient(let payload):
             if !payload.powerOn || payload.brightness <= 0 {
-                return WLEDStateUpdate(on: false, bri: 0, defaultTransitionDeciseconds: 0)
+                return WLEDStateUpdate(on: false)
             }
             let gradient = resolveGradientPayload(payload, device: device)
             return viewModel.presetStateForGradient(
@@ -3374,7 +3854,7 @@ class AutomationStore: ObservableObject {
             )
         case .directState(let payload):
             if payload.brightness <= 0 {
-                return WLEDStateUpdate(on: false, bri: 0, defaultTransitionDeciseconds: 0)
+                return WLEDStateUpdate(on: false)
             }
             let stops = [
                 GradientStop(position: 0.0, hexColor: payload.colorHex),
@@ -3490,11 +3970,20 @@ class AutomationStore: ObservableObject {
                 return nil
             }
             let label = "Automation \(automation.name)"
-            if let presetId = await ensureAutomationPresetSnapshot(for: automation, device: device, state: state, label: label) {
+            let customAPICommand = automationPresetCustomAPICommand(for: automation)
+            let signature = automationManagedPresetSignature(for: automation, state: state)
+            if let presetId = await ensureAutomationPresetSnapshot(
+                for: automation,
+                device: device,
+                state: state,
+                customAPICommand: customAPICommand,
+                desiredSignature: signature,
+                label: label
+            ) {
                 return .macro(
                     id: presetId,
                     managed: true,
-                    signature: presetSnapshotSignature(state),
+                    signature: signature,
                     managedStepPresetIds: nil
                 )
             }
@@ -3565,14 +4054,16 @@ class AutomationStore: ObservableObject {
             let previousSyncState = updated.metadata.syncState(for: device.id)
             let previousTimerSlot = storedTimerSlot(for: updated, deviceId: device.id)
             let previousSyncedAt = updated.metadata.lastSyncAt(for: device.id)
-            updated = updateAutomationSyncMetadata(
-                updated,
-                deviceId: device.id,
-                state: .syncing,
-                error: nil,
-                syncedAt: nil
-            )
-            commitAutomationSyncSnapshot(updated)
+            if previousSyncState != .synced {
+                updated = updateAutomationSyncMetadata(
+                    updated,
+                    deviceId: device.id,
+                    state: .syncing,
+                    error: nil,
+                    syncedAt: nil
+                )
+                commitAutomationSyncSnapshot(updated)
+            }
             if hasAutomationCleanupDebt(deviceId: device.id) {
                 if let preservedSlot = previousTimerSlot {
                     updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: preservedSlot)
@@ -3598,6 +4089,21 @@ class AutomationStore: ObservableObject {
                 )
                 logger.warning("automation.sync.not_ready device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) reason=\(solarIssue, privacy: .public)")
                 logger.error("On-device schedule failed: \(solarIssue, privacy: .public) for \(automation.name, privacy: .public) on \(device.name, privacy: .public)")
+                continue
+            }
+            if let clockIssue = await validateWLEDTimerClockIfNeeded(for: updated.trigger, device: device) {
+                if let preservedSlot = previousTimerSlot {
+                    updated = updateAutomationMetadata(updated, deviceId: device.id, timerSlot: preservedSlot)
+                }
+                updated = updateAutomationSyncMetadata(
+                    updated,
+                    deviceId: device.id,
+                    state: .notSynced,
+                    error: clockIssue,
+                    syncedAt: nil
+                )
+                logger.warning("automation.sync.not_ready device=\(device.id, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) reason=wled_clock_not_ready detail=\(clockIssue, privacy: .public)")
+                logger.error("On-device schedule failed: \(clockIssue, privacy: .public) for \(automation.name, privacy: .public) on \(device.name, privacy: .public)")
                 continue
             }
             guard let timeConfig = await wledTimerConfig(for: updated, device: device, referenceDate: Date()) else {
@@ -4486,6 +4992,37 @@ class AutomationStore: ObservableObject {
         }
     }
 
+    private func validateWLEDTimerClockIfNeeded(
+        for trigger: AutomationTrigger,
+        device: WLEDDevice
+    ) async -> String? {
+        guard case .specificTime = trigger else { return nil }
+
+        do {
+            let settings = try await apiService.fetchDeviceTimeSettings(for: device)
+            if settings.isTimerClockReady {
+                return nil
+            }
+
+            try await apiService.updateDeviceTimeSettings(
+                for: device,
+                timeZone: .current,
+                coordinate: nil
+            )
+
+            let refreshed = try await apiService.fetchDeviceTimeSettings(for: device)
+            if refreshed.isTimerClockReady {
+                logger.info("automation.clock.auto_configured device=\(device.id, privacy: .public)")
+                return nil
+            }
+
+            return "Device clock is not ready. Open Time & Schedules and enable WLED time sync before this can run while the app is closed."
+        } catch {
+            logger.warning("automation.clock.verify_failed device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            return "Could not verify the device clock. Keep the app open or reconnect the device, then try again."
+        }
+    }
+
     private func autoConfigureWLEDSolarReference(for device: WLEDDevice) async -> Bool {
         do {
             let coordinate = try await locationProvider.currentCoordinate()
@@ -4867,6 +5404,10 @@ class AutomationStore: ObservableObject {
                     blockedConfigReasons.append("\(device.name): \(solarIssue)")
                     continue
                 }
+                if let clockIssue = await validateWLEDTimerClockIfNeeded(for: automation.trigger, device: device) {
+                    blockedConfigReasons.append("\(device.name): \(clockIssue)")
+                    continue
+                }
                 guard let timeConfig = await wledTimerConfig(for: automation, device: device, referenceDate: Date()) else {
                     blockedConfigReasons.append("\(device.name): timer config unavailable")
                     continue
@@ -4982,14 +5523,16 @@ class AutomationStore: ObservableObject {
             )
             // Persist deletion intent synchronously so "delete + force quit" does not resurrect
             // imported automations on next launch.
-            if onlineDevice == nil {
+            if onlineDevice == nil, let timerSlot {
                 if shouldDeleteTimerSlot {
-                    logger.warning(
-                        "automation.delete.pipeline.defer_offline_timer trace=\(deleteTraceId, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) device=\(deviceId, privacy: .public) slot=\((timerSlot.map(String.init) ?? "nil"), privacy: .public)"
+                    DeviceCleanupManager.shared.enqueueVerifiedAutomationTimerDelete(
+                        deviceId: deviceId,
+                        slot: timerSlot
                     )
-                    deletionMayFinalize = false
-                    continue
-                } else if let timerSlot {
+                    logger.info(
+                        "automation.delete.pipeline.queue_offline_timer trace=\(deleteTraceId, privacy: .public) automation=\(automation.id.uuidString, privacy: .public) device=\(deviceId, privacy: .public) slot=\(timerSlot, privacy: .public)"
+                    )
+                } else {
                     // Another automation still owns this slot; do not clear it.
                     DeviceCleanupManager.shared.removeIds(type: .timer, deviceId: deviceId, ids: [timerSlot])
                     logger.info(

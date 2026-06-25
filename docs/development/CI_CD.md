@@ -58,6 +58,5 @@ The CI/CD pipeline runs 5 jobs in parallel:
 4. **Code Quality** (10 min timeout) - Runs linting and structure checks
 5. **Test Summary** - Aggregates results from all test jobs
 
-See [.github/workflows/README.md](.github/workflows/README.md) for detailed documentation.
-
+See [GitHub workflow documentation](../../.github/workflows/README.md) for detailed documentation.
 

@@ -58,6 +58,46 @@ final class AutomationModelTests: XCTestCase {
         }
         
         XCTAssertEqual(prefill.metadata?.templateId, "sunrise")
+        XCTAssertEqual(prefill.name, "Sunrise")
+    }
+
+    func testSunsetTemplatePrefillUsesLiteralName() {
+        let device = WLEDDevice(
+            id: "demo-device",
+            name: "Aurora",
+            ipAddress: "192.168.1.20",
+            isOnline: true,
+            brightness: 42,
+            currentColor: .orange
+        )
+        let context = AutomationTemplate.Context(
+            device: device,
+            availableDevices: [device],
+            defaultGradient: LEDGradient(stops: [
+                GradientStop(position: 0.0, hexColor: "#FFD8A8"),
+                GradientStop(position: 1.0, hexColor: "#FFFFFF")
+            ])
+        )
+
+        let prefill = AutomationTemplate.sunset.prefill(for: context)
+
+        XCTAssertEqual(prefill.name, "Sunset")
+        XCTAssertEqual(prefill.metadata?.templateId, "sunset")
+    }
+
+    func testDefaultAutomationNameReusesLowestAvailableNumber() {
+        let existing = [
+            testAutomation(name: "Routine 2"),
+            testAutomation(name: "Morning"),
+            testAutomation(name: "Automation 4"),
+            testAutomation(name: "Automation Step 1"),
+            testAutomation(name: "Automation 01")
+        ]
+
+        XCTAssertEqual(AutomationDefaultNaming.defaultName(for: existing), "Routine 1")
+
+        let filledGap = existing + [testAutomation(name: "Automation 1")]
+        XCTAssertEqual(AutomationDefaultNaming.defaultName(for: filledGap), "Routine 3")
     }
     
     func testTimeTriggerNextDateAdvancesToNextValidDay() {
@@ -72,6 +112,24 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertEqual(components.weekday, 3) // Tuesday
         XCTAssertEqual(components.hour, 6)
         XCTAssertEqual(components.minute, 30)
+    }
+
+    private func testAutomation(name: String) -> Automation {
+        Automation(
+            name: name,
+            trigger: .specificTime(TimeTrigger(time: "06:30", weekdays: WeekdayMask.allDaysSunFirst)),
+            action: .gradient(
+                GradientActionPayload(
+                    gradient: LEDGradient(stops: [
+                        GradientStop(position: 0, hexColor: "FFFFFF"),
+                        GradientStop(position: 1, hexColor: "FFA000")
+                    ]),
+                    brightness: 128,
+                    durationSeconds: 0
+                )
+            ),
+            targets: AutomationTargets(deviceIds: ["demo-device"])
+        )
     }
 
     func testAutomationMetadataSyncStateDefaultsToUnknown() {
@@ -137,6 +195,111 @@ final class AutomationModelTests: XCTestCase {
             ).macroAssetKind,
             .preset
         )
+    }
+
+    func testPowerOffStateEncodesLikeWLEDPowerToggle() throws {
+        let data = try JSONEncoder().encode(WLEDStateUpdate(on: false))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["on"] as? Bool, false)
+        XCTAssertNil(object["bri"])
+        XCTAssertNil(object["transition"])
+        XCTAssertNil(object["tt"])
+    }
+
+    @MainActor
+    func testReconstructsAppManagedTransitionPlaylistFromWLEDRecords() {
+        let startPreset = WLEDPreset(
+            id: 120,
+            name: "Automation Step 120",
+            quickLoad: nil,
+            segment: nil,
+            state: WLEDStateUpdate(
+                on: true,
+                bri: 12,
+                seg: [
+                    SegmentUpdate(id: 0, start: 0, stop: 50, col: [[255, 160, 0, 0]], fx: 0),
+                    SegmentUpdate(id: 1, start: 50, stop: 100, col: [[255, 220, 120, 0]], fx: 0)
+                ]
+            )
+        )
+        let endPreset = WLEDPreset(
+            id: 121,
+            name: "Automation Step 121",
+            quickLoad: nil,
+            segment: nil,
+            state: WLEDStateUpdate(
+                on: true,
+                bri: 210,
+                seg: [
+                    SegmentUpdate(id: 0, start: 0, stop: 50, col: [[255, 245, 220, 0]], fx: 0),
+                    SegmentUpdate(id: 1, start: 50, stop: 100, col: [[255, 255, 255, 0]], fx: 0)
+                ]
+            )
+        )
+        let playlist = WLEDPlaylist(
+            id: 119,
+            name: "Automation Wake",
+            presets: [120, 121],
+            duration: [120, 180],
+            transition: [30, 30],
+            repeat: 1,
+            endPresetId: 0,
+            shuffle: 0
+        )
+
+        let action = AutomationStore._reconstructedImportedWLEDActionForTesting(
+            playlist: playlist,
+            presetById: [120: startPreset, 121: endPreset]
+        )
+
+        guard case .transition(let payload) = action else {
+            return XCTFail("Expected recovered transition action")
+        }
+        XCTAssertEqual(payload.presetName, "Automation Wake")
+        XCTAssertEqual(payload.startBrightness, 12)
+        XCTAssertEqual(payload.endBrightness, 210)
+        XCTAssertEqual(payload.durationSeconds, 30.0, accuracy: 0.01)
+        XCTAssertEqual(payload.startGradient.stops.first?.hexColor, "#FFA000")
+        XCTAssertEqual(payload.endGradient.stops.last?.hexColor, "#FFFFFF")
+    }
+
+    @MainActor
+    func testReconstructsAppManagedEffectPresetFromWLEDRecord() {
+        let preset = WLEDPreset(
+            id: 42,
+            name: "Automation Party",
+            quickLoad: nil,
+            segment: nil,
+            state: WLEDStateUpdate(
+                on: true,
+                bri: 144,
+                seg: [
+                    SegmentUpdate(
+                        id: 0,
+                        bri: 144,
+                        col: [[255, 0, 64, 0]],
+                        fx: 73,
+                        sx: 77,
+                        ix: 88,
+                        pal: 3
+                    )
+                ]
+            )
+        )
+
+        let action = AutomationStore._reconstructedImportedWLEDActionForTesting(preset: preset)
+
+        guard case .effect(let payload) = action else {
+            return XCTFail("Expected recovered effect action")
+        }
+        XCTAssertEqual(payload.effectId, 73)
+        XCTAssertEqual(payload.effectName, "Automation Party")
+        XCTAssertEqual(payload.brightness, 144)
+        XCTAssertEqual(payload.speed, 77)
+        XCTAssertEqual(payload.intensity, 88)
+        XCTAssertEqual(payload.paletteId, 3)
+        XCTAssertEqual(payload.gradient?.stops.first?.hexColor, "#FF0040")
     }
 
     func testAutomationMetadataManagedSignaturesRoundTripCodable() throws {
@@ -617,6 +780,13 @@ final class AutomationModelTests: XCTestCase {
                     ($0.type == .timer && $0.ids.contains(timerSlot))
                         || ($0.type == .playlist && $0.ids.contains(playlistId))
                         || ($0.type == .preset && !$0.ids.filter { stepPresetIds.contains($0) }.isEmpty)
+                        || (
+                            $0.type == .presetStore
+                                && (
+                                    ($0.playlistIds ?? []).contains(playlistId)
+                                        || !($0.presetIds ?? []).filter { stepPresetIds.contains($0) }.isEmpty
+                                )
+                        )
                 )
         }
         XCTAssertFalse(managedCleanupEntries.isEmpty)
@@ -626,11 +796,17 @@ final class AutomationModelTests: XCTestCase {
             .map(\.createdAt)
             .min()
         let playlistCreatedAt = managedCleanupEntries
-            .filter { $0.type == .playlist }
+            .filter {
+                ($0.type == .playlist && $0.ids.contains(playlistId))
+                    || ($0.type == .presetStore && ($0.playlistIds ?? []).contains(playlistId))
+            }
             .map(\.createdAt)
             .min()
         let presetCreatedAt = managedCleanupEntries
-            .filter { $0.type == .preset }
+            .filter {
+                ($0.type == .preset && !$0.ids.filter { stepPresetIds.contains($0) }.isEmpty)
+                    || ($0.type == .presetStore && !($0.presetIds ?? []).filter { stepPresetIds.contains($0) }.isEmpty)
+            }
             .map(\.createdAt)
             .min()
         XCTAssertNotNil(timerCreatedAt)
@@ -780,6 +956,13 @@ final class AutomationModelTests: XCTestCase {
                     ($0.type == .timer && $0.ids.contains(timerSlot))
                         || ($0.type == .playlist && $0.ids.contains(playlistId))
                         || ($0.type == .preset && !$0.ids.filter { stepPresetIds.contains($0) }.isEmpty)
+                        || (
+                            $0.type == .presetStore
+                                && (
+                                    ($0.playlistIds ?? []).contains(playlistId)
+                                        || !($0.presetIds ?? []).filter { stepPresetIds.contains($0) }.isEmpty
+                                )
+                        )
                 )
         }
         XCTAssertFalse(importedManagedCleanupEntries.isEmpty)
@@ -789,11 +972,17 @@ final class AutomationModelTests: XCTestCase {
             .map(\.createdAt)
             .min()
         let importedPlaylistCreatedAt = importedManagedCleanupEntries
-            .filter { $0.type == .playlist }
+            .filter {
+                ($0.type == .playlist && $0.ids.contains(playlistId))
+                    || ($0.type == .presetStore && ($0.playlistIds ?? []).contains(playlistId))
+            }
             .map(\.createdAt)
             .min()
         let importedPresetCreatedAt = importedManagedCleanupEntries
-            .filter { $0.type == .preset }
+            .filter {
+                ($0.type == .preset && !$0.ids.filter { stepPresetIds.contains($0) }.isEmpty)
+                    || ($0.type == .presetStore && !($0.presetIds ?? []).filter { stepPresetIds.contains($0) }.isEmpty)
+            }
             .map(\.createdAt)
             .min()
         XCTAssertNotNil(importedTimerCreatedAt)
@@ -1195,6 +1384,10 @@ final class AutomationModelTests: XCTestCase {
             store.isDeletionInProgress(for: deviceId),
             "Queued cleanup should not block unrelated preset/transition actions as an active automation delete"
         )
+        XCTAssertFalse(
+            store.isAutomationDeletionInProgress(for: deviceId),
+            "Queued cleanup should not be reported as an automation delete"
+        )
         XCTAssertFalse(store.hasAnyDeletionInProgress)
     }
 
@@ -1224,6 +1417,10 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertFalse(
             store.isDeletionInProgress(for: deviceId),
             "Unknown-source preset-store cleanup should be serialized by the cleanup queue, not shown as automation deletion"
+        )
+        XCTAssertFalse(
+            store.isAutomationDeletionInProgress(for: deviceId),
+            "Unknown-source preset-store cleanup should not be reported as an automation delete"
         )
         XCTAssertFalse(store.hasAnyDeletionInProgress)
     }

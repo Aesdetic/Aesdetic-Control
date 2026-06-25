@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import CoreLocation
 import Testing
 @testable import Aesdetic_Control
 
@@ -222,6 +223,197 @@ struct WLEDAPIServiceTests {
             state: nil
         )
     }
+
+    private func okResponse(for url: URL, contentType: String = "application/json") throws -> HTTPURLResponse {
+        guard let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": contentType]
+        ) else {
+            throw URLError(.badURL)
+        }
+        return response
+    }
+
+    private func mockStateResponseJSON(filesystemUsedKB: Int, filesystemTotalKB: Int) -> String {
+        """
+        {
+          "state": {
+            "on": true,
+            "bri": 128,
+            "mainseg": 0,
+            "seg": [
+              {
+                "id": 0,
+                "start": 0,
+                "stop": 30,
+                "col": [[255,255,255]],
+                "fx": 0
+              }
+            ]
+          },
+          "info": {
+            "name": "Mock WLED",
+            "mac": "AABBCCDDEEFF",
+            "ver": "0.15.3",
+            "leds": {
+              "count": 30
+            },
+            "fs": {
+              "u": \(filesystemUsedKB),
+              "t": \(filesystemTotalKB),
+              "pmt": 123
+            }
+          }
+        }
+        """
+    }
+
+    @Test("full preset-store rewrite blocks storage-increasing save when WLED filesystem is low")
+    func testPresetStoreRewriteBlocksLowFilesystemHeadroom() async throws {
+        let originalPresets = Data("""
+        {
+          "0": {},
+          "10": { "n": "Existing", "seg": [] }
+        }
+        """.utf8)
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+
+            switch url.path {
+            case "/presets.json":
+                return (response, originalPresets)
+            case "/json":
+                return (response, Data(mockStateResponseJSON(filesystemUsedKB: 99, filesystemTotalKB: 100).utf8))
+            case "/upload":
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        do {
+            _ = try await service.rewritePresetStoreUpsertingRecords(
+                presetRequests: [
+                    WLEDPresetSaveRequest(
+                        id: 12,
+                        name: "New Low Space Preset",
+                        quickLoad: nil,
+                        state: nil
+                    )
+                ],
+                playlistRequests: [],
+                device: device
+            )
+            Issue.record("Expected low filesystem space to block the rewrite")
+        } catch let error as WLEDAPIError {
+            guard case .presetStoreInsufficientSpace = error else {
+                Issue.record("Expected presetStoreInsufficientSpace, got \(error)")
+                return
+            }
+        }
+
+        let uploadRequests = MockWLEDURLProtocol.requests().filter { $0.url?.path == "/upload" }
+        #expect(uploadRequests.isEmpty)
+    }
+
+    @Test("full preset-store rewrite writes custom off macro command")
+    func testPresetStoreRewriteWritesCustomOffMacroCommand() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{}}"#.utf8)
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.presets = Data(#"{"0":{},"10":{"n":"Automation Routine 1","win":"T=0"}}"#.utf8)
+                return (response, Data("File Uploaded!".utf8))
+            case "/json":
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let rewritten = try await service.rewritePresetStoreUpsertingRecords(
+            presetRequests: [
+                WLEDPresetSaveRequest(
+                    id: 10,
+                    name: "Automation Routine 1",
+                    quickLoad: nil,
+                    state: WLEDStateUpdate(on: false),
+                    customAPICommand: "T=0"
+                )
+            ],
+            playlistRequests: [],
+            device: device
+        )
+
+        #expect(rewritten == true)
+        let uploadBody = try #require(
+            MockWLEDURLProtocol.requestBodies()
+                .compactMap { $0.flatMap { String(data: $0, encoding: .utf8) } }
+                .first { $0.contains("presets.json") }
+        )
+        #expect(uploadBody.contains(#""win":"T=0""#) || uploadBody.contains(#""win": "T=0""#))
+        #expect(!uploadBody.contains(#""on":false"#))
+    }
+
+    @Test("full preset-store rewrite allows shrinking delete even when WLED filesystem is low")
+    func testPresetStoreRewriteAllowsShrinkingDeleteWhenFilesystemLow() async throws {
+        final class Fixture {
+            var presets = Data("""
+            {
+              "0": {},
+              "10": { "n": "Remove Me", "seg": [{ "id": 0, "stop": 30, "col": [[255,0,0,0]] }] },
+              "11": { "n": "Keep Me", "seg": [] }
+            }
+            """.utf8)
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.presets = Data("""
+                {
+                  "0": {},
+                  "11": { "n": "Keep Me", "seg": [] }
+                }
+                """.utf8)
+                return (response, Data("File Uploaded!".utf8))
+            case "/json":
+                return (response, Data(mockStateResponseJSON(filesystemUsedKB: 99, filesystemTotalKB: 100).utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let deleted = try await service.rewritePresetStoreDeletingRecords(
+            playlistIds: [],
+            presetIds: [10],
+            device: device
+        )
+
+        #expect(deleted == true)
+        let requests = MockWLEDURLProtocol.requests()
+        #expect(requests.contains { $0.url?.path == "/upload" })
+        #expect(!requests.contains { $0.url?.path == "/json" })
+    }
     
     // MARK: - setColor Tests
     
@@ -269,6 +461,110 @@ struct WLEDAPIServiceTests {
         let device = createTestDevice()
         
         _ = try await service.setColor(for: device, color: [255, 165, 0], cct: 200, white: nil)
+    }
+
+    @Test("Alexa settings report firmware support when voice assistant config exists")
+    func testAlexaSettingsReportSupportedFirmware() async throws {
+        let service = makeTestService()
+        let device = createTestDevice()
+
+        let settings = try await service.fetchAlexaIntegrationSettings(for: device)
+
+        #expect(settings.isSupported)
+        #expect(!settings.isEnabled)
+        #expect(settings.exposedPresetCount == 0)
+    }
+
+    @Test("Alexa settings report unsupported when firmware omits voice assistant config")
+    func testAlexaSettingsReportUnsupportedFirmware() async throws {
+        let unsupportedConfig = """
+        {
+          "id": { "inv": "Light" },
+          "if": {
+            "sync": {
+              "send": {},
+              "recv": {}
+            }
+          }
+        }
+        """
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if url.path == "/json/cfg" {
+                return (response, Data(unsupportedConfig.utf8))
+            }
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice()
+
+        let settings = try await service.fetchAlexaIntegrationSettings(for: device)
+
+        #expect(!settings.isSupported)
+        #expect(!settings.isEnabled)
+        #expect(settings.invocationName == "Light")
+    }
+
+    @Test("Alexa settings update refuses unsupported firmware")
+    func testAlexaSettingsUpdateRefusesUnsupportedFirmware() async throws {
+        let unsupportedConfig = """
+        {
+          "id": { "inv": "Light" },
+          "if": {
+            "sync": {
+              "send": {},
+              "recv": {}
+            }
+          }
+        }
+        """
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if url.path == "/json/cfg" {
+                return (response, Data(unsupportedConfig.utf8))
+            }
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice()
+
+        do {
+            try await service.updateAlexaIntegrationSettings(
+                WLEDAlexaIntegrationSettings(
+                    isEnabled: true,
+                    invocationName: "Bedroom Lights",
+                    exposedPresetCount: 0
+                ),
+                for: device
+            )
+            Issue.record("Expected unsupported Alexa firmware to reject settings update")
+        } catch let error as WLEDAPIError {
+            guard case .unsupportedOperation(let operation) = error else {
+                Issue.record("Expected unsupported operation error")
+                return
+            }
+            #expect(operation == "Alexa")
+        }
+
+        let requests = MockWLEDURLProtocol.requests()
+        #expect(requests.filter { $0.url?.path == "/json/cfg" }.count == 1)
+        #expect(requests.allSatisfy { $0.httpMethod != "POST" })
     }
     
     // MARK: - setCCT Tests
@@ -826,6 +1122,34 @@ struct WLEDAPIServiceTests {
         #expect(parsedNested.first?.shuffle == 1)
     }
 
+    @Test("preset parser hydrates top-level WLED state fields")
+    func testPresetParserHydratesTopLevelStateFields() async throws {
+        let service = makeTestService()
+        let payload = """
+        {
+          "42": {
+            "n": "Automation Recovered",
+            "on": true,
+            "bri": 144,
+            "seg": [
+              { "id": 0, "start": 0, "stop": 30, "col": [[255,0,64,0]], "fx": 73, "sx": 77, "ix": 88, "pal": 3 }
+            ]
+          }
+        }
+        """.data(using: .utf8)!
+
+        let parsed = try await service.parsePresetsPayloadForTesting(payload)
+
+        let preset = try #require(parsed.first(where: { $0.id == 42 }))
+        #expect(preset.name == "Automation Recovered")
+        #expect(preset.state?.on == true)
+        #expect(preset.state?.bri == 144)
+        #expect(preset.state?.seg?.first?.fx == 73)
+        #expect(preset.state?.seg?.first?.sx == 77)
+        #expect(preset.state?.seg?.first?.ix == 88)
+        #expect(preset.state?.seg?.first?.pal == 3)
+    }
+
     @Test("preset parser wraps malformed payload errors")
     func testPresetParserMalformedPayloadErrorWrapping() async throws {
         let service = makeTestService()
@@ -1169,6 +1493,196 @@ struct WLEDAPIServiceTests {
                 throw error
             }
         }
+    }
+
+    @Test("time settings write WLED timezone table index without extra offset")
+    func testUpdateDeviceTimeSettingsWritesWLEDTimezoneIndex() async throws {
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if request.httpMethod == "GET", url.path == "/json/cfg" {
+                return (response, Data("""
+                {
+                  "if": {
+                    "ntp": {
+                      "en": false,
+                      "host": "1.wled.pool.ntp.org",
+                      "tz": 0,
+                      "offset": 0,
+                      "ampm": false
+                    }
+                  },
+                  "light": {
+                    "gc": { "val": 2.2, "col": 2.2 }
+                  }
+                }
+                """.utf8))
+            }
+
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice(ipAddress: "192.168.0.6")
+        let hongKong = try #require(TimeZone(identifier: "Asia/Hong_Kong"))
+        let coordinate = CLLocationCoordinate2D(latitude: 22.3193, longitude: 114.1694)
+
+        try await service.updateDeviceTimeSettings(for: device, timeZone: hongKong, coordinate: coordinate)
+
+        let recordedRequests = MockWLEDURLProtocol.requests()
+        let recordedBodies = MockWLEDURLProtocol.requestBodies()
+        let postIndex = try #require(recordedRequests.firstIndex {
+            $0.httpMethod == "POST" && $0.url?.path == "/json/cfg"
+        })
+        let bodyData = try #require(recordedBodies[postIndex])
+        let body = try #require(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
+        let interfaces = try #require(body["if"] as? [String: Any])
+        let ntp = try #require(interfaces["ntp"] as? [String: Any])
+
+        #expect(ntp["en"] as? Bool == true)
+        #expect(ntp["tz"] as? Int == 9)
+        #expect(ntp["offset"] as? Int == 0)
+        #expect(ntp["host"] as? String == "1.wled.pool.ntp.org")
+        #expect((ntp["lt"] as? Double).map { abs($0 - 22.3193) < 0.0001 } == true)
+        #expect((ntp["ln"] as? Double).map { abs($0 - 114.1694) < 0.0001 } == true)
+
+        let statePostIndex = try #require(recordedRequests.firstIndex {
+            $0.httpMethod == "POST" && $0.url?.path == "/json/state"
+        })
+        let stateBodyData = try #require(recordedBodies[statePostIndex])
+        let stateBody = try #require(JSONSerialization.jsonObject(with: stateBodyData) as? [String: Any])
+        #expect(stateBody["time"] as? Int != nil)
+    }
+
+    @Test("time settings use UTC table plus offset for unsupported zones")
+    func testUpdateDeviceTimeSettingsUsesUTCOffsetForUnsupportedZone() async throws {
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if request.httpMethod == "GET", url.path == "/json/cfg" {
+                return (response, Data("""
+                {
+                  "if": {
+                    "ntp": {
+                      "en": true,
+                      "tz": 12,
+                      "offset": 43200
+                    }
+                  },
+                  "light": {
+                    "gc": { "val": 2.2, "col": 2.2 }
+                  }
+                }
+                """.utf8))
+            }
+
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice(ipAddress: "192.168.0.6")
+        let chatham = try #require(TimeZone(identifier: "Pacific/Chatham"))
+
+        try await service.updateDeviceTimeSettings(for: device, timeZone: chatham, coordinate: nil)
+
+        let recordedRequests = MockWLEDURLProtocol.requests()
+        let recordedBodies = MockWLEDURLProtocol.requestBodies()
+        let postIndex = try #require(recordedRequests.firstIndex {
+            $0.httpMethod == "POST" && $0.url?.path == "/json/cfg"
+        })
+        let bodyData = try #require(recordedBodies[postIndex])
+        let body = try #require(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
+        let interfaces = try #require(body["if"] as? [String: Any])
+        let ntp = try #require(interfaces["ntp"] as? [String: Any])
+
+        #expect(ntp["tz"] as? Int == 0)
+        #expect(ntp["offset"] as? Int == chatham.secondsFromGMT())
+    }
+
+    @Test("time settings parser reports timer clock readiness")
+    func testFetchDeviceTimeSettingsReportsClockReadiness() async throws {
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if request.httpMethod == "GET", url.path == "/json/cfg" {
+                return (response, Data("""
+                {
+                  "if": {
+                    "ntp": {
+                      "en": 1,
+                      "tz": 9,
+                      "offset": 28800
+                    }
+                  }
+                }
+                """.utf8))
+            }
+
+            return (response, Data("{}".utf8))
+        }
+        let device = createTestDevice(ipAddress: "192.168.0.6")
+
+        let settings = try await service.fetchDeviceTimeSettings(for: device)
+
+        #expect(settings.ntpEnabled == true)
+        #expect(settings.timeZone?.identifier == "Asia/Hong_Kong")
+        #expect(settings.isTimerClockReady)
+    }
+
+    @Test("time settings parser treats missing timezone as not clock ready")
+    func testFetchDeviceTimeSettingsMissingTimezoneNotReady() async throws {
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if request.httpMethod == "GET", url.path == "/json/cfg" {
+                return (response, Data("""
+                {
+                  "if": {
+                    "ntp": {
+                      "en": true
+                    }
+                  }
+                }
+                """.utf8))
+            }
+
+            return (response, Data("{}".utf8))
+        }
+        let device = createTestDevice(ipAddress: "192.168.0.6")
+
+        let settings = try await service.fetchDeviceTimeSettings(for: device)
+
+        #expect(settings.ntpEnabled == true)
+        #expect(settings.timeZone == nil)
+        #expect(!settings.isTimerClockReady)
     }
 
     @Test("decode sparse timers returns 10 logical slots")

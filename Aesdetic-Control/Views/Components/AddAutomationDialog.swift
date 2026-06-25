@@ -78,6 +78,7 @@ struct AddAutomationDialog: View {
     @State private var presetSlotLoadingKey: String?
 
     @State private var actionSelection: ActionSelection = .color
+    @State private var actionPreviewEnabled: Bool = false
     @State private var selectedSceneId: UUID?
     @State private var sceneBrightnessOverride: Int? = nil
     @State private var selectedEffectId: Int?
@@ -120,10 +121,51 @@ struct AddAutomationDialog: View {
 
     private var isEditing: Bool { editingAutomation != nil }
 
+    private static func defaultTriggerSelection(
+        for targetDeviceIds: Set<String>,
+        automations: [Automation],
+        excludingAutomationId: UUID? = nil
+    ) -> TriggerSelection {
+        let targets = targetDeviceIds
+        let matchingAutomations = automations.filter { automation in
+            if automation.id == excludingAutomationId {
+                return false
+            }
+            return !Set(automation.targets.deviceIds).isDisjoint(with: targets)
+        }
+        let hasSunrise = matchingAutomations.contains { automation in
+            if case .sunrise = automation.trigger {
+                return true
+            }
+            return false
+        }
+        let hasSunset = matchingAutomations.contains { automation in
+            if case .sunset = automation.trigger {
+                return true
+            }
+            return false
+        }
+
+        if !hasSunrise {
+            return .sunrise
+        }
+        if !hasSunset {
+            return .sunset
+        }
+        return .time
+    }
+
     private struct TemplateEffectSettings {
         let gradient: LEDGradient?
         let speed: Int
         let intensity: Int
+    }
+
+    private struct WeekdaySelectionRun: Identifiable {
+        let startIndex: Int
+        let endIndex: Int
+
+        var id: String { "\(startIndex)-\(endIndex)" }
     }
 
     init(
@@ -349,6 +391,10 @@ struct AddAutomationDialog: View {
             }
         } else {
             initialAllowPartial = true
+            initialTriggerSelection = Self.defaultTriggerSelection(
+                for: initialDeviceIds,
+                automations: AutomationStore.shared.automations
+            )
         }
 
         _automationName = State(initialValue: initialName)
@@ -540,15 +586,11 @@ struct AddAutomationDialog: View {
         VStack(spacing: 0) {
             inlineEditorHeader
                 .padding(.top, 2)
-                .padding(.bottom, 6)
+                .padding(.bottom, 8)
                 .zIndex(2)
 
             contentScrollView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            stickySaveBar
-                .padding(.top, 6)
-                .zIndex(2)
         }
         .padding(.horizontal, 10)
         .padding(.top, 10)
@@ -559,9 +601,9 @@ struct AddAutomationDialog: View {
                     for: colorScheme,
                     tone: .muted,
                     cornerRadius: 28
+                            )
+                        )
                 )
-            )
-        )
         .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -582,72 +624,177 @@ struct AddAutomationDialog: View {
     }
 
     private var editableAutomationTitle: some View {
-        HStack(spacing: 8) {
+        Group {
             if isEditingName {
-                TextField("Automation name", text: $automationName)
-                    .textFieldStyle(.plain)
-                    .foregroundColor(.white)
-                    .font(AppTypography.style(.headline, weight: .semibold))
-                    .focused($isNameFieldFocused)
-                    .onSubmit {
-                        isEditingName = false
-                        isNameFieldFocused = false
-                    }
-                    .frame(minWidth: 160)
-            } else {
-                Text(editorTitleText)
-                    .font(AppTypography.style(.headline, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-            }
+                HStack(spacing: 6) {
+                    TextField("Automation name", text: $automationName)
+                        .textFieldStyle(.plain)
+                        .foregroundColor(.white.opacity(0.96))
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .multilineTextAlignment(.center)
+                        .focused($isNameFieldFocused)
+                        .onSubmit {
+                            commitNameEdit()
+                        }
+                        .submitLabel(.done)
+                        .frame(maxWidth: .infinity)
 
-            Button {
-                handleNameEditToggle()
-            } label: {
-                Image(systemName: isEditingName ? "checkmark" : "pencil")
-                    .foregroundColor(.white.opacity(0.7))
-                    .font(AppTypography.style(.subheadline, weight: .medium))
+                    Button {
+                        commitNameEdit()
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .foregroundColor(.white.opacity(0.82))
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .fill(Color.white.opacity(0.045))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                        )
+                )
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+                .onAppear {
+                    DispatchQueue.main.async {
+                        isNameFieldFocused = true
+                    }
+                }
+            } else {
+                Button {
+                    handleNameEditToggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(editorTitleText)
+                            .font(AppTypography.style(.subheadline, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.96))
+                            .lineLimit(1)
+
+                        Image(systemName: "pencil")
+                            .foregroundColor(.white.opacity(0.52))
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Rename automation")
+                .frame(height: 28)
             }
-            .buttonStyle(.plain)
         }
+        .frame(maxWidth: .infinity)
     }
 
     private var inlineEditorHeader: some View {
-        HStack(spacing: 12) {
-            Button {
-                closeEditor()
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "chevron.left")
-                        .font(AppTypography.style(.caption, weight: .bold))
-                    Text("Back")
-                        .font(AppTypography.style(.subheadline, weight: .semibold))
+        let headerActionWidth: CGFloat = 82
+
+        return HStack(spacing: 8) {
+            HStack {
+                Button {
+                    closeEditor()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.left")
+                            .font(AppTypography.style(.caption2, weight: .bold))
+                        Text("Back")
+                            .font(AppTypography.style(.caption, weight: .semibold))
+                    }
+                    .foregroundColor(.white.opacity(0.64))
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(secondaryControlBackground(isActive: false, cornerRadius: 15))
+                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                 }
-                .foregroundColor(.white)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 8)
-                .contentShape(Capsule())
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
+            .frame(width: headerActionWidth, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 2) {
-                editableAutomationTitle
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(isEditing ? "Editing automation" : "New automation")
-                    .font(AppTypography.style(.caption, weight: .medium))
-                    .foregroundColor(.white.opacity(0.55))
+            editableAutomationTitle
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            HStack {
+                Spacer(minLength: 0)
+                if presentationStyle == .embedded {
+                    inlinePrimaryActionButton
+                }
             }
-
-            Spacer(minLength: 0)
+            .frame(width: headerActionWidth, alignment: .trailing)
         }
         .padding(.horizontal, 2)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var inlinePrimaryActionButton: some View {
+        Button(action: saveAndDismiss) {
+            HStack(spacing: 6) {
+                if isValidatingOnDeviceSchedule {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .tint(.white.opacity(0.72))
+                }
+                Text(isValidatingOnDeviceSchedule ? "Checking" : (isEditing ? "Save" : "Create"))
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundColor(canSave && !isValidatingOnDeviceSchedule ? .black.opacity(0.78) : .white.opacity(0.54))
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(inlinePrimaryActionBackground(isEnabled: canSave && !isValidatingOnDeviceSchedule))
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSave || isValidatingOnDeviceSchedule)
+    }
+
+    @ViewBuilder
+    private func inlinePrimaryActionBackground(isEnabled: Bool) -> some View {
+        ZStack {
+            if isEnabled {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(Color.clear)
+                    .appLiquidGlass(role: .control, cornerRadius: 15)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.60),
+                                        Color.white.opacity(0.30)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.035), radius: 2, x: 0, y: 1)
+            } else {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(Color.white.opacity(0.035))
+                    .background(.ultraThinMaterial.opacity(0.64), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                    )
+            }
+        }
     }
 
     private var contentScrollView: some View {
         ScrollView {
-            LazyVStack(spacing: presentationStyle == .embedded ? 10 : 20) {
+            LazyVStack(spacing: presentationStyle == .embedded ? 12 : 18) {
                 if presentationStyle == .sheet {
                     dialogSection(automationDetailsSection)
                 }
@@ -683,7 +830,7 @@ struct AddAutomationDialog: View {
     private func editorCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         if presentationStyle == .embedded {
             content()
-                .padding(.vertical, 4)
+                .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             content()
@@ -791,10 +938,10 @@ struct AddAutomationDialog: View {
 
     @ViewBuilder
     private var saveSection: some View {
-        if hasSaveGuidanceMessages {
+        if presentationStyle == .sheet, hasSaveGuidanceMessages {
             editorCard {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Before saving", systemImage: "info.circle")
+                    Label("Needs attention", systemImage: "exclamationmark.circle")
                         .font(AppTypography.style(.footnote, weight: .semibold))
                         .foregroundColor(.white.opacity(0.82))
                     saveGuidanceMessages
@@ -809,62 +956,50 @@ struct AddAutomationDialog: View {
             if let message = onDeviceScheduleValidationMessage {
                 Text(message)
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(onDeviceScheduleValidationIsWarning ? .yellow : .orange)
+                    .foregroundColor(.white.opacity(onDeviceScheduleValidationIsWarning ? 0.86 : 0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = onDeviceScheduleOverlapWarningMessage,
                message != onDeviceScheduleValidationMessage {
                 Text(message)
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(.yellow)
+                    .foregroundColor(.white.opacity(0.86))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = timerSlotLimitPromptMessage {
                 Text(message)
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if !selectedWeekdays.contains(true) {
-                Text("Choose at least one day for this automation.")
-                    .font(AppTypography.style(.footnote))
-                    .foregroundColor(.orange)
+                    .foregroundColor(.white.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = dateWindowValidationMessage {
                 Text(message)
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(.orange)
+                    .foregroundColor(.white.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let message = presetCapacityMessage, !presetCapacitySatisfied {
                 Text(message)
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(.orange)
+                    .foregroundColor(.white.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if presentationStyle == .sheet, let message = transitionDurationRecommendationMessage {
                 Text(message)
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if let message = sameDayScheduleWarningMessage {
-                Text(message)
-                    .font(AppTypography.style(.footnote))
-                    .foregroundColor(.yellow)
+                    .foregroundColor(.white.opacity(0.86))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if automationStore.hasAnyDeletionInProgress {
                 Text("Please wait for automation deletion to finish before saving automation changes.")
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(.orange)
+                    .foregroundColor(.white.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if automationStore.hasOnDeviceSyncInProgress(for: selectedDeviceIds) {
                 Text("Please wait for the current automation to finish preparing before saving automation changes.")
                     .font(AppTypography.style(.footnote))
-                    .foregroundColor(.orange)
+                    .foregroundColor(.white.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -874,11 +1009,9 @@ struct AddAutomationDialog: View {
         onDeviceScheduleValidationMessage != nil
             || onDeviceScheduleOverlapWarningMessage != nil
             || timerSlotLimitPromptMessage != nil
-            || !selectedWeekdays.contains(true)
             || dateWindowValidationMessage != nil
             || (presetCapacityMessage != nil && !presetCapacitySatisfied)
             || (presentationStyle == .sheet && transitionDurationRecommendationMessage != nil)
-            || sameDayScheduleWarningMessage != nil
             || automationStore.hasAnyDeletionInProgress
             || automationStore.hasOnDeviceSyncInProgress(for: selectedDeviceIds)
     }
@@ -893,16 +1026,10 @@ struct AddAutomationDialog: View {
                     Text(primarySaveStatusText)
                         .font(AppTypography.style(.footnote, weight: .medium))
                         .foregroundColor(primarySaveStatusTint)
-                        .lineLimit(2)
+                        .lineLimit(presentationStyle == .embedded ? 1 : 2)
+                        .minimumScaleFactor(presentationStyle == .embedded ? 0.86 : 1)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if presentationStyle == .embedded, let storageText = saveBarStorageText {
-                        Text(storageText)
-                            .font(AppTypography.style(.caption2, weight: .medium))
-                            .foregroundColor(.white.opacity(0.58))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.82)
-                    }
                 }
 
                 Spacer(minLength: 8)
@@ -942,7 +1069,7 @@ struct AddAutomationDialog: View {
 
     private func saveButtonTextColor(isEnabled: Bool) -> Color {
         if presentationStyle == .embedded {
-            return .white.opacity(isEnabled ? 0.94 : 0.72)
+            return isEnabled ? .black.opacity(0.92) : .white.opacity(0.62)
         }
         return isEnabled ? .black : .white.opacity(0.62)
     }
@@ -950,17 +1077,32 @@ struct AddAutomationDialog: View {
     @ViewBuilder
     private func saveButtonBackground(isEnabled: Bool) -> some View {
         if presentationStyle == .embedded {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.clear)
-                .appLiquidGlass(role: .control, cornerRadius: 18)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.white.opacity(isEnabled ? 0.08 : 0.04))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(isEnabled ? 0.18 : 0.10), lineWidth: 1)
-                )
+            if isEnabled {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.98), Color.white.opacity(0.84)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.42), lineWidth: 1)
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.clear)
+                    .appLiquidGlass(role: .control, cornerRadius: 18)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white.opacity(0.04))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    )
+            }
         } else {
             Capsule(style: .continuous)
                 .fill(
@@ -1006,21 +1148,10 @@ struct AddAutomationDialog: View {
         }
     }
 
-    private var saveBarStorageText: String? {
-        guard let context = presetCapacityContext, context.status.total > 0 else { return nil }
-        let status = context.status
-        let usedNow = storagePercentText(count: status.used, total: status.total)
-        guard requiredPresetSlots > 0 else {
-            return "Storage: \(usedNow) used"
-        }
-        let afterSave = storagePercentText(
-            count: min(status.total, status.used + requiredPresetSlots),
-            total: status.total
-        )
-        return "Storage: \(usedNow) used, \(afterSave) after save"
-    }
-
     private var primarySaveStatusText: String {
+        if presentationStyle == .embedded {
+            return compactPrimarySaveStatusText
+        }
         if isValidatingOnDeviceSchedule {
             return "Checking this automation before saving..."
         }
@@ -1057,11 +1188,48 @@ struct AddAutomationDialog: View {
         if requiredPresetSlots > 0 && !presetCapacitySatisfied {
             return presetCapacityMessage ?? "Free saved-entry space before saving."
         }
-        if let warning = sameDayScheduleWarningMessage {
-            return warning
-        }
         if presentationStyle == .sheet, let warning = transitionDurationRecommendationMessage {
             return warning
+        }
+        return "Ready to save."
+    }
+
+    private var compactPrimarySaveStatusText: String {
+        if isValidatingOnDeviceSchedule {
+            return "Checking..."
+        }
+        if automationStore.hasAnyDeletionInProgress {
+            return "Delete in progress."
+        }
+        if automationStore.hasOnDeviceSyncInProgress(for: selectedDeviceIds) {
+            return "Preparing current automation."
+        }
+        if automationName.trimmed().isEmpty {
+            return "Name required."
+        }
+        if selectedDeviceIds.isEmpty {
+            return "Select a device."
+        }
+        if !selectedWeekdays.contains(true) {
+            return "Choose a repeat day."
+        }
+        if !isDateWindowValid {
+            return "Check date range."
+        }
+        if onDeviceScheduleValidationMessage != nil {
+            return onDeviceScheduleValidationIsWarning ? "Review schedule warning." : "Schedule issue."
+        }
+        if onDeviceScheduleOverlapWarningMessage != nil {
+            return "Schedule overlap."
+        }
+        if !timerSlotCapacitySatisfied {
+            return "No schedule slot available."
+        }
+        if actionSelection == .scene && selectedScene == nil {
+            return "Choose a scene."
+        }
+        if requiredPresetSlots > 0 && !presetCapacitySatisfied {
+            return "Free saved-entry space."
         }
         return "Ready to save."
     }
@@ -1069,17 +1237,20 @@ struct AddAutomationDialog: View {
     private var primarySaveStatusTint: Color {
         if canSave && !isValidatingOnDeviceSchedule {
             if onDeviceScheduleValidationMessage != nil {
+                if presentationStyle == .embedded { return .white.opacity(0.9) }
                 return onDeviceScheduleValidationIsWarning ? .yellow.opacity(0.94) : .orange.opacity(0.94)
             }
             if onDeviceScheduleOverlapWarningMessage != nil {
+                if presentationStyle == .embedded { return .white.opacity(0.9) }
                 return .yellow.opacity(0.94)
             }
-            if sameDayScheduleWarningMessage != nil || transitionDurationRecommendationMessage != nil {
+            if transitionDurationRecommendationMessage != nil {
+                if presentationStyle == .embedded { return .white.opacity(0.9) }
                 return .yellow.opacity(0.94)
             }
-            return .white.opacity(0.78)
+            return .white.opacity(presentationStyle == .embedded ? 0.9 : 0.78)
         }
-        return .orange.opacity(0.94)
+        return presentationStyle == .embedded ? .white.opacity(0.78) : .orange.opacity(0.94)
     }
 
     private var storageEstimateCard: some View {
@@ -1522,14 +1693,23 @@ struct AddAutomationDialog: View {
                 )
             }
 
-            triggerSelectionCard
+            scheduleSelectionSection
             if presentationStyle == .sheet {
                 solarParityHint
             }
-            repeatScheduleSection
             if advancedUIEnabled {
                 dateWindowSection
             }
+        }
+    }
+
+    @ViewBuilder
+    private var scheduleSelectionSection: some View {
+        if presentationStyle == .embedded {
+            triggerSelectionCard
+        } else {
+            triggerSelectionCard
+            repeatScheduleSection
         }
     }
 
@@ -1537,11 +1717,11 @@ struct AddAutomationDialog: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .font(AppTypography.style(.callout, weight: .semibold))
-                .foregroundColor(.white.opacity(0.92))
+                .foregroundColor(.white.opacity(0.88))
             if let subtitle {
                 Text(subtitle)
                     .font(AppTypography.style(.caption, weight: .medium))
-                    .foregroundColor(.white.opacity(0.56))
+                    .foregroundColor(.white.opacity(0.52))
             }
         }
     }
@@ -1555,9 +1735,9 @@ struct AddAutomationDialog: View {
 
     private var triggerSelectionHeight: CGFloat {
         if presentationStyle == .embedded {
-            return 198
+            return 260
         }
-        return 244
+        return 248
     }
 
     @ViewBuilder
@@ -1642,125 +1822,239 @@ struct AddAutomationDialog: View {
     // MARK: - Repeat Schedule Section
 
     private var repeatScheduleSection: some View {
-        let weekdaySpacing: CGFloat = presentationStyle == .embedded ? 4 : 6
+        let weekdaySpacing: CGFloat = presentationStyle == .embedded ? 1 : 4
         let weekdayCornerRadius: CGFloat = presentationStyle == .embedded ? 11 : 13
-        let weekdayHeight: CGFloat = presentationStyle == .embedded ? 34 : 38
+        let weekdayHeight: CGFloat = presentationStyle == .embedded ? 32 : 36
+        let trackPadding: CGFloat = 4
 
         return VStack(alignment: .leading, spacing: presentationStyle == .embedded ? 8 : 10) {
-            Text("Repeat on")
-                .font(AppTypography.style(.caption, weight: .semibold))
-                .foregroundColor(.white.opacity(0.76))
+            if presentationStyle != .embedded {
+                Text("Repeat on")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.76))
+            }
 
             // Weekday buttons with swipe-to-select
-            GeometryReader { geo in
-                HStack(spacing: weekdaySpacing) {
+            weekdaySelectionBar(
+                weekdaySpacing: weekdaySpacing,
+                weekdayCornerRadius: weekdayCornerRadius,
+                weekdayHeight: weekdayHeight,
+                trackPadding: trackPadding
+            )
+
+            if !selectedWeekdays.contains(true) {
+                repeatDayValidationBubble
+            }
+        }
+    }
+
+    private var repeatDayValidationBubble: some View {
+        Text("Choose at least one repeat day.")
+            .font(AppTypography.style(.caption, weight: .medium))
+            .foregroundColor(.white.opacity(0.84))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.black.opacity(0.08))
+                    .background(.ultraThinMaterial.opacity(0.62), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    )
+            )
+            .shadow(color: Color.black.opacity(0.08), radius: 7, x: 0, y: 3)
+    }
+
+    private func weekdaySelectionBar(
+        weekdaySpacing: CGFloat,
+        weekdayCornerRadius: CGFloat,
+        weekdayHeight: CGFloat,
+        trackPadding: CGFloat
+    ) -> some View {
+        GeometryReader { geo in
+            let width = max(0, geo.size.width - (trackPadding * 2))
+            let slotWidth = max(1, width / 7)
+            let selectedInset = max(0, weekdaySpacing / 2)
+            let selectedHeight = weekdayHeight
+
+            ZStack(alignment: .topLeading) {
+                weekdayTrackBackground
+
+                ForEach(selectedWeekdayRuns) { run in
+                    let runLength = run.endIndex - run.startIndex + 1
+                    let runX = trackPadding + (CGFloat(run.startIndex) * slotWidth) + selectedInset
+                    let runWidth = max(1, (CGFloat(runLength) * slotWidth) - (selectedInset * 2))
+                    repeatDaySelectedRunBackground(cornerRadius: weekdayCornerRadius)
+                        .frame(width: runWidth, height: selectedHeight)
+                        .offset(x: runX, y: trackPadding)
+                        .allowsHitTesting(false)
+                }
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+
+                HStack(spacing: 0) {
                     ForEach(weekdayNames.indices, id: \.self) { idx in
                         Button(action: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                selectedWeekdays[idx].toggle()
-                            }
+                            toggleWeekday(idx)
                         }) {
                             Text(weekdayNames[idx].uppercased())
                                 .font(AppTypography.style(.caption2, weight: .semibold))
                                 .tracking(0.3)
-                                .foregroundColor(selectedWeekdays[idx] ? .black : .white.opacity(0.7))
-                            .frame(maxWidth: .infinity)
+                                .foregroundColor(selectedWeekdays[idx] ? .black.opacity(0.78) : .white.opacity(0.64))
+                                .frame(width: slotWidth)
                                 .frame(height: weekdayHeight)
-                                .background(weekdayButtonBackground(isSelected: selectedWeekdays[idx], cornerRadius: weekdayCornerRadius))
                                 .clipShape(RoundedRectangle(cornerRadius: weekdayCornerRadius, style: .continuous))
-                                .shadow(color: Color.black.opacity(selectedWeekdays[idx] ? 0.15 : 0.08), radius: selectedWeekdays[idx] ? 6 : 3, x: 0, y: selectedWeekdays[idx] ? 3 : 2)
                         }
                         .contentShape(RoundedRectangle(cornerRadius: weekdayCornerRadius, style: .continuous))
                         .buttonStyle(.plain)
                     }
                 }
-                .overlay(
-                    // Swipe-to-select gesture overlay
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    let width = geo.size.width
-                                    let totalSpacing = weekdaySpacing * 6  // 6 gaps between 7 chips
-                                    let chipWidth = (width - totalSpacing) / 7
-                                    // Calculate index: each chip occupies chipWidth + spacing (except last)
-                                    let slotWidth = chipWidth + weekdaySpacing
-                                    let idx = min(max(Int(value.location.x / slotWidth), 0), 6)
-
-                                    // On first call, detect swipe mode based on starting day
-                                    if draggingSelects == nil && idx < selectedWeekdays.count {
-                                        draggingSelects = !selectedWeekdays[idx]
-                                    }
-
-                                    // Apply swipe mode to current day
-                                    if let mode = draggingSelects, idx < selectedWeekdays.count {
-                                        if selectedWeekdays[idx] != mode {
-                                            withAnimation(.easeInOut(duration: 0.1)) {
-                                                selectedWeekdays[idx] = mode
-                                            }
-                                        }
-                                    }
-                                }
-                                .onEnded { _ in
-                                    // Clear swipe mode when drag ends
-                                    draggingSelects = nil
-                                }
-                        )
-                )
+                .padding(trackPadding)
             }
-            .frame(height: weekdayHeight)
-            .padding(.bottom, weekdaySpacing)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(
+                // Swipe-to-select gesture overlay
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let adjustedX = min(max(value.location.x - trackPadding, 0), max(width - 1, 0))
+                                let idx = min(max(Int(adjustedX / slotWidth), 0), 6)
+
+                                // On first call, detect swipe mode based on starting day
+                                if draggingSelects == nil && idx < selectedWeekdays.count {
+                                    draggingSelects = !selectedWeekdays[idx]
+                                }
+
+                                // Apply swipe mode to current day
+                                if let mode = draggingSelects, idx < selectedWeekdays.count {
+                                    setWeekday(idx, selected: mode)
+                                }
+                            }
+                            .onEnded { _ in
+                                // Clear swipe mode when drag ends
+                                draggingSelects = nil
+                            }
+                    )
+            )
+        }
+        .frame(height: weekdayHeight + (trackPadding * 2))
+    }
+
+    private var embeddedRepeatScheduleBar: some View {
+        weekdaySelectionBar(
+            weekdaySpacing: 1,
+            weekdayCornerRadius: 11,
+            weekdayHeight: 32,
+            trackPadding: 4
+        )
+    }
+
+    private var selectedWeekdayRuns: [WeekdaySelectionRun] {
+        var runs: [WeekdaySelectionRun] = []
+        var start: Int?
+
+        for index in selectedWeekdays.indices {
+            if selectedWeekdays[index] {
+                if start == nil {
+                    start = index
+                }
+            } else if let currentStart = start {
+                runs.append(WeekdaySelectionRun(startIndex: currentStart, endIndex: index - 1))
+                start = nil
+            }
+        }
+
+        if let currentStart = start {
+            runs.append(WeekdaySelectionRun(startIndex: currentStart, endIndex: selectedWeekdays.count - 1))
+        }
+
+        return runs
+    }
+
+    private func toggleWeekday(_ index: Int) {
+        guard selectedWeekdays.indices.contains(index) else { return }
+        setWeekday(index, selected: !selectedWeekdays[index])
+    }
+
+    private func setWeekday(_ index: Int, selected: Bool) {
+        guard selectedWeekdays.indices.contains(index),
+              selectedWeekdays[index] != selected else { return }
+
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+
+        withTransaction(transaction) {
+            selectedWeekdays[index] = selected
         }
     }
 
-    // MARK: - Weekday Button Background Helper
+    // MARK: - Repeat Day Selection Background
 
-    @ViewBuilder
-    private func weekdayButtonBackground(isSelected: Bool, cornerRadius: CGFloat = 10) -> some View {
-        if isSelected {
-            // Selected: White pill with soft gradient
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.white)
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.95),
-                                    Color.white.opacity(0.85)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+    private func repeatDaySelectedRunBackground(cornerRadius: CGFloat = 10) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.56),
+                        Color.white.opacity(0.30)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.10),
+                                Color.white.opacity(0.03),
+                                Color.clear
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
-                )
-        } else {
-            // Inactive: Transparent fill matching tab style
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.white.opacity(0.085))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color.white.opacity(0.03))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-                )
-        }
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.03), radius: 3, x: 0, y: 1)
+    }
+
+    private var weekdayTrackBackground: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color.white.opacity(0.045))
+            .background(.ultraThinMaterial.opacity(0.64), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.09), lineWidth: 1)
+            )
     }
 
     @ViewBuilder
     private func triggerSelectionContent(geometry: GeometryProxy) -> some View {
         let isEmbedded = presentationStyle == .embedded
-        let tabHeight: CGFloat = isEmbedded ? 32 : 34
+        let tabHeight: CGFloat = isEmbedded ? 38 : 40
         let tabGap: CGFloat = isEmbedded ? 8 : 10
         let cardHeight: CGFloat = {
             if isEmbedded {
-                return 158
+                return 214
             }
-            return 200
+            return 198
         }()
+        let embeddedRepeatHeight: CGFloat = isEmbedded ? 40 : 0
+        let embeddedRepeatTopGap: CGFloat = isEmbedded ? 7 : 0
+        let embeddedRepeatBottomPadding: CGFloat = isEmbedded ? 8 : 0
+        let triggerContentHeight = max(
+            120,
+            cardHeight - embeddedRepeatHeight - embeddedRepeatTopGap - embeddedRepeatBottomPadding
+        )
         let cornerRadius: CGFloat = isEmbedded ? 18 : 16
         let totalHeight = tabHeight + tabGap + cardHeight
         let contentWidth = max(0, geometry.size.width)
@@ -1801,8 +2095,8 @@ struct AddAutomationDialog: View {
         )
 
         VStack(spacing: 0) {
-            // Tab row aligned with card edges
-            HStack(spacing: isEmbedded ? 6 : 8) {
+            // Trigger row aligned with card edges
+            HStack(spacing: 4) {
                 // Explicit order: Sunrise | Sunset | Time of Day
                 ForEach([TriggerSelection.sunrise, .sunset, .time], id: \.self) { option in
                     let isActive = triggerSelection == option
@@ -1812,24 +2106,28 @@ struct AddAutomationDialog: View {
                         guard isAvailable else { return }
                         Task { await handleTriggerSelectionTap(option) }
                     } label: {
-                        Text(option == .time ? "Time" : option.rawValue)
+                        Text(triggerSelectionLabel(for: option))
                             .font(AppTypography.style(isEmbedded ? .caption : .footnote, weight: .semibold))
-                            .foregroundColor(isActive ? .black : .white.opacity(isAvailable ? 0.82 : 0.42))
-                            .frame(maxWidth: .infinity, minHeight: tabHeight)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.86)
+                            .foregroundColor(isActive ? .black.opacity(0.78) : .white.opacity(isAvailable ? 0.64 : 0.34))
+                            .frame(maxWidth: .infinity, minHeight: max(0, tabHeight - 8))
                             .padding(.horizontal, isEmbedded ? 4 : 8)
-                            .background(tabButtonBackground(isActive: isActive))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .shadow(color: Color.black.opacity(isActive ? 0.15 : 0.08), radius: isActive ? 6 : 3, x: 0, y: isActive ? 3 : 2)
+                            .background(triggerSelectionSegmentBackground(isActive: isActive))
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .opacity(isAvailable ? 1.0 : 0.7)
                     }
                     .frame(maxWidth: .infinity)
-                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .buttonStyle(.plain)
                     .disabled(!isAvailable)
                 }
             }
+            .padding(4)
             .frame(width: contentWidth, height: tabHeight)
+            .background(triggerSelectionTrackBackground)
             .padding(.bottom, tabGap)
+            .zIndex(2)
 
             // Card with gradient background (masked to rounded shape)
             ZStack {
@@ -1856,27 +2154,66 @@ struct AddAutomationDialog: View {
                 cardChrome(cornerRadius: cornerRadius)
 
                 // Content layer - unified structure
-                ZStack {
-                    if triggerSelection == .time {
-                        timeTriggerContent(cardHeight: cardHeight, cardWidth: cardContentWidth)
-                            .padding(.horizontal, cardContentInset)
+                Group {
+                    if isEmbedded {
+                        VStack(spacing: embeddedRepeatTopGap) {
+                            triggerControlContent(
+                                cardHeight: triggerContentHeight,
+                                cardWidth: cardContentWidth,
+                                cardContentInset: cardContentInset
+                            )
+                            .frame(width: contentWidth, height: triggerContentHeight)
+
+                            embeddedRepeatScheduleBar
+                                .padding(.horizontal, cardContentInset + 6)
+                                .frame(width: contentWidth, height: embeddedRepeatHeight)
+                                .overlay(alignment: .topLeading) {
+                                    if !selectedWeekdays.contains(true) {
+                                        repeatDayValidationBubble
+                                            .offset(x: cardContentInset + 6, y: -34)
+                                            .zIndex(4)
+                                    }
+                                }
+                        }
+                        .padding(.bottom, embeddedRepeatBottomPadding)
+                        .frame(width: contentWidth, height: cardHeight, alignment: .top)
                     } else {
-                        SolarOffsetArcSlider(
-                            offsetMinutes: $solarOffsetMinutes,
-                            eventType: selectedSolarEvent,
-                            device: activeDevice,
-                            disableClipping: true,
-                            useExternalGradient: true
+                        triggerControlContent(
+                            cardHeight: cardHeight,
+                            cardWidth: cardContentWidth,
+                            cardContentInset: cardContentInset
                         )
-                        .padding(.horizontal, cardContentInset)
+                        .frame(width: contentWidth, height: cardHeight)
                     }
                 }
                 .frame(width: contentWidth, height: cardHeight)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             }
             .frame(width: contentWidth, height: cardHeight)
+            .zIndex(0)
         }
         .frame(width: contentWidth, height: totalHeight)
+    }
+
+    @ViewBuilder
+    private func triggerControlContent(
+        cardHeight: CGFloat,
+        cardWidth: CGFloat,
+        cardContentInset: CGFloat
+    ) -> some View {
+        if triggerSelection == .time {
+            timeTriggerContent(cardHeight: cardHeight, cardWidth: cardWidth)
+                .padding(.horizontal, cardContentInset)
+        } else {
+            SolarOffsetArcSlider(
+                offsetMinutes: $solarOffsetMinutes,
+                eventType: selectedSolarEvent,
+                device: activeDevice,
+                disableClipping: true,
+                useExternalGradient: true
+            )
+            .padding(.horizontal, cardContentInset)
+        }
     }
 
     // MARK: - Card Chrome Helper
@@ -1889,84 +2226,148 @@ struct AddAutomationDialog: View {
                     .stroke(Color.white.opacity(presentationStyle == .embedded ? 0.14 : 0.2), lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(presentationStyle == .embedded ? 0.08 : 0.2), radius: presentationStyle == .embedded ? 4 : 8, x: 0, y: presentationStyle == .embedded ? 2 : 4)
-                        }
+    }
 
-    // MARK: - Tab Button Background Helper
+    // MARK: - Trigger Selection Styling
 
-    private func tabButtonBackground(isActive: Bool) -> some View {
-        ZStack {
-            if isActive {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.94))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.98),
-                                        Color.white.opacity(0.78)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.65),
-                                        Color.white.opacity(0.32)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.5
-                            )
-                    )
-            } else {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.075))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.035))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                    )
-            }
-        }
+    private func triggerSelectionLabel(for option: TriggerSelection) -> String {
+        option == .time ? "Time" : option.rawValue
+    }
+
+    private var triggerSelectionTrackBackground: some View {
+        automationSegmentTrackBackground(cornerRadius: 18)
+    }
+
+    private func triggerSelectionSegmentBackground(isActive: Bool) -> some View {
+        automationSegmentBackground(isActive: isActive, cornerRadius: 14)
     }
 
     private func timeTriggerContent(cardHeight: CGFloat, cardWidth: CGFloat) -> some View {
-        // Wheel pickers are ~216pt tall; scale & clamp to match the solar card
+        // Wheel pickers are ~216pt tall; crop instead of vertically scaling so numerals stay legible.
         let pickerHeight: CGFloat = 216
         let pickerWidth = min(max(cardWidth, 260), 340)
         let horizontalScale = min(1, max(0.88, (cardWidth - 6) / max(pickerWidth, 1)))
-        let verticalScale = min(1, cardHeight / pickerHeight)
 
-        return DatePicker("", selection: $selectedTime, displayedComponents: .hourAndMinute)
-            .labelsHidden()
-            .datePickerStyle(.wheel)
+        return HStack(spacing: 0) {
+            Picker("", selection: selectedTimeHourBinding) {
+                ForEach(1...12, id: \.self) { hour in
+                    Text("\(hour)")
+                        .font(AppTypography.style(.title2, weight: .regular))
+                        .foregroundColor(.white)
+                        .tag(hour)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(width: pickerWidth * 0.28)
+            .clipped()
+
+            Picker("", selection: selectedTimeMinuteBinding) {
+                ForEach(0...59, id: \.self) { minute in
+                    Text(String(format: "%02d", minute))
+                        .font(AppTypography.style(.title2, weight: .regular))
+                        .foregroundColor(.white)
+                        .tag(minute)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(width: pickerWidth * 0.34)
+            .clipped()
+
+            Picker("", selection: selectedTimePeriodBinding) {
+                Text("AM")
+                    .font(AppTypography.style(.title2, weight: .regular))
+                    .foregroundColor(.white)
+                    .tag(false)
+                Text("PM")
+                    .font(AppTypography.style(.title2, weight: .regular))
+                    .foregroundColor(.white)
+                    .tag(true)
+            }
+            .pickerStyle(.wheel)
+            .frame(width: pickerWidth * 0.28)
+            .clipped()
+        }
             .frame(width: pickerWidth, height: pickerHeight)
             .environment(\.colorScheme, .dark)
             .background(Color.clear)  // Remove default background
-            .scaleEffect(x: horizontalScale, y: verticalScale, anchor: .center)
+            .scaleEffect(x: horizontalScale, y: 1, anchor: .center)
             .frame(width: cardWidth, alignment: .center)
             .frame(height: cardHeight)  // Enforce final height
+            .contentShape(Rectangle())
             .clipped()
+    }
+
+    private var selectedTimeHourBinding: Binding<Int> {
+        Binding(
+            get: { selectedTimeHour12 },
+            set: { hour in
+                updateSelectedTime(hour12: hour, minute: selectedTimeMinute, isPM: selectedTimeIsPM)
+            }
+        )
+    }
+
+    private var selectedTimeMinuteBinding: Binding<Int> {
+        Binding(
+            get: { selectedTimeMinute },
+            set: { minute in
+                updateSelectedTime(hour12: selectedTimeHour12, minute: minute, isPM: selectedTimeIsPM)
+            }
+        )
+    }
+
+    private var selectedTimePeriodBinding: Binding<Bool> {
+        Binding(
+            get: { selectedTimeIsPM },
+            set: { isPM in
+                updateSelectedTime(hour12: selectedTimeHour12, minute: selectedTimeMinute, isPM: isPM)
+            }
+        )
+    }
+
+    private var selectedTimeHour12: Int {
+        let hour = Calendar.current.component(.hour, from: selectedTime)
+        let normalized = hour % 12
+        return normalized == 0 ? 12 : normalized
+    }
+
+    private var selectedTimeMinute: Int {
+        Calendar.current.component(.minute, from: selectedTime)
+    }
+
+    private var selectedTimeIsPM: Bool {
+        Calendar.current.component(.hour, from: selectedTime) >= 12
+    }
+
+    private func updateSelectedTime(hour12: Int, minute: Int, isPM: Bool) {
+        var calendar = Calendar.current
+        calendar.locale = Locale.current
+        var components = calendar.dateComponents([.year, .month, .day], from: selectedTime)
+        components.hour = (hour12 % 12) + (isPM ? 12 : 0)
+        components.minute = minute
+        components.second = 0
+        if let date = calendar.date(from: components) {
+            selectedTime = date
+        }
     }
 
     // MARK: - Action Section
 
     private var automationActionSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            sectionHeader(
-                title: "What happens",
-                subtitle: "Pick the light change to run at the scheduled time."
-            )
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                sectionHeader(
+                    title: "Light Action",
+                    subtitle: actionSectionSubtitle
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer(minLength: 8)
+
+                if actionSelectionSupportsPreview {
+                    actionPreviewToggle
+                        .padding(.top, actionSectionSubtitle == nil ? 0 : 1)
+                }
+            }
 
             actionSelectionButtons
 
@@ -1983,40 +2384,170 @@ struct AddAutomationDialog: View {
         }
     }
 
+    private var actionSelectionSupportsPreview: Bool {
+        switch actionSelection {
+        case .color, .transition, .effect:
+            return true
+        case .scene:
+            return false
+        }
+    }
+
+    private var actionPreviewToggle: some View {
+        Button {
+            actionPreviewEnabled.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: actionPreviewEnabled ? "eye.fill" : "eye")
+                    .font(AppTypography.style(.caption2, weight: .semibold))
+                Text("Preview")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+            }
+            .foregroundColor(actionPreviewEnabled ? .black.opacity(0.78) : .white.opacity(0.64))
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(
+                actionPreviewBackground
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var actionPreviewBackground: some View {
+        if actionPreviewEnabled {
+            secondaryControlBackground(isActive: true, cornerRadius: 15)
+        } else {
+            secondaryControlBackground(isActive: false, cornerRadius: 15)
+        }
+    }
+
+    private var actionSectionSubtitle: String? {
+        isFirstAutomationForSelectedTargets ? "What the lamp does when this runs." : nil
+    }
+
+    private var isFirstAutomationForSelectedTargets: Bool {
+        let targets = selectedDeviceIds.isEmpty ? Set([activeDevice.id]) : selectedDeviceIds
+        return !automationStore.automations.contains { automation in
+            if automation.id == editingAutomation?.id {
+                return false
+            }
+            return !Set(automation.targets.deviceIds).isDisjoint(with: targets)
+        }
+    }
+
     private var actionSelectionButtons: some View {
-        HStack(spacing: 4) {
+        let segmentHeight: CGFloat = presentationStyle == .embedded ? 38 : 40
+        let segmentLabelHeight = max(0, segmentHeight - 8)
+
+        return HStack(spacing: 4) {
             ForEach(availableActionSelections) { option in
                 let isActive = actionSelection == option
                 Button {
                     guard lockedAction == nil else { return }
                     withAnimation(.easeInOut(duration: 0.18)) {
+                        actionPreviewEnabled = false
                         actionSelection = option
                     }
                 } label: {
                     Text(actionSelectionLabel(for: option))
-                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .font(AppTypography.style(presentationStyle == .embedded ? .caption : .footnote, weight: .semibold))
                         .lineLimit(1)
-                    .foregroundColor(isActive ? .black : .white.opacity(0.84))
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 36)
-                    .padding(.horizontal, 10)
-                    .background(tabButtonBackground(isActive: isActive))
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .opacity(lockedAction == nil || isActive ? 1 : 0.45)
+                        .minimumScaleFactor(0.86)
+                        .foregroundColor(isActive ? .black.opacity(0.78) : .white.opacity(0.64))
+                        .frame(maxWidth: .infinity, minHeight: segmentLabelHeight)
+                        .padding(.horizontal, presentationStyle == .embedded ? 4 : 8)
+                        .background(automationSegmentBackground(isActive: isActive))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .opacity(lockedAction == nil || isActive ? 1 : 0.45)
                 }
                 .buttonStyle(.plain)
                 .disabled(lockedAction != nil)
             }
         }
         .padding(4)
+        .frame(height: segmentHeight)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.075))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
+            automationSegmentTrackBackground(cornerRadius: 18)
         )
+    }
+
+    private func automationSegmentTrackBackground(cornerRadius: CGFloat = 18) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.white.opacity(0.045))
+            .background(.ultraThinMaterial.opacity(0.64), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.09), lineWidth: 1)
+            )
+    }
+
+    private func automationSegmentBackground(isActive: Bool, cornerRadius: CGFloat = 14) -> some View {
+        ZStack {
+            if isActive {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.clear)
+                    .appLiquidGlass(role: .card, cornerRadius: cornerRadius)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.54),
+                                        Color.white.opacity(0.22),
+                                        Color.clear
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.015))
+            }
+        }
+    }
+
+    private func secondaryControlBackground(isActive: Bool, cornerRadius: CGFloat = 15) -> some View {
+        ZStack {
+            if isActive {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.clear)
+                    .appLiquidGlass(role: .control, cornerRadius: cornerRadius)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.58),
+                                        Color.white.opacity(0.28)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.24), lineWidth: 1)
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.045))
+                    .background(.ultraThinMaterial.opacity(0.64), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                    )
+            }
+        }
     }
 
     private func actionSelectionLabel(for option: ActionSelection) -> String {
@@ -2068,7 +2599,8 @@ struct AddAutomationDialog: View {
                 }
             ),
             selectedEffectPresetId: $selectedEffectPresetId,
-            isInline: presentationStyle == .embedded
+            isInline: presentationStyle == .embedded,
+            externalPreviewEnabled: $actionPreviewEnabled
         )
     }
 
@@ -2192,7 +2724,8 @@ struct AddAutomationDialog: View {
             temperature: $gradientTemperature,
             whiteLevel: $gradientWhiteLevel,
             showFadeControls: advancedUIEnabled,
-            isInline: presentationStyle == .embedded
+            isInline: presentationStyle == .embedded,
+            externalPreviewEnabled: $actionPreviewEnabled
         )
     }
     private var transitionActionControls: some View {
@@ -2228,12 +2761,12 @@ struct AddAutomationDialog: View {
             endWhiteLevel: $transitionEndWhiteLevel,
             selectedTransitionPresetId: $selectedTransitionPresetId,
             transitionProfile: transitionProfileForActiveDevice,
-            automationGuaranteeCount: 5,
             showsDurationRecommendationGuide: presentationStyle != .embedded,
             expectedStartDate: transitionSchedulePreviewStart,
             expectedEndDate: transitionSchedulePreviewEnd,
             expectedTimeZone: transitionSchedulePreviewTimeZone,
-            isInline: presentationStyle == .embedded
+            isInline: presentationStyle == .embedded,
+            externalPreviewEnabled: $actionPreviewEnabled
         )
     }
 
@@ -2365,8 +2898,7 @@ struct AddAutomationDialog: View {
                 startBrightness: input.startBrightness,
                 endBrightness: input.endBrightness,
                 context: .persistentAutomation,
-                device: target,
-                automationGuaranteeCount: 5
+                device: target
             )
             return (target, profile)
         }
@@ -2379,10 +2911,10 @@ struct AddAutomationDialog: View {
         return transitionProfilesByDevice.first?.profile
     }
 
-    private var transitionBudgetSatisfied: Bool {
+    private var transitionStorageSatisfied: Bool {
         guard transitionPlanningInput != nil else { return true }
         return !transitionProfilesByDevice.isEmpty
-            && transitionProfilesByDevice.allSatisfy { $0.profile.fitsBudget }
+            && transitionProfilesByDevice.allSatisfy { $0.profile.fitsStorage }
     }
 
     private var requiredPresetSlots: Int {
@@ -2433,7 +2965,7 @@ struct AddAutomationDialog: View {
             let storageLoaded = targetDevicesForCapacity.allSatisfy {
                 viewModel.presetSlotAvailability(for: $0, range: storageCapacityRange) != nil
             }
-            return storageLoaded && transitionBudgetSatisfied
+            return storageLoaded && transitionStorageSatisfied
         }
         return targetDevicesForCapacity.allSatisfy { device in
             guard let status = viewModel.presetSlotAvailability(for: device, range: storageCapacityRange) else { return false }
@@ -2441,10 +2973,10 @@ struct AddAutomationDialog: View {
         }
     }
 
-    private var transitionBudgetContext: (device: WLEDDevice, profile: TransitionStepProfile)? {
+    private var transitionStorageContext: (device: WLEDDevice, profile: TransitionStepProfile)? {
         transitionProfilesByDevice.min { lhs, rhs in
-            let leftMargin = (lhs.profile.perAutomationBudget ?? Int.max) - lhs.profile.slotsRequired
-            let rightMargin = (rhs.profile.perAutomationBudget ?? Int.max) - rhs.profile.slotsRequired
+            let leftMargin = (lhs.profile.availableSlots ?? Int.max) - lhs.profile.slotsRequired
+            let rightMargin = (rhs.profile.availableSlots ?? Int.max) - rhs.profile.slotsRequired
             return leftMargin < rightMargin
         }
     }
@@ -2454,18 +2986,18 @@ struct AddAutomationDialog: View {
         if transitionPlanningInput != nil && presetCapacityContext == nil {
             return "Checking saved-entry space..."
         }
-        if let context = transitionBudgetContext {
+        if let context = transitionStorageContext {
             let profile = context.profile
-            if !profile.fitsBudget {
+            if !profile.fitsStorage {
                 let maxDuration = TransitionDurationPicker.clockString(seconds: profile.maxDurationSecondsAtCurrentQuality ?? 0)
                 let available = profile.availableSlots ?? 0
-                return "This transition needs \(profile.slotsRequired) saved entries on \(context.device.name), but only \(available) are safely available for automation transitions. Try a shorter duration, fewer steps, or free saved presets. At this quality, about \(maxDuration) is recommended."
+                return "This transition needs \(profile.slotsRequired) saved entries on \(context.device.name), but only \(available) are available after reserve. Try a shorter duration or free saved presets. About \(maxDuration) fits with the current storage."
             }
             let adjusted = profile.wasCoarsened
                 ? " The step spacing was adjusted so it fits safely."
                 : ""
             let available = profile.availableSlots ?? 0
-            return "Storage looks good on \(context.device.name): this transition needs \(profile.slotsRequired) saved entries, with \(available) available for automation transitions.\(adjusted)"
+            return "Storage looks good on \(context.device.name): this transition needs \(profile.slotsRequired) saved entries, with \(available) available after reserve.\(adjusted)"
         }
         guard let context = presetCapacityContext else {
             return "Checking preset storage..."
@@ -2557,16 +3089,16 @@ struct AddAutomationDialog: View {
 
     private func normalizeTriggerSelectionIfNeeded() {
         guard !isTriggerOptionAvailable(triggerSelection) else { return }
-        if isTriggerOptionAvailable(.time) {
-            triggerSelection = .time
-            return
-        }
         if isTriggerOptionAvailable(.sunrise) {
             triggerSelection = .sunrise
             return
         }
         if isTriggerOptionAvailable(.sunset) {
             triggerSelection = .sunset
+            return
+        }
+        if isTriggerOptionAvailable(.time) {
+            triggerSelection = .time
         }
     }
 
@@ -2779,41 +3311,6 @@ struct AddAutomationDialog: View {
             return "Invalid end date for selected month."
         }
         return nil
-    }
-
-    private var sameDayScheduleWarningMessage: String? {
-        guard triggerSelection == .time else { return nil }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .current
-        let now = Date()
-        let todayWeekdayIndex = calendar.component(.weekday, from: now) - 1
-        guard selectedWeekdays.indices.contains(todayWeekdayIndex),
-              selectedWeekdays[todayWeekdayIndex] else {
-            return nil
-        }
-        guard isWithinDateWindow(now, calendar: calendar) else { return nil }
-
-        let timeComponents = calendar.dateComponents([.hour, .minute], from: selectedTime)
-        guard let hour = timeComponents.hour, let minute = timeComponents.minute else {
-            return nil
-        }
-        var todayStartComponents = calendar.dateComponents([.year, .month, .day], from: now)
-        todayStartComponents.hour = hour
-        todayStartComponents.minute = minute
-        todayStartComponents.second = 0
-        guard let todayStart = calendar.date(from: todayStartComponents),
-              todayStart <= now else {
-            return nil
-        }
-
-        if actionSelection == .transition {
-            let todayEnd = todayStart.addingTimeInterval(max(0, customTransitionDuration))
-            if now < todayEnd {
-                return "Today's automation window is already in progress. WLED timers cannot start midway, so the on-device schedule will run at the next selected start unless you run it manually now."
-            }
-        }
-
-        return "Today's start time has already passed. The on-device schedule will first run on the next selected day."
     }
 
     private func isValidCalendarDay(month: Int, day: Int) -> Bool {
@@ -3189,19 +3686,29 @@ private extension String {
 extension AddAutomationDialog {
     func handleNameEditToggle() {
         if isEditingName {
-            // Save changes when toggling off
-            let trimmed = automationName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                // Restore previous name if empty
-                automationName = editingAutomation?.name ?? defaultName ?? "Automation"
-            } else {
-                automationName = trimmed
-            }
-            isEditingName = false
-            isNameFieldFocused = false
+            commitNameEdit()
         } else {
-            isEditingName = true
-            isNameFieldFocused = true
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                isEditingName = true
+            }
+        }
+    }
+
+    func commitNameEdit() {
+        let trimmed = automationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            automationName = editingAutomation?.name ?? defaultName ?? "Automation"
+        } else {
+            automationName = trimmed
+        }
+
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            isNameFieldFocused = false
+            isEditingName = false
         }
     }
 }

@@ -10,8 +10,9 @@ import Foundation
 
 enum DeviceDetailPresentation {
     static let coordinateSpaceName = "device-detail-presentation"
-    static let animation = Animation.spring(response: 0.54, dampingFraction: 0.91, blendDuration: 0.1)
-    static let expandedCornerRadius: CGFloat = 30
+    static let animation = Animation.spring(response: 0.48, dampingFraction: 0.88, blendDuration: 0.08)
+    static let expandedCornerRadius: CGFloat = 34
+    static let folderSourceCornerRadius: CGFloat = 20
     static let dismissGestureActivationHeight: CGFloat = 168
 
     static func interactiveProgress(isPresented: Bool, dragOffset: CGFloat) -> CGFloat {
@@ -28,8 +29,8 @@ enum DeviceDetailPresentation {
     }
 
     static func sourceCornerRadius(for sourceFrame: CGRect?) -> CGFloat {
-        guard let sourceFrame else { return 20 }
-        return abs(sourceFrame.width - sourceFrame.height) < 24 ? 20 : 16
+        guard let sourceFrame else { return folderSourceCornerRadius }
+        return abs(sourceFrame.width - sourceFrame.height) < 24 ? folderSourceCornerRadius : 18
     }
 
     static func fallbackSourceFrame(for panelFrame: CGRect) -> CGRect {
@@ -57,6 +58,105 @@ enum DeviceDetailPresentation {
         let sourceRadius = sourceCornerRadius(for: sourceFrame)
         let clampedProgress = min(1, max(0, progress))
         return sourceRadius + ((expandedCornerRadius - sourceRadius) * clampedProgress)
+    }
+}
+
+struct FolderGlassContainerBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    let cornerRadius: CGFloat
+    var expanded: Bool = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let contrastBoost = colorSchemeContrast == .increased ? 1.35 : 1
+        let detailTintOpacity = colorScheme == .dark ? 0.10 : 0.05
+
+        ZStack {
+            if expanded {
+                LiquidGlassBackground(cornerRadius: cornerRadius, tint: nil, clarity: .clear)
+            } else if #available(iOS 26.0, *) {
+                Color.clear
+                    .glassEffect(.clear, in: .rect(cornerRadius: cornerRadius))
+            } else {
+                shape
+                    .fill(.ultraThinMaterial.opacity(0.32))
+            }
+
+            if expanded {
+                shape
+                    .fill(Color.black.opacity(detailTintOpacity))
+            }
+
+            shape
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity((expanded ? 0.038 : 0.095) * contrastBoost),
+                            Color.white.opacity((expanded ? 0.014 : 0.042) * contrastBoost),
+                            Color.white.opacity(expanded ? 0.006 : 0.018)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            Capsule(style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity((expanded ? 0.072 : 0.26) * contrastBoost),
+                            Color.white.opacity((expanded ? 0.024 : 0.095) * contrastBoost),
+                            .clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: expanded ? 148 : 54, height: expanded ? 410 : 138)
+                .blur(radius: expanded ? 20 : 9)
+                .rotationEffect(.degrees(expanded ? -7 : 7))
+                .offset(x: expanded ? -176 : -50, y: expanded ? -108 : -8)
+                .mask(shape)
+
+            shape
+                .fill(Color.black.opacity(colorScheme == .dark ? (expanded ? 0.018 : 0.035) : 0.0))
+
+            shape
+                .strokeBorder(Color.white.opacity((expanded ? 0.18 : 0.22) * contrastBoost), lineWidth: expanded ? 0.9 : 1.0)
+
+            LinearGradient(
+                colors: [
+                    Color.white.opacity((expanded ? 0.08 : 0.14) * contrastBoost),
+                    .clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .center
+            )
+            .clipShape(shape)
+        }
+        .clipShape(shape)
+        .shadow(
+            color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.09),
+            radius: expanded ? 22 : 12,
+            x: 0,
+            y: expanded ? 14 : 7
+        )
+    }
+}
+
+struct DeviceDetailBackdrop: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let isActive: Bool
+
+    var body: some View {
+        let tintOpacity = colorScheme == .dark ? 0.12 : 0.075
+
+        Rectangle()
+            .fill(Color.black.opacity(isActive ? tintOpacity : 0))
+            .animation(.easeInOut(duration: 0.22), value: isActive)
     }
 }
 

@@ -15,6 +15,7 @@ struct DeviceControlView: View {
     @State private var showRealTimeSettings: Bool = false
     @State private var detailPresentation = DeviceDetailPresentationState()
     @State private var detailSourceFrames: [String: CGRect] = [:]
+    @State private var detailTransitionID = UUID()
     @State private var setupDevice: WLEDDevice?
     @State private var detailBackgroundDismissEnabledAt: Date = .distantPast
     @State private var selectedLocation: DeviceLocation = .all
@@ -51,7 +52,7 @@ struct DeviceControlView: View {
                             
                             Spacer()
                             
-                            // Real-Time Settings Button
+                            // Device settings button
                             Button {
                                 showRealTimeSettings = true
                             } label: {
@@ -151,6 +152,8 @@ struct DeviceControlView: View {
                     }
                 }
             }
+            .blur(radius: detailBackdropBlurRadius)
+            .animation(.easeInOut(duration: 0.22), value: detailBackdropBlurRadius)
             .coordinateSpace(name: DeviceDetailPresentation.coordinateSpaceName)
             .onPreferenceChange(DeviceDetailSourceFramePreferenceKey.self) { frames in
                 detailSourceFrames = frames
@@ -200,7 +203,8 @@ struct DeviceControlView: View {
                 let dragOffset = liveDragOffset > 0 ? liveDragOffset : detailPresentation.closingDragOffset
                 let panelTopPadding: CGFloat = 4
                 let panelHorizontalPadding: CGFloat = 8
-                let dockOverlapAllowance: CGFloat = 0
+                let panelBottomClearance: CGFloat = 8
+                let dockOverlapAllowance = max(0, proxy.safeAreaInsets.bottom - panelBottomClearance)
                 let panelWidth = max(1, proxy.size.width - (panelHorizontalPadding * 2))
                 let panelHeight = max(420, proxy.size.height - proxy.safeAreaInsets.bottom - panelTopPadding + dockOverlapAllowance)
                 let panelFrame = CGRect(
@@ -223,7 +227,7 @@ struct DeviceControlView: View {
                     progress: presentationProgress
                 )
                 ZStack(alignment: .topLeading) {
-                    Color.clear
+                    DeviceDetailBackdrop(isActive: isDetailBackdropActive)
                         .ignoresSafeArea()
                         .allowsHitTesting(canDismissDetailFromBackground && detailPresentation.isPresented && !detailPresentation.isClosing)
                         .onTapGesture {
@@ -239,8 +243,10 @@ struct DeviceControlView: View {
                         onClose: { closeDeviceDetail() }
                     )
                     .frame(width: morphFrame.width, height: morphFrame.height, alignment: .top)
+                    .clipShape(RoundedRectangle(cornerRadius: morphCornerRadius, style: .continuous))
+                    .compositingGroup()
                     .position(x: morphFrame.midX, y: morphFrame.midY)
-                    .opacity(Double(0.18 + (0.82 * presentationProgress)))
+                    .opacity(detailShellOpacity(for: presentationProgress))
                     .simultaneousGesture(detailCollapseDragGesture)
                 }
             }
@@ -250,6 +256,20 @@ struct DeviceControlView: View {
 
     private var canDismissDetailFromBackground: Bool {
         Date() >= detailBackgroundDismissEnabledAt
+    }
+
+    private var detailBackdropBlurRadius: CGFloat {
+        isDetailBackdropActive ? 14 : 0
+    }
+
+    private var isDetailBackdropActive: Bool {
+        detailPresentation.isPresented && !detailPresentation.isClosing
+    }
+
+    private func detailShellOpacity(for progress: CGFloat) -> Double {
+        let normalized = min(1, max(0, (progress - 0.02) / 0.26))
+        let eased = normalized * normalized * (3 - (2 * normalized))
+        return Double(eased)
     }
 
     private var detailCollapseDragGesture: some Gesture {
@@ -302,6 +322,9 @@ struct DeviceControlView: View {
     }
 
     private func closeDeviceDetail(fromDragOffset dragOffset: CGFloat = 0, animated: Bool = true) {
+        let transitionID = UUID()
+        detailTransitionID = transitionID
+
         guard detailPresentation.device != nil else {
             detailBackgroundDismissEnabledAt = .distantPast
             return
@@ -318,20 +341,28 @@ struct DeviceControlView: View {
             detailPresentation.isPresented = false
             detailPresentation.closingDragOffset = 0
         } completion: {
+            guard detailTransitionID == transitionID else { return }
             detailPresentation.reset()
             detailBackgroundDismissEnabledAt = .distantPast
         }
     }
 
     private func openDeviceDetail(_ device: WLEDDevice) {
+        if detailPresentation.device?.id == device.id && detailPresentation.isPresented {
+            return
+        }
+
         if viewModel.requiresProfileSetup(device) {
             closeDeviceDetail(animated: false)
             setupDevice = device
             return
         }
+        let transitionID = UUID()
+        detailTransitionID = transitionID
         detailBackgroundDismissEnabledAt = Date().addingTimeInterval(detailDismissGuardDelay)
         detailPresentation.prepare(device: device, sourceFrame: detailSourceFrames[device.id])
         DispatchQueue.main.async {
+            guard detailTransitionID == transitionID else { return }
             withAnimation(detailPanelAnimation) {
                 detailPresentation.isPresented = true
             }
@@ -386,9 +417,8 @@ struct DeviceControlView: View {
                         isSelected: selectedLocation == location,
                         deviceCount: deviceCount(for: location)
                     ) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            selectedLocation = location
-                        }
+                        guard selectedLocation != location else { return }
+                        selectedLocation = location
                     }
                 }
             }
@@ -496,13 +526,20 @@ struct DeviceControlView: View {
 
 // MARK: - Location Pill Button
 
+private struct LocationPillPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
+            .animation(.spring(response: 0.14, dampingFraction: 0.86), value: configuration.isPressed)
+    }
+}
+
 struct LocationPillButton: View {
     let location: DeviceLocation
     let isSelected: Bool
     let deviceCount: Int
     let action: () -> Void
     @Environment(\.colorScheme) private var colorScheme
-    private var surfaceStyle: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
     
     var body: some View {
         Button(action: action) {
@@ -519,19 +556,64 @@ struct LocationPillButton: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(.ultraThinMaterial.opacity(0.5))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color.white.opacity(0.14))
-                        )
-                }
-            }
-            .appLiquidGlass(role: .control, cornerRadius: 18)
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(LocationPillBackground(isSelected: isSelected))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(LocationPillPressStyle())
+    }
+}
+
+private struct LocationPillBackground: View {
+    let isSelected: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
+        return ZStack {
+            shape
+                .fill(Color.clear)
+                .appLiquidGlass(role: .control, cornerRadius: 18)
+
+            shape
+                .fill(.ultraThinMaterial.opacity(isSelected ? selectedMaterialBoostOpacity : 0))
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+
+            shape
+                .fill(selectedOverlayColor.opacity(selectionProgress))
+                .animation(.easeInOut(duration: 0.16), value: isSelected)
+
+            shape
+                .stroke(Color.white.opacity(0.18 + (selectionProgress * 0.10)), lineWidth: 1)
+                .animation(.easeInOut(duration: 0.16), value: isSelected)
+
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.08 + (selectionProgress * 0.08)),
+                    .clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .center
+            )
+            .clipShape(shape)
+            .animation(.easeInOut(duration: 0.16), value: isSelected)
+        }
+        .clipShape(shape)
+        .compositingGroup()
+    }
+
+    private var selectedMaterialBoostOpacity: Double {
+        colorScheme == .dark ? 0.20 : 0.16
+    }
+
+    private var selectionProgress: Double {
+        isSelected ? 1 : 0
+    }
+
+    private var selectedOverlayColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.10)
     }
 }
 

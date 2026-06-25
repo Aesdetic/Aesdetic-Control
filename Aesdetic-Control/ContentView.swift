@@ -6,14 +6,10 @@
 //
 
 import SwiftUI
-import UIKit
 
 struct ContentView: View {
     @State private var selectedTab: DockTab = .dashboard
     @StateObject private var deviceControlViewModel = DeviceControlViewModel.shared
-    private let dockHorizontalPadding: CGFloat = 16
-    private let dockTopInsetPadding: CGFloat = 0
-    private let dockBottomInsetOffset: CGFloat = -8
     private var isRunningForPreviews: Bool {
         ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
     }
@@ -49,17 +45,12 @@ struct ContentView: View {
                 }
         }
         .background(Color.clear)
-        .toolbar(.hidden, for: .tabBar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            DockBar(selectedTab: $selectedTab)
-                .padding(.horizontal, dockHorizontalPadding)
-                .padding(.top, dockTopInsetPadding)
-                .padding(.bottom, dockBottomInsetOffset)
-                .allowsHitTesting(!deviceControlViewModel.isMandatorySetupFlowActive)
-                .opacity(deviceControlViewModel.isMandatorySetupFlowActive ? 0.55 : 1.0)
+        .tint(.primary)
+        .toolbar(deviceControlViewModel.isMandatorySetupFlowActive ? .hidden : .visible, for: .tabBar)
+        .background {
+            TabBarVisibilityController(isHidden: deviceControlViewModel.isMandatorySetupFlowActive)
         }
         .onAppear {
-            UITabBar.appearance().isHidden = true
             if !isRunningForPreviews {
                 // Passive discovery at launch (UDP/mDNS only)
                 DeviceControlViewModel.shared.startPassiveDiscovery()

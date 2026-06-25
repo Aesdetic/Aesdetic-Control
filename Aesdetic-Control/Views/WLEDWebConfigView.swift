@@ -48,9 +48,7 @@ private struct WebView: UIViewRepresentable {
 	func makeUIView(context: Context) -> WKWebView {
 		let webView = WKWebView(frame: .zero)
 		webView.navigationDelegate = context.coordinator
-		webView.addObserver(context.coordinator, forKeyPath: #keyPath(WKWebView.estimatedProgress), options: .new, context: nil)
-		webView.addObserver(context.coordinator, forKeyPath: #keyPath(WKWebView.canGoBack), options: .new, context: nil)
-		webView.addObserver(context.coordinator, forKeyPath: #keyPath(WKWebView.canGoForward), options: .new, context: nil)
+		context.coordinator.attach(to: webView)
 		webView.load(URLRequest(url: url))
 		NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.goBack), name: .webGoBack, object: nil)
 		NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.goForward), name: .webGoForward, object: nil)
@@ -62,38 +60,66 @@ private struct WebView: UIViewRepresentable {
 		// no-op
 	}
 
+	static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+		webView.stopLoading()
+		webView.navigationDelegate = nil
+		coordinator.detach()
+	}
+
 	class Coordinator: NSObject, WKNavigationDelegate {
 		var parent: WebView
+		private weak var webView: WKWebView?
+		private var isObserving = false
+
 		init(_ parent: WebView) { self.parent = parent }
+
+		deinit {
+			detach()
+		}
+
+		func attach(to webView: WKWebView) {
+			self.webView = webView
+			guard !isObserving else { return }
+			webView.addObserver(self, forKeyPath: #keyPath(WKWebView.estimatedProgress), options: .new, context: nil)
+			webView.addObserver(self, forKeyPath: #keyPath(WKWebView.canGoBack), options: .new, context: nil)
+			webView.addObserver(self, forKeyPath: #keyPath(WKWebView.canGoForward), options: .new, context: nil)
+			isObserving = true
+		}
+
+		func detach() {
+			NotificationCenter.default.removeObserver(self)
+			guard isObserving, let webView else { return }
+			webView.removeObserver(self, forKeyPath: #keyPath(WKWebView.estimatedProgress))
+			webView.removeObserver(self, forKeyPath: #keyPath(WKWebView.canGoBack))
+			webView.removeObserver(self, forKeyPath: #keyPath(WKWebView.canGoForward))
+			isObserving = false
+		}
 
 		override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
 			guard let webView = object as? WKWebView else { return }
-			if keyPath == #keyPath(WKWebView.estimatedProgress) {
-				parent.progress = webView.estimatedProgress
-			} else if keyPath == #keyPath(WKWebView.canGoBack) {
-				parent.canGoBack = webView.canGoBack
-			} else if keyPath == #keyPath(WKWebView.canGoForward) {
-				parent.canGoForward = webView.canGoForward
+			let progress = webView.estimatedProgress
+			let canGoBack = webView.canGoBack
+			let canGoForward = webView.canGoForward
+			DispatchQueue.main.async { [weak self] in
+				guard let self else { return }
+				if keyPath == #keyPath(WKWebView.estimatedProgress) {
+					self.parent.progress = progress
+				} else if keyPath == #keyPath(WKWebView.canGoBack) {
+					self.parent.canGoBack = canGoBack
+				} else if keyPath == #keyPath(WKWebView.canGoForward) {
+					self.parent.canGoForward = canGoForward
+				}
 			}
 		}
 
 		@objc func goBack() {
-			(parentView as? WKWebView)?.goBack()
+			webView?.goBack()
 		}
 		@objc func goForward() {
-			(parentView as? WKWebView)?.goForward()
+			webView?.goForward()
 		}
 		@objc func reload() {
-			(parentView as? WKWebView)?.reload()
-		}
-
-		private var parentView: UIView? {
-			// WKWebView reference from notification not passed; rely on KVO target
-			// This is a simple approach: search the key window for WKWebView
-			return UIApplication.shared.connectedScenes
-				.compactMap { ($0 as? UIWindowScene)?.keyWindow }
-				.first?
-				.rootViewController?.view.subviews.first(where: { $0 is WKWebView })
+			webView?.reload()
 		}
 	}
 }
@@ -103,5 +129,4 @@ private extension Notification.Name {
 	static let webGoForward = Notification.Name("WLEDWebViewGoForward")
 	static let webReload = Notification.Name("WLEDWebViewReload")
 }
-
 

@@ -65,7 +65,7 @@ extension AutomationTemplate {
                 presetName: "Sunrise Glow"
             )
             return Prefill(
-                name: "\(context.device.name) Sunrise",
+                name: "Sunrise",
                 targetDeviceIds: [context.device.id],
                 allowPartialFailure: false,
                 trigger: .sunrise(offsetMinutes: -15),
@@ -95,7 +95,7 @@ extension AutomationTemplate {
                 GradientStop(position: 1.0, hexColor: "#200B02")
             ])
             return Prefill(
-                name: "\(context.device.name) Sunset",
+                name: "Sunset",
                 targetDeviceIds: [context.device.id],
                 allowPartialFailure: true,
                 trigger: .sunset(offsetMinutes: 10),
@@ -182,4 +182,3 @@ extension AutomationTemplate {
         [AutomationTemplate.sunrise, AutomationTemplate.sunset, AutomationTemplate.focus, AutomationTemplate.bedtime]
     }
 }
-

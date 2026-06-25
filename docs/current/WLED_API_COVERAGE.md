@@ -1,5 +1,7 @@
 # WLED API Implementation Coverage Analysis
 
+Last updated: 2026-06-04 (Asia/Hong_Kong)
+
 ## ✅ Implemented Core Functions
 
 ### State Management
@@ -16,20 +18,23 @@
 - ✅ Multi-segment support
 
 ### Effects & Palettes
-- ✅ `fetchEffectMetadata()` - GET `/json/fxdata` - Effect metadata
+- ✅ `fetchEffectNames()` - GET `/json/effects` - Effects list
+- ✅ `fetchFxData()` / effect metadata - GET `/json/fxdata` - Effect metadata
+- ✅ `fetchPaletteNames()` - GET `/json/palettes` - Palettes list
+- ✅ `fetchPalettePreviewPage()` - GET `/json/palx?page=...` - Palette preview pages
 - ✅ `setEffect()` - Apply effect with speed/intensity/palette
-- ⚠️ **MISSING**: `fetchEffects()` - GET `/json/effects` - Effects list
-- ⚠️ **MISSING**: `fetchPalettes()` - GET `/json/palettes` - Palettes list
 
 ### Presets
 - ✅ `fetchPresets()` - GET `/json/presets` - List presets
 - ✅ `savePreset()` - POST `/json/presets` - Save preset
 - ✅ `applyPreset()` - Apply preset with transition
+- ✅ Full `presets.json` rewrite create/delete helpers with preflight, local backup, upload, readback, and verification
 
 ### Playlists
-- ⚠️ **MISSING**: `fetchPlaylists()` - GET `/json/playlists` - List playlists
-- ⚠️ **MISSING**: `savePlaylist()` - POST `/json/playlists` - Save playlist
-- ⚠️ **MISSING**: `applyPlaylist()` - Apply playlist
+- ✅ `fetchPlaylists()` / playlist parsing from WLED preset-store records
+- ✅ `savePlaylist()` / playlist upsert through full `presets.json` rewrite
+- ✅ `applyPlaylist()` / playlist start through WLED state playlist target
+- ✅ Playlist delete through verified full `presets.json` rewrite
 
 ### Configuration
 - ✅ `updateConfig()` - POST `/json/cfg` - Update device config (name)
@@ -50,42 +55,7 @@
 
 ## ⚠️ Missing Standard WLED API Endpoints
 
-### 1. Effects & Palettes Lists
-```swift
-// MISSING: GET /json/effects
-func fetchEffects(for device: WLEDDevice) async throws -> [String] {
-    // Returns array of effect names
-}
-
-// MISSING: GET /json/palettes  
-func fetchPalettes(for device: WLEDDevice) async throws -> [String] {
-    // Returns array of palette names
-}
-```
-
-**Impact**: Low - You have `fetchEffectMetadata()` which provides effect data, but not the simple list. Palettes are missing entirely.
-
-### 2. Playlists Management
-```swift
-// MISSING: GET /json/playlists
-func fetchPlaylists(for device: WLEDDevice) async throws -> [WLEDPlaylist] {
-    // Returns array of playlists
-}
-
-// MISSING: POST /json/playlists
-func savePlaylist(_ playlist: WLEDPlaylist, to device: WLEDDevice) async throws {
-    // Save playlist
-}
-
-// MISSING: Apply playlist via state update
-func applyPlaylist(_ playlistId: Int, to device: WLEDDevice) async throws -> WLEDState {
-    // Apply playlist (uses pl: Int in state update)
-}
-```
-
-**Impact**: Medium - Playlists are useful for automated sequences but not critical for basic control.
-
-### 3. Network Nodes
+### 1. Network Nodes
 ```swift
 // MISSING: GET /json/nodes
 func fetchNodes(for device: WLEDDevice) async throws -> [WLEDNode] {
@@ -95,7 +65,7 @@ func fetchNodes(for device: WLEDDevice) async throws -> [WLEDNode] {
 
 **Impact**: Low - Discovery service handles this differently.
 
-### 4. Time Sync
+### 2. Time Sync
 ```swift
 // MISSING: POST /json/time
 func syncTime(for device: WLEDDevice) async throws {
@@ -105,7 +75,7 @@ func syncTime(for device: WLEDDevice) async throws {
 
 **Impact**: Low - Usually handled automatically.
 
-### 5. WiFi Info (Partial)
+### 3. WiFi Info (Partial)
 ```swift
 // PARTIAL: GET /json/info (used in WiFiSetupView, not in WLEDAPIService)
 // Should be centralized in WLEDAPIService
@@ -116,7 +86,7 @@ func getWiFiInfo(for device: WLEDDevice) async throws -> WiFiInfo {
 
 **Impact**: Low - Exists but not centralized.
 
-### 6. File System (Advanced)
+### 4. File System (Advanced)
 ```swift
 // MISSING: GET /json/fs
 func getFileSystem(for device: WLEDDevice) async throws -> FileSystemInfo {
@@ -126,7 +96,7 @@ func getFileSystem(for device: WLEDDevice) async throws -> FileSystemInfo {
 
 **Impact**: Low - Advanced feature, rarely needed.
 
-### 7. Peers Discovery
+### 5. Peers Discovery
 ```swift
 // MISSING: GET /json/peers
 func fetchPeers(for device: WLEDDevice) async throws -> [WLEDPeer] {
@@ -144,12 +114,14 @@ func fetchPeers(for device: WLEDDevice) async throws -> [WLEDPeer] {
 
 ### Advanced Features: ✅ 95%
 - Night light, UDP sync, batch operations, WebSocket
-- Only missing: Playlists (which has model defined but no API methods)
+- Playlists are implemented through WLED preset-store records and state playlist apply.
+- Remaining advanced gaps are mostly optional metadata/network/file-system endpoints.
 
-### Metadata: ⚠️ 80%
+### Metadata: ✅ 100% for current UI needs
+- Effect names: ✅
 - Effect metadata: ✅
-- Effects list: ❌
-- Palettes list: ❌
+- Palette names: ✅
+- Palette preview pages: ✅
 
 ### Configuration: ✅ 100%
 - Device config, LED config, WiFi (partial)
@@ -161,40 +133,19 @@ func fetchPeers(for device: WLEDDevice) async throws -> [WLEDPeer] {
 
 ## 🎯 Recommendations
 
-### High Priority (if needed)
-1. **Add `fetchPalettes()`** - Palettes are commonly used with effects
-   ```swift
-   func fetchPalettes(for device: WLEDDevice) async throws -> [String]
-   ```
-
-2. **Add `fetchEffects()`** - Simple effects list (complement to fxdata)
-   ```swift
-   func fetchEffects(for device: WLEDDevice) async throws -> [String]
-   ```
-
-### Medium Priority (nice to have)
-3. **Complete Playlists** - Add API methods for playlist management
-   ```swift
-   func fetchPlaylists(for device: WLEDDevice) async throws -> [WLEDPlaylist]
-   func savePlaylist(_ playlist: WLEDPlaylist, to device: WLEDDevice) async throws
-   func applyPlaylist(_ playlistId: Int, to device: WLEDDevice) async throws -> WLEDState
-   ```
-
 ### Low Priority (optional)
-4. Centralize WiFi info fetching in WLEDAPIService
-5. Add time sync if needed
-6. Add file system access if custom presets needed
+1. Centralize WiFi info fetching in WLEDAPIService if more screens need the same payload.
+2. Add explicit `/json/time` sync only if field devices need app-forced time correction.
+3. Add `/json/fs` if custom preset/effect file management becomes a customer feature.
+4. Add `/json/nodes` or `/json/peers` only if native WLED peer browsing becomes more useful than the existing discovery service.
 
 ## ✅ Conclusion
 
-**You have implemented ~90-95% of essential WLED functions correctly!**
+**The app implements the essential WLED functions needed for production control, saves, playlists, and on-device automation.**
 
 The missing pieces are mostly:
-- **Palettes list** (highly used with effects)
-- **Effects list** (simple complement to fxdata)
-- **Playlists** (nice to have for automation)
+- **Optional network/filesystem metadata endpoints** (`/json/nodes`, `/json/peers`, `/json/fs`)
 
-Everything else (core control, presets, effects, segments, configuration) is **fully implemented and correctly done**.
+Everything else in the core flow (power, brightness, color, CCT, effects, segments, presets, playlists, timer-backed automations, and verified preset-store rewrites) is implemented for the current app behavior.
 
 The implementation follows WLED API specifications correctly and handles edge cases well (validation, error handling, caching, batch operations).
-

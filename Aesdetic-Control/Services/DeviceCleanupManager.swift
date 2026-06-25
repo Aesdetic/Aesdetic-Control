@@ -16,10 +16,10 @@ final class DeviceCleanupManager: ObservableObject {
     private let maxPresetStoreDeleteAttempts = 3
     private let cleanupEnabled = true
     private let maxDeletesPerPass = 1
-    // Keep a single fixed cadence for WLED-style one-by-one preset-store deletes.
-    private let interPresetStoreDeleteDelayNanoseconds: UInt64 = 1_200_000_000
+    // Keep a short fixed cadence for WLED-style preset-store rewrites without making foreground deletes feel stuck.
+    private let interPresetStoreDeleteDelayNanoseconds: UInt64 = 500_000_000
     private let interTimerDeleteDelayNanoseconds: UInt64 = 180_000_000
-    private let presetStoreDeleteCoalesceWindowSeconds: TimeInterval = 0.5
+    private let presetStoreDeleteCoalesceWindowSeconds: TimeInterval = 0.2
     private var lastDeleteAttemptAtByCadenceKey: [String: Date] = [:]
     private var activeDeleteLeaseByDeviceId: Set<String> = []
     private var scheduledProcessTasksByDeviceId: [String: Task<Void, Never>] = [:]
@@ -152,6 +152,51 @@ final class DeviceCleanupManager: ObservableObject {
         save()
         logger.info(
             "cleanup.preset_store_delete.enqueued device=\(deviceId, privacy: .public) playlists=\(normalizedPlaylistIds, privacy: .public) presets=\(normalizedPresetIds, privacy: .public) nextAttemptAt=\(requestedNextAttemptAt.ISO8601Format(), privacy: .public)"
+        )
+        scheduleProcessQueue(for: deviceId, at: requestedNextAttemptAt)
+    }
+
+    func enqueueVerifiedAutomationTimerDelete(
+        deviceId: String,
+        slot: Int,
+        leaseId: UUID? = nil
+    ) {
+        guard cleanupEnabled else { return }
+        guard (0...9).contains(slot) else { return }
+        let requestedNextAttemptAt = Date()
+        if let index = pendingDeletes.firstIndex(where: {
+            $0.type == .timer
+                && $0.deviceId == deviceId
+                && $0.source == .automation
+                && $0.leaseId == leaseId
+                && $0.deadLetteredAt == nil
+        }) {
+            pendingDeletes[index].ids = Array(Set(pendingDeletes[index].ids + [slot])).sorted()
+            pendingDeletes[index].lastAttempt = Date()
+            pendingDeletes[index].nextAttemptAt = min(pendingDeletes[index].nextAttemptAt ?? requestedNextAttemptAt, requestedNextAttemptAt)
+            pendingDeletes[index].verificationRequired = true
+            pendingDeletes[index].lastError = nil
+            save()
+            logger.info(
+                "cleanup.timer.verified_automation_merged device=\(deviceId, privacy: .public) ids=\(self.pendingDeletes[index].ids, privacy: .public)"
+            )
+            scheduleProcessQueue(for: deviceId, at: pendingDeletes[index].nextAttemptAt)
+            return
+        }
+
+        let delete = PendingDeviceDelete(
+            type: .timer,
+            deviceId: deviceId,
+            ids: [slot],
+            nextAttemptAt: requestedNextAttemptAt,
+            source: .automation,
+            leaseId: leaseId,
+            verificationRequired: true
+        )
+        pendingDeletes.append(delete)
+        save()
+        logger.info(
+            "cleanup.timer.verified_automation_enqueued device=\(deviceId, privacy: .public) slot=\(slot, privacy: .public)"
         )
         scheduleProcessQueue(for: deviceId, at: requestedNextAttemptAt)
     }
@@ -313,6 +358,13 @@ final class DeviceCleanupManager: ObservableObject {
                 let succeeded = Set(outcome.succeededIds)
                 if !succeeded.isEmpty {
                     entry.ids = entry.ids.filter { !succeeded.contains($0) }
+                    if entry.type == .presetStore {
+                        let remainingPlaylistIds = (entry.playlistIds ?? []).filter { !succeeded.contains($0) }
+                        let remainingPresetIds = (entry.presetIds ?? []).filter { !succeeded.contains($0) }
+                        entry.playlistIds = remainingPlaylistIds
+                        entry.presetIds = remainingPresetIds
+                        entry.ids = Array(Set(remainingPlaylistIds + remainingPresetIds)).sorted()
+                    }
                 }
                 entry.lastAttempt = Date()
 
@@ -746,14 +798,14 @@ final class DeviceCleanupManager: ObservableObject {
         device: WLEDDevice,
         playlistIds: [Int],
         presetIds: [Int],
-        timeout: TimeInterval = 12
+        timeout: TimeInterval = 45
     ) async -> Bool {
         let normalizedPlaylistIds = Set(playlistIds.filter { (1...250).contains($0) })
         let normalizedPresetIds = Set(presetIds.filter { (1...250).contains($0) })
         let deadline = Date().addingTimeInterval(timeout)
 
         while Date() < deadline {
-            if device.isOnline {
+            if device.isOnline, !isDeleteLeaseActive(deviceId: device.id) {
                 await processQueue(for: device.id)
             }
 
@@ -765,7 +817,7 @@ final class DeviceCleanupManager: ObservableObject {
                 return true
             }
 
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
 
         logger.warning(

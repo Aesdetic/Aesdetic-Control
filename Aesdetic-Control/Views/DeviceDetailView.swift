@@ -11,6 +11,8 @@ struct DeviceDetailView: View {
     private let backgroundStyle: DeviceDetailBackgroundStyle
     private let containerCornerRadius: CGFloat
     private let presentationProgress: CGFloat
+    private let delaysContentUntilExpanded: Bool
+    private let contentRevealProgress: CGFloat?
     private let onClose: (() -> Void)?
     @ObservedObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
@@ -19,6 +21,7 @@ struct DeviceDetailView: View {
     // State variables for new features
     @State private var showSettings: Bool = false
     @State private var settingsInitialCategory: ComprehensiveSettingsView.SettingsCategory = .overview
+    @State private var tabBeforeSettings: String = "Light"
     @State private var showProductSetup: Bool = false
     @State private var showSaveSceneDialog: Bool = false
     @State private var showAddAutomation: Bool = false
@@ -59,12 +62,16 @@ struct DeviceDetailView: View {
         backgroundStyle: DeviceDetailBackgroundStyle = .frosted,
         containerCornerRadius: CGFloat = DeviceDetailPresentation.expandedCornerRadius,
         presentationProgress: CGFloat = 1,
+        delaysContentUntilExpanded: Bool = false,
+        contentRevealProgress: CGFloat? = nil,
         onClose: (() -> Void)? = nil
     ) {
         self.device = device
         self.backgroundStyle = backgroundStyle
         self.containerCornerRadius = containerCornerRadius
         self.presentationProgress = presentationProgress
+        self.delaysContentUntilExpanded = delaysContentUntilExpanded
+        self.contentRevealProgress = contentRevealProgress
         self.onClose = onClose
         self.viewModel = viewModel
         _selectedTab = State(initialValue: Self.normalizedTabName(initialTab))
@@ -307,15 +314,6 @@ struct DeviceDetailView: View {
                 EditDeviceInfoDialog(device: activeDevice)
                     .environmentObject(viewModel)
             }
-            .sheet(isPresented: $showSettings) {
-                NavigationStack {
-                    ComprehensiveSettingsView(device: activeDevice, initialCategory: settingsInitialCategory)
-                        .environmentObject(viewModel)
-                }
-                .presentationDetents([.large])
-                .presentationDragIndicator(.hidden)
-                .presentationBackground(.ultraThinMaterial)
-            }
             .sheet(isPresented: $showSaveColorPresetDialog) {
                 SaveColorPresetDialog(
                     device: activeDevice,
@@ -357,12 +355,25 @@ struct DeviceDetailView: View {
 
     private var detailContentOpacity: Double {
         guard onClose != nil else { return 1 }
+        if delaysContentUntilExpanded {
+            if let contentRevealProgress {
+                let normalized = min(1, max(0, contentRevealProgress))
+                let eased = normalized * normalized * (3 - (2 * normalized))
+                return Double(eased)
+            }
+            let normalized = min(1, max(0, (presentationProgress - 0.78) / 0.16))
+            let eased = normalized * normalized * (3 - (2 * normalized))
+            return Double(eased)
+        }
         let normalized = (presentationProgress - 0.36) / 0.42
         return Double(min(1, max(0, normalized)))
     }
 
     private var detailContentOffset: CGFloat {
         guard onClose != nil else { return 0 }
+        if delaysContentUntilExpanded {
+            return 0
+        }
         return (1 - min(1, max(0, presentationProgress))) * 18
     }
 
@@ -382,25 +393,47 @@ struct DeviceDetailView: View {
                 .padding(.top, onClose == nil ? 20 : 10)
                 .padding(.bottom, 10)
 
-            tabNavigationBar
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 2)
+            if showSettings {
+                settingsModeHeader
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
+            } else if !showAddAutomation {
+                tabNavigationBar
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
+            }
 
-            if showAddAutomation {
+            if showSettings {
                 GeometryReader { proxy in
-                    embeddedAutomationEditor
-                        .id(automationEditorIdentity)
+                    embeddedSettingsContent
                         .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                        .clipped()
                 }
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
-                .padding(.bottom, onClose == nil ? 0 : 88)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.asymmetric(
                     insertion: .move(edge: .trailing).combined(with: .opacity),
                     removal: .move(edge: .leading).combined(with: .opacity)
                 ))
+            } else if showAddAutomation {
+                embeddedAutomationEditor
+                    .id(automationEditorIdentity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .move(edge: .bottom).combined(with: .opacity)
+                    ))
             } else {
                 ScrollView {
                     tabContent
@@ -772,6 +805,9 @@ struct DeviceDetailView: View {
             Button(action: { openSettings(.overview) }) {
                 Label("Settings", systemImage: "gearshape")
             }
+            Button(action: { openSettings(.timeSchedules) }) {
+                Label("Time & Schedules", systemImage: "clock")
+            }
             Button(action: { openSettings(.integrations) }) {
                 Label("Integrations", systemImage: "link")
             }
@@ -813,8 +849,21 @@ struct DeviceDetailView: View {
     }
 
     private func openSettings(_ category: ComprehensiveSettingsView.SettingsCategory) {
+        if !showSettings {
+            tabBeforeSettings = selectedTab
+        }
         settingsInitialCategory = category
-        showSettings = true
+        withAnimation(.easeInOut(duration: 0.22)) {
+            showAddAutomation = false
+            showSettings = true
+        }
+    }
+
+    private func closeSettingsMode() {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            showSettings = false
+            selectedTab = tabBeforeSettings
+        }
     }
 
     @ViewBuilder
@@ -829,8 +878,7 @@ struct DeviceDetailView: View {
 
     @ViewBuilder
     private var detailLiquidGlassBackground: some View {
-        Color.clear
-            .appLiquidGlass(role: .highContrast, cornerRadius: detailCardCornerRadius)
+        FolderGlassContainerBackground(cornerRadius: detailCardCornerRadius, expanded: true)
     }
 
     private var detailFrostedBackground: some View {
@@ -1120,6 +1168,50 @@ struct DeviceDetailView: View {
 
 
     // MARK: - Tab Navigation Bar
+
+    private var settingsModeHeader: some View {
+        HStack(spacing: 10) {
+            Button(action: closeSettingsMode) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                    Text("Controls")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                }
+                .foregroundColor(.white.opacity(0.9))
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.12))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back to controls")
+
+            Spacer()
+
+            Text("Settings")
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .foregroundColor(.white.opacity(0.68))
+        }
+        .frame(minHeight: 48)
+    }
+
+    private var embeddedSettingsContent: some View {
+        ComprehensiveSettingsView(
+            device: activeDevice,
+            initialCategory: settingsInitialCategory,
+            presentationMode: .embedded,
+            contentBottomPadding: onClose == nil ? 20 : 152
+        )
+        .environmentObject(viewModel)
+        .id(settingsInitialCategory)
+    }
 
     private var tabNavigationBar: some View {
         HStack(spacing: 4) {
@@ -1559,7 +1651,7 @@ struct DeviceDetailView: View {
     }
 
     private var defaultAutomationName: String {
-        "Automation \(automationStore.automations.count + 1)"
+        AutomationDefaultNaming.defaultName(for: automationStore.automations)
     }
 
     private func automation(from prefill: AutomationTemplate.Prefill, templateName: String, context: AutomationTemplate.Context) -> Automation? {

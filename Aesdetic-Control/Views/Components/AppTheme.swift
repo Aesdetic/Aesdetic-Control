@@ -30,17 +30,14 @@ enum AppTheme {
     static func tokens(for scheme: ColorScheme) -> AppSemanticTheme {
         let surface = GlassTheme.surfaces(for: scheme)
         let text = GlassTheme.text(for: scheme)
-        let lightPrimary = Color(red: 95.0 / 255.0, green: 91.0 / 255.0, blue: 87.0 / 255.0)
-        let lightSecondary = Color(red: 95.0 / 255.0, green: 91.0 / 255.0, blue: 87.0 / 255.0).opacity(0.78)
-
         return AppSemanticTheme(
             surface: surface.cardFillInactive,
             surfaceElevated: surface.cardFillActive,
             surfaceMuted: surface.panelFill,
-            textPrimary: scheme == .dark ? text.pagePrimaryText : lightPrimary,
-            textSecondary: scheme == .dark ? text.pageSecondaryText : lightSecondary,
-            textTertiary: scheme == .dark ? text.pageTertiaryText : lightSecondary.opacity(0.82),
-            accent: scheme == .dark ? .white : lightPrimary,
+            textPrimary: text.pagePrimaryText,
+            textSecondary: text.pageSecondaryText,
+            textTertiary: text.pageTertiaryText,
+            accent: scheme == .dark ? .white : text.pagePrimaryText,
             divider: surface.separator,
             status: AppStatusColors(
                 positive: .green,

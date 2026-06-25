@@ -8,6 +8,11 @@ struct AutomationCreationSheet: View {
     
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     @ObservedObject private var scenesStore = ScenesStore.shared
+    @ObservedObject private var automationStore = AutomationStore.shared
+
+    private var defaultAutomationName: String {
+        AutomationDefaultNaming.defaultName(for: automationStore.automations)
+    }
     
     var body: some View {
         if deviceViewModel.devices.isEmpty {
@@ -63,6 +68,7 @@ struct AutomationCreationSheet: View {
                 effectOptions: effects,
                 availableDevices: deviceViewModel.devices,
                 viewModel: deviceViewModel,
+                defaultName: pendingTemplate == nil ? defaultAutomationName : nil,
                 templatePrefill: prefill
             ) { automation in
                 AutomationStore.shared.add(automation)
