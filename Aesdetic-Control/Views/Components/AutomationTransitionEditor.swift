@@ -42,6 +42,8 @@ struct AutomationTransitionEditor: View {
     @State private var stopWhiteLevelsB: [UUID: Double] = [:]
     @State private var selectedStartPresetId: UUID?
     @State private var selectedEndPresetId: UUID?
+    @State private var selectedStartRecoveredPresetId: Int?
+    @State private var selectedEndRecoveredPresetId: Int?
     @State private var durationMinutesPart: Int = 1
     @State private var durationSecondsPart: Int = 0
     @State private var isApplyingTransition: Bool = false
@@ -112,6 +114,15 @@ struct AutomationTransitionEditor: View {
     
     private var colorPresets: [ColorPreset] {
         presetsStore.colorPresets
+    }
+
+    private var recoveredColorPresets: [WLEDRecoveredColorPreset] {
+        WLEDDevicePresetRecovery.recoveredColorPresets(
+            for: device.id,
+            presets: viewModel.presets(for: device),
+            playlists: viewModel.playlists(for: device),
+            localColorPresets: colorPresets
+        )
     }
     
     private var transitionPresets: [TransitionPreset] {
@@ -217,6 +228,10 @@ struct AutomationTransitionEditor: View {
         return Button {
             isApplyingTransitionPreset = true
             selectedTransitionPresetId = preset.id
+            selectedStartPresetId = nil
+            selectedEndPresetId = nil
+            selectedStartRecoveredPresetId = nil
+            selectedEndRecoveredPresetId = nil
             startGradient = preset.gradientA
             endGradient = preset.gradientB
             startBrightness = Double(preset.brightnessA)
@@ -371,7 +386,7 @@ struct AutomationTransitionEditor: View {
                 Text("0:00")
                 Spacer()
                 Text("\(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) recommended")
-                    .foregroundColor(.orange.opacity(0.9))
+                    .foregroundColor(.white.opacity(0.9))
                 Spacer()
                 Text(formatDuration(Double(maxDurationSeconds)))
             }
@@ -381,7 +396,7 @@ struct AutomationTransitionEditor: View {
             if transitionExceedsRecommendedMax {
                 Text("Above \(TransitionDurationPicker.clockString(seconds: Double(TransitionDurationPicker.recommendedMaxSeconds))) may reduce automation reliability and increase preset storage use.")
                     .font(AppTypography.style(.caption2))
-                    .foregroundColor(.orange.opacity(0.9))
+                    .foregroundColor(.white.opacity(0.9))
             }
         }
     }
@@ -405,7 +420,7 @@ struct AutomationTransitionEditor: View {
                 if profile.wasCoarsened {
                     Text("Auto-adjusted from \(Int(profile.baseLegSeconds))s to \(Int(profile.legSeconds))s legs to fit storage.")
                         .font(AppTypography.style(.caption2))
-                        .foregroundColor(.orange.opacity(0.92))
+                        .foregroundColor(.white.opacity(0.92))
                 }
                 Text(profile.fitsStorage ? "Fits available storage." : "Not enough saved-entry space. Reduce duration or free preset slots.")
                     .font(AppTypography.style(.caption2, weight: .semibold))
@@ -448,6 +463,7 @@ struct AutomationTransitionEditor: View {
                 .tint(.white)
                 .onChange(of: startBrightness) { _, _ in
                     clearTransitionPresetSelectionForManualEdit()
+                    clearColorPresetSelection(for: .start)
                     if previewEnabled {
                         schedulePreview(target: .start)
                     }
@@ -466,6 +482,7 @@ struct AutomationTransitionEditor: View {
                 },
                 onTapAnywhere: { t, _ in
                     clearTransitionPresetSelectionForManualEdit()
+                    clearColorPresetSelection(for: .start)
                     let color = GradientSampler.sampleColor(at: t, stops: startGradient.stops, interpolation: startGradient.interpolation)
                     let new = GradientStop(position: t, hexColor: color.toHex())
                     var updatedStops = startGradient.stops
@@ -518,6 +535,7 @@ struct AutomationTransitionEditor: View {
                 },
                 onStopsChanged: { stops, phase in
                     clearTransitionPresetSelectionForManualEdit()
+                    clearColorPresetSelection(for: .start)
                     startGradient = LEDGradient(stops: stops, interpolation: startGradient.interpolation)
                     let stopIds = Set(stops.map { $0.id })
                     stopTemperaturesA = stopTemperaturesA.filter { stopIds.contains($0.key) }
@@ -531,7 +549,7 @@ struct AutomationTransitionEditor: View {
             )
             .frame(height: 56)
             
-            if !colorPresets.isEmpty {
+            if !colorPresets.isEmpty || !recoveredColorPresets.isEmpty {
                 colorPresetSelector(target: .start)
             }
             
@@ -570,6 +588,7 @@ struct AutomationTransitionEditor: View {
                 .tint(.white)
                 .onChange(of: endBrightness) { _, _ in
                     clearTransitionPresetSelectionForManualEdit()
+                    clearColorPresetSelection(for: .end)
                     if previewEnabled {
                         schedulePreview(target: .end)
                     }
@@ -588,6 +607,7 @@ struct AutomationTransitionEditor: View {
                 },
                 onTapAnywhere: { t, _ in
                     clearTransitionPresetSelectionForManualEdit()
+                    clearColorPresetSelection(for: .end)
                     let color = GradientSampler.sampleColor(at: t, stops: endGradient.stops, interpolation: endGradient.interpolation)
                     let new = GradientStop(position: t, hexColor: color.toHex())
                     var updatedStops = endGradient.stops
@@ -640,6 +660,7 @@ struct AutomationTransitionEditor: View {
                 },
                 onStopsChanged: { stops, phase in
                     clearTransitionPresetSelectionForManualEdit()
+                    clearColorPresetSelection(for: .end)
                     endGradient = LEDGradient(stops: stops, interpolation: endGradient.interpolation)
                     let stopIds = Set(stops.map { $0.id })
                     stopTemperaturesB = stopTemperaturesB.filter { stopIds.contains($0.key) }
@@ -653,7 +674,7 @@ struct AutomationTransitionEditor: View {
             )
             .frame(height: 56)
             
-            if !colorPresets.isEmpty {
+            if !colorPresets.isEmpty || !recoveredColorPresets.isEmpty {
                 colorPresetSelector(target: .end)
             }
             
@@ -670,6 +691,9 @@ struct AutomationTransitionEditor: View {
             HStack(spacing: 7) {
                 ForEach(colorPresets) { preset in
                     colorPresetChip(preset: preset, target: target)
+                }
+                ForEach(recoveredColorPresets) { preset in
+                    recoveredColorPresetChip(preset: preset, target: target)
                 }
             }
             .padding(.horizontal, 2)
@@ -690,6 +714,7 @@ struct AutomationTransitionEditor: View {
             clearTransitionPresetSelectionForManualEdit()
             if target == .start {
                 selectedStartPresetId = preset.id
+                selectedStartRecoveredPresetId = nil
                 startGradient = LEDGradient(stops: preset.gradientStops, interpolation: preset.gradientInterpolation ?? .linear)
                 startBrightness = Double(preset.brightness)
                 stopTemperaturesA = preset.temperature.map { temp in
@@ -702,6 +727,7 @@ struct AutomationTransitionEditor: View {
                 startWhiteLevel = preset.whiteLevel
             } else {
                 selectedEndPresetId = preset.id
+                selectedEndRecoveredPresetId = nil
                 endGradient = LEDGradient(stops: preset.gradientStops, interpolation: preset.gradientInterpolation ?? .linear)
                 endBrightness = Double(preset.brightness)
                 stopTemperaturesB = preset.temperature.map { temp in
@@ -729,6 +755,50 @@ struct AutomationTransitionEditor: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(preset.name)
+    }
+
+    private func recoveredColorPresetChip(preset: WLEDRecoveredColorPreset, target: GradientTarget) -> some View {
+        let isSelected = (target == .start && selectedStartRecoveredPresetId == preset.id)
+            || (target == .end && selectedEndRecoveredPresetId == preset.id)
+        return Button {
+            clearTransitionPresetSelectionForManualEdit()
+            let sortedStops = preset.gradient.stops.sorted { $0.position < $1.position }
+            guard !sortedStops.isEmpty else { return }
+            if target == .start {
+                selectedStartPresetId = nil
+                selectedStartRecoveredPresetId = preset.id
+                startGradient = LEDGradient(stops: sortedStops, interpolation: preset.gradient.interpolation)
+                startBrightness = Double(preset.brightness)
+                stopTemperaturesA = [:]
+                stopWhiteLevelsA = [:]
+                startTemperature = nil
+                startWhiteLevel = nil
+            } else {
+                selectedEndPresetId = nil
+                selectedEndRecoveredPresetId = preset.id
+                endGradient = LEDGradient(stops: sortedStops, interpolation: preset.gradient.interpolation)
+                endBrightness = Double(preset.brightness)
+                stopTemperaturesB = [:]
+                stopWhiteLevelsB = [:]
+                endTemperature = nil
+                endWhiteLevel = nil
+            }
+
+            if previewEnabled {
+                schedulePreview(target: target)
+            }
+        } label: {
+            presetSwatchGradient(stops: preset.gradient.stops)
+                .opacity(0.72)
+                .frame(width: 48, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(presetSwatchHighlight(cornerRadius: 6))
+                .overlay(presetSwatchSelection(isSelected: isSelected, cornerRadius: 6))
+                .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.0), radius: 4, x: 0, y: 2)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.displayName)
     }
 
     private func presetSwatchGradient(stops: [GradientStop]) -> LinearGradient {
@@ -793,6 +863,7 @@ struct AutomationTransitionEditor: View {
             cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, whiteLevel in
                 clearTransitionPresetSelectionForManualEdit()
+                clearColorPresetSelection(for: target)
                 if target == .start {
                     guard let idx = startGradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }
                     var updatedStops = startGradient.stops
@@ -847,6 +918,7 @@ struct AutomationTransitionEditor: View {
             },
             onRemove: {
                 clearTransitionPresetSelectionForManualEdit()
+                clearColorPresetSelection(for: target)
                 if target == .start {
                     if startGradient.stops.count > 1 {
                         var updatedStops = startGradient.stops
@@ -959,6 +1031,17 @@ struct AutomationTransitionEditor: View {
     private func clearTransitionPresetSelectionForManualEdit() {
         guard !isApplyingTransitionPreset, !isSyncingDurationParts else { return }
         selectedTransitionPresetId = nil
+    }
+
+    private func clearColorPresetSelection(for target: GradientTarget) {
+        switch target {
+        case .start:
+            selectedStartPresetId = nil
+            selectedStartRecoveredPresetId = nil
+        case .end:
+            selectedEndPresetId = nil
+            selectedEndRecoveredPresetId = nil
+        }
     }
 
     private func formatDuration(_ seconds: Double) -> String {

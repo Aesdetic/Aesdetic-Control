@@ -27,6 +27,7 @@ struct AutomationEffectEditor: View {
     @State private var showWheel: Bool = false
     @State private var wheelInitial: Color = .white
     @State private var selectedColorPresetId: UUID? = nil
+    @State private var selectedRecoveredColorPresetId: Int? = nil
     @State private var stagedSpeedValue: Double?
     @State private var stagedIntensityValue: Double?
     @State private var isAdjustingSpeed = false
@@ -62,6 +63,15 @@ struct AutomationEffectEditor: View {
     
     private var colorPresets: [ColorPreset] {
         presetsStore.colorPresets
+    }
+
+    private var recoveredColorPresets: [WLEDRecoveredColorPreset] {
+        WLEDDevicePresetRecovery.recoveredColorPresets(
+            for: device.id,
+            presets: viewModel.presets(for: device),
+            playlists: viewModel.playlists(for: device),
+            localColorPresets: colorPresets
+        )
     }
     
     private var effectPresets: [WLEDEffectPreset] {
@@ -181,6 +191,8 @@ struct AutomationEffectEditor: View {
         let isSelected = selectedEffectPresetId == preset.id
         return Button {
             selectedEffectPresetId = preset.id
+            selectedColorPresetId = nil
+            selectedRecoveredColorPresetId = nil
             effectId = preset.effectId
             brightness = Double(preset.brightness)
             speed = preset.speed ?? 128
@@ -247,6 +259,8 @@ struct AutomationEffectEditor: View {
                 .tint(.white)
                 .onChange(of: effectId) { _, _ in
                     selectedEffectPresetId = nil
+                    selectedColorPresetId = nil
+                    selectedRecoveredColorPresetId = nil
                     updateGradientForSlotCount()
                 }
             }
@@ -273,6 +287,7 @@ struct AutomationEffectEditor: View {
                         }
                     },
                     onTapAnywhere: { t, _ in
+                        clearColorPresetSelectionForManualEdit()
                         let color = GradientSampler.sampleColor(at: t, stops: gradient.stops, interpolation: gradient.interpolation)
                         let newStop = GradientStop(position: t, hexColor: color.toHex())
                         var updatedStops = gradient.stops
@@ -290,6 +305,7 @@ struct AutomationEffectEditor: View {
                         }
                     },
                     onStopsChanged: { stops, phase in
+                        clearColorPresetSelectionForManualEdit()
                         gradient = LEDGradient(stops: stops, interpolation: gradient.interpolation)
                         if previewEnabled && phase == .ended {
                             Task {
@@ -300,7 +316,7 @@ struct AutomationEffectEditor: View {
                 )
                 .frame(height: 56)
                 
-                if !colorPresets.isEmpty {
+                if !colorPresets.isEmpty || !recoveredColorPresets.isEmpty {
                     colorPresetSelector
                 }
                 
@@ -346,6 +362,9 @@ struct AutomationEffectEditor: View {
                 ForEach(colorPresets) { preset in
                     colorPresetChip(preset: preset)
                 }
+                ForEach(recoveredColorPresets) { preset in
+                    recoveredColorPresetChip(preset: preset)
+                }
             }
             .padding(.horizontal, 2)
             .padding(.vertical, 2)
@@ -357,6 +376,7 @@ struct AutomationEffectEditor: View {
         let isSelected = selectedColorPresetId == preset.id
         return Button {
             selectedColorPresetId = preset.id
+            selectedRecoveredColorPresetId = nil
             let sortedStops = preset.gradientStops.sorted { $0.position < $1.position }
             guard !sortedStops.isEmpty else { return }
             gradient = LEDGradient(
@@ -382,6 +402,39 @@ struct AutomationEffectEditor: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(preset.name)
+    }
+
+    private func recoveredColorPresetChip(preset: WLEDRecoveredColorPreset) -> some View {
+        let isSelected = selectedRecoveredColorPresetId == preset.id
+        return Button {
+            selectedColorPresetId = nil
+            selectedRecoveredColorPresetId = preset.id
+            let sortedStops = preset.gradient.stops.sorted { $0.position < $1.position }
+            guard !sortedStops.isEmpty else { return }
+            gradient = LEDGradient(
+                stops: sortedStops,
+                interpolation: preset.gradient.interpolation
+            )
+            brightness = Double(preset.brightness)
+            updateGradientForSlotCount()
+
+            if previewEnabled {
+                Task {
+                    await previewEffect()
+                }
+            }
+        } label: {
+            presetSwatchGradient(stops: preset.gradient.stops)
+                .opacity(0.72)
+                .frame(width: 48, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(presetSwatchHighlight(cornerRadius: 6))
+                .overlay(presetSwatchSelection(isSelected: isSelected, cornerRadius: 6))
+                .shadow(color: Color.black.opacity(isSelected ? 0.08 : 0.0), radius: 4, x: 0, y: 2)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.displayName)
     }
 
     private func effectPresetGradient(preset: WLEDEffectPreset) -> LinearGradient {
@@ -457,6 +510,7 @@ struct AutomationEffectEditor: View {
             cctKelvinRange: viewModel.cctKelvinRange(for: device),
             onColorChange: { color, temperature, _ in
                 guard let idx = gradient.stops.firstIndex(where: { $0.id == selectedId }) else { return }
+                clearColorPresetSelectionForManualEdit()
                 var updatedStops = gradient.stops
                 if let temp = temperature {
                     updatedStops[idx].hexColor = Color.hexColor(fromCCTTemperature: temp)
@@ -473,6 +527,7 @@ struct AutomationEffectEditor: View {
             },
             onRemove: {
                 if canEditGradient && gradient.stops.count > 1 {
+                    clearColorPresetSelectionForManualEdit()
                     var updatedStops = gradient.stops
                     updatedStops.removeAll { $0.id == selectedId }
                     gradient = LEDGradient(stops: updatedStops, interpolation: gradient.interpolation)
@@ -666,6 +721,11 @@ struct AutomationEffectEditor: View {
             }
             gradient = LEDGradient(stops: generatedStops, interpolation: gradient.interpolation)
         }
+    }
+
+    private func clearColorPresetSelectionForManualEdit() {
+        selectedColorPresetId = nil
+        selectedRecoveredColorPresetId = nil
     }
     
     // MARK: - Preview Functions

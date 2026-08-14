@@ -17,6 +17,11 @@ final class AccessibilityTests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["--uitesting"]
         app.launch()
+
+        let devicesTab = app.buttons["Devices"]
+        XCTAssertTrue(devicesTab.waitForExistence(timeout: 8), "Devices tab should be available")
+        devicesTab.tap()
+        XCTAssertTrue(app.staticTexts["UI Test Device"].waitForExistence(timeout: 8), "Missing deterministic UI-test device")
     }
     
     override func tearDownWithError() throws {
@@ -27,7 +32,8 @@ final class AccessibilityTests: XCTestCase {
     
     /// Wait for device list to appear
     func waitForDeviceList(timeout: TimeInterval = 10.0) {
-        let deviceListExists = app.otherElements["DeviceControlView"].waitForExistence(timeout: timeout) ||
+        let deviceListExists = app.staticTexts["UI Test Device"].waitForExistence(timeout: timeout) ||
+                              app.otherElements["DeviceControlView"].waitForExistence(timeout: timeout) ||
                               app.staticTexts["No WLED Devices Found"].waitForExistence(timeout: timeout) ||
                               app.staticTexts["Discovering WLED Devices"].waitForExistence(timeout: timeout)
         
@@ -35,17 +41,17 @@ final class AccessibilityTests: XCTestCase {
     }
     
     /// Navigate to device detail view
-    func navigateToDeviceDetail() {
+    func navigateToDeviceDetail() throws {
         waitForDeviceList()
         Thread.sleep(forTimeInterval: 2.0)
         
-        let deviceCards = app.buttons.matching(identifier: "DeviceCard")
-        if deviceCards.count > 0 {
-            deviceCards.element(boundBy: 0).tap()
-            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 5.0),
+        let cardName = app.staticTexts["UI Test Device"]
+        if cardName.exists {
+            cardName.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["device-options-menu"].waitForExistence(timeout: 5.0),
                          "Device detail view should appear")
         } else {
-            XCTSkip("No devices found - cannot test accessibility without devices")
+            throw XCTSkip("No devices found - cannot test accessibility without devices")
         }
     }
     
@@ -87,20 +93,9 @@ final class AccessibilityTests: XCTestCase {
         waitForDeviceList()
         Thread.sleep(forTimeInterval: 2.0)
         
-        // Find device cards
-        let deviceCards = app.buttons.matching(identifier: "DeviceCard")
-        if deviceCards.count > 0 {
-            let card = deviceCards.element(boundBy: 0)
-            
-            // Verify device card has accessibility
-            XCTAssertTrue(card.exists, "Device card should exist")
-            
-            // Device name should be accessible
-            let deviceName = card.staticTexts.firstMatch
-            if deviceName.exists {
-                XCTAssertFalse(deviceName.label.isEmpty, "Device name should have label")
-            }
-        }
+        let deviceName = app.staticTexts["UI Test Device"]
+        XCTAssertTrue(deviceName.exists, "Device card should expose its device name")
+        XCTAssertFalse(deviceName.label.isEmpty, "Device name should have a label")
     }
     
     @MainActor
@@ -109,7 +104,7 @@ final class AccessibilityTests: XCTestCase {
         Thread.sleep(forTimeInterval: 2.0)
         
         // Find power toggle button
-        let powerToggle = app.buttons.matching(NSPredicate(format: "label == 'Power'")).firstMatch
+        let powerToggle = app.buttons["device-card-power-020000000001"]
         
         if powerToggle.exists {
             verifyButtonAccessibility(powerToggle, description: "Power toggle")
@@ -153,22 +148,16 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testDeviceDetailViewNavigationAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
-        // Verify navigation bar is accessible
-        let navBar = app.navigationBars.firstMatch
-        XCTAssertTrue(navBar.exists, "Navigation bar should exist")
-        
-        // Verify back button is accessible
-        let backButton = navBar.buttons.firstMatch
-        if backButton.exists {
-            XCTAssertTrue(backButton.isHittable, "Back button should be hittable")
-        }
+        let optionsMenu = app.descendants(matching: .any)["device-options-menu"]
+        XCTAssertTrue(optionsMenu.exists, "Device detail navigation control should exist")
+        XCTAssertTrue(optionsMenu.isHittable, "Device detail navigation control should be hittable")
     }
     
     @MainActor
     func testGlobalBrightnessSliderAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Find global brightness slider
@@ -185,7 +174,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testPowerToggleInDeviceDetailAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Find power toggle
@@ -202,7 +191,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testSettingsButtonAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Find settings button
@@ -220,7 +209,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testColorTabAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Color tab
         let colorTab = app.buttons["Color"]
@@ -235,7 +224,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testBrightnessSliderAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Color tab
         let colorTab = app.buttons["Color"]
@@ -254,7 +243,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testCCTSliderAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Color tab
         let colorTab = app.buttons["Color"]
@@ -279,7 +268,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testGradientBarAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Color tab
         let colorTab = app.buttons["Color"]
@@ -308,7 +297,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testEffectsTabAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Effects tab
         let effectsTab = app.buttons["Animations"]
@@ -323,7 +312,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testEffectPickerAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Effects tab
         let effectsTab = app.buttons["Animations"]
@@ -342,7 +331,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testSpeedSliderAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Effects tab
         let effectsTab = app.buttons["Animations"]
@@ -361,7 +350,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testIntensitySliderAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Effects tab
         let effectsTab = app.buttons["Animations"]
@@ -380,7 +369,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testPalettePickerAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Effects tab
         let effectsTab = app.buttons["Animations"]
@@ -401,7 +390,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testSegmentPickerAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Find segment picker
@@ -424,7 +413,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testPresetsTabAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Presets tab
         let presetsTab = app.buttons["Presets"]
@@ -439,7 +428,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testPresetPickerAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Presets tab
         let presetsTab = app.buttons["Presets"]
@@ -458,7 +447,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testApplyPresetButtonAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Navigate to Presets tab
         let presetsTab = app.buttons["Presets"]
@@ -480,22 +469,17 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testVoiceOverNavigationOrder() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Verify that interactive elements are accessible in a logical order
         // In VoiceOver, users navigate sequentially through accessible elements
         
-        // Get all accessible elements
-        let accessibleElements = app.descendants(matching: .any).matching(NSPredicate(format: "isAccessibilityElement == YES"))
-        
-        // Verify we have accessible elements
-        XCTAssertGreaterThan(accessibleElements.count, 0, "Should have accessible elements")
-        
-        // Verify interactive elements are accessible
-        let buttons = app.buttons.matching(NSPredicate(format: "isAccessibilityElement == YES"))
-        let sliders = app.sliders.matching(NSPredicate(format: "isAccessibilityElement == YES"))
-        let pickers = app.pickers.matching(NSPredicate(format: "isAccessibilityElement == YES"))
+        // XCUIElementQuery does not support isAccessibilityElement as a predicate key.
+        // Typed interactive queries already expose the accessibility elements XCTest can drive.
+        let buttons = app.buttons
+        let sliders = app.sliders
+        let pickers = app.pickers
         
         // Verify at least some interactive elements exist
         let totalInteractive = buttons.count + sliders.count + pickers.count
@@ -504,11 +488,11 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testAllInteractiveElementsHaveLabels() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Check all buttons have labels
-        let buttons = app.buttons.matching(NSPredicate(format: "isAccessibilityElement == YES"))
+        let buttons = app.buttons
         
         var buttonsWithoutLabels = 0
         for i in 0..<min(buttons.count, 10) { // Check first 10 buttons
@@ -525,11 +509,11 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testAllSlidersHaveValues() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Check all sliders have values
-        let sliders = app.sliders.matching(NSPredicate(format: "isAccessibilityElement == YES"))
+        let sliders = app.sliders
         
         var slidersWithoutValues = 0
         for i in 0..<sliders.count {
@@ -549,7 +533,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testPowerToggleLabelAccuracy() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         let powerToggle = app.buttons.matching(NSPredicate(format: "label == 'Power'")).firstMatch
@@ -563,7 +547,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testBrightnessSliderLabelAccuracy() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         let brightnessSlider = app.sliders["Brightness"]
@@ -577,7 +561,7 @@ final class AccessibilityTests: XCTestCase {
     
     @MainActor
     func testErrorBannerAccessibilityLabelAccuracy() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         Thread.sleep(forTimeInterval: 1.0)
         
         // Check if error banner is visible
@@ -598,11 +582,11 @@ final class AccessibilityTests: XCTestCase {
         Thread.sleep(forTimeInterval: 2.0)
         
         // Step 1: Navigate to device detail
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
-        // Step 2: Verify navigation is accessible
-        let navBar = app.navigationBars.firstMatch
-        XCTAssertTrue(navBar.exists, "Navigation bar should be accessible")
+        // Step 2: Verify the current custom detail navigation is accessible
+        let optionsMenu = app.descendants(matching: .any)["device-options-menu"]
+        XCTAssertTrue(optionsMenu.exists, "Device detail navigation should be accessible")
         
         // Step 3: Verify tabs are accessible
         let colorTab = app.buttons["Color"]
@@ -636,4 +620,3 @@ final class AccessibilityTests: XCTestCase {
         }
     }
 }
-

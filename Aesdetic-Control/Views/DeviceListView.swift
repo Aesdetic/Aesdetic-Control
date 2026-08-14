@@ -24,6 +24,7 @@ struct DeviceListView: View {
                     }
                 }
                 .id(device.id) // Stable identity for better performance
+                .accessibilityIdentifier("device-card-\(device.id)")
                 .onTapGesture {
                     if let onSelectDevice {
                         onSelectDevice(device)

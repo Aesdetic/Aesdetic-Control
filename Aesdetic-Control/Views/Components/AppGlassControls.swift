@@ -29,7 +29,8 @@ struct AppGlassIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(AppTypography.style(.title3, weight: .semibold))
+                .font(.system(size: 17, weight: .regular))
+                .symbolRenderingMode(.monochrome)
                 .foregroundColor(foregroundColor)
                 .frame(width: size, height: size)
                 .background(
@@ -142,6 +143,10 @@ struct AppGlassPillButton: View {
     var size: Size = .regular
     var useControlGlassRecipe: Bool = false
     var useAppleSelectedStyle: Bool = false
+    var selectedGlassRole: AppLiquidGlassRole = .panel
+    var selectedFrostUsesMaterial: Bool = true
+    var foregroundColorOverride: Color? = nil
+    var secondaryForegroundColorOverride: Color? = nil
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -149,9 +154,16 @@ struct AppGlassPillButton: View {
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
     private var fillColor: Color { AppTheme.pillFill(for: colorScheme, isSelected: isSelected) }
     private var strokeColor: Color { AppTheme.pillStroke(for: colorScheme, isSelected: isSelected) }
-    private var textColor: Color { AppTheme.pillText(for: colorScheme, isSelected: isSelected) }
-    private var secondaryTextColor: Color { AppTheme.pillSecondaryText(for: colorScheme, isSelected: isSelected) }
+    private var textColor: Color {
+        foregroundColorOverride ?? AppTheme.pillText(for: colorScheme, isSelected: isSelected)
+    }
+    private var secondaryTextColor: Color {
+        secondaryForegroundColorOverride ?? AppTheme.pillSecondaryText(for: colorScheme, isSelected: isSelected)
+    }
     private var cornerRadius: CGFloat { size == .compact ? 14 : 18 }
+    private var glassRole: AppLiquidGlassRole {
+        useAppleSelectedStyle && isSelected ? selectedGlassRole : .control
+    }
 
     var body: some View {
         Button(action: action) {
@@ -160,9 +172,10 @@ struct AppGlassPillButton: View {
                     Image(systemName: iconName)
                         .font(
                             size == .compact
-                                ? AppTypography.style(.caption, weight: .semibold)
-                                : AppTypography.style(.subheadline, weight: .semibold)
+                                ? .system(size: 12, weight: .regular)
+                                : .system(size: 15, weight: .regular)
                         )
+                        .symbolRenderingMode(.monochrome)
                         .foregroundColor(textColor)
                 }
 
@@ -197,14 +210,12 @@ struct AppGlassPillButton: View {
             )
             .overlay(
                 Group {
-                    if useControlGlassRecipe && isSelected && useAppleSelectedStyle {
-                        // Selected treatment that keeps the glass base while increasing visual affordance.
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(Color.white.opacity(colorScheme == .dark ? 0.24 : 0.18))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.34 : 0.26), lineWidth: 1)
-                            )
+                    if useControlGlassRecipe && useAppleSelectedStyle {
+                        AppLiquidGlassFrostOverlay(
+                            isActive: isSelected,
+                            cornerRadius: cornerRadius,
+                            usesMaterial: selectedFrostUsesMaterial
+                        )
                     }
                 }
             )
@@ -222,9 +233,75 @@ struct AppGlassPillButton: View {
             )
         }
         .if(useControlGlassRecipe) { view in
-            view.appLiquidGlass(role: .control, cornerRadius: cornerRadius)
+            view.appLiquidGlass(role: glassRole, cornerRadius: cornerRadius)
         }
         .buttonStyle(AppGlassSnappyTapStyle(pressedScale: size == .compact ? 0.97 : 0.96))
+        .animation(.easeInOut(duration: 0.18), value: isSelected)
+    }
+}
+
+struct PresetSavePillButton: View {
+    let title: String
+    let isSaving: Bool
+    let isSuccess: Bool
+    var isDisabled: Bool = false
+    var minWidth: CGFloat = 112
+    var normalForegroundColor: Color = .white.opacity(0.9)
+    var disabledForegroundColor: Color = .white.opacity(0.45)
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                ZStack {
+                    if isSaving {
+                        ProgressView()
+                            .scaleEffect(0.68)
+                            .tint(currentForegroundColor)
+                    } else {
+                        Image(systemName: isSuccess ? "checkmark" : "plus.circle")
+                            .font(.system(size: 12, weight: .regular))
+                            .symbolRenderingMode(.monochrome)
+                            .symbolEffect(.bounce, value: isSuccess)
+                    }
+                }
+                .frame(width: 15, height: 15)
+
+                Text(title)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundColor(currentForegroundColor)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .frame(minWidth: minWidth)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(isSuccess ? 0.16 : 0.12))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(
+                                Color.white.opacity(isSuccess ? 0.26 : 0.16),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            .shadow(color: isSuccess ? Color.white.opacity(0.08) : Color.clear, radius: 6, x: 0, y: 2)
+            .scaleEffect(isSuccess ? 1.018 : 1.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.72), value: isSuccess)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.45 : 1.0)
+        .accessibilityLabel(title)
+        .accessibilityValue(isSaving ? "Saving" : (isSuccess ? "Saved" : "Ready"))
+    }
+
+    private var currentForegroundColor: Color {
+        if isDisabled {
+            return disabledForegroundColor
+        }
+        return normalForegroundColor
     }
 }
 

@@ -13,6 +13,7 @@ struct ColorWheelInline: View {
     let autoWhiteEnabled: Bool
     let cctKelvinRange: ClosedRange<Int>
     let onColorChange: (Color, Double?, Double?) -> Void  // Color, optional temperature (0-1), optional white level (0-1)
+    let onColorPreview: ((Color, Double?, Double?) -> Void)?
     let onRemove: () -> Void
     let onDismiss: () -> Void
     
@@ -24,10 +25,13 @@ struct ColorWheelInline: View {
     @State private var temperature: Double = 0.5 // 0 = orange, 0.5 = white, 1 = cool white
     @State private var whiteLevel: Double = 0.0 // 0 = no white, 1 = full white (for RGBW strips)
     @State private var pickerPosition: CGPoint = .zero
+    @State private var spectrumSize: CGSize = .zero
     @State private var hexInput: String = ""
     @State private var isUsingTemperatureSlider: Bool = false
     @State private var isEditingHex: Bool = false
     @State private var isProgrammaticSyncInProgress: Bool = false
+    @State private var colorPreviewWorkItem: DispatchWorkItem?
+    @State private var lastColorPreviewSentAt: Date = .distantPast
     @AppStorage("savedGradientColors") private var savedColorsData: Data = Data()
     
     init(
@@ -43,6 +47,7 @@ struct ColorWheelInline: View {
         autoWhiteEnabled: Bool = false,
         cctKelvinRange: ClosedRange<Int>? = nil,
         onColorChange: @escaping (Color, Double?, Double?) -> Void,
+        onColorPreview: ((Color, Double?, Double?) -> Void)? = nil,
         onRemove: @escaping () -> Void,
         onDismiss: @escaping () -> Void
     ) {
@@ -58,6 +63,7 @@ struct ColorWheelInline: View {
         self.autoWhiteEnabled = autoWhiteEnabled
         self.cctKelvinRange = cctKelvinRange ?? Self.defaultKelvinRange
         self.onColorChange = onColorChange
+        self.onColorPreview = onColorPreview
         self.onRemove = onRemove
         self.onDismiss = onDismiss
         _selectedColor = State(initialValue: initialColor)
@@ -215,6 +221,9 @@ struct ColorWheelInline: View {
         .onChange(of: initialWhiteLevel) { _, _ in
             syncFromInitialState(force: true)
         }
+        .onDisappear {
+            cancelColorPreview()
+        }
         }
     }
     
@@ -228,7 +237,7 @@ struct ColorWheelInline: View {
                     // Apple's exact spectrum: HSV color space representation
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(
-                            // Apple's spectrum: Hue horizontally, Saturation vertically
+                            // Apple's spectrum: hue horizontally, saturation vertically.
                             LinearGradient(
                                 colors: [
                                     Color(hue: 0.0, saturation: 1.0, brightness: 1.0),    // Red
@@ -245,7 +254,7 @@ struct ColorWheelInline: View {
                             )
                         )
                         .overlay(
-                            // Apple's saturation gradient: White overlay from top to bottom
+                            // White overlay at the top creates the low-saturation edge.
                             LinearGradient(
                                 colors: [.white, .clear],
                                 startPoint: .top,
@@ -255,16 +264,8 @@ struct ColorWheelInline: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     
                     // Apple's exact indicator design
-                    Circle()
-                        .stroke(Color.white, lineWidth: 2)
-                        .background(
-                            Circle()
-                                .fill(Color.white)
-                                .frame(width: 6, height: 6)
-                        )
-                        .frame(width: 20, height: 20)
+                    spectrumIndicator
                         .position(pickerPosition)
-                        .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
                 }
                 .gesture(
                     DragGesture(minimumDistance: 0)
@@ -276,10 +277,10 @@ struct ColorWheelInline: View {
                         }
                 )
                 .onAppear {
-                    updateAppleSpectrumIndicatorPosition(in: geo.size)
+                    updateSpectrumIndicatorPosition(in: geo.size)
                 }
                 .onChange(of: geo.size) { _, newSize in
-                    updateAppleSpectrumIndicatorPosition(in: newSize)
+                    updateSpectrumIndicatorPosition(in: newSize)
                 }
             }
             .frame(height: 200)
@@ -333,32 +334,21 @@ struct ColorWheelInline: View {
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
                                 let newValue = Double(value.location.x / geometry.size.width)
-                                let oldTemp = temperature
                                 temperature = max(0, min(1, newValue))
                                 isUsingTemperatureSlider = true
                                 // Only update visual preview during drag, don't apply to device
-                                #if DEBUG
-                                print("🔵 Temperature slider: onChanged - temp changed from \(oldTemp) to \(temperature), NOT applying to device")
-                                #endif
                                 applyTemperatureShift()
+                                updateSpectrumIndicatorPosition()
+                                scheduleColorPreview()
                             }
                             .onEnded { value in
                                 // Apply to device only when drag ends (on release)
-                                #if DEBUG
-                                print("🔵 Temperature slider: onEnded - temp=\(temperature), NOW applying to device")
-                                print("🔵 Temperature slider: isUsingTemperatureSlider=\(isUsingTemperatureSlider)")
-                                #endif
                                 // CRITICAL: Update hex input AFTER slider is released (not during drag)
                                 updateHexInput()
                                 // Ensure flag is still set after updateHexInput
                                 isUsingTemperatureSlider = true
-                                #if DEBUG
-                                print("🔵 Temperature slider: About to call applyColorToDevice()")
-                                #endif
+                                cancelColorPreview()
                                 applyColorToDevice()
-                                #if DEBUG
-                                print("🔵 Temperature slider: Finished calling applyColorToDevice()")
-                                #endif
                             }
                     )
                 }
@@ -390,6 +380,7 @@ struct ColorWheelInline: View {
                 }
                 isUsingTemperatureSlider = true
                 applyTemperatureShift()
+                updateSpectrumIndicatorPosition()
                 applyColorToDevice()
             }
             }
@@ -438,10 +429,12 @@ struct ColorWheelInline: View {
                                 whiteLevel = max(0, min(1, newValue))
                                 isUsingTemperatureSlider = false
                                 // Don't apply during drag, just update preview
+                                scheduleColorPreview()
                             }
                             .onEnded { _ in
                                 isUsingTemperatureSlider = false
                                 // Apply color to device only on release
+                                cancelColorPreview()
                                 applyColorToDevice()
                             }
                     )
@@ -485,17 +478,12 @@ struct ColorWheelInline: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     // Saved colors
-                    ForEach(Array(savedColors.enumerated()), id: \.offset) { index, colorHex in
+                    ForEach(Array(savedSwatches.enumerated()), id: \.offset) { index, swatch in
                         Button(action: {
-                            let color = Color(hex: colorHex)
-                            selectedColor = color
-                            extractHSV(from: color)
-                            // Reset temperature flag when using saved color
-                            isUsingTemperatureSlider = false
-                            applyColorToDevice()
+                            applySavedSwatch(swatch)
                         }) {
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color(hex: colorHex))
+                                .fill(swatch.color)
                                 .frame(width: 29, height: 29)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -509,12 +497,12 @@ struct ColorWheelInline: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
-                        .accessibilityLabel("Saved color \(index + 1)")
+                        .accessibilityLabel(savedSwatchAccessibilityLabel(swatch, index: index))
                         .accessibilityHint("Applies the stored color to the device.")
                     }
                     
                     // Add new color button (only show if under max limit)
-                    if savedColors.count < 8 {
+                    if savedSwatches.count < 8 {
                         Button(action: saveCurrentColor) {
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(chipBackgroundColor)
@@ -541,6 +529,22 @@ struct ColorWheelInline: View {
     // MARK: - Helper Functions
     
     private static let defaultKelvinRange: ClosedRange<Int> = 1900...10091
+    private static let spectrumIndicatorRadius: CGFloat = 10
+    private static let livePreviewInterval: TimeInterval = 0.09
+
+    private var spectrumIndicator: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white, lineWidth: 2)
+                .frame(width: 20, height: 20)
+
+            Circle()
+                .fill(Color.white)
+                .frame(width: 6, height: 6)
+        }
+        .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
+        .accessibilityHidden(true)
+    }
 
     private func syncFromInitialState(force: Bool) {
         if !force, initialColor.toHex() == selectedColor.toHex() {
@@ -562,8 +566,10 @@ struct ColorWheelInline: View {
         }
         if let initialWhiteLevel, supportsWhite, allowManualWhite {
             whiteLevel = max(0.0, min(1.0, initialWhiteLevel))
+        } else {
+            whiteLevel = 0.0
         }
-        updatePickerPosition()
+        updateSpectrumIndicatorPosition()
         updateHexInput()
         Task { @MainActor in
             isProgrammaticSyncInProgress = false
@@ -575,6 +581,10 @@ struct ColorWheelInline: View {
     
     private var temperatureText: String {
         let clamped = max(0.0, min(1.0, temperature))
+        if usesKelvinCCT {
+            let kelvin = kelvinValue(fromNormalized: clamped)
+            return "\(kelvin)K"
+        }
         let percentCool = Int(round(clamped * 100))
         if percentCool == 0 {
             return "Warm"
@@ -583,6 +593,12 @@ struct ColorWheelInline: View {
             return "Cool"
         }
         return "Warm to cool, \(percentCool)% cool"
+    }
+
+    private func kelvinValue(fromNormalized normalized: Double) -> Int {
+        let clamped = max(0.0, min(1.0, normalized))
+        let span = Double(cctKelvinRange.upperBound - cctKelvinRange.lowerBound)
+        return Int(round(Double(cctKelvinRange.lowerBound) + clamped * span))
     }
     
     private var whiteLevelText: String {
@@ -690,57 +706,41 @@ struct ColorWheelInline: View {
     
     // Apple's exact spectrum position calculation
     private func updateAppleSpectrumPosition(_ location: CGPoint, in size: CGSize) {
-        // Apple's spectrum mapping: Hue horizontally (0-1), Saturation vertically (0-1)
-        // Top = saturated (1.0), Bottom = white (0.0)
-        let indicatorRadius: CGFloat = 10
-        let maxX = size.width - indicatorRadius
-        let maxY = size.height - indicatorRadius
-        
-        let x = max(indicatorRadius, min(location.x, maxX))
-        let y = max(indicatorRadius, min(location.y, maxY))
+        spectrumSize = size
+        let point = ColorWheelSpectrumGeometry.clampedPoint(
+            location,
+            in: size,
+            indicatorRadius: Self.spectrumIndicatorRadius
+        )
         
         // Map to Apple's HSV color space
-        hue = Double((x - indicatorRadius) / (maxX - indicatorRadius))
-        saturation = Double((y - indicatorRadius) / (maxY - indicatorRadius))  // Top=1.0, Bottom=0.0
+        let values = ColorWheelSpectrumGeometry.values(
+            from: point,
+            in: size,
+            indicatorRadius: Self.spectrumIndicatorRadius
+        )
+        hue = values.hue
+        saturation = values.saturation
         
         // Reset temperature slider flag when using color picker
         isUsingTemperatureSlider = false
         
         updateColor()
-        updateAppleSpectrumIndicatorPosition(in: size)
+        updateSpectrumIndicatorPosition(in: size)
+        scheduleColorPreview()
     }
-    
-    private func updateAppleSpectrumIndicatorPosition(in size: CGSize) {
-        // Calculate position based on current hue and saturation
-        let indicatorRadius: CGFloat = 10
-        let maxX = size.width - indicatorRadius
-        let maxY = size.height - indicatorRadius
-        
-        let x = indicatorRadius + hue * Double(maxX - indicatorRadius)
-        let y = indicatorRadius + saturation * Double(maxY - indicatorRadius)
-        
-        pickerPosition = CGPoint(x: x, y: y)
-    }
-    
-    private func updatePickerPosition() {
-        // Calculate position based on current hue and saturation
-        // Use a reasonable default size that will be updated by GeometryReader
-        let defaultSize: CGFloat = 300 // Reasonable default
-        pickerPosition = CGPoint(x: hue * defaultSize, y: (1.0 - saturation) * defaultSize)
-    }
-    
-    private func updatePickerPosition(in size: CGSize) {
-        // Calculate position based on current hue and saturation with actual geometry size
-        // Account for indicator radius (14px) to keep it within bounds
-        let indicatorRadius: CGFloat = 14
-        let maxX = size.width - indicatorRadius
-        let maxY = size.height - indicatorRadius
-        
-        let x = indicatorRadius + hue * Double(maxX - indicatorRadius)
-        // Fix: Use (1.0 - saturation) to match visual gradient (saturated at top, white at bottom)
-        let y = indicatorRadius + (1.0 - saturation) * Double(maxY - indicatorRadius)
-        
-        pickerPosition = CGPoint(x: x, y: y)
+
+    private func updateSpectrumIndicatorPosition(in size: CGSize? = nil) {
+        if let size {
+            spectrumSize = size
+        }
+
+        pickerPosition = ColorWheelSpectrumGeometry.position(
+            hue: hue,
+            saturation: saturation,
+            in: size ?? spectrumSize,
+            indicatorRadius: Self.spectrumIndicatorRadius
+        )
     }
     
     private func applyTemperatureShift() {
@@ -757,9 +757,50 @@ struct ColorWheelInline: View {
     }
     
     private func applyColorToDevice() {
-        #if DEBUG
-        print("🔵 applyColorToDevice() called - isUsingTemperatureSlider=\(isUsingTemperatureSlider), temperature=\(temperature)")
-        #endif
+        let payload = currentColorPayload()
+        onColorChange(payload.color, payload.temperature, payload.whiteLevel)
+
+        // Haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.impactOccurred()
+    }
+
+    private func scheduleColorPreview() {
+        guard onColorPreview != nil else { return }
+
+        // Keep at most one pending preview, but anchor its deadline to the last
+        // sent update. A simple debounce never fires while a drag produces
+        // events faster than the preview interval.
+        colorPreviewWorkItem?.cancel()
+        let payload = currentColorPayload()
+        let elapsed = Date().timeIntervalSince(lastColorPreviewSentAt)
+        let delay = max(0, Self.livePreviewInterval - elapsed)
+        let work = DispatchWorkItem {
+            lastColorPreviewSentAt = Date()
+            colorPreviewWorkItem = nil
+            onColorPreview?(payload.color, payload.temperature, payload.whiteLevel)
+        }
+        colorPreviewWorkItem = work
+
+        if delay == 0 {
+            work.perform()
+            return
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if !work.isCancelled {
+                work.perform()
+            }
+        }
+    }
+
+    private func cancelColorPreview() {
+        colorPreviewWorkItem?.cancel()
+        colorPreviewWorkItem = nil
+    }
+
+    private func currentColorPayload() -> (color: Color, temperature: Double?, whiteLevel: Double?) {
         // CRITICAL FIX: Ensure we always send sRGB color to WLED
         // Convert selectedColor to hex string (which uses toRGBArray() for correct sRGB extraction)
         // Then recreate Color from hex to ensure sRGB consistency
@@ -774,46 +815,49 @@ struct ColorWheelInline: View {
         if isUsingTemperatureSlider, let whiteLevelValue, whiteLevel <= 0.0 {
             whiteLevel = whiteLevelValue
         }
-        #if DEBUG
-        print("🔵 applyColorToDevice() calling onColorChange - tempValue=\(temperatureValue?.description ?? "nil")")
-        #endif
-        onColorChange(sRGBColor, temperatureValue, whiteLevelValue)
-        
-        // Haptic feedback
-        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-        impactFeedback.impactOccurred()
+        return (sRGBColor, temperatureValue, whiteLevelValue)
     }
     
     // MARK: - Saved Colors Management
     
-    private var savedColors: [String] {
-        (try? JSONDecoder().decode([String].self, from: savedColorsData)) ?? []
+    private var savedSwatches: [SavedColorSwatch] {
+        if let swatches = try? JSONDecoder().decode([SavedColorSwatch].self, from: savedColorsData) {
+            return swatches
+        }
+        if let legacyHexColors = try? JSONDecoder().decode([String].self, from: savedColorsData) {
+            return legacyHexColors.map { SavedColorSwatch(hexColor: $0) }
+        }
+        return []
     }
     
-    private func updateSavedColors(_ colors: [String]) {
+    private func updateSavedSwatches(_ swatches: [SavedColorSwatch]) {
         // Keep only last 8 colors (FIFO)
-        let limited = Array(colors.suffix(8))
+        let limited = Array(swatches.suffix(8))
         if let data = try? JSONEncoder().encode(limited) {
             savedColorsData = data
         }
     }
     
     private func saveCurrentColor() {
-        var colors = savedColors
-        let hex = selectedColor.toHex()
+        var swatches = savedSwatches
+        let swatch = SavedColorSwatch(
+            hexColor: selectedColor.toHex(),
+            temperature: isUsingTemperatureSlider ? temperature : nil,
+            whiteLevel: whiteLevel > 0.0 ? whiteLevel : nil
+        )
         
         // Remove if already exists (to avoid duplicates)
-        colors.removeAll { $0 == hex }
+        swatches.removeAll { $0.matches(swatch) }
         
         // Add to end
-        colors.append(hex)
+        swatches.append(swatch)
         
         // Auto-remove oldest if > 8
-        if colors.count > 8 {
-            colors.removeFirst()
+        if swatches.count > 8 {
+            swatches.removeFirst()
         }
         
-        updateSavedColors(colors)
+        updateSavedSwatches(swatches)
         
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -821,10 +865,43 @@ struct ColorWheelInline: View {
     }
     
     private func deleteSavedColor(at index: Int) {
-        var colors = savedColors
-        guard index < colors.count else { return }
-        colors.remove(at: index)
-        updateSavedColors(colors)
+        var swatches = savedSwatches
+        guard index < swatches.count else { return }
+        swatches.remove(at: index)
+        updateSavedSwatches(swatches)
+    }
+
+    private func applySavedSwatch(_ swatch: SavedColorSwatch) {
+        selectedColor = swatch.color
+        extractHSV(from: selectedColor)
+
+        if supportsCCT, let savedTemperature = swatch.temperature {
+            temperature = savedTemperature
+            isUsingTemperatureSlider = true
+            applyTemperatureShift()
+        } else {
+            isUsingTemperatureSlider = false
+        }
+
+        if supportsWhite, allowManualWhite {
+            whiteLevel = swatch.whiteLevel ?? 0.0
+        } else {
+            whiteLevel = 0.0
+        }
+
+        updateSpectrumIndicatorPosition()
+        updateHexInput()
+        applyColorToDevice()
+    }
+
+    private func savedSwatchAccessibilityLabel(_ swatch: SavedColorSwatch, index: Int) -> String {
+        if swatch.temperature != nil {
+            return "Saved CCT color \(index + 1)"
+        }
+        if swatch.whiteLevel != nil {
+            return "Saved white channel color \(index + 1)"
+        }
+        return "Saved color \(index + 1)"
     }
     
     // MARK: - Hex Input Functions
@@ -869,6 +946,116 @@ struct ColorWheelInline: View {
     }
 }
 
+struct SavedColorSwatch: Codable, Hashable {
+    var hexColor: String
+    var temperature: Double?
+    var whiteLevel: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case hexColor
+        case temperature
+        case whiteLevel
+    }
+
+    init(hexColor: String, temperature: Double? = nil, whiteLevel: Double? = nil) {
+        self.hexColor = hexColor.replacingOccurrences(of: "#", with: "").uppercased()
+        self.temperature = temperature.map(Self.clampUnit)
+        self.whiteLevel = whiteLevel.map(Self.clampUnit)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            hexColor: try container.decode(String.self, forKey: .hexColor),
+            temperature: try container.decodeIfPresent(Double.self, forKey: .temperature),
+            whiteLevel: try container.decodeIfPresent(Double.self, forKey: .whiteLevel)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(hexColor, forKey: .hexColor)
+        try container.encodeIfPresent(temperature, forKey: .temperature)
+        try container.encodeIfPresent(whiteLevel, forKey: .whiteLevel)
+    }
+
+    var color: Color {
+        Color(hex: hexColor)
+    }
+
+    func matches(_ other: SavedColorSwatch) -> Bool {
+        hexColor == other.hexColor &&
+        Self.optionalUnitValue(temperature, equals: other.temperature) &&
+        Self.optionalUnitValue(whiteLevel, equals: other.whiteLevel)
+    }
+
+    private static func clampUnit(_ value: Double) -> Double {
+        max(0.0, min(1.0, value))
+    }
+
+    private static func optionalUnitValue(_ lhs: Double?, equals rhs: Double?) -> Bool {
+        switch (lhs, rhs) {
+        case (.none, .none):
+            return true
+        case let (.some(lhs), .some(rhs)):
+            return abs(lhs - rhs) < 0.000001
+        default:
+            return false
+        }
+    }
+}
+
+struct ColorWheelSpectrumGeometry {
+    static func position(
+        hue: Double,
+        saturation: Double,
+        in size: CGSize,
+        indicatorRadius: CGFloat
+    ) -> CGPoint {
+        let bounds = interactionBounds(in: size, indicatorRadius: indicatorRadius)
+        return CGPoint(
+            x: bounds.minX + CGFloat(clampUnit(hue)) * (bounds.maxX - bounds.minX),
+            y: bounds.minY + CGFloat(clampUnit(saturation)) * (bounds.maxY - bounds.minY)
+        )
+    }
+
+    static func values(
+        from location: CGPoint,
+        in size: CGSize,
+        indicatorRadius: CGFloat
+    ) -> (hue: Double, saturation: Double) {
+        let bounds = interactionBounds(in: size, indicatorRadius: indicatorRadius)
+        let point = clampedPoint(location, in: size, indicatorRadius: indicatorRadius)
+        return (
+            hue: Double((point.x - bounds.minX) / max(CGFloat(1), bounds.maxX - bounds.minX)),
+            saturation: Double((point.y - bounds.minY) / max(CGFloat(1), bounds.maxY - bounds.minY))
+        )
+    }
+
+    static func clampedPoint(
+        _ location: CGPoint,
+        in size: CGSize,
+        indicatorRadius: CGFloat
+    ) -> CGPoint {
+        let bounds = interactionBounds(in: size, indicatorRadius: indicatorRadius)
+        return CGPoint(
+            x: max(bounds.minX, min(location.x, bounds.maxX)),
+            y: max(bounds.minY, min(location.y, bounds.maxY))
+        )
+    }
+
+    private static func interactionBounds(in size: CGSize, indicatorRadius: CGFloat) -> CGRect {
+        let minX = indicatorRadius
+        let minY = indicatorRadius
+        let maxX = max(minX, size.width - indicatorRadius)
+        let maxY = max(minY, size.height - indicatorRadius)
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private static func clampUnit(_ value: Double) -> Double {
+        max(0.0, min(1.0, value))
+    }
+}
 
 private extension ColorWheelInline {
     var containerBackgroundColor: Color {

@@ -285,6 +285,52 @@ struct WLEDEffectPreset: Identifiable, Codable, Equatable {
     }
 }
 
+enum PresetDefaultNaming {
+    static func colorName(existingNames: [String]) -> String {
+        defaultName(baseName: "Color", existingNames: existingNames)
+    }
+
+    static func transitionName(existingNames: [String]) -> String {
+        defaultName(baseName: "Transition", existingNames: existingNames)
+    }
+
+    static func animationName(existingNames: [String]) -> String {
+        defaultName(baseName: "Animation", existingNames: existingNames)
+    }
+
+    private static func defaultName(baseName: String, existingNames: [String]) -> String {
+        let normalizedBase = normalize(baseName)
+        let usedNumbers = Set(existingNames.compactMap { name -> Int? in
+            let normalizedName = normalize(name)
+
+            if normalizedName == normalizedBase {
+                return 1
+            }
+
+            let numberedPrefix = "\(normalizedBase) "
+            guard normalizedName.hasPrefix(numberedPrefix) else { return nil }
+
+            let suffix = normalizedName.dropFirst(numberedPrefix.count)
+            guard let value = Int(suffix), value > 0 else { return nil }
+            return value
+        })
+
+        var candidate = 1
+        while usedNumbers.contains(candidate) {
+            candidate += 1
+        }
+
+        return "\(baseName) \(candidate)"
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
+    }
+}
+
 extension Date {
     private static let presetNameFormatter: DateFormatter = {
         let formatter = DateFormatter()

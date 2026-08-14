@@ -189,9 +189,9 @@ struct EditDeviceInfoDialog: View {
                                     .padding(.vertical, 12)
                                     .background(
                                         RoundedRectangle(cornerRadius: 12)
-                                            .fill(Color.white)
+                                            .fill(Color.white.opacity(0.18))
                                     )
-                                    .foregroundColor(.black)
+                                    .foregroundColor(.white)
                                     .disabled(newLocationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                                 }
                             }
@@ -242,9 +242,9 @@ struct EditDeviceInfoDialog: View {
                         .padding(.vertical, 16)
                         .background(
                             RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.white)
+                                .fill(Color.white.opacity(0.18))
                         )
-                        .foregroundColor(.black)
+                        .foregroundColor(.white)
                     }
                     .padding(.top, 16)
                 }

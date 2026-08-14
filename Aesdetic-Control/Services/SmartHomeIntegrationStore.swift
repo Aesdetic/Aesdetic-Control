@@ -24,7 +24,8 @@ final class SmartHomeIntegrationStore: ObservableObject {
                 kind: kind,
                 state: setup.integrationState,
                 message: setup.integrationMessage,
-                updatedAt: setup.updatedAt
+                updatedAt: setup.updatedAt,
+                verificationSource: setup.hasStartedSetup ? .savedInApp : .notVerified
             )
         }
 
@@ -32,7 +33,8 @@ final class SmartHomeIntegrationStore: ObservableObject {
             deviceId: deviceId,
             kind: kind,
             state: defaultState(for: kind),
-            message: defaultMessage(for: kind)
+            message: defaultMessage(for: kind),
+            verificationSource: .notVerified
         )
     }
 
@@ -40,13 +42,15 @@ final class SmartHomeIntegrationStore: ObservableObject {
         _ state: SmartHomeIntegrationState,
         for kind: SmartHomeIntegrationKind,
         deviceId: String,
-        message: String? = nil
+        message: String? = nil,
+        verificationSource: SmartHomeVerificationSource = .savedInApp
     ) {
         let status = SmartHomeIntegrationStatus(
             deviceId: deviceId,
             kind: kind,
             state: state,
-            message: message ?? defaultMessage(for: kind, state: state)
+            message: message ?? defaultMessage(for: kind, state: state),
+            verificationSource: verificationSource
         )
         statuses[key(deviceId: deviceId, kind: kind)] = status
         save()

@@ -77,13 +77,13 @@ extension WLEDDeviceEntity {
     
     /// Find existing entity or create new one
     static func findOrCreate(for deviceId: String, in context: NSManagedObjectContext) -> WLEDDeviceEntity {
+        let canonicalID = WLEDDeviceIdentity.canonicalID(for: deviceId)
         let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", deviceId)
-        request.fetchLimit = 1
         
         do {
             let existing = try context.fetch(request)
-            if let entity = existing.first {
+            if let entity = existing.first(where: { WLEDDeviceIdentity.matches($0.id, canonicalID) }) {
+                entity.id = canonicalID
                 return entity
             }
         } catch {
@@ -94,7 +94,7 @@ extension WLEDDeviceEntity {
         
         // Create new entity
         let entity = WLEDDeviceEntity(context: context)
-        entity.id = deviceId
+        entity.id = canonicalID
         return entity
     }
     

@@ -22,6 +22,7 @@ struct AddAutomationDialog: View {
         case color = "Colors"
         case transition = "Transitions"
         case effect = "Animations"
+        case preset = "Presets"
         case scene = "Scene"
 
         var id: String { rawValue }
@@ -31,6 +32,7 @@ struct AddAutomationDialog: View {
             case .color: return "paintpalette"
             case .transition: return "arrow.triangle.2.circlepath"
             case .effect: return "sparkles"
+            case .preset: return "rectangle.stack"
             case .scene: return "square.stack.3d.up"
             }
         }
@@ -95,6 +97,9 @@ struct AddAutomationDialog: View {
     @State private var gradientWhiteLevel: Double?
     @State private var selectedTransitionPresetId: UUID?
     @State private var selectedEffectPresetId: UUID?
+    @State private var selectedDevicePresetId: Int?
+    @State private var selectedRecoveredColorPresetId: Int?
+    @State private var selectedRecoveredEffectPresetId: Int?
     @State private var enableColorFade: Bool = false
     @State private var customTransitionDuration: Double = 600
     @State private var allowPartialFailure: Bool = true
@@ -238,6 +243,7 @@ struct AddAutomationDialog: View {
         var initialSelectedColorPresetId: UUID?
         var initialSelectedTransitionPresetId: UUID?
         var initialSelectedEffectPresetId: UUID?
+        var initialSelectedDevicePresetId: Int?
         var initialLockedAction: AutomationAction? = nil
 
         if let editing = editingAutomation {
@@ -312,9 +318,9 @@ struct AddAutomationDialog: View {
                 initialTemplateGradient = payload.gradient
                 initialTemplateEffect = TemplateEffectSettings(gradient: payload.gradient, speed: payload.speed, intensity: payload.intensity)
                 initialSelectedEffectPresetId = payload.presetId
-            case .preset:
-                initialActionSelection = .color
-                initialLockedAction = editing.action
+            case .preset(let payload):
+                initialActionSelection = .preset
+                initialSelectedDevicePresetId = payload.presetId
             case .directState(let payload):
                 initialActionSelection = .color
                 initialTemplateGradient = LEDGradient(stops: [
@@ -413,6 +419,7 @@ struct AddAutomationDialog: View {
         _gradientWhiteLevel = State(initialValue: initialGradientWhiteLevel)
         _selectedTransitionPresetId = State(initialValue: initialSelectedTransitionPresetId)
         _selectedEffectPresetId = State(initialValue: initialSelectedEffectPresetId)
+        _selectedDevicePresetId = State(initialValue: initialSelectedDevicePresetId)
         _customTransitionDuration = State(initialValue: initialTransitionDuration)
         _allowPartialFailure = State(initialValue: initialAllowPartial)
         _triggerSelection = State(initialValue: initialTriggerSelection)
@@ -456,13 +463,18 @@ struct AddAutomationDialog: View {
     private var weekdayNames: [String] { ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"] }
     private var primaryButtonTitle: String { isEditing ? "Save Changes" : "Save Automation" }
     private var availableActionSelections: [ActionSelection] {
-        if allowSceneAction {
-            return ActionSelection.allCases
+        ActionSelection.allCases.filter { option in
+            switch option {
+            case .scene:
+                if allowSceneAction { return true }
+                if case .scene = editingAutomation?.action { return true }
+                return false
+            case .preset:
+                return actionSelection == .preset || !visibleDevicePresets.isEmpty
+            case .color, .transition, .effect:
+                return true
+            }
         }
-        if case .scene = editingAutomation?.action {
-            return ActionSelection.allCases
-        }
-        return ActionSelection.allCases.filter { $0 != .scene }
     }
 
     private static func dateFrom(hour: Int, minute: Int) -> Date? {
@@ -532,11 +544,13 @@ struct AddAutomationDialog: View {
             clearOnDeviceScheduleValidationMessage()
             onDeviceScheduleOverlapWarningMessage = nil
             normalizeTriggerSelectionIfNeeded()
+            normalizeDevicePresetSelectionIfNeeded()
         }
         .onChange(of: activeDevice.id) { _, _ in
             clearOnDeviceScheduleValidationMessage()
             onDeviceScheduleOverlapWarningMessage = nil
             normalizeTriggerSelectionIfNeeded()
+            normalizeDevicePresetSelectionIfNeeded()
         }
         .onChange(of: validationInputsKey) { _, _ in
             clearOnDeviceScheduleValidationMessage()
@@ -545,6 +559,9 @@ struct AddAutomationDialog: View {
         .onChange(of: actionSelection) { _, selection in
             if selection == .scene {
                 normalizeSceneSelectionIfNeeded()
+            }
+            if selection == .preset {
+                normalizeDevicePresetSelectionIfNeeded()
             }
             clearOnDeviceScheduleValidationMessage()
             onDeviceScheduleOverlapWarningMessage = nil
@@ -560,6 +577,7 @@ struct AddAutomationDialog: View {
             }
             normalizeTriggerSelectionIfNeeded()
             normalizeSceneSelectionIfNeeded()
+            normalizeDevicePresetSelectionIfNeeded()
         }
         .alert("Location Access Needed", isPresented: $showLocationSettingsAlert) {
             Button("Cancel", role: .cancel) {}
@@ -888,6 +906,7 @@ struct AddAutomationDialog: View {
             String(endDay),
             actionSelection.rawValue,
             selectedSceneId?.uuidString ?? "nil",
+            selectedDevicePresetId.map(String.init) ?? "nil",
             selectedEffectId.map(String.init) ?? "nil",
             automationName
         ].joined(separator: "|")
@@ -922,7 +941,8 @@ struct AddAutomationDialog: View {
             String(Int(customTransitionDuration.rounded())),
             selectedColorPresetId?.uuidString ?? "nil",
             selectedTransitionPresetId?.uuidString ?? "nil",
-            selectedEffectPresetId?.uuidString ?? "nil"
+            selectedEffectPresetId?.uuidString ?? "nil",
+            selectedDevicePresetId.map(String.init) ?? "nil"
         ].joined(separator: "|")
     }
 
@@ -1185,6 +1205,12 @@ struct AddAutomationDialog: View {
         if actionSelection == .scene && selectedScene == nil {
             return "Choose a scene to continue."
         }
+        if actionSelection == .preset && selectedDevicePreset == nil {
+            return devicePresetPickerStatusMessage
+        }
+        if actionSelection == .preset && !selectedDevicePresetAvailableOnTargets {
+            return "This preset is not available on every selected device."
+        }
         if requiredPresetSlots > 0 && !presetCapacitySatisfied {
             return presetCapacityMessage ?? "Free saved-entry space before saving."
         }
@@ -1227,6 +1253,12 @@ struct AddAutomationDialog: View {
         }
         if actionSelection == .scene && selectedScene == nil {
             return "Choose a scene."
+        }
+        if actionSelection == .preset && selectedDevicePreset == nil {
+            return "Choose a preset."
+        }
+        if actionSelection == .preset && !selectedDevicePresetAvailableOnTargets {
+            return "Preset unavailable."
         }
         if requiredPresetSlots > 0 && !presetCapacitySatisfied {
             return "Free saved-entry space."
@@ -1743,7 +1775,7 @@ struct AddAutomationDialog: View {
     @ViewBuilder
     private var solarParityHint: some View {
         if triggerSelection == .sunrise || triggerSelection == .sunset {
-            Text("WLED solar parity: Sunrise uses timer slot 8, Sunset uses slot 9. Offset range is -120...+120 minutes and uses device timezone/location.")
+            Text("WLED solar parity: Sunrise uses timer slot 8, Sunset uses slot 9. Offset range is \(SolarTrigger.minOnDeviceOffsetMinutes)...+\(SolarTrigger.maxOnDeviceOffsetMinutes) minutes and uses device timezone/location.")
                 .font(AppTypography.style(.caption))
                 .foregroundColor(.white.opacity(0.7))
         }
@@ -1769,7 +1801,7 @@ struct AddAutomationDialog: View {
                 if let validationMessage = dateWindowValidationMessage {
                     Text(validationMessage)
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.orange)
+                        .foregroundColor(.white)
                 }
             }
         }
@@ -2380,6 +2412,8 @@ struct AddAutomationDialog: View {
                 transitionActionControls
             case .effect:
                 effectActionControls
+            case .preset:
+                presetActionControls
             }
         }
     }
@@ -2388,7 +2422,7 @@ struct AddAutomationDialog: View {
         switch actionSelection {
         case .color, .transition, .effect:
             return true
-        case .scene:
+        case .preset, .scene:
             return false
         }
     }
@@ -2558,50 +2592,119 @@ struct AddAutomationDialog: View {
             return "Transition"
         case .effect:
             return "Animation"
+        case .preset:
+            return "Preset"
         case .scene:
             return "Scene"
         }
     }
 
     private var effectActionControls: some View {
-        AutomationEffectEditor(
-            viewModel: viewModel,
-            device: activeDevice,
-            effectOptions: effectOptions,
-            effectId: Binding(
-                get: { selectedEffectId ?? effectOptions.first?.id ?? 0 },
-                set: { newId in
-                    selectedEffectId = newId
-                    selectedEffectPresetId = nil
-                    // Update gradient for new slot count
-                    if let metadata = effectOptions.first(where: { $0.id == newId }) {
-                        let slotCount = max(metadata.colorSlotCount, 1)
-                        if slotCount <= 1 {
-                            // Single color mode
-                            let currentHex = effectGradient?.stops.first?.hexColor ?? "FFFFFF"
-                            effectGradient = LEDGradient(stops: [GradientStop(position: 0.0, hexColor: currentHex)])
-                        } else {
-                            // Multi-color mode - prepare gradient for slot count
-                            let currentGrad = effectGradient ?? viewModel.automationGradient(for: activeDevice)
-                            effectGradient = preparedGradientForSlotCount(currentGrad, slotCount: slotCount)
+        VStack(spacing: 12) {
+            recoveredEffectPresetSelector
+
+            AutomationEffectEditor(
+                viewModel: viewModel,
+                device: activeDevice,
+                effectOptions: effectOptions,
+                effectId: Binding(
+                    get: { selectedEffectId ?? effectOptions.first?.id ?? 0 },
+                    set: { newId in
+                        selectedEffectId = newId
+                        selectedEffectPresetId = nil
+                        selectedRecoveredEffectPresetId = nil
+                        // Update gradient for new slot count
+                        if let metadata = effectOptions.first(where: { $0.id == newId }) {
+                            let slotCount = max(metadata.colorSlotCount, 1)
+                            if slotCount <= 1 {
+                                // Single color mode
+                                let currentHex = effectGradient?.stops.first?.hexColor ?? "FFFFFF"
+                                effectGradient = LEDGradient(stops: [GradientStop(position: 0.0, hexColor: currentHex)])
+                            } else {
+                                // Multi-color mode - prepare gradient for slot count
+                                let currentGrad = effectGradient ?? viewModel.automationGradient(for: activeDevice)
+                                effectGradient = preparedGradientForSlotCount(currentGrad, slotCount: slotCount)
+                            }
                         }
                     }
-                }
-            ),
-            brightness: $effectBrightness,
-            speed: $effectSpeed,
-            intensity: $effectIntensity,
-            gradient: Binding(
-                get: { effectGradient ?? viewModel.automationGradient(for: activeDevice) },
-                set: { newGradient in
-                    effectGradient = newGradient
+                ),
+                brightness: $effectBrightness,
+                speed: $effectSpeed,
+                intensity: $effectIntensity,
+                gradient: Binding(
+                    get: { effectGradient ?? viewModel.automationGradient(for: activeDevice) },
+                    set: { newGradient in
+                        effectGradient = newGradient
                         selectedEffectPresetId = nil
+                        selectedRecoveredEffectPresetId = nil
+                    }
+                ),
+                selectedEffectPresetId: Binding(
+                get: { selectedEffectPresetId },
+                set: { newValue in
+                    selectedEffectPresetId = newValue
+                    selectedRecoveredEffectPresetId = nil
                 }
             ),
-            selectedEffectPresetId: $selectedEffectPresetId,
-            isInline: presentationStyle == .embedded,
-            externalPreviewEnabled: $actionPreviewEnabled
-        )
+                isInline: presentationStyle == .embedded,
+                externalPreviewEnabled: $actionPreviewEnabled
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var recoveredEffectPresetSelector: some View {
+        let choices = recoveredEffectDevicePresets
+        if !choices.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(choices, id: \.id) { preset in
+                        recoveredEffectPresetChoice(preset)
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func recoveredEffectPresetChoice(_ preset: WLEDPreset) -> some View {
+        let isSelected = selectedRecoveredEffectPresetId == preset.id
+        let preview = devicePresetPreview(for: preset)
+
+        return Button {
+            applyRecoveredEffectPreset(preset)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                LinearGradient(
+                    gradient: Gradient(stops: gradientStops(for: preview.gradient)),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+
+                Text(preset.displayName)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(isSelected ? .black.opacity(0.82) : .white.opacity(0.88))
+                    .lineLimit(1)
+            }
+            .padding(9)
+            .frame(width: 116, height: 62, alignment: .topLeading)
+            .background(automationSegmentBackground(isActive: isSelected, cornerRadius: 15))
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.18 : 0.08), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.displayName), recovered animation preset")
     }
 
     @ViewBuilder
@@ -2634,6 +2737,94 @@ struct AddAutomationDialog: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    @ViewBuilder
+    private var presetActionControls: some View {
+        if visibleDevicePresets.isEmpty {
+            Text(devicePresetPickerStatusMessage)
+                .font(AppTypography.style(.footnote))
+                .foregroundColor(.white.opacity(0.66))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.045))
+                        .background(.ultraThinMaterial.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(visibleDevicePresets) { preset in
+                            devicePresetChoice(preset)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 2)
+                }
+
+                if !selectedDevicePresetAvailableOnTargets {
+                    Text("This preset must exist on every selected device.")
+                        .font(AppTypography.style(.caption2, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private func devicePresetChoice(_ preset: WLEDPreset) -> some View {
+        let isSelected = selectedDevicePresetId == preset.id
+        let preview = devicePresetPreview(for: preset)
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                selectedDevicePresetId = preset.id
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                LinearGradient(
+                    gradient: Gradient(stops: gradientStops(for: preview.gradient)),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 22)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(preset.displayName)
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(isSelected ? .black.opacity(0.82) : .white.opacity(0.88))
+                        .lineLimit(1)
+
+                    Text("Preset \(preset.id)")
+                        .font(AppTypography.style(.caption2, weight: .medium))
+                        .foregroundColor(isSelected ? .black.opacity(0.50) : .white.opacity(0.52))
+                        .lineLimit(1)
+                }
+            }
+            .padding(9)
+            .frame(width: 116, height: 74, alignment: .topLeading)
+            .background(automationSegmentBackground(isActive: isSelected, cornerRadius: 15))
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.18 : 0.08), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.displayName), preset \(preset.id)")
     }
 
     private func sceneSelectionRow(_ scene: Scene) -> some View {
@@ -2695,13 +2886,76 @@ struct AddAutomationDialog: View {
     }
 
     private var colorActionControls: some View {
-                gradientCreationControls
+        VStack(spacing: 12) {
+            gradientCreationControls
+            recoveredColorPresetSelector
+        }
             .onChange(of: templateGradient) { _, newGradient in
                 // Sync interpolation when gradient changes
                 if let newGradient = newGradient {
                     gradientInterpolation = newGradient.interpolation
             }
         }
+    }
+
+    @ViewBuilder
+    private var recoveredColorPresetSelector: some View {
+        let choices = recoveredColorDevicePresets
+        if !choices.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(choices, id: \.id) { preset in
+                        recoveredColorPresetChoice(preset)
+                    }
+                }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func recoveredColorPresetChoice(_ preset: WLEDRecoveredColorPreset) -> some View {
+        let isSelected = selectedRecoveredColorPresetId == preset.id
+
+        return Button {
+            selectedRecoveredColorPresetId = preset.id
+            selectedRecoveredEffectPresetId = nil
+            selectedColorPresetId = nil
+            selectedDevicePresetId = nil
+            templateGradient = preset.gradient
+            gradientBrightness = Double(preset.brightness)
+            gradientInterpolation = preset.gradient.interpolation
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                LinearGradient(
+                    gradient: Gradient(stops: gradientStops(for: preset.gradient)),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+
+                Text(preset.displayName)
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundColor(isSelected ? .black.opacity(0.82) : .white.opacity(0.88))
+                    .lineLimit(1)
+            }
+            .padding(9)
+            .frame(width: 116, height: 62, alignment: .topLeading)
+            .background(automationSegmentBackground(isActive: isSelected, cornerRadius: 15))
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.18 : 0.08), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.displayName), recovered color preset")
     }
 
     private var gradientCreationControls: some View {
@@ -2720,7 +2974,13 @@ struct AddAutomationDialog: View {
             fadeDuration: $gradientDuration,
             enableFade: $enableColorFade,
             powerOn: $colorPowerOn,
-            selectedPresetId: $selectedColorPresetId,
+            selectedPresetId: Binding(
+                get: { selectedColorPresetId },
+                set: { newValue in
+                    selectedColorPresetId = newValue
+                    selectedRecoveredColorPresetId = nil
+                }
+            ),
             temperature: $gradientTemperature,
             whiteLevel: $gradientWhiteLevel,
             showFadeControls: advancedUIEnabled,
@@ -2786,6 +3046,285 @@ struct AddAutomationDialog: View {
         return scenes.first(where: { $0.id == id })
     }
 
+    private var visibleDevicePresets: [WLEDPreset] {
+        visibleDevicePresets(for: activeDevice)
+    }
+
+    private var selectedDevicePreset: WLEDPreset? {
+        guard let id = selectedDevicePresetId else { return nil }
+        return visibleDevicePresets.first(where: { $0.id == id })
+    }
+
+    private var selectedRecoveredColorPreset: WLEDRecoveredColorPreset? {
+        guard let id = selectedRecoveredColorPresetId else { return nil }
+        return recoveredColorDevicePresets.first(where: { $0.id == id })
+    }
+
+    private var selectedRecoveredEffectPreset: WLEDPreset? {
+        guard let id = selectedRecoveredEffectPresetId else { return nil }
+        return recoveredEffectDevicePresets.first(where: { $0.id == id })
+    }
+
+    private var recoveredColorDevicePresets: [WLEDRecoveredColorPreset] {
+        WLEDDevicePresetRecovery.recoveredColorPresets(
+            for: activeDevice.id,
+            presets: viewModel.presets(for: activeDevice),
+            playlists: viewModel.playlists(for: activeDevice),
+            localColorPresets: presetsStore.colorPresets
+        )
+    }
+
+    private var recoveredEffectDevicePresets: [WLEDPreset] {
+        recoveredDevicePresets(for: activeDevice, markerKind: .savedAnimation)
+            .filter { effectSegment(for: $0) != nil }
+    }
+
+    private var selectedDevicePresetAvailableOnTargets: Bool {
+        guard let id = selectedDevicePresetId else { return false }
+        return targetDevicesForCapacity.allSatisfy { target in
+            visibleDevicePresets(for: target).contains { $0.id == id }
+        }
+    }
+
+    private var devicePresetPickerStatusMessage: String {
+        if viewModel.isLoadingPresets(for: activeDevice) || viewModel.isLoadingPlaylists(for: activeDevice) {
+            return "Loading presets saved on this device..."
+        }
+        return "No device presets found. Save a preset on this lamp first."
+    }
+
+    private func visibleDevicePresets(for device: WLEDDevice) -> [WLEDPreset] {
+        let playlistIds = Set(viewModel.playlists(for: device).map(\.id))
+        return viewModel
+            .presets(for: device)
+            .filter { preset in
+                !playlistIds.contains(preset.id)
+                    && preset.isUserVisibleAutomationChoice
+                    && isGenericDevicePresetAutomationChoice(preset)
+            }
+            .sorted { lhs, rhs in
+                if lhs.id == rhs.id {
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+                return lhs.id < rhs.id
+            }
+    }
+
+    private func recoveredDevicePresets(
+        for device: WLEDDevice,
+        markerKind: AesdeticWLEDPresetMarkerKind
+    ) -> [WLEDPreset] {
+        let playlistIds = Set(viewModel.playlists(for: device).map(\.id))
+        let localPresetIds: Set<Int>
+
+        switch markerKind {
+        case .savedColor:
+            localPresetIds = Set(
+                presetsStore.colorPresets.compactMap { preset in
+                    preset.wledPresetIds?[device.id] ?? preset.wledPresetId
+                }
+            )
+        case .savedAnimation:
+            localPresetIds = Set(
+                presetsStore.effectPresets(for: device.id).compactMap(\.wledPresetId)
+            )
+        case .savedTransition, .transitionStep, .automation, .automationStep:
+            localPresetIds = []
+        }
+
+        return viewModel
+            .presets(for: device)
+            .filter { preset in
+                guard !playlistIds.contains(preset.id),
+                      !localPresetIds.contains(preset.id),
+                      preset.isUserVisibleAutomationChoice,
+                      let marker = AesdeticWLEDPresetNameMarker.parse(preset.name) else {
+                    return false
+                }
+                return marker.kind == markerKind
+            }
+            .sorted { lhs, rhs in
+                if lhs.id == rhs.id {
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+                return lhs.id < rhs.id
+            }
+    }
+
+    private func isGenericDevicePresetAutomationChoice(_ preset: WLEDPreset) -> Bool {
+        guard let marker = AesdeticWLEDPresetNameMarker.parse(preset.name) else {
+            return true
+        }
+
+        switch marker.kind {
+        case .savedColor, .savedAnimation, .savedTransition, .transitionStep, .automation, .automationStep:
+            return false
+        }
+    }
+
+    private func effectSegment(for preset: WLEDPreset) -> SegmentUpdate? {
+        if let segment = preset.state?.seg?.first(where: { $0.fx != nil }) {
+            return segment
+        }
+        if let segment = preset.segment, segment.fx != nil {
+            return segment
+        }
+        return nil
+    }
+
+    private func applyRecoveredEffectPreset(_ preset: WLEDPreset) {
+        guard let segment = effectSegment(for: preset) else { return }
+
+        selectedRecoveredEffectPresetId = preset.id
+        selectedRecoveredColorPresetId = nil
+        selectedEffectPresetId = nil
+        selectedDevicePresetId = nil
+        selectedEffectId = segment.fx ?? selectedEffectId
+        effectSpeed = segment.sx ?? 128
+        effectIntensity = segment.ix ?? 128
+        effectBrightness = Double(max(0, min(255, preset.state?.bri ?? segment.bri ?? 255)))
+
+        let segments: [SegmentUpdate]
+        if let stateSegments = preset.state?.seg, !stateSegments.isEmpty {
+            segments = stateSegments
+        } else {
+            segments = [segment]
+        }
+
+        let stops = gradientStopsFromSegments(segments)
+        if !stops.isEmpty {
+            effectGradient = LEDGradient(stops: stops, interpolation: .linear)
+        }
+    }
+
+    private func normalizeDevicePresetSelectionIfNeeded() {
+        guard actionSelection == .preset else { return }
+        if let selectedDevicePresetId,
+           visibleDevicePresets.contains(where: { $0.id == selectedDevicePresetId }) {
+            return
+        }
+        selectedDevicePresetId = visibleDevicePresets.first?.id
+    }
+
+    private struct DevicePresetPreview {
+        let gradient: LEDGradient
+        let brightness: Int
+    }
+
+    private func devicePresetPreview(for preset: WLEDPreset) -> DevicePresetPreview {
+        let preferredSegments = (preset.state?.seg ?? []).filter { ($0.col?.isEmpty == false) }
+        let segments: [SegmentUpdate]
+        if !preferredSegments.isEmpty {
+            segments = preferredSegments
+        } else if let segment = preset.segment, segment.col?.isEmpty == false {
+            segments = [segment]
+        } else {
+            segments = []
+        }
+
+        let stops = gradientStopsFromSegments(segments)
+        let gradient = LEDGradient(
+            stops: stops.isEmpty ? fallbackDevicePresetStops() : stops,
+            interpolation: .linear
+        )
+        let brightness = max(0, min(255, preset.state?.bri ?? preset.segment?.bri ?? 255))
+        return DevicePresetPreview(gradient: gradient, brightness: brightness)
+    }
+
+    private func gradientStops(for gradient: LEDGradient) -> [Gradient.Stop] {
+        gradient.stops
+            .sorted { $0.position < $1.position }
+            .map { stop in
+                Gradient.Stop(color: Color(hex: stop.hexColor), location: max(0.0, min(1.0, stop.position)))
+            }
+    }
+
+    private func gradientStopsFromSegments(_ segments: [SegmentUpdate]) -> [GradientStop] {
+        guard !segments.isEmpty else { return [] }
+
+        struct SegmentColorSpan {
+            let index: Int
+            let start: Int?
+            let stop: Int?
+            let hexColor: String
+        }
+
+        let spans = segments.enumerated().compactMap { index, segment -> SegmentColorSpan? in
+            guard let hex = primaryHexColor(from: segment) else { return nil }
+            return SegmentColorSpan(index: index, start: segment.start, stop: segment.stop, hexColor: hex)
+        }
+        guard !spans.isEmpty else { return [] }
+
+        let useAbsoluteBounds = spans.allSatisfy { span in
+            guard let start = span.start, let stop = span.stop else { return false }
+            return stop > start
+        }
+
+        let ordered = useAbsoluteBounds
+            ? spans.sorted { ($0.start ?? 0) < ($1.start ?? 0) }
+            : spans.sorted { $0.index < $1.index }
+
+        var stops: [GradientStop] = []
+        if useAbsoluteBounds {
+            let minStart = ordered.compactMap(\.start).min() ?? 0
+            let maxStop = ordered.compactMap(\.stop).max() ?? (minStart + 1)
+            let spanLength = max(1, maxStop - minStart)
+
+            for span in ordered {
+                guard let start = span.start, let stop = span.stop else { continue }
+                let startPos = max(0.0, min(1.0, Double(start - minStart) / Double(spanLength)))
+                let endPos = max(0.0, min(1.0, Double(stop - minStart) / Double(spanLength)))
+                stops.append(GradientStop(position: startPos, hexColor: span.hexColor))
+                stops.append(GradientStop(position: endPos, hexColor: span.hexColor))
+            }
+        } else {
+            let count = max(1, ordered.count)
+            for (index, span) in ordered.enumerated() {
+                let startPos = count == 1 ? 0.0 : Double(index) / Double(count)
+                let endPos = count == 1 ? 1.0 : Double(index + 1) / Double(count)
+                stops.append(GradientStop(position: startPos, hexColor: span.hexColor))
+                stops.append(GradientStop(position: endPos, hexColor: span.hexColor))
+            }
+        }
+
+        var normalized: [GradientStop] = []
+        for stop in stops.sorted(by: { $0.position < $1.position }) {
+            if let last = normalized.last, abs(last.position - stop.position) < 0.0005 {
+                normalized[normalized.count - 1] = GradientStop(position: last.position, hexColor: stop.hexColor)
+            } else {
+                normalized.append(stop)
+            }
+        }
+
+        guard let first = normalized.first else { return [] }
+        if first.position > 0 {
+            normalized.insert(GradientStop(position: 0, hexColor: first.hexColor), at: 0)
+        }
+        if let last = normalized.last, last.position < 1 {
+            normalized.append(GradientStop(position: 1, hexColor: last.hexColor))
+        }
+        if normalized.count == 1, let single = normalized.first {
+            normalized.append(GradientStop(position: 1, hexColor: single.hexColor))
+        }
+
+        return normalized
+    }
+
+    private func primaryHexColor(from segment: SegmentUpdate) -> String? {
+        guard let rgb = segment.col?.first, rgb.count >= 3 else { return nil }
+        let red = max(0, min(255, rgb[0]))
+        let green = max(0, min(255, rgb[1]))
+        let blue = max(0, min(255, rgb[2]))
+        return String(format: "%02X%02X%02X", red, green, blue)
+    }
+
+    private func fallbackDevicePresetStops() -> [GradientStop] {
+        [
+            GradientStop(position: 0.0, hexColor: "FFFFFF"),
+            GradientStop(position: 1.0, hexColor: "FFA000")
+        ]
+    }
+
     private func deviceName(for deviceId: String) -> String {
         availableDevices.first(where: { $0.id == deviceId })?.name ?? "Device"
     }
@@ -2820,6 +3359,9 @@ struct AddAutomationDialog: View {
         }
         if actionSelection == .scene && selectedScene == nil {
             return false
+        }
+        if actionSelection == .preset {
+            return selectedDevicePreset != nil && selectedDevicePresetAvailableOnTargets
         }
         if actionSelection == .effect {
             return selectedEffectId != nil
@@ -2934,6 +3476,8 @@ struct AddAutomationDialog: View {
             return transitionProfilesByDevice.map(\.profile.slotsRequired).max() ?? 0
         case .color:
             return 1
+        case .preset:
+            return 0
         case .scene:
             return 1
         case .effect:
@@ -3167,7 +3711,10 @@ struct AddAutomationDialog: View {
             return (next, timeZone)
 
         case .sunrise, .sunset:
-            guard let reference = await automationStore.currentSolarReference(for: activeDevice) else {
+            guard let reference = await automationStore.currentSolarReference(
+                for: activeDevice,
+                requestAuthorization: true
+            ) else {
                 return (nil, .current)
             }
             let event: SolarEvent = triggerSelection == .sunrise ? .sunrise : .sunset
@@ -3280,7 +3827,7 @@ struct AddAutomationDialog: View {
                 showLocationSettingsAlert = true
                 return
             case .notDetermined:
-                let coordinate = await AutomationStore.shared.currentCoordinate()
+                let coordinate = await AutomationStore.shared.currentCoordinate(requestAuthorization: true)
                 if coordinate == nil {
                     switch CLLocationManager().authorizationStatus {
                     case .denied, .restricted:
@@ -3371,7 +3918,9 @@ struct AddAutomationDialog: View {
         }
         for device in targetDevicesForCapacity {
             await viewModel.loadPresets(for: device)
+            await viewModel.loadPlaylists(for: device, force: false)
         }
+        normalizeDevicePresetSelectionIfNeeded()
     }
 
     private func buildAutomation() -> Automation? {
@@ -3495,7 +4044,7 @@ struct AddAutomationDialog: View {
                     whiteLevel: gradientWhiteLevel,
                     shouldLoop: false,
                     presetId: selectedColorPresetId,
-                    presetName: selectedColorPreset?.name,
+                    presetName: selectedColorPreset?.name ?? selectedRecoveredColorPreset?.displayName,
                     powerOn: colorPowerOn
                 )
             )
@@ -3512,6 +4061,15 @@ struct AddAutomationDialog: View {
             return buildTransitionAction()
         case .effect:
             return buildEffectAction()
+        case .preset:
+            guard let preset = selectedDevicePreset else { return nil }
+            return .preset(
+                PresetActionPayload(
+                    presetId: preset.id,
+                    paletteName: preset.displayName,
+                    durationSeconds: nil
+                )
+            )
         }
     }
 
@@ -3657,8 +4215,10 @@ private extension AddAutomationDialog {
         }
 
         // Use editor values (from AutomationEffectEditor bindings)
-            let effectName = effectOptions.first(where: { $0.id == effectId })?.name
+        let effectName = effectOptions.first(where: { $0.id == effectId })?.name
         let gradient = effectGradient ?? viewModel.automationGradient(for: activeDevice)
+        let recoveredSegment = selectedRecoveredEffectPreset.flatMap { effectSegment(for: $0) }
+        let recoveredPresetName = selectedRecoveredEffectPreset?.displayName
             return .effect(
                 EffectActionPayload(
                     effectId: effectId,
@@ -3666,10 +4226,10 @@ private extension AddAutomationDialog {
                     gradient: gradient,
                 speed: effectSpeed,
                 intensity: effectIntensity,
-                paletteId: nil,
+                paletteId: recoveredSegment?.pal,
                 brightness: Int(effectBrightness),
                 presetId: nil,
-                presetName: nil
+                presetName: recoveredPresetName
             )
         )
     }

@@ -179,7 +179,9 @@ struct SaveEffectPresetDialog: View {
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {
-            presetName = "Effect Preset \(Date().presetNameTimestamp())"
+            presetName = PresetDefaultNaming.animationName(
+                existingNames: PresetsStore.shared.effectPresets(for: device.id).map(\.name)
+            )
             // Auto-focus text field after a brief delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isTextFieldFocused = true

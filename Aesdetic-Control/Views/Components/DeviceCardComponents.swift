@@ -11,8 +11,15 @@ import Foundation
 enum DeviceDetailPresentation {
     static let coordinateSpaceName = "device-detail-presentation"
     static let animation = Animation.spring(response: 0.48, dampingFraction: 0.88, blendDuration: 0.08)
-    static let expandedCornerRadius: CGFloat = 34
+    static let expandedTopCornerRadius: CGFloat = 36
+    static let expandedBottomCornerRadiusMinimum: CGFloat = 34
+    static let expandedPanelHorizontalInset: CGFloat = 8
+    static let expandedPanelTopInset: CGFloat = 4
+    static let expandedPanelBottomInset: CGFloat = expandedPanelHorizontalInset
+    static let dockHideLeadTime: TimeInterval = 0.18
     static let folderSourceCornerRadius: CGFloat = 20
+    static let contentHorizontalInset: CGFloat = 10
+    static let tabContentHorizontalInset: CGFloat = 20
     static let dismissGestureActivationHeight: CGFloat = 168
 
     static func interactiveProgress(isPresented: Bool, dragOffset: CGFloat) -> CGFloat {
@@ -28,13 +35,31 @@ enum DeviceDetailPresentation {
         startLocation.y <= dismissGestureActivationHeight
     }
 
+    static func expandedPanelFrame(
+        in size: CGSize,
+        bottomSafeAreaInset: CGFloat
+    ) -> CGRect {
+        CGRect(
+            x: expandedPanelHorizontalInset,
+            y: expandedPanelTopInset,
+            width: max(1, size.width - (expandedPanelHorizontalInset * 2)),
+            height: max(
+                420,
+                size.height
+                    + bottomSafeAreaInset
+                    - expandedPanelTopInset
+                    - expandedPanelBottomInset
+            )
+        )
+    }
+
     static func sourceCornerRadius(for sourceFrame: CGRect?) -> CGFloat {
         guard let sourceFrame else { return folderSourceCornerRadius }
         return abs(sourceFrame.width - sourceFrame.height) < 24 ? folderSourceCornerRadius : 18
     }
 
     static func fallbackSourceFrame(for panelFrame: CGRect) -> CGRect {
-        CGRect(
+        return CGRect(
             x: panelFrame.minX + 18,
             y: panelFrame.maxY - 178,
             width: max(1, panelFrame.width - 36),
@@ -57,7 +82,67 @@ enum DeviceDetailPresentation {
     static func cornerRadius(sourceFrame: CGRect?, progress: CGFloat) -> CGFloat {
         let sourceRadius = sourceCornerRadius(for: sourceFrame)
         let clampedProgress = min(1, max(0, progress))
-        return sourceRadius + ((expandedCornerRadius - sourceRadius) * clampedProgress)
+        return sourceRadius + ((expandedTopCornerRadius - sourceRadius) * clampedProgress)
+    }
+
+    static func bottomCornerRadius(
+        sourceFrame: CGRect?,
+        progress: CGFloat,
+        bottomSafeAreaInset: CGFloat
+    ) -> CGFloat {
+        let sourceRadius = sourceCornerRadius(for: sourceFrame)
+        let inferredScreenCornerRadius = min(
+            52,
+            max(expandedBottomCornerRadiusMinimum, bottomSafeAreaInset + 14)
+        )
+        let clampedProgress = min(1, max(0, progress))
+        return sourceRadius + ((inferredScreenCornerRadius - sourceRadius) * clampedProgress)
+    }
+}
+
+private struct DeviceDetailPanelClipModifier: ViewModifier {
+    let topCornerRadius: CGFloat
+    let bottomCornerRadius: CGFloat
+    let usesScreenConcentricBottomCorners: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), usesScreenConcentricBottomCorners {
+            content.clipShape(
+                ConcentricRectangle(
+                    uniformTopCorners: .fixed(topCornerRadius),
+                    uniformBottomCorners: .concentric(minimum: .fixed(bottomCornerRadius))
+                )
+            )
+        } else {
+            content.clipShape(
+                UnevenRoundedRectangle(
+                    cornerRadii: RectangleCornerRadii(
+                        topLeading: topCornerRadius,
+                        bottomLeading: bottomCornerRadius,
+                        bottomTrailing: bottomCornerRadius,
+                        topTrailing: topCornerRadius
+                    ),
+                    style: .continuous
+                )
+            )
+        }
+    }
+}
+
+extension View {
+    func deviceDetailPanelClip(
+        topCornerRadius: CGFloat,
+        bottomCornerRadius: CGFloat,
+        usesScreenConcentricBottomCorners: Bool
+    ) -> some View {
+        modifier(
+            DeviceDetailPanelClipModifier(
+                topCornerRadius: topCornerRadius,
+                bottomCornerRadius: bottomCornerRadius,
+                usesScreenConcentricBottomCorners: usesScreenConcentricBottomCorners
+            )
+        )
     }
 }
 
@@ -66,69 +151,73 @@ struct FolderGlassContainerBackground: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     let cornerRadius: CGFloat
-    var expanded: Bool = false
+    var bottomCornerRadius: CGFloat? = nil
+    var usesScreenConcentricBottomCorners = false
 
+    @ViewBuilder
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let contrastBoost = colorSchemeContrast == .increased ? 1.35 : 1
-        let detailTintOpacity = colorScheme == .dark ? 0.10 : 0.05
+        let resolvedBottomCornerRadius = bottomCornerRadius ?? cornerRadius
 
+        if #available(iOS 26.0, *), usesScreenConcentricBottomCorners {
+            glassBackground(
+                shape: ConcentricRectangle(
+                    uniformTopCorners: .fixed(cornerRadius),
+                    uniformBottomCorners: .concentric(minimum: .fixed(resolvedBottomCornerRadius))
+                ),
+                contrastBoost: contrastBoost
+            )
+        } else {
+            glassBackground(
+                shape: UnevenRoundedRectangle(
+                    cornerRadii: RectangleCornerRadii(
+                        topLeading: cornerRadius,
+                        bottomLeading: resolvedBottomCornerRadius,
+                        bottomTrailing: resolvedBottomCornerRadius,
+                        topTrailing: cornerRadius
+                    ),
+                    style: .continuous
+                ),
+                contrastBoost: contrastBoost
+            )
+        }
+    }
+
+    private func glassBackground<PanelShape: Shape>(
+        shape: PanelShape,
+        contrastBoost: Double
+    ) -> some View {
         ZStack {
-            if expanded {
-                LiquidGlassBackground(cornerRadius: cornerRadius, tint: nil, clarity: .clear)
-            } else if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, *) {
                 Color.clear
-                    .glassEffect(.clear, in: .rect(cornerRadius: cornerRadius))
+                    .glassEffect(.clear, in: shape)
             } else {
                 shape
                     .fill(.ultraThinMaterial.opacity(0.32))
-            }
-
-            if expanded {
-                shape
-                    .fill(Color.black.opacity(detailTintOpacity))
             }
 
             shape
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.white.opacity((expanded ? 0.038 : 0.095) * contrastBoost),
-                            Color.white.opacity((expanded ? 0.014 : 0.042) * contrastBoost),
-                            Color.white.opacity(expanded ? 0.006 : 0.018)
+                            Color.white.opacity(0.095 * contrastBoost),
+                            Color.white.opacity(0.042 * contrastBoost),
+                            Color.white.opacity(0.018)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
 
-            Capsule(style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity((expanded ? 0.072 : 0.26) * contrastBoost),
-                            Color.white.opacity((expanded ? 0.024 : 0.095) * contrastBoost),
-                            .clear
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: expanded ? 148 : 54, height: expanded ? 410 : 138)
-                .blur(radius: expanded ? 20 : 9)
-                .rotationEffect(.degrees(expanded ? -7 : 7))
-                .offset(x: expanded ? -176 : -50, y: expanded ? -108 : -8)
-                .mask(shape)
+            shape
+                .fill(Color.black.opacity(colorScheme == .dark ? 0.035 : 0.0))
 
             shape
-                .fill(Color.black.opacity(colorScheme == .dark ? (expanded ? 0.018 : 0.035) : 0.0))
-
-            shape
-                .strokeBorder(Color.white.opacity((expanded ? 0.18 : 0.22) * contrastBoost), lineWidth: expanded ? 0.9 : 1.0)
+                .stroke(Color.white.opacity(0.22 * contrastBoost), lineWidth: 1.0)
 
             LinearGradient(
                 colors: [
-                    Color.white.opacity((expanded ? 0.08 : 0.14) * contrastBoost),
+                    Color.white.opacity(0.14 * contrastBoost),
                     .clear
                 ],
                 startPoint: .topLeading,
@@ -136,27 +225,12 @@ struct FolderGlassContainerBackground: View {
             )
             .clipShape(shape)
         }
-        .clipShape(shape)
         .shadow(
             color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.09),
-            radius: expanded ? 22 : 12,
+            radius: 12,
             x: 0,
-            y: expanded ? 14 : 7
+            y: 7
         )
-    }
-}
-
-struct DeviceDetailBackdrop: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    let isActive: Bool
-
-    var body: some View {
-        let tintOpacity = colorScheme == .dark ? 0.12 : 0.075
-
-        Rectangle()
-            .fill(Color.black.opacity(isActive ? tintOpacity : 0))
-            .animation(.easeInOut(duration: 0.22), value: isActive)
     }
 }
 
@@ -164,6 +238,7 @@ struct DeviceDetailPresentationState {
     var device: WLEDDevice?
     var sourceFrame: CGRect?
     var isPresented = false
+    var isPreparing = false
     var isClosing = false
     var closingDragOffset: CGFloat = 0
 
@@ -171,6 +246,7 @@ struct DeviceDetailPresentationState {
         self.device = device
         self.sourceFrame = sourceFrame
         isPresented = false
+        isPreparing = true
         isClosing = false
         closingDragOffset = 0
     }
@@ -179,6 +255,7 @@ struct DeviceDetailPresentationState {
         device = nil
         sourceFrame = nil
         isPresented = false
+        isPreparing = false
         isClosing = false
         closingDragOffset = 0
     }
@@ -189,6 +266,25 @@ struct DeviceDetailSourceFramePreferenceKey: PreferenceKey {
 
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
+struct SetupJourneyDeviceFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newValue in newValue })
+    }
+}
+
+private struct SetupJourneyTargetDeviceIDKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    var setupJourneyTargetDeviceID: String? {
+        get { self[SetupJourneyTargetDeviceIDKey.self] }
+        set { self[SetupJourneyTargetDeviceIDKey.self] = newValue }
     }
 }
 
@@ -211,9 +307,37 @@ private struct DeviceDetailSourceFrameModifier: ViewModifier {
     }
 }
 
+private struct SetupJourneyTargetFrameModifier: ViewModifier {
+    @Environment(\.setupJourneyTargetDeviceID) private var targetDeviceID
+
+    let deviceId: String
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let canonicalDeviceID = WLEDDeviceIdentity.canonicalID(for: deviceId)
+        if targetDeviceID == canonicalDeviceID {
+            content
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: SetupJourneyDeviceFramePreferenceKey.self,
+                            value: [canonicalDeviceID: proxy.frame(in: .global)]
+                        )
+                    }
+                }
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
     func deviceDetailSourceFrame(deviceId: String) -> some View {
         modifier(DeviceDetailSourceFrameModifier(deviceId: deviceId))
+    }
+
+    func setupJourneyTargetFrame(deviceId: String) -> some View {
+        modifier(SetupJourneyTargetFrameModifier(deviceId: deviceId))
     }
 }
 
@@ -289,8 +413,8 @@ struct EnhancedDeviceCard: View {
     private var glassSurface: GlassSurfaceStyle { GlassTheme.surfaces(for: colorScheme) }
     private var glassText: GlassTextStyle { GlassTheme.text(for: colorScheme) }
     private var isReferenceLightMode: Bool { colorScheme == .light }
-    private var cardPrimaryTextColor: Color { .white.opacity(0.96) }
-    private var cardSecondaryTextColor: Color { .white.opacity(0.86) }
+    private var cardPrimaryTextColor: Color { AppTheme.text(.glassPrimary, for: colorScheme) }
+    private var cardSecondaryTextColor: Color { AppTheme.text(.glassSecondary, for: colorScheme) }
 
     var body: some View {
         ZStack {
@@ -319,6 +443,8 @@ struct EnhancedDeviceCard: View {
         .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)
         .appLiquidGlass(role: .card, cornerRadius: 16)
         .deviceDetailSourceFrame(deviceId: device.id)
+        .setupJourneyTargetFrame(deviceId: device.id)
+        .symbolRenderingMode(.hierarchical)
         .overlay {
             if requiresSetup {
                 Button(action: onTap) {
@@ -546,10 +672,10 @@ struct EnhancedDeviceCard: View {
                             )
                     } else {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(currentPowerState ? .white : .clear)
+                            .fill(currentPowerState ? AppTheme.controlFill(for: colorScheme, isActive: true) : .clear)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(colorScheme == .dark ? .white : .clear, lineWidth: currentPowerState ? 0 : 1.5)
+                                    .stroke(AppTheme.controlStroke(for: colorScheme, isActive: currentPowerState), lineWidth: currentPowerState ? 1 : 1.5)
                             )
                     }
                 }
@@ -571,7 +697,7 @@ struct EnhancedDeviceCard: View {
             .animation(.easeInOut(duration: 0.2), value: currentPowerState)
         }
         .buttonStyle(.plain)
-        .accessibilityElement()
+        .accessibilityIdentifier("device-card-power-\(device.id)")
         .accessibilityLabel("Power")
         .accessibilityValue(currentPowerState ? "On" : "Off")
         .accessibilityHint(currentPowerState ? "Double tap to turn the device off." : "Double tap to turn the device on.")
@@ -749,7 +875,7 @@ struct EnhancedDeviceCard: View {
         if !currentPowerState {
             return .white
         }
-        return colorScheme == .dark ? .black : glassText.pagePrimaryText
+        return AppTheme.text(.selectedControlPrimary, for: colorScheme)
     }
 
     private var borderStrokeOuter: Color {
@@ -990,11 +1116,11 @@ struct ImagePickerSheet: View {
                                     Text("Choose from Photos")
                                         .font(AppTypography.style(.subheadline))
                                         .fontWeight(.medium)
-                                        .foregroundColor(.primary)
+                                        .foregroundColor(.white)
                                     
                                     Text("Upload a PNG image for your device")
                                         .font(AppTypography.style(.caption))
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(.white.opacity(0.72))
                                         .multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity)
@@ -1227,7 +1353,7 @@ struct ImageSelectionCard: View {
             Text(displayName)
                 .font(AppTypography.style(.caption))
                 .fontWeight(.medium)
-                .foregroundColor(.primary)
+                .foregroundColor(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }

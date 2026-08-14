@@ -23,6 +23,38 @@ enum AppLiquidGlassRole {
     }
 }
 
+enum AppLiquidGlassFrostProminence {
+    case selected
+
+    func materialOpacity(for colorScheme: ColorScheme) -> Double {
+        switch self {
+        case .selected:
+            return colorScheme == .dark ? 0.34 : 0.28
+        }
+    }
+
+    func overlayOpacity(for colorScheme: ColorScheme) -> Double {
+        switch self {
+        case .selected:
+            return colorScheme == .dark ? 0.20 : 0.16
+        }
+    }
+
+    var selectedStrokeBoost: Double {
+        switch self {
+        case .selected:
+            return 0.20
+        }
+    }
+
+    var selectedHighlightBoost: Double {
+        switch self {
+        case .selected:
+            return 0.14
+        }
+    }
+}
+
 private struct AppLiquidGlassModifier: ViewModifier {
     let role: AppLiquidGlassRole
     var cornerRadiusOverride: CGFloat?
@@ -168,6 +200,59 @@ private struct AppLiquidGlassModifier: ViewModifier {
     }
 }
 
+struct AppLiquidGlassFrostOverlay: View {
+    let isActive: Bool
+    let cornerRadius: CGFloat
+    var prominence: AppLiquidGlassFrostProminence = .selected
+    var showsInactiveEdge: Bool = false
+    var usesMaterial: Bool = true
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let progress = isActive ? 1.0 : 0.0
+        let inactiveEdgeOpacity = showsInactiveEdge ? 0.18 : 0.0
+        let inactiveHighlightOpacity = showsInactiveEdge ? 0.08 : 0.0
+
+        ZStack {
+            shape
+                .fill(.ultraThinMaterial.opacity(usesMaterial && isActive ? prominence.materialOpacity(for: colorScheme) : 0))
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+
+            shape
+                .fill(selectedOverlayColor.opacity(progress))
+                .animation(.easeInOut(duration: 0.16), value: isActive)
+
+            shape
+                .stroke(
+                    Color.white.opacity(inactiveEdgeOpacity + (progress * prominence.selectedStrokeBoost)),
+                    lineWidth: 1
+                )
+                .animation(.easeInOut(duration: 0.16), value: isActive)
+
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(inactiveHighlightOpacity + (progress * prominence.selectedHighlightBoost)),
+                    .clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .center
+            )
+            .clipShape(shape)
+            .animation(.easeInOut(duration: 0.16), value: isActive)
+        }
+        .clipShape(shape)
+        .compositingGroup()
+    }
+
+    private var selectedOverlayColor: Color {
+        Color.white.opacity(prominence.overlayOpacity(for: colorScheme))
+    }
+}
+
 extension View {
     func appLiquidGlass(
         role: AppLiquidGlassRole = .card,
@@ -183,5 +268,23 @@ extension View {
                 highContrastDarkTintOpacity: highContrastDarkTintOpacity
             )
         )
+    }
+
+    func appLiquidGlassFrost(
+        isActive: Bool,
+        cornerRadius: CGFloat,
+        prominence: AppLiquidGlassFrostProminence = .selected,
+        showsInactiveEdge: Bool = false,
+        usesMaterial: Bool = true
+    ) -> some View {
+        overlay {
+            AppLiquidGlassFrostOverlay(
+                isActive: isActive,
+                cornerRadius: cornerRadius,
+                prominence: prominence,
+                showsInactiveEdge: showsInactiveEdge,
+                usesMaterial: usesMaterial
+            )
+        }
     }
 }

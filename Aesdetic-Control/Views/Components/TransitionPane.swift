@@ -3,7 +3,6 @@ import SwiftUI
 struct TransitionPane: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @ObservedObject private var automationStore = AutomationStore.shared
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let device: WLEDDevice
     @Binding var dismissColorPicker: Bool
     @Binding var isExpanded: Bool
@@ -35,6 +34,8 @@ struct TransitionPane: View {
     @State private var durationSecondsPart: Int = 0
     @State private var selectedStartPresetId: UUID?
     @State private var selectedEndPresetId: UUID?
+    @State private var selectedStartRecoveredPresetId: Int?
+    @State private var selectedEndRecoveredPresetId: Int?
     @State private var isApplyingTransition: Bool = false
     @State private var isCancellingTransition: Bool = false
     @State private var saveFeedbackTrigger: Int = 0
@@ -98,7 +99,7 @@ struct TransitionPane: View {
     }
 
     private var isPresetWriteLocked: Bool {
-        viewModel.presetWriteInProgress.contains(device.id)
+        viewModel.isPersistentPresetStoreEditBlocked(for: device.id)
     }
     
     private var durationTotalSeconds: Double {
@@ -146,6 +147,15 @@ struct TransitionPane: View {
         PresetsStore.shared.colorPresets
     }
 
+    private var recoveredColorPresets: [WLEDRecoveredColorPreset] {
+        WLEDDevicePresetRecovery.recoveredColorPresets(
+            for: device.id,
+            presets: viewModel.presets(for: device),
+            playlists: viewModel.playlists(for: device),
+            localColorPresets: colorPresets
+        )
+    }
+
     var body: some View {
         let base = paneCardContent
         let runtimeBound = applyRuntimeModifiers(to: base)
@@ -169,14 +179,7 @@ struct TransitionPane: View {
             }
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(backgroundFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(colorSchemeContrast == .increased ? 0.26 : 0.16), lineWidth: 1)
-                )
-        )
+        .settingsDetailControlBackground()
     }
 
     @ViewBuilder
@@ -350,7 +353,7 @@ struct TransitionPane: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(AppTypography.text(size: 9, weight: .bold, relativeTo: .caption2))
-                        .foregroundColor(.black.opacity(0.75))
+                        .foregroundColor(.white.opacity(0.75))
                         .frame(width: 14, height: 14)
                         .background(
                             Circle()
@@ -369,6 +372,60 @@ struct TransitionPane: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(preset.name) preset")
+        .accessibilityHint(target == .start ? "Apply to start gradient" : "Apply to end gradient")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func recoveredPresetChip(for preset: WLEDRecoveredColorPreset, target: PresetTarget) -> some View {
+        let isSelected = target == .start
+            ? selectedStartRecoveredPresetId == preset.id
+            : selectedEndRecoveredPresetId == preset.id
+        Button(action: {
+            applyRecoveredPreset(preset, to: target)
+        }) {
+            LinearGradient(
+                gradient: Gradient(stops: preset.gradient.stops.sorted { $0.position < $1.position }.map {
+                    .init(color: $0.color, location: $0.position)
+                }),
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: 48, height: 30)
+            .clipShape(Capsule(style: .continuous))
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.82 : 0.28), lineWidth: isSelected ? 1.5 : 1)
+            )
+            .shadow(
+                color: .black.opacity(isSelected ? 0.24 : 0.12),
+                radius: isSelected ? 4 : 2,
+                x: 0,
+                y: isSelected ? 2 : 1
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(AppTypography.text(size: 9, weight: .bold, relativeTo: .caption2))
+                        .foregroundColor(.white.opacity(0.75))
+                        .frame(width: 14, height: 14)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.9))
+                        )
+                        .offset(x: 2, y: 2)
+                }
+            }
+            .contentShape(Capsule(style: .continuous))
+            .accessibilityHidden(true)
+            .padding(.vertical, 1)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(isSelected ? 0.12 : 0.04))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.displayName) on-device color")
         .accessibilityHint(target == .start ? "Apply to start gradient" : "Apply to end gradient")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -420,6 +477,7 @@ struct TransitionPane: View {
         switch target {
         case .start:
             selectedStartPresetId = preset.id
+            selectedStartRecoveredPresetId = nil
             gradientA = LEDGradient(stops: sortedStops, interpolation: interpolation)
             stopsA = sortedStops
             stopTemperaturesA = temperatureMap
@@ -428,10 +486,38 @@ struct TransitionPane: View {
             Task { await applyNow(stops: sortedStops, interpolation: interpolation) }
         case .end:
             selectedEndPresetId = preset.id
+            selectedEndRecoveredPresetId = nil
             gradientB = LEDGradient(stops: sortedStops, interpolation: interpolation)
             stopsB = sortedStops
             stopTemperaturesB = temperatureMap
             stopWhiteLevelsB = whiteMap
+            bBrightness = Double(preset.brightness)
+            Task { await applyNowB(stops: sortedStops, interpolation: interpolation) }
+        }
+    }
+
+    private func applyRecoveredPreset(_ preset: WLEDRecoveredColorPreset, to target: PresetTarget) {
+        let sortedStops = preset.gradient.stops.sorted { $0.position < $1.position }
+        guard !sortedStops.isEmpty else { return }
+        let interpolation = target == .start ? currentGradientA.interpolation : endInterpolation
+
+        switch target {
+        case .start:
+            selectedStartPresetId = nil
+            selectedStartRecoveredPresetId = preset.id
+            gradientA = LEDGradient(stops: sortedStops, interpolation: interpolation)
+            stopsA = sortedStops
+            stopTemperaturesA = [:]
+            stopWhiteLevelsA = [:]
+            aBrightness = Double(preset.brightness)
+            Task { await applyNow(stops: sortedStops, interpolation: interpolation) }
+        case .end:
+            selectedEndPresetId = nil
+            selectedEndRecoveredPresetId = preset.id
+            gradientB = LEDGradient(stops: sortedStops, interpolation: interpolation)
+            stopsB = sortedStops
+            stopTemperaturesB = [:]
+            stopWhiteLevelsB = [:]
             bBrightness = Double(preset.brightness)
             Task { await applyNowB(stops: sortedStops, interpolation: interpolation) }
         }
@@ -488,49 +574,23 @@ struct TransitionPane: View {
                 .opacity((isSavingPreset || isApplyingTransition || isCancellingTransition || viewModel.isTransitionCleanupInProgress(for: device.id) || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
 
                 Text("Transition")
-                    .font(AppTypography.style(.headline))
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
 
                 Spacer()
 
                 if isTransitionActive {
-                    Button(action: {
+                    PresetSavePillButton(
+                        title: "Save Transition",
+                        isSaving: isSavingPreset,
+                        isSuccess: showSaveSuccess,
+                        isDisabled: isPresetButtonDisabled,
+                        minWidth: 138
+                    ) {
                         Task {
                             await saveTransitionPresetDirectly()
                         }
-                    }) {
-                        HStack(spacing: 6) {
-                            if isSavingPreset {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .tint(.white)
-                            } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(AppTypography.style(.caption))
-                                    .foregroundColor(.green.opacity(0.95))
-                            } else {
-                                Image(systemName: "plus.circle")
-                                    .font(AppTypography.style(.caption))
-                            }
-                            Text(showSaveSuccess ? "Saved" : "Save Transition")
-                                .font(AppTypography.style(.caption, weight: .semibold))
-                        }
-                        .foregroundColor(showSaveSuccess ? Color.black.opacity(0.82) : .white.opacity(0.9))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(showSaveSuccess ? Color.white.opacity(0.92) : Color.white.opacity(0.12))
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(showSaveSuccess ? Color.green.opacity(0.95) : Color.white.opacity(0.16), lineWidth: showSaveSuccess ? 1.5 : 1)
-                                )
-                        )
-                        .shadow(color: showSaveSuccess ? Color.green.opacity(0.38) : Color.clear, radius: 10, x: 0, y: 4)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(isPresetButtonDisabled)
-                    .opacity(isPresetButtonDisabled ? 0.45 : 1.0)
                 }
             }
 
@@ -732,11 +792,14 @@ struct TransitionPane: View {
                 }
             }
 
-            if !colorPresets.isEmpty {
+            if !colorPresets.isEmpty || !recoveredColorPresets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(colorPresets) { preset in
                             presetChip(for: preset, target: .start)
+                        }
+                        ForEach(recoveredColorPresets) { preset in
+                            recoveredPresetChip(for: preset, target: .start)
                         }
                     }
                     .padding(.horizontal, 2)
@@ -954,11 +1017,14 @@ struct TransitionPane: View {
                 }
             }
 
-            if !colorPresets.isEmpty {
+            if !colorPresets.isEmpty || !recoveredColorPresets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(colorPresets) { preset in
                             presetChip(for: preset, target: .end)
+                        }
+                        ForEach(recoveredColorPresets) { preset in
+                            recoveredPresetChip(for: preset, target: .end)
                         }
                     }
                     .padding(.horizontal, 2)
@@ -1334,10 +1400,6 @@ struct TransitionPane: View {
 }
 
 private extension TransitionPane {
-    var backgroundFill: Color {
-        Color.white.opacity(colorSchemeContrast == .increased ? 0.12 : 0.06)
-    }
-
     func persistDraftSession() {
         let session = TransitionDraftSession(
             gradientA: currentGradientA,
@@ -1403,7 +1465,11 @@ private extension TransitionPane {
             persistDraftSession()
         }
         
-        let presetName = "Transition \(Date().presetNameTimestamp())"
+        let presetName = await MainActor.run {
+            PresetDefaultNaming.transitionName(
+                existingNames: PresetsStore.shared.transitionPresets(for: device.id).map(\.name)
+            )
+        }
         let gB = currentGradientB.stops.isEmpty ? currentGradientA : currentGradientB
         let resolvedTempB = stopTemperaturesB.values.first ?? stopTemperaturesA.values.first
         let resolvedWhiteB = stopWhiteLevelsB.values.first ?? stopWhiteLevelsA.values.first
@@ -1461,40 +1527,6 @@ private extension TransitionPane {
             #if DEBUG
             print("✅ Transition preset saved to WLED device: Playlist ID \(result.playlistId)")
             print("transition_preset.save.synced playlist=\(result.playlistId) stepIds=\(result.stepPresetIds)")
-            #endif
-        case .some(.deferred):
-            await MainActor.run {
-                preset.wledPlaylistId = nil
-                preset.wledStepPresetIds = nil
-                preset.wledSyncState = .pendingSync
-                preset.lastWLEDSyncError = "Deferred WLED sync"
-                preset.lastWLEDSyncAt = nil
-                PresetsStore.shared.addTransitionPreset(preset)
-                viewModel.markPresetSaveHighlight(.transition, id: preset.id, for: device.id)
-                saveFeedbackTrigger += 1
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                isSavingPreset = false
-                showSaveSuccess = true
-                persistDraftSession()
-                viewModel.updateTransitionDraftSaveUIState(
-                    deviceId: device.id,
-                    isSavingPreset: false,
-                    showSaveSuccess: true
-                )
-            }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await MainActor.run {
-                showSaveSuccess = false
-                persistDraftSession()
-                viewModel.updateTransitionDraftSaveUIState(
-                    deviceId: device.id,
-                    isSavingPreset: false,
-                    showSaveSuccess: false
-                )
-            }
-            #if DEBUG
-            print("⚠️ Transition preset save deferred for WLED device due to preset store health")
-            print("transition_preset.save.deferred_local_only device=\(device.id)")
             #endif
         case .some(.suppressedBusy):
             await MainActor.run {

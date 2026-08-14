@@ -46,9 +46,10 @@ jobs:
             -scheme Aesdetic-Control \
             -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
             -only-testing:Aesdetic-ControlTests \
+            -parallel-testing-enabled NO \
             -enableCodeCoverage YES \
             -resultBundlePath ./test-results/unit-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO || true
+            CODE_SIGNING_ALLOWED=NO
       
       - name: Generate Code Coverage Report
         run: |
@@ -115,9 +116,10 @@ jobs:
             -scheme Aesdetic-Control \
             -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
             -only-testing:Aesdetic-ControlUITests \
+            -parallel-testing-enabled NO \
             -enableCodeCoverage YES \
             -resultBundlePath ./test-results/ui-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO || true
+            CODE_SIGNING_ALLOWED=NO
       
       - name: Generate UI Test Coverage Report
         run: |
@@ -176,8 +178,9 @@ jobs:
           xcodebuild clean build \
             -project Aesdetic-Control.xcodeproj \
             -scheme Aesdetic-Control \
+            -configuration Release \
             -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
-            CODE_SIGNING_ALLOWED=NO || true
+            CODE_SIGNING_ALLOWED=NO
       
       - name: Verify Build Artifacts
         run: |
@@ -257,4 +260,3 @@ jobs:
           else
             echo "UI test results not available" >> $GITHUB_STEP_SUMMARY
           fi
-

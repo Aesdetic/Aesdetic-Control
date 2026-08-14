@@ -1,6 +1,44 @@
 import SwiftUI
 
 struct AutomationRow: View {
+    private struct DeviceTimerStatus: Equatable {
+        let text: String
+        let retryable: Bool
+        let isReady: Bool
+        let showsProgress: Bool
+
+        static func working(_ text: String) -> DeviceTimerStatus {
+            DeviceTimerStatus(
+                text: text,
+                retryable: false,
+                isReady: false,
+                showsProgress: true
+            )
+        }
+
+        static func attention(_ text: String, retryable: Bool = true) -> DeviceTimerStatus {
+            DeviceTimerStatus(
+                text: text,
+                retryable: retryable,
+                isReady: false,
+                showsProgress: false
+            )
+        }
+
+        static func ready(
+            _ text: String = "Ready",
+            checking: Bool = false,
+            retryable: Bool = false
+        ) -> DeviceTimerStatus {
+            DeviceTimerStatus(
+                text: text,
+                retryable: retryable,
+                isReady: true,
+                showsProgress: checking
+            )
+        }
+    }
+
     let automation: Automation
     let scenes: [Scene]
     let isNext: Bool
@@ -10,6 +48,8 @@ struct AutomationRow: View {
     var isRunning: Bool = false
     var runningProgress: Double? = nil
     var subtitle: String? = nil
+    var usesDetailSecondaryContainer: Bool = false
+    var displayNoun: String = "automation"
     let onToggle: (Bool) -> Void
     var onRun: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
@@ -18,7 +58,11 @@ struct AutomationRow: View {
     var onDelete: (() -> Void)? = nil
     
     @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
+    @ObservedObject private var automationStore = AutomationStore.shared
     @State private var solarTriggerDate: Date?
+    @State private var routineReadyFeedbackTrigger = 0
+    @State private var routineReadyCheckVisible = false
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
     private var cardStyle: AppCardStyle {
         AppCardStyles.glass(
@@ -61,9 +105,7 @@ struct AutomationRow: View {
                 .padding(.trailing, 54)
         }
         .padding(16)
-        .background(
-            AppCardBackground(style: cardStyle)
-        )
+        .background(cardBackground)
         .blur(radius: isInteractionLocked ? 3 : 0)
         .overlay {
             if isInteractionLocked {
@@ -83,12 +125,45 @@ struct AutomationRow: View {
         .onChange(of: automation.trigger) { _, _ in
             loadSolarTriggerDate()
         }
-        .accessibilityLabel("\(automation.name) automation")
+        .onChange(
+            of: automationStore.routineReadyCelebrationToken(for: automation.id)
+        ) { oldValue, newValue in
+            if newValue > oldValue {
+                routineReadyFeedbackTrigger += 1
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.72)) {
+                    routineReadyCheckVisible = true
+                }
+                let feedbackToken = routineReadyFeedbackTrigger
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_100_000_000)
+                    guard routineReadyFeedbackTrigger == feedbackToken else { return }
+                    withAnimation(.easeInOut(duration: 0.24)) {
+                        routineReadyCheckVisible = false
+                    }
+                }
+            }
+        }
+        .onChange(of: deviceTimerStatus?.isReady) { _, isReady in
+            if isReady != true {
+                routineReadyCheckVisible = false
+            }
+        }
+        .sensorySuccess(trigger: routineReadyFeedbackTrigger)
+        .accessibilityLabel("\(automation.name) \(displayNoun)")
         .accessibilityValue(automation.enabled ? "Enabled" : "Disabled")
         .accessibilityHint(isDeleting
-            ? "Automation is being deleted. Keep app open until it completes."
-            : "Double tap to edit this automation. Use the inline controls to run, save, delete, or toggle it."
+            ? "\(displayNoun.capitalized) is being deleted. Keep app open until it completes."
+            : "Double tap to edit this \(displayNoun). Use the inline controls to run, save, delete, or toggle it."
         )
+    }
+
+    @ViewBuilder
+    private var cardBackground: some View {
+        if usesDetailSecondaryContainer {
+            SettingsDetailControlBackground(cornerRadius: cardCornerRadius)
+        } else {
+            AppCardBackground(style: cardStyle)
+        }
     }
 
     private var loadingOverlay: some View {
@@ -129,19 +204,19 @@ struct AutomationRow: View {
         VStack(alignment: .leading, spacing: 5) {
             topStatusChips
             Text(automation.name)
-                .font(AppTypography.style(.headline, weight: .semibold))
-                .foregroundColor(.white)
+                .font(DeviceDetailTypography.cardTitle)
+                .foregroundColor(theme.textPrimary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(actionDescription)
-                .font(AppTypography.style(.caption, weight: .medium))
-                .foregroundColor(.white.opacity(0.72))
+                .font(DeviceDetailTypography.metadata.weight(.medium))
+                .foregroundColor(theme.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
             if let subtitle {
                 Text(subtitle)
                     .font(AppTypography.style(.caption))
-                    .foregroundColor(.white.opacity(0.62))
+                    .foregroundColor(theme.textTertiary)
             }
         }
         .padding(.bottom, 48)
@@ -176,7 +251,7 @@ struct AutomationRow: View {
                 }
             }
             .frame(maxWidth: previews.count > 1 ? 190 : 150)
-            .accessibilityLabel("Automation color preview")
+            .accessibilityLabel("\(displayNoun.capitalized) color preview")
         }
     }
     
@@ -202,7 +277,7 @@ struct AutomationRow: View {
                 neutralChip(runningChipText, prominent: true)
             }
             if let deviceTimerStatus {
-                neutralChip(deviceTimerStatus.text)
+                routineStatusChip(deviceTimerStatus)
             }
             TimelineView(.periodic(from: .now, by: 20)) { context in
                 if let triggerText = recentOnDeviceTriggerText(referenceDate: context.date) {
@@ -249,7 +324,7 @@ struct AutomationRow: View {
             if let onDelete {
                 neutralIconButton(
                     systemName: "trash",
-                    accessibilityLabel: isDeleteDisabled ? "Delete unavailable" : "Delete automation",
+                    accessibilityLabel: isDeleteDisabled ? "Delete unavailable" : "Delete \(displayNoun)",
                     isDisabled: isDeleteDisabled,
                     action: onDelete
                 )
@@ -344,6 +419,46 @@ struct AutomationRow: View {
                     )
             )
     }
+
+    private func routineStatusChip(_ status: DeviceTimerStatus) -> some View {
+        HStack(spacing: routineReadyCheckVisible || status.showsProgress ? 5 : 0) {
+            if status.isReady && routineReadyCheckVisible {
+                Image(systemName: "checkmark")
+                    .font(AppTypography.style(.caption2, weight: .bold))
+                    .symbolEffect(.bounce, value: routineReadyFeedbackTrigger)
+                    .transition(
+                        .opacity
+                            .combined(with: .scale(scale: 0.72))
+                            .combined(with: .move(edge: .leading))
+                    )
+            } else if status.showsProgress {
+                ProgressView()
+                    .scaleEffect(0.55)
+                    .tint(.white.opacity(0.74))
+                    .frame(width: 10, height: 10)
+                    .transition(.opacity.combined(with: .scale(scale: 0.86)))
+            }
+
+            Text(status.text)
+                .font(AppTypography.style(.caption2, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundColor(.white.opacity(status.isReady ? 0.94 : 0.76))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(status.isReady ? 0.16 : 0.10))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(status.isReady ? 0.26 : 0.18), lineWidth: 1)
+                )
+        )
+        .shadow(color: status.isReady ? Color.white.opacity(0.08) : Color.clear, radius: 6, x: 0, y: 2)
+        .scaleEffect(status.isReady && routineReadyCheckVisible ? 1.018 : 1.0)
+        .animation(.easeInOut(duration: 0.24), value: routineReadyCheckVisible)
+        .animation(.spring(response: 0.22, dampingFraction: 0.72), value: routineReadyFeedbackTrigger)
+    }
     
     private var triggerRow: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -361,28 +476,107 @@ struct AutomationRow: View {
         }
     }
 
-    private var deviceTimerStatus: (text: String, color: Color, retryable: Bool)? {
+    private var deviceTimerStatus: DeviceTimerStatus? {
         guard automation.enabled else { return nil }
         guard automation.metadata.runOnDevice else { return nil }
         let deviceIds = automation.targets.deviceIds
         if deviceIds.isEmpty {
-            return ("Not ready", .orange, true)
+            return .attention("Not ready")
         }
+
+        if automationStore.hasOnDeviceSyncInProgress(for: automation.id) {
+            return .working("Preparing")
+        }
+
         let states = deviceIds.map { automation.metadata.syncState(for: $0) }
         let syncedCount = states.filter { $0 == .synced }.count
+        let evidence = syncedCount == deviceIds.count
+            ? deviceIds.map {
+                automationStore.onDeviceRoutineReadinessEvidence(
+                    automationId: automation.id,
+                    deviceId: $0
+                )
+            }
+            : []
+        let transactionStatuses = deviceIds.map {
+            deviceViewModel.presetStoreTransactionStatus(for: $0)
+        }
+        if transactionStatuses.contains(.needsRepair) {
+            return .attention("Needs repair")
+        }
+        if transactionStatuses.contains(.recovering) {
+            return .working("Recovering")
+        }
+        if transactionStatuses.contains(.saving) {
+            if syncedCount == deviceIds.count,
+               evidence.allSatisfy({ $0.operationalState == .lastKnownReady }) {
+                return .ready("Ready · Checking", checking: true)
+            }
+            return .working("Preparing")
+        }
+        if transactionStatuses.contains(.verifying) {
+            if syncedCount == deviceIds.count,
+               evidence.allSatisfy({ $0.operationalState == .lastKnownReady }) {
+                return .ready("Ready · Checking", checking: true)
+            }
+            return .working("Verifying")
+        }
+
+        let healthStates = deviceIds.map {
+            deviceViewModel.presetStoreHealthByDeviceId[$0]
+        }
+        if healthStates.contains(where: { $0 == .unsafeWritesPaused }) {
+            return .attention("Needs repair")
+        }
+
         if syncedCount == deviceIds.count {
-            return ("Ready", theme.status.positive, false)
+            if evidence.contains(where: { $0.operationalState == .confirmedNotReady }) {
+                return .attention("Not ready")
+            }
+
+            let allLastKnownReady = evidence.allSatisfy {
+                $0.operationalState == .lastKnownReady
+            }
+            let hasChecking = evidence.contains {
+                $0.verificationState == .checking || $0.verificationState == .notStarted
+            }
+            let hasUnavailableVerification = evidence.contains {
+                $0.verificationState == .temporarilyUnavailable
+            }
+                || transactionStatuses.contains(.verificationNeeded)
+                || healthStates.contains(where: { $0 == .degradedReadable || $0 == nil })
+
+            if allLastKnownReady {
+                if evidence.allSatisfy({ $0.verificationState == .current }) {
+                    return .ready()
+                }
+                if hasChecking {
+                    return .ready("Ready · Checking", checking: true)
+                }
+                if hasUnavailableVerification {
+                    return .ready("Ready · Check needed", retryable: true)
+                }
+                return .ready("Ready · Checking", checking: true)
+            }
+
+            if hasChecking {
+                return .working("Checking")
+            }
+            if hasUnavailableVerification {
+                return .attention("Verification needed")
+            }
+            return .working("Checking")
         }
         if states.contains(.syncing) {
-            return ("Preparing", theme.textSecondary, false)
+            return .working("Preparing")
         }
         if states.contains(.notSynced) {
             if syncedCount > 0 {
-                return ("Partially ready", theme.status.warning, true)
+                return .attention("Partially ready")
             }
-            return ("Not ready", theme.status.warning, true)
+            return .attention("Not ready")
         }
-        return ("Not ready", theme.status.warning, true)
+        return .attention("Not ready")
     }
 
     private var runningChipText: String {
@@ -412,7 +606,7 @@ struct AutomationRow: View {
             let sceneName = payload.sceneName ?? scenes.first(where: { $0.id == payload.sceneId })?.name ?? "Scene"
             actionLabel(icon: "paintbrush", text: "→ \(sceneName)")
         case .preset(let payload):
-            actionLabel(icon: "list.bullet.rectangle", text: "Preset \(payload.presetId)")
+            actionLabel(icon: "list.bullet.rectangle", text: payload.paletteName ?? "Saved color")
         case .playlist(let payload):
             actionLabel(icon: "list.bullet.rectangle", text: payload.playlistName ?? "Playlist \(payload.playlistId)")
         case .gradient(let payload):
@@ -445,7 +639,7 @@ struct AutomationRow: View {
             let sceneName = payload.sceneName ?? scenes.first(where: { $0.id == payload.sceneId })?.name ?? "Scene"
             return "Scene · \(sceneName)"
         case .preset(let payload):
-            return "Preset #\(payload.presetId)"
+            return payload.paletteName ?? "Saved color"
         case .playlist(let payload):
             return "Playlist #\(payload.playlistId)"
         case .gradient(let payload):

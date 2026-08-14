@@ -17,6 +17,11 @@ final class CCTSliderVisibilityTests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["--uitesting"]
         app.launch()
+
+        let devicesTab = app.buttons["Devices"]
+        XCTAssertTrue(devicesTab.waitForExistence(timeout: 8), "Devices tab should be available")
+        devicesTab.tap()
+        XCTAssertTrue(app.staticTexts["UI Test Device"].waitForExistence(timeout: 8), "Missing deterministic UI-test device")
     }
     
     override func tearDownWithError() throws {
@@ -28,7 +33,8 @@ final class CCTSliderVisibilityTests: XCTestCase {
     /// Wait for device list to appear
     func waitForDeviceList(timeout: TimeInterval = 10.0) {
         // Wait for either the device list or empty state
-        let deviceListExists = app.otherElements["DeviceControlView"].waitForExistence(timeout: timeout) ||
+        let deviceListExists = app.staticTexts["UI Test Device"].waitForExistence(timeout: timeout) ||
+                              app.otherElements["DeviceControlView"].waitForExistence(timeout: timeout) ||
                               app.staticTexts["No WLED Devices Found"].waitForExistence(timeout: timeout) ||
                               app.staticTexts["Discovering WLED Devices"].waitForExistence(timeout: timeout)
         
@@ -37,24 +43,20 @@ final class CCTSliderVisibilityTests: XCTestCase {
     
     /// Navigate to device detail view for a device
     /// - Parameter deviceName: Name of the device to open (optional, opens first device if nil)
-    func navigateToDeviceDetail(deviceName: String? = nil) {
+    func navigateToDeviceDetail(deviceName: String? = nil) throws {
         waitForDeviceList()
         
         // Wait a bit for devices to load
         Thread.sleep(forTimeInterval: 2.0)
         
-        // Try to find a device card
-        let deviceCards = app.buttons.matching(identifier: "DeviceCard")
-        
-        if deviceCards.count > 0 {
-            // Tap first device card
-            deviceCards.element(boundBy: 0).tap()
-            
-            // Wait for device detail view
-            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 5.0),
+        let cardName = app.staticTexts["UI Test Device"]
+
+        if cardName.exists {
+            cardName.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["device-options-menu"].waitForExistence(timeout: 5.0),
                          "Device detail view should appear")
         } else {
-            XCTSkip("No devices found - cannot test CCT slider visibility without devices")
+            throw XCTSkip("No devices found - cannot test CCT slider visibility without devices")
         }
     }
     
@@ -103,7 +105,7 @@ final class CCTSliderVisibilityTests: XCTestCase {
     @MainActor
     func testCCTSliderVisibleWhenDeviceSupportsCCT() throws {
         // Navigate to device detail
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Open color picker
         openColorPicker()
@@ -137,7 +139,7 @@ final class CCTSliderVisibilityTests: XCTestCase {
     @MainActor
     func testCCTSliderHiddenWhenDeviceDoesNotSupportCCT() throws {
         // Navigate to device detail
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Open color picker
         openColorPicker()
@@ -167,7 +169,7 @@ final class CCTSliderVisibilityTests: XCTestCase {
     
     @MainActor
     func testCCTSliderAccessibilityLabel() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         openColorPicker()
         
         // If CCT slider exists, verify its accessibility label
@@ -189,7 +191,7 @@ final class CCTSliderVisibilityTests: XCTestCase {
     
     @MainActor
     func testCCTSliderVisibilityAfterSegmentChange() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Find segment picker if it exists (for multi-segment devices)
         let segmentPicker = app.pickers["Segment selector"]
@@ -211,13 +213,13 @@ final class CCTSliderVisibilityTests: XCTestCase {
             XCTAssertTrue(true, "Segment picker found - multi-segment device detected")
         } else {
             // Single segment device - skip segment-specific test
-            XCTSkip("Single segment device - cannot test segment-specific CCT visibility")
+            throw XCTSkip("Single segment device - cannot test segment-specific CCT visibility")
         }
     }
     
     @MainActor
     func testColorPickerOpensAndCloses() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         openColorPicker()
         
         // Verify color picker is visible
@@ -245,7 +247,7 @@ final class CCTSliderVisibilityTests: XCTestCase {
     @MainActor
     func testFullColorControlFlowWithCCT() throws {
         // Full integration test: Navigate to device, open color picker, verify CCT slider
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         
         // Open color picker
         openColorPicker()
@@ -274,4 +276,3 @@ final class CCTSliderVisibilityTests: XCTestCase {
         }
     }
 }
-

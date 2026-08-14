@@ -1,6 +1,6 @@
 # Current Code Anchors
 
-Last updated: 2026-06-04 (Asia/Hong_Kong)
+Last updated: 2026-06-26 (Asia/Hong_Kong)
 
 This file ties the current feature docs to the repo. It is not a full code walkthrough; it is the anchor map used to verify that the documented features and caveats are real in the current checkout.
 
@@ -79,9 +79,13 @@ Confirmed caveats:
 Confirmed caveats:
 
 - WLED-side timers are the production scheduling path. App-side foreground timers are fallback behavior.
+- Active native WLED timers are imported when their macro target resolves to an existing preset or playlist.
+- Imported/native WLED timer rows are read-through rows and are excluded from automatic drift resync.
+- Orphan native WLED timers with missing preset/playlist macro targets are auto-cleared.
 - WLED timer rows can compact, so raw stored slot IDs are not trusted as permanent ownership proof.
 - Time-of-day automations use logical slots `0...7`; sunrise uses slot `8`; sunset uses slot `9`.
 - Sunrise and sunset each have one logical solar slot per device, so conflicting solar automations are blocked.
+- Generated transition automation step presets use compact partial WLED JSON API records from `DeviceControlViewModel.segmentedPresetState(...)`.
 
 ## Automation Delete And Cleanup
 

@@ -6,6 +6,7 @@ struct RootContainer: View {
     var body: some View {
         ContentView()
             .preferredColorScheme(appAppearance.colorScheme)
+            .symbolRenderingMode(.monochrome)
     }
 
     private var appAppearance: AppAppearance {

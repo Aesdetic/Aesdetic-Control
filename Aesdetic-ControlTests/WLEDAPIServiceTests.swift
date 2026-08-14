@@ -39,6 +39,10 @@ private final class MockWLEDURLProtocol: URLProtocol {
         return recordedRequestBodies
     }
 
+    static func bodyDataForTesting(from request: URLRequest) -> Data? {
+        bodyData(from: request)
+    }
+
     override class func canInit(with request: URLRequest) -> Bool {
         true
     }
@@ -104,7 +108,8 @@ struct WLEDAPIServiceTests {
     // MARK: - Test Device Helper
 
     private func makeTestService(
-        handler: MockWLEDURLProtocol.Handler? = nil
+        handler: MockWLEDURLProtocol.Handler? = nil,
+        persistenceRoot: URL? = nil
     ) -> WLEDAPIService {
         MockWLEDURLProtocol.reset(handler: handler ?? defaultMockWLEDHandler)
 
@@ -113,7 +118,10 @@ struct WLEDAPIServiceTests {
         configuration.timeoutIntervalForRequest = 0.25
         configuration.timeoutIntervalForResource = 0.25
 
-        return WLEDAPIService(testURLSession: URLSession(configuration: configuration))
+        return WLEDAPIService(
+            testURLSession: URLSession(configuration: configuration),
+            presetStorePersistenceRoot: persistenceRoot
+        )
     }
 
     private func defaultMockWLEDHandler(_ request: URLRequest) throws -> (HTTPURLResponse, Data) {
@@ -236,6 +244,24 @@ struct WLEDAPIServiceTests {
         return response
     }
 
+    private func uploadedPresetStoreData(from request: URLRequest) throws -> Data {
+        let body = try #require(MockWLEDURLProtocol.bodyDataForTesting(from: request))
+        let contentType = try #require(request.value(forHTTPHeaderField: "Content-Type"))
+        let boundaryPrefix = "boundary="
+        let boundary = try #require(
+            contentType
+                .split(separator: ";")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first(where: { $0.hasPrefix(boundaryPrefix) })?
+                .dropFirst(boundaryPrefix.count)
+        )
+        let headerTerminator = Data("\r\n\r\n".utf8)
+        let trailer = Data("\r\n--\(boundary)".utf8)
+        let payloadStart = try #require(body.range(of: headerTerminator)?.upperBound)
+        let payloadEnd = try #require(body.range(of: trailer, in: payloadStart..<body.endIndex)?.lowerBound)
+        return body.subdata(in: payloadStart..<payloadEnd)
+    }
+
     private func mockStateResponseJSON(filesystemUsedKB: Int, filesystemTotalKB: Int) -> String {
         """
         {
@@ -334,7 +360,7 @@ struct WLEDAPIServiceTests {
             case "/presets.json":
                 return (response, fixture.presets)
             case "/upload":
-                fixture.presets = Data(#"{"0":{},"10":{"n":"Automation Routine 1","win":"T=0"}}"#.utf8)
+                fixture.presets = try uploadedPresetStoreData(from: request)
                 return (response, Data("File Uploaded!".utf8))
             case "/json":
                 return (response, Data(Self.mockStateResponseJSON.utf8))
@@ -358,7 +384,7 @@ struct WLEDAPIServiceTests {
             device: device
         )
 
-        #expect(rewritten == true)
+        #expect(rewritten == .committed)
         let uploadBody = try #require(
             MockWLEDURLProtocol.requestBodies()
                 .compactMap { $0.flatMap { String(data: $0, encoding: .utf8) } }
@@ -388,12 +414,7 @@ struct WLEDAPIServiceTests {
             case "/presets.json":
                 return (response, fixture.presets)
             case "/upload":
-                fixture.presets = Data("""
-                {
-                  "0": {},
-                  "11": { "n": "Keep Me", "seg": [] }
-                }
-                """.utf8)
+                fixture.presets = try uploadedPresetStoreData(from: request)
                 return (response, Data("File Uploaded!".utf8))
             case "/json":
                 return (response, Data(mockStateResponseJSON(filesystemUsedKB: 99, filesystemTotalKB: 100).utf8))
@@ -403,16 +424,655 @@ struct WLEDAPIServiceTests {
         }
         let device = createTestDevice()
 
-        let deleted = try await service.rewritePresetStoreDeletingRecords(
+        let targets = try await service.capturePresetStoreCleanupTargets(
             playlistIds: [],
             presetIds: [10],
             device: device
         )
+        let deleted = try await service.rewritePresetStoreConditionallyDeleting(
+            targets: targets,
+            device: device
+        )
 
-        #expect(deleted == true)
+        #expect(deleted.outcome == .committed)
+        #expect(deleted.deleted.map(\.id) == [10])
         let requests = MockWLEDURLProtocol.requests()
         #expect(requests.contains { $0.url?.path == "/upload" })
         #expect(!requests.contains { $0.url?.path == "/json" })
+    }
+
+    @Test("timed-out upload commits when two read-backs match the candidate")
+    func testTimedOutUploadCommitsFromReadBackWithoutSecondUpload() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{},"10":{"n":"Existing","seg":[]}}"#.utf8)
+            var uploadCount = 0
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                throw URLError(.timedOut)
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 77, name: "Timeout Candidate", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .committed)
+        #expect(fixture.uploadCount == 1)
+        #expect(try await service._presetStoreTransactionJournalForTesting(deviceId: device.id) == nil)
+        #expect(try await service._verifiedPresetStoreSnapshotCountForTesting(device: device) == 2)
+    }
+
+    @Test("timed-out upload reads the original twice before one retry")
+    func testTimedOutUploadRetriesOnlyAfterStableOriginalReadBack() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{},"10":{"n":"Existing","seg":[]}}"#.utf8)
+            var uploadCount = 0
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                if fixture.uploadCount == 1 {
+                    throw URLError(.timedOut)
+                }
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 78, name: "Retry Candidate", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .committed)
+        #expect(fixture.uploadCount == 2)
+        let requestPaths = MockWLEDURLProtocol.requests().compactMap(\.url?.path)
+        let uploadIndices = requestPaths.indices.filter { requestPaths[$0] == "/upload" }
+        #expect(uploadIndices.count == 2)
+        if uploadIndices.count == 2 {
+            let readsBetween = requestPaths[(uploadIndices[0] + 1)..<uploadIndices[1]]
+                .filter { $0 == "/presets.json" }
+                .count
+            #expect(readsBetween >= 2)
+        }
+    }
+
+    @Test("confirmed malformed read-back restores, then replays the interrupted save once")
+    func testMalformedReadBackRestoresAndReplaysOnce() async throws {
+        final class Fixture {
+            let malformed = Data(#"{"0":{},"77":{"n":"partial""#.utf8)
+            var presets = Data(#"{"0":{},"10":{"n":"Existing","seg":[]}}"#.utf8)
+            var uploadCount = 0
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                if fixture.uploadCount == 1 {
+                    fixture.presets = fixture.malformed
+                } else {
+                    fixture.presets = try uploadedPresetStoreData(from: request)
+                }
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 77, name: "Recovered Save", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .committed)
+        #expect(fixture.uploadCount == 3)
+        let records = try #require(
+            JSONSerialization.jsonObject(with: fixture.presets) as? [String: Any]
+        )
+        #expect(records["10"] != nil)
+        #expect(records["77"] != nil)
+    }
+
+    @Test("failed replay performs a final restore and reports no commit")
+    func testReplayFailureRestoresOriginalAndStops() async throws {
+        final class Fixture {
+            let malformed = Data(#"{"0":{},"79":{"n":"partial""#.utf8)
+            let original = Data(#"{"0":{},"10":{"n":"Existing","seg":[]}}"#.utf8)
+            var presets: Data
+            var uploadCount = 0
+
+            init() {
+                presets = original
+            }
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                if fixture.uploadCount == 1 || fixture.uploadCount == 3 {
+                    fixture.presets = fixture.malformed
+                } else {
+                    fixture.presets = try uploadedPresetStoreData(from: request)
+                }
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 79, name: "Replay Fails", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .recoveredWithoutCommit)
+        #expect(fixture.uploadCount == 4)
+        #expect(fixture.presets == fixture.original)
+        #expect(try await service._presetStoreTransactionJournalForTesting(deviceId: device.id) == nil)
+    }
+
+    @Test("transport failure leaves recovery pending and resumes from the durable journal")
+    func testPendingJournalResumesAfterServiceRelaunch() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{},"10":{"n":"Existing","seg":[]}}"#.utf8)
+            var readCount = 0
+            var uploadCount = 0
+        }
+        let fixture = Fixture()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PresetStoreRelaunch-\(UUID().uuidString)", isDirectory: true)
+        let firstService = makeTestService(handler: { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                fixture.readCount += 1
+                if fixture.readCount > 1 {
+                    throw URLError(.networkConnectionLost)
+                }
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                throw URLError(.timedOut)
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }, persistenceRoot: root)
+        let device = createTestDevice()
+
+        let firstOutcome = try await firstService.savePreset(
+            WLEDPresetSaveRequest(id: 80, name: "Resume Me", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(firstOutcome == .recoveryPending)
+        #expect(fixture.uploadCount == 1)
+        #expect(try await firstService._verifiedPresetStoreSnapshotCountForTesting(device: device) == 1)
+        #expect(try await firstService._presetStoreTransactionJournalForTesting(deviceId: device.id) != nil)
+        do {
+            _ = try await firstService.applyPreset(10, to: device)
+            Issue.record("Preset activation must remain blocked while recovery is pending")
+        } catch let error as WLEDAPIError {
+            guard case .deviceBusy = error else {
+                Issue.record("Expected deviceBusy while recovery is pending, got \(error)")
+                return
+            }
+        }
+        _ = try await firstService.setPower(
+            for: device,
+            isOn: false,
+            transitionDeciseconds: 0
+        )
+        let directControlRequests = MockWLEDURLProtocol.requests().filter {
+            $0.httpMethod == "POST" && $0.url?.path == "/json"
+        }
+        #expect(!directControlRequests.isEmpty)
+
+        let resumedService = makeTestService(handler: { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }, persistenceRoot: root)
+
+        let resumedOutcome = await resumedService.resumePendingPresetStoreRecovery(for: device)
+
+        #expect(resumedOutcome == .committed)
+        #expect(fixture.uploadCount == 2)
+        #expect(try await resumedService._presetStoreTransactionJournalForTesting(deviceId: device.id) == nil)
+    }
+
+    @Test("a new user save is not queued behind an older recovered transaction")
+    func testNewSaveDoesNotQueueBehindRecoveredTransaction() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{},"10":{"n":"Existing","seg":[]}}"#.utf8)
+            var readCount = 0
+            var uploadCount = 0
+        }
+        let fixture = Fixture()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PresetStoreNoUserQueue-\(UUID().uuidString)", isDirectory: true)
+        let firstService = makeTestService(handler: { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                fixture.readCount += 1
+                if fixture.readCount > 1 {
+                    throw URLError(.networkConnectionLost)
+                }
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                throw URLError(.timedOut)
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }, persistenceRoot: root)
+        let device = createTestDevice()
+
+        let interruptedOutcome = try await firstService.savePreset(
+            WLEDPresetSaveRequest(id: 80, name: "Interrupted", quickLoad: nil, state: nil),
+            to: device
+        )
+        #expect(interruptedOutcome == .recoveryPending)
+
+        let resumedService = makeTestService(handler: { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }, persistenceRoot: root)
+
+        let newSaveOutcome = try await resumedService.savePreset(
+            WLEDPresetSaveRequest(id: 81, name: "Must Not Queue", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(newSaveOutcome == .recoveredWithoutCommit)
+        #expect(fixture.uploadCount == 2)
+        let records = try #require(
+            JSONSerialization.jsonObject(with: fixture.presets) as? [String: Any]
+        )
+        #expect(records["80"] != nil)
+        #expect(records["81"] == nil)
+        #expect(try await resumedService._presetStoreTransactionJournalForTesting(deviceId: device.id) == nil)
+    }
+
+    @Test("valid external change is preserved while the interrupted edit is rebased once")
+    func testValidExternalChangeIsPreservedDuringRebase() async throws {
+        final class Fixture {
+            let externallyChanged = Data(
+                #"{"0":{},"10":{"n":"Existing","seg":[],"futureField":{"keep":true}},"88":{"n":"External","seg":[]}}"#.utf8
+            )
+            var presets = Data(#"{"0":{},"10":{"n":"Existing","seg":[],"futureField":{"keep":true}}}"#.utf8)
+            var uploadCount = 0
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                if fixture.uploadCount == 1 {
+                    fixture.presets = fixture.externallyChanged
+                    throw URLError(.timedOut)
+                }
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 81, name: "Rebased", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .committed)
+        #expect(fixture.uploadCount == 2)
+        let records = try #require(
+            JSONSerialization.jsonObject(with: fixture.presets) as? [String: Any]
+        )
+        #expect(records["81"] != nil)
+        #expect(records["88"] != nil)
+        let existing = try #require(records["10"] as? [String: Any])
+        #expect(existing["futureField"] != nil)
+    }
+
+    @Test("malformed store without a verified backup enters needs repair without writing")
+    func testMalformedStoreWithoutBackupDoesNotGuessAFile() async throws {
+        let malformed = Data(#"{"0":{},"10":{"n":"broken""#.utf8)
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            if url.path == "/presets.json" {
+                return (response, malformed)
+            }
+            if url.path == "/upload" {
+                Issue.record("A malformed store without a backup must not be uploaded over")
+            }
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 82, name: "Must Not Save", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .needsRepair)
+        let uploadRequests = MockWLEDURLProtocol.requests().filter { $0.url?.path == "/upload" }
+        #expect(uploadRequests.isEmpty)
+        #expect(await service.presetStoreTransactionStatus(deviceId: device.id) == .needsRepair)
+    }
+
+    @Test("transaction verification rejects exact response bytes that require repair")
+    func testStrictTransactionReadRejectsRepairableInvalidBytes() async throws {
+        var malformed = Data(#"{"0":{}"#.utf8)
+        malformed.append(0)
+        malformed.append(Data("}".utf8))
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            if url.path == "/presets.json" {
+                return (response, malformed)
+            }
+            if url.path == "/upload" {
+                Issue.record("Strict verification must not upload over invalid exact bytes without a backup")
+            }
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 83, name: "Must Not Sanitize", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .needsRepair)
+        #expect(MockWLEDURLProtocol.requests().allSatisfy { $0.url?.path != "/upload" })
+    }
+
+    @Test("verified snapshot rotation retains only the three newest files")
+    func testVerifiedSnapshotRotationRetainsThree() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{}}"#.utf8)
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        for id in 90...93 {
+            let outcome = try await service.savePreset(
+                WLEDPresetSaveRequest(id: id, name: "Snapshot \(id)", quickLoad: nil, state: nil),
+                to: device
+            )
+            #expect(outcome == .committed)
+        }
+
+        #expect(try await service._verifiedPresetStoreSnapshotCountForTesting(device: device) == 3)
+    }
+
+    @Test("confirmed-invalid restore attempts stop at three and enter needs repair")
+    func testConfirmedInvalidRestoreAttemptsAreLimited() async throws {
+        final class Fixture {
+            let malformed = Data(#"{"0":{},"94":{"n":"partial""#.utf8)
+            var presets = Data(#"{"0":{}}"#.utf8)
+            var forceMalformedUploads = false
+            var uploadCount = 0
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.uploadCount += 1
+                if fixture.forceMalformedUploads {
+                    fixture.presets = fixture.malformed
+                } else {
+                    fixture.presets = try uploadedPresetStoreData(from: request)
+                }
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+        #expect(
+            try await service.savePreset(
+                WLEDPresetSaveRequest(id: 93, name: "Verified Backup", quickLoad: nil, state: nil),
+                to: device
+            ) == .committed
+        )
+        fixture.forceMalformedUploads = true
+        let baselineUploads = fixture.uploadCount
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(id: 94, name: "Cannot Recover", quickLoad: nil, state: nil),
+            to: device
+        )
+
+        #expect(outcome == .needsRepair)
+        #expect(fixture.uploadCount - baselineUploads == 4)
+        let journal = try await service._presetStoreTransactionJournalForTesting(deviceId: device.id)
+        #expect(journal?.phase == .needsRepair)
+        #expect(journal?.recoveryAttemptCount == 3)
+    }
+
+    @Test("segmented preset, playlist, and renames preserve unrelated unknown fields")
+    func testSegmentedPresetPlaylistAndRenameTransactionsPreserveUnknownFields() async throws {
+        final class Fixture {
+            var presets = Data(
+                #"{"0":{},"10":{"n":"Existing","seg":[],"future":{"nested":true}},"11":{"n":"Existing Playlist","playlist":{"ps":[10],"dur":[100],"transition":[7],"repeat":1,"end":0,"r":0},"futurePlaylistField":"keep"}}"#.utf8
+            )
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+        let segmentedState = WLEDStateUpdate(
+            on: true,
+            bri: 180,
+            seg: [
+                SegmentUpdate(id: 0, start: 0, stop: 15, col: [[255, 0, 0, 0]], fx: 0),
+                SegmentUpdate(id: 1, start: 15, stop: 30, col: [[0, 0, 255, 0]], fx: 0)
+            ]
+        )
+
+        #expect(
+            try await service.savePreset(
+                WLEDPresetSaveRequest(
+                    id: 30,
+                    name: "Segmented",
+                    quickLoad: nil,
+                    state: segmentedState,
+                    saveSegmentBounds: true
+                ),
+                to: device
+            ) == .committed
+        )
+        #expect(
+            try await service.savePlaylist(
+                WLEDPlaylistSaveRequest(
+                    id: 31,
+                    name: "Sequence",
+                    ps: [10, 30],
+                    dur: [100, 100],
+                    transition: [7, 7],
+                    repeat: 1,
+                    endPresetId: 0,
+                    shuffle: 0
+                ),
+                to: device
+            ) == .committed
+        )
+        #expect(
+            try await service.renamePresetRecord(
+                id: 30,
+                name: "Segmented Renamed",
+                device: device
+            ) == .committed
+        )
+        #expect(
+            try await service.renamePlaylistRecord(
+                id: 31,
+                name: "Sequence Renamed",
+                device: device
+            ) == .committed
+        )
+
+        let records = try #require(
+            JSONSerialization.jsonObject(with: fixture.presets) as? [String: Any]
+        )
+        let existingPreset = try #require(records["10"] as? [String: Any])
+        let existingPlaylist = try #require(records["11"] as? [String: Any])
+        let segmented = try #require(records["30"] as? [String: Any])
+        let playlist = try #require(records["31"] as? [String: Any])
+        #expect(existingPreset["future"] != nil)
+        #expect(existingPlaylist["futurePlaylistField"] as? String == "keep")
+        #expect((segmented["seg"] as? [[String: Any]])?.count == 2)
+        #expect(segmented["n"] as? String == "Segmented Renamed")
+        #expect(playlist["n"] as? String == "Sequence Renamed")
+        #expect(playlist["playlist"] != nil)
+    }
+
+    @Test("apply at boot is written only after store commit and is verified separately")
+    func testApplyAtBootFollowsCommittedStoreAndVerifiesConfig() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{}}"#.utf8)
+            var bootPreset = 0
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            case "/json":
+                if request.httpMethod == "POST",
+                   let body = MockWLEDURLProtocol.bodyDataForTesting(from: request),
+                   let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+                   let bootPreset = object["bootps"] as? Int {
+                    fixture.bootPreset = bootPreset
+                }
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            case "/json/cfg":
+                return (response, Data(#"{"def":{"ps":\#(fixture.bootPreset)}}"#.utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
+        let device = createTestDevice()
+
+        let outcome = try await service.savePreset(
+            WLEDPresetSaveRequest(
+                id: 40,
+                name: "Boot Preset",
+                quickLoad: nil,
+                state: nil,
+                applyAtBoot: true
+            ),
+            to: device
+        )
+
+        #expect(outcome == .committed)
+        #expect(fixture.bootPreset == 40)
+        let paths = MockWLEDURLProtocol.requests().compactMap(\.url?.path)
+        let uploadIndex = try #require(paths.firstIndex(of: "/upload"))
+        let stateIndex = try #require(
+            MockWLEDURLProtocol.requests().firstIndex {
+                $0.httpMethod == "POST" && $0.url?.path == "/json"
+            }
+        )
+        let configIndex = try #require(paths.lastIndex(of: "/json/cfg"))
+        #expect(uploadIndex < stateIndex)
+        #expect(stateIndex < configIndex)
     }
     
     // MARK: - setColor Tests
@@ -689,7 +1349,7 @@ struct WLEDAPIServiceTests {
         let invalidRequest = WLEDPresetSaveRequest(id: -1, name: "Test", quickLoad: nil, state: nil)
         
         do {
-            try await service.savePreset(invalidRequest, to: device)
+            _ = try await service.savePreset(invalidRequest, to: device)
             Issue.record("Should have thrown error for preset ID < 0")
         } catch {
             if let apiError = error as? WLEDAPIError {
@@ -743,6 +1403,60 @@ struct WLEDAPIServiceTests {
         
         _ = try await service.applyPreset(1, to: device)
         _ = try await service.applyPreset(250, to: device)
+    }
+
+    @Test("applyPreset fetches direct preset payload on cold cache")
+    func testApplyPresetFetchesDirectPayloadWhenCacheIsCold() async throws {
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if url.path == "/presets.json" {
+                return (response, Data("""
+                {
+                  "0": {},
+                  "42": {
+                    "n": "Saved Warm",
+                    "on": true,
+                    "bri": 173,
+                    "seg": [
+                      { "id": 0, "start": 0, "stop": 30, "col": [[255, 160, 0, 0]], "fx": 0, "pal": 0 }
+                    ]
+                  }
+                }
+                """.utf8))
+            }
+
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice()
+
+        _ = try await service.applyPreset(42, to: device, transitionDeciseconds: 7)
+
+        let requests = MockWLEDURLProtocol.requests()
+        #expect(requests.contains { $0.url?.path == "/presets.json" })
+
+        let stateBody = try #require(
+            zip(requests, MockWLEDURLProtocol.requestBodies())
+                .first { $0.0.httpMethod == "POST" && $0.0.url?.path == "/json" }?.1
+        )
+        let object = try #require(JSONSerialization.jsonObject(with: stateBody) as? [String: Any])
+        #expect(object["ps"] == nil)
+        #expect(object["pd"] as? Int == 42)
+        #expect(object["bri"] as? Int == 173)
+        #expect(object["tt"] as? Int == 7)
+
+        let segments = try #require(object["seg"] as? [[String: Any]])
+        let firstSegment = try #require(segments.first)
+        let colorSlots = try #require(firstSegment["col"] as? [[Int]])
+        #expect(colorSlots.first == [255, 160, 0, 0])
     }
 
     @Test("applyPlaylist validates playlist ID range 1-250")
@@ -853,27 +1567,36 @@ struct WLEDAPIServiceTests {
         }
     }
 
-    @Test("WLED-style preset delete request targets /json/si with pdel payload")
-    func testWLEDPresetStoreDeleteRequestShape() async throws {
-        let service = makeTestService()
+    @Test("preset delete uses one full-file upload and never emits pdel or psave")
+    func testPresetDeleteUsesOnlyFullFileUpload() async throws {
+        final class Fixture {
+            var presets = Data(#"{"0":{},"19":{"n":"Remove","seg":[]},"20":{"n":"Keep","seg":[]}}"#.utf8)
+        }
+        let fixture = Fixture()
+        let service = makeTestService { request in
+            let url = try #require(request.url)
+            let response = try okResponse(for: url)
+            switch url.path {
+            case "/presets.json":
+                return (response, fixture.presets)
+            case "/upload":
+                fixture.presets = try uploadedPresetStoreData(from: request)
+                return (response, Data("File Uploaded!".utf8))
+            default:
+                return (response, Data(Self.mockStateResponseJSON.utf8))
+            }
+        }
         let device = createTestDevice(ipAddress: "192.168.0.6")
 
-        let request = try await service.makePresetStoreDeleteRequestLikeWLED(
-            id: 19,
-            device: device,
-            timestamp: 1_713_456_789
-        )
+        let outcome = try await service.deletePreset(id: 19, device: device)
 
-        #expect(request.httpMethod == "POST")
-        #expect(request.url?.absoluteString == "http://192.168.0.6/json/si")
-        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
-
-        let bodyObject = try #require(
-            JSONSerialization.jsonObject(with: request.httpBody ?? Data(), options: []) as? [String: Any]
-        )
-        #expect(bodyObject["pdel"] as? Int == 19)
-        #expect(bodyObject["v"] as? Bool == true)
-        #expect(bodyObject["time"] as? Int == 1_713_456_789)
+        #expect(outcome == .committed)
+        let requests = MockWLEDURLProtocol.requests()
+        #expect(requests.filter { $0.url?.path == "/upload" }.count == 1)
+        #expect(!requests.contains { $0.url?.path == "/json/si" })
+        let bodies = MockWLEDURLProtocol.requestBodies().compactMap { $0 }
+        #expect(!bodies.contains { String(decoding: $0, as: UTF8.self).contains("\"pdel\"") })
+        #expect(!bodies.contains { String(decoding: $0, as: UTF8.self).contains("\"psave\"") })
     }
 
     @Test("WLED-style automation delete orders playlist deletes before preset deletes")
@@ -1271,16 +1994,29 @@ struct WLEDAPIServiceTests {
         }
     }
 
-    @Test("strict preset verification parser tolerates invalid byte outside strings")
-    func testStrictPresetVerificationParserToleratesInvalidByteOutsideStrings() async throws {
+    @Test("strict preset verification parser rejects invalid bytes outside strings")
+    func testStrictPresetVerificationParserRejectsInvalidByteOutsideStrings() async throws {
         let service = makeTestService()
         var bytes = Array("{\"0\":{},\"17\":{\"n\":\"Recovered\"}                                                                  }".utf8)
         let insertionIndex = max(1, bytes.count - 2) // whitespace zone before final closing brace
         bytes.insert(0xC9, at: insertionIndex) // invalid UTF-8 byte outside JSON strings
         let malformed = Data(bytes)
 
-        let ids = try await service.debugParsedPresetRecordIdsForTesting(data: malformed, strict: true)
-        #expect(ids == [17])
+        do {
+            _ = try await service.debugParsedPresetRecordIdsForTesting(data: malformed, strict: true)
+            Issue.record("Strict verification must reject byte-repaired payloads")
+        } catch {
+            guard let apiError = error as? WLEDAPIError else {
+                Issue.record("Expected WLEDAPIError from strict parser")
+                return
+            }
+            switch apiError {
+            case .decodingError, .invalidResponse:
+                break
+            default:
+                Issue.record("Expected strict parser rejection error")
+            }
+        }
     }
 
     @Test("Alexa mirror plan detects existing non-app Alexa slots")
@@ -1345,7 +2081,7 @@ struct WLEDAPIServiceTests {
         let device = createTestDevice()
 
         do {
-            try await service.renamePresetRecord(id: 0, name: "Test", device: device)
+            _ = try await service.renamePresetRecord(id: 0, name: "Test", device: device)
             Issue.record("Should have thrown error for preset ID 0")
         } catch {
             if let apiError = error as? WLEDAPIError {
@@ -1360,7 +2096,7 @@ struct WLEDAPIServiceTests {
         }
 
         do {
-            try await service.renamePresetRecord(id: 251, name: "Test", device: device)
+            _ = try await service.renamePresetRecord(id: 251, name: "Test", device: device)
             Issue.record("Should have thrown error for preset ID > 250")
         } catch {
             if let apiError = error as? WLEDAPIError {
@@ -1381,7 +2117,7 @@ struct WLEDAPIServiceTests {
         let device = createTestDevice()
 
         do {
-            try await service.renamePlaylistRecord(id: 0, name: "Test", device: device)
+            _ = try await service.renamePlaylistRecord(id: 0, name: "Test", device: device)
             Issue.record("Should have thrown error for playlist ID 0")
         } catch {
             if let apiError = error as? WLEDAPIError {
@@ -1396,7 +2132,7 @@ struct WLEDAPIServiceTests {
         }
 
         do {
-            try await service.renamePlaylistRecord(id: 251, name: "Test", device: device)
+            _ = try await service.renamePlaylistRecord(id: 251, name: "Test", device: device)
             Issue.record("Should have thrown error for playlist ID > 250")
         } catch {
             if let apiError = error as? WLEDAPIError {
@@ -1553,7 +2289,7 @@ struct WLEDAPIServiceTests {
         #expect((ntp["ln"] as? Double).map { abs($0 - 114.1694) < 0.0001 } == true)
 
         let statePostIndex = try #require(recordedRequests.firstIndex {
-            $0.httpMethod == "POST" && $0.url?.path == "/json/state"
+            $0.httpMethod == "POST" && $0.url?.path == "/json"
         })
         let stateBodyData = try #require(recordedBodies[statePostIndex])
         let stateBody = try #require(JSONSerialization.jsonObject(with: stateBodyData) as? [String: Any])
@@ -1611,8 +2347,93 @@ struct WLEDAPIServiceTests {
         #expect(ntp["offset"] as? Int == chatham.secondsFromGMT())
     }
 
+    @Test("clock-only time settings update preserves cached solar location")
+    func testUpdateDeviceTimeSettingsPreservesSolarReferenceCacheWhenCoordinateIsNil() async throws {
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if request.httpMethod == "GET", url.path == "/json/cfg" {
+                return (response, Data("""
+                {
+                  "if": {
+                    "ntp": {
+                      "en": true,
+                      "tz": 9,
+                      "offset": 28800,
+                      "lt": 22.3193,
+                      "ln": 114.1694
+                    }
+                  },
+                  "light": {
+                    "gc": { "val": 2.2, "col": 2.2 }
+                  }
+                }
+                """.utf8))
+            }
+
+            return (response, Data(Self.mockStateResponseJSON.utf8))
+        }
+        let device = createTestDevice(ipAddress: "192.168.0.6")
+        let hongKong = try #require(TimeZone(identifier: "Asia/Hong_Kong"))
+
+        try await service.updateDeviceTimeSettings(for: device, timeZone: hongKong, coordinate: nil)
+        let reference = try await service.fetchSolarReference(for: device)
+
+        #expect(reference.coordinate.map { abs($0.latitude - 22.3193) < 0.0001 } == true)
+        #expect(reference.coordinate.map { abs($0.longitude - 114.1694) < 0.0001 } == true)
+        #expect(reference.timeZone?.identifier == "Asia/Hong_Kong")
+    }
+
     @Test("time settings parser reports timer clock readiness")
     func testFetchDeviceTimeSettingsReportsClockReadiness() async throws {
+        let service = makeTestService { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                  ) else {
+                throw URLError(.badURL)
+            }
+
+            if request.httpMethod == "GET", url.path == "/json/cfg" {
+                return (response, Data("""
+                {
+                  "if": {
+                    "ntp": {
+                      "en": 1,
+                      "tz": 9,
+                      "offset": 0
+                    }
+                  }
+                }
+                """.utf8))
+            }
+
+            return (response, Data("{}".utf8))
+        }
+        let device = createTestDevice(ipAddress: "192.168.0.6")
+
+        let settings = try await service.fetchDeviceTimeSettings(for: device)
+
+        #expect(settings.ntpEnabled == true)
+        #expect(settings.timeZone?.identifier == "Asia/Hong_Kong")
+        #expect(settings.timeZoneIndex == 9)
+        #expect(settings.utcOffsetSeconds == 0)
+        #expect(settings.isTimerClockReady)
+    }
+
+    @Test("time settings parser rejects timezone table with extra offset")
+    func testFetchDeviceTimeSettingsRejectsTimezoneIndexWithExtraOffset() async throws {
         let service = makeTestService { request in
             guard let url = request.url,
                   let response = HTTPURLResponse(
@@ -1646,7 +2467,9 @@ struct WLEDAPIServiceTests {
 
         #expect(settings.ntpEnabled == true)
         #expect(settings.timeZone?.identifier == "Asia/Hong_Kong")
-        #expect(settings.isTimerClockReady)
+        #expect(settings.timeZoneIndex == 9)
+        #expect(settings.utcOffsetSeconds == 28800)
+        #expect(!settings.isTimerClockReady)
     }
 
     @Test("time settings parser treats missing timezone as not clock ready")
@@ -2274,5 +3097,192 @@ struct WLEDAPIServiceTests {
         #expect(merged[9].macroId == 42)
         #expect(merged[9].hour == 254)
         #expect(merged[0].macroId == 10)
+    }
+
+    @Test("automation snapshot uses one config read and one preset-store read")
+    func testAutomationSnapshotRequestBudget() async throws {
+        let service = makeTestService()
+        let device = createTestDevice()
+
+        let snapshot = try await service.fetchDeviceAutomationSnapshot(for: device)
+
+        #expect(snapshot.deviceId == device.id)
+        #expect(snapshot.presetIds.contains(10))
+        #expect(snapshot.playlistIds.contains(11))
+        #expect(snapshot.presets.contains { $0.id == 10 })
+        #expect(snapshot.playlists.contains { $0.id == 11 })
+        #expect(snapshot.presetStoreRecordHashes[10] != nil)
+        #expect(snapshot.presetStoreRecordHashes[11] != nil)
+
+        let paths = MockWLEDURLProtocol.requests().compactMap(\.url?.path)
+        #expect(paths.filter { $0 == "/json/cfg" }.count == 1)
+        #expect(paths.filter { $0 == "/presets.json" }.count == 1)
+        #expect(paths.count == 2)
+        #expect(MockWLEDURLProtocol.requests().allSatisfy { $0.httpMethod == "GET" })
+    }
+
+    @Test("timer mutation reads one merge base before its write")
+    func testTimerMutationUsesOnePreWriteConfigRead() async throws {
+        var didWrite = false
+        let initialConfig = """
+        {"timers":{"ins":[{"en":0,"hour":18,"min":0,"macro":0,"dow":127}]},"if":{"sync":{}}}
+        """
+        let updatedConfig = """
+        {"timers":{"ins":[{"en":1,"hour":19,"min":22,"macro":47,"dow":127}]},"if":{"sync":{}}}
+        """
+        let service = makeTestService { request in
+            let response = try okResponse(for: try #require(request.url))
+            if request.url?.path == "/json/cfg", request.httpMethod == "POST" {
+                didWrite = true
+                return (response, Data("{}".utf8))
+            }
+            if request.url?.path == "/json/cfg" {
+                return (response, Data((didWrite ? updatedConfig : initialConfig).utf8))
+            }
+            return (response, Data(Self.mockPresetsJSON.utf8))
+        }
+        let update = WLEDTimerUpdate(
+            id: 0,
+            enabled: true,
+            hour: 19,
+            minute: 22,
+            days: 0x7F,
+            macroId: 47,
+            startMonth: nil,
+            startDay: nil,
+            endMonth: nil,
+            endDay: nil
+        )
+
+        let outcome = await service.updateAndVerifyTimer(update, on: createTestDevice())
+
+        #expect(outcome == .committed)
+        let requests = MockWLEDURLProtocol.requests()
+        let postIndex = try #require(requests.firstIndex {
+            $0.url?.path == "/json/cfg" && $0.httpMethod == "POST"
+        })
+        let preWriteConfigReads = requests[..<postIndex].filter {
+            $0.url?.path == "/json/cfg" && $0.httpMethod != "POST"
+        }
+        #expect(preWriteConfigReads.count == 1)
+    }
+
+    @Test("conditional cleanup preserves a reused preset ID")
+    func testConditionalDeletePreservesSupersededRecord() async throws {
+        let currentStore = """
+        {"0":{},"10":{"n":"User replacement","seg":[]}}
+        """
+        let service = makeTestService { request in
+            let response = try okResponse(for: try #require(request.url))
+            if request.url?.path == "/presets.json" {
+                return (response, Data(currentStore.utf8))
+            }
+            return (response, Data(Self.mockConfigJSON.utf8))
+        }
+        let target = CleanupDeleteTarget(
+            resourceType: .preset,
+            id: 10,
+            ownership: CleanupOwnershipEvidence(
+                recordHash: "old-record-hash",
+                semanticSignature: "{n:\"Old managed preset\"}",
+                markerKind: .automation,
+                expectedTimerSignature: nil,
+                ownerAutomationId: UUID()
+            )
+        )
+
+        let report = try await service.rewritePresetStoreConditionallyDeleting(
+            targets: [target],
+            device: createTestDevice()
+        )
+
+        #expect(report.outcome == .committed)
+        #expect(report.superseded == Set([target]))
+        #expect(report.deleted.isEmpty)
+        #expect(MockWLEDURLProtocol.requests().allSatisfy { $0.url?.path != "/edit" })
+    }
+
+    @Test("conditional cleanup deletes the exact captured record")
+    func testConditionalDeleteUsesCapturedIdentity() async throws {
+        var storedData = Data(Self.mockPresetsJSON.utf8)
+        let service = makeTestService { request in
+            let response = try okResponse(for: try #require(request.url))
+            if request.url?.path == "/upload", request.httpMethod == "POST" {
+                storedData = try uploadedPresetStoreData(from: request)
+                return (response, Data("{}".utf8))
+            }
+            if request.url?.path == "/presets.json" {
+                return (response, storedData)
+            }
+            return (response, Data(Self.mockConfigJSON.utf8))
+        }
+        let device = createTestDevice()
+        let targets = try await service.capturePresetStoreCleanupTargets(
+            playlistIds: [],
+            presetIds: [10],
+            device: device
+        )
+
+        let report = try await service.rewritePresetStoreConditionallyDeleting(
+            targets: targets,
+            device: device
+        )
+
+        #expect(report.outcome == .committed)
+        #expect(report.deleted.map(\.id) == [10])
+        let finalObject = try #require(
+            JSONSerialization.jsonObject(with: storedData) as? [String: Any]
+        )
+        #expect(finalObject["10"] == nil)
+        #expect(finalObject["11"] != nil)
+    }
+
+    @Test("conditional cleanup accepts a matching owner-scoped internal marker")
+    func testConditionalDeleteUsesOwnerScopedMarker() async throws {
+        let ownerId = try #require(
+            UUID(uuidString: "11111111-2222-3333-4444-555555555555")
+        )
+        var storedData = Data("""
+        {
+          "0": {},
+          "10": { "n": "[AD:o=111111112222 automation] Morning", "seg": [] },
+          "11": { "n": "Keep", "seg": [] }
+        }
+        """.utf8)
+        let service = makeTestService { request in
+            let response = try okResponse(for: try #require(request.url))
+            if request.url?.path == "/upload", request.httpMethod == "POST" {
+                storedData = try uploadedPresetStoreData(from: request)
+                return (response, Data("{}".utf8))
+            }
+            if request.url?.path == "/presets.json" {
+                return (response, storedData)
+            }
+            return (response, Data(Self.mockConfigJSON.utf8))
+        }
+        let target = CleanupDeleteTarget(
+            resourceType: .preset,
+            id: 10,
+            ownership: CleanupOwnershipEvidence(
+                recordHash: nil,
+                semanticSignature: nil,
+                markerKind: .automation,
+                expectedTimerSignature: nil,
+                ownerAutomationId: ownerId
+            )
+        )
+
+        let report = try await service.rewritePresetStoreConditionallyDeleting(
+            targets: [target],
+            device: createTestDevice()
+        )
+
+        #expect(report.outcome == .committed)
+        #expect(report.deleted == Set([target]))
+        let finalObject = try #require(
+            JSONSerialization.jsonObject(with: storedData) as? [String: Any]
+        )
+        #expect(finalObject["10"] == nil)
+        #expect(finalObject["11"] != nil)
     }
 }

@@ -39,7 +39,7 @@ Status meanings:
 | Offline automation delete | Production | Delete remains pending/retrying and resumes after app relaunch. |
 | App-side foreground scheduling | Partial | Exists as fallback; WLED-side timer path is the reliable production path. |
 | Device sync | Supported | App-side source-to-target propagation plus manual copy-now; WLED UDP sync settings are native. |
-| WLED settings parity | Partial | Native for product-critical paths, web fallback for advanced firmware-specific settings. |
+| WLED settings parity | Partial | LED & Hardware is the validated Advanced native pattern; product-critical paths stay native and firmware-specific/risky settings keep WLED web fallback. |
 | Product setup | Supported | Guided product profile setup, LED recommendations, name/WiFi, Alexa, and first wake automation. |
 | Smart-home setup | Partial | Alexa is native when firmware supports it; Home Assistant is guidance; MQTT/Hue/E1.31/Art-Net/DMX are advanced/native or web fallback by firmware. |
 | Wellness | Supported | Sleep/wake journal, sunrise-lamp tracking, history, and HealthKit wake-time import. |

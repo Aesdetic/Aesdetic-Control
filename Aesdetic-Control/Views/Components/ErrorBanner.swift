@@ -8,6 +8,7 @@ struct ErrorBanner: View {
     var onDismiss: () -> Void
     
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.colorScheme) private var colorScheme
     
     private var announcement: String {
         if let actionTitle { return "Error: \(message). Action: \(actionTitle)" }
@@ -17,13 +18,18 @@ struct ErrorBanner: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: icon)
-                .font(AppTypography.style(.headline))
-                .foregroundColor(.white)
+                .font(AppTypography.role(.cardTitle))
+                .foregroundColor(AppTheme.text(.glassPrimary, for: colorScheme))
+                .padding(7)
+                .background(
+                    Circle()
+                        .fill(AppTheme.statusAccent(.error, for: colorScheme).opacity(accentOpacity))
+                )
                 .accessibilityHidden(true)
             
             Text(message)
-                .font(AppTypography.style(.subheadline, weight: .medium))
-                .foregroundColor(.white)
+                .font(AppTypography.role(.bodyStrong))
+                .foregroundColor(AppTheme.text(.glassPrimary, for: colorScheme))
                 .multilineTextAlignment(.leading)
                 .lineLimit(3)
                 .minimumScaleFactor(0.85)
@@ -38,15 +44,15 @@ struct ErrorBanner: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(actionButtonTint)
-                .foregroundColor(.white)
+                .foregroundColor(AppTheme.text(.glassPrimary, for: colorScheme))
                 .clipShape(Capsule())
                 .accessibilityLabel(actionTitle)
             }
             
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(AppTypography.style(.footnote, weight: .semibold))
-                    .foregroundColor(.white.opacity(closeIconOpacity))
+                    .font(AppTypography.role(.micro))
+                    .foregroundColor(AppTheme.text(.glassSecondary, for: colorScheme).opacity(closeIconOpacity))
                     .padding(8)
                     .background(
                         Circle()
@@ -63,6 +69,7 @@ struct ErrorBanner: View {
                 .fill(bannerBackground)
                 .shadow(color: bannerShadow, radius: 16, x: 0, y: 12)
         )
+        .appLiquidGlass(role: .highContrast, cornerRadius: 16, highContrastDarkTintOpacity: colorScheme == .dark ? 0.16 : 0.06)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(announcement)
     }
@@ -85,9 +92,7 @@ struct ErrorBanner_Previews: PreviewProvider {
 
 private extension ErrorBanner {
     var bannerBackground: Color {
-        let base = Color(red: 0.73, green: 0.16, blue: 0.2)
-        let opacity = colorSchemeContrast == .increased ? 0.95 : 0.85
-        return base.opacity(opacity)
+        Color.white.opacity(colorSchemeContrast == .increased ? 0.16 : 0.08)
     }
     
     var bannerShadow: Color {
@@ -95,7 +100,7 @@ private extension ErrorBanner {
     }
     
     var actionButtonTint: Color {
-        colorSchemeContrast == .increased ? Color.white.opacity(0.4) : Color.white.opacity(0.25)
+        colorSchemeContrast == .increased ? Color.white.opacity(0.34) : Color.white.opacity(0.22)
     }
     
     var closeIconOpacity: Double {
@@ -105,5 +110,8 @@ private extension ErrorBanner {
     var closeButtonBackground: Color {
         Color.white.opacity(colorSchemeContrast == .increased ? 0.18 : 0.08)
     }
-}
 
+    var accentOpacity: Double {
+        colorSchemeContrast == .increased ? 0.34 : 0.24
+    }
+}

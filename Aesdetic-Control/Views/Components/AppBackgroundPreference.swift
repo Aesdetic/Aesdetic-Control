@@ -79,6 +79,13 @@ enum AppBackgroundChoice: String, CaseIterable, Identifiable {
 enum AppBackgroundPreference {
     static let selectedChoiceKey = "AppBackground.choice"
     static let customVersionKey = "AppBackground.customVersion"
+    static let blurEnabledKey = "AppBackground.blurEnabled"
+    static let blurIntensityKey = "AppBackground.blurIntensity"
+
+    static let defaultBlurEnabled = false
+    static let defaultBlurIntensity = 0.35
+    static let blurIntensityRange = 0.10...1.00
+    static let maximumBlurRadius: CGFloat = 24
 
     private static let directoryName = "Appearance"
     private static let customFileName = "custom-app-background.jpg"
@@ -93,10 +100,18 @@ enum AppBackgroundPreference {
         FileManager.default.fileExists(atPath: customBackgroundURL.path)
     }
 
+    static func clampedBlurIntensity(_ intensity: Double) -> Double {
+        min(max(intensity, blurIntensityRange.lowerBound), blurIntensityRange.upperBound)
+    }
+
+    static func blurRadius(for intensity: Double) -> CGFloat {
+        CGFloat(clampedBlurIntensity(intensity)) * maximumBlurRadius
+    }
+
     static func image(for choice: AppBackgroundChoice) -> UIImage? {
         switch choice {
         case .custom:
-            return UIImage(contentsOfFile: customBackgroundURL.path)
+            return preparedCustomBackgroundImage()
         case .neutral:
             return nil
         default:
@@ -126,6 +141,13 @@ enum AppBackgroundPreference {
 
     private static var applicationSupportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    }
+
+    private static func preparedCustomBackgroundImage() -> UIImage? {
+        guard let image = UIImage(contentsOfFile: customBackgroundURL.path) else {
+            return nil
+        }
+        return prepareBackgroundImage(image)
     }
 
     private static func prepareBackgroundImage(_ image: UIImage) -> UIImage {

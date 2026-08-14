@@ -356,6 +356,7 @@ private struct SceneUndoBanner: View {
 struct SceneEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.setupJourneyActions) private var setupJourneyActions
     @ObservedObject private var deviceViewModel = DeviceControlViewModel.shared
     @ObservedObject private var scenesStore = SceneGroupStore.shared
 
@@ -365,7 +366,6 @@ struct SceneEditorSheet: View {
     @State private var selectedDeviceIds: Set<String>
     @State private var applyFromDeviceId: String? = nil
     @State private var editingDevice: WLEDDevice? = nil
-    @State private var editingSetupDevice: WLEDDevice? = nil
 
     init(existingScene: SceneGroup? = nil) {
         self.existingScene = existingScene
@@ -414,31 +414,6 @@ struct SceneEditorSheet: View {
         }
         .sheet(item: $editingDevice) { device in
             DeviceDetailView(device: device, viewModel: deviceViewModel)
-        }
-        .overlay { setupOverlay }
-    }
-
-    @ViewBuilder
-    private var setupOverlay: some View {
-        if let editingSetupDevice {
-            GeometryReader { proxy in
-                let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
-                ZStack(alignment: .top) {
-                    SetupBackdropBlur()
-
-                    ProductSetupFlowView(
-                        device: editingSetupDevice,
-                        onClose: { self.editingSetupDevice = nil },
-                        allowsManualClose: false
-                    )
-                    .environmentObject(deviceViewModel)
-                    .frame(maxHeight: maxPopupHeight, alignment: .top)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 26)
-                }
-            }
-            .transition(.identity)
-            .zIndex(3)
         }
     }
 
@@ -547,7 +522,10 @@ struct SceneEditorSheet: View {
                         onToggle: { toggleDevice(device) },
                         onConfigure: {
                             if deviceViewModel.requiresProfileSetup(device) {
-                                editingSetupDevice = device
+                                dismiss()
+                                DispatchQueue.main.async {
+                                    setupJourneyActions.beginProductSetup(device, nil)
+                                }
                             } else {
                                 editingDevice = device
                             }

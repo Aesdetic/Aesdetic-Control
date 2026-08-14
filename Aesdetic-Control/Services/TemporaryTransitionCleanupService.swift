@@ -565,11 +565,20 @@ actor TemporaryTransitionCleanupService {
                     logger.info(
                         "cleanup.delete_preset_store_rewrite device=\(device.id, privacy: .public) playlistIds=\(playlistIds, privacy: .public) presetIds=\(presetIds, privacy: .public)"
                     )
-                    _ = try await WLEDAPIService.shared.rewritePresetStoreDeletingRecords(
+                    let targets = try await WLEDAPIService.shared.capturePresetStoreCleanupTargets(
                         playlistIds: playlistIds,
                         presetIds: presetIds,
                         device: device
                     )
+                    let report = try await WLEDAPIService.shared.rewritePresetStoreConditionallyDeleting(
+                        targets: targets,
+                        device: device
+                    )
+                    guard report.outcome.isCommitted, report.needsReview.isEmpty else {
+                        return .failure(
+                            "Preset-store cleanup did not commit (\(report.outcome.rawValue))."
+                        )
+                    }
                 }
                 completedDeletePhaseLeaseIds.insert(lease.leaseId)
             }

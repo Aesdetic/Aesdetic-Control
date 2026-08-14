@@ -47,7 +47,7 @@ struct DeviceOverviewCard: View {
             
             Text("\(device.brightness)% brightness")
                 .font(AppTypography.style(.caption))
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.72))
         }
         .padding()
         .background(Color.clear)
@@ -74,7 +74,7 @@ struct AutomationOverviewCard: View {
                     .font(AppTypography.style(.headline))
                 Text(triggerDescription(for: automation))
                     .font(AppTypography.style(.caption))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.72))
             }
             
             Spacer()
@@ -104,7 +104,7 @@ struct DeviceControlCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.name)
                     .font(AppTypography.style(.headline))
-                    .foregroundColor(.primary)
+                    .foregroundColor(.white)
                 
                 Text(device.isOnline ? "Online" : "Offline")
                     .font(AppTypography.style(.caption))
@@ -138,7 +138,7 @@ struct DiscoveryStatusView: View {
                 .scaleEffect(0.8)
             Text("Scanning for devices...")
                 .font(AppTypography.style(.caption))
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.72))
         }
         .padding()
         .background(Color.clear)
@@ -151,7 +151,7 @@ struct EmptyDevicesView: View {
         VStack(spacing: 16) {
             Image(systemName: "lightbulb.slash")
                 .font(AppTypography.style(.largeTitle))
-                .foregroundColor(.gray)
+                .foregroundColor(.white.opacity(0.58))
             
             Text("No devices found")
                 .font(AppTypography.style(.title3))
@@ -159,7 +159,7 @@ struct EmptyDevicesView: View {
             
             Text("Make sure your WLED devices are connected to the same WiFi network.")
                 .font(AppTypography.style(.caption))
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
         }
         .padding()
@@ -560,10 +560,10 @@ struct DailyJournalCard: View {
             Button(action: { wellnessVM.upsertTodayJournal(content: journalText, mood: selectedMood) }) {
                 Text("Save Journal")
                     .font(AppTypography.style(.body, weight: .semibold))
-                    .foregroundColor(.black)
+                    .foregroundColor(.white)
                     .padding(.vertical, 10)
                     .padding(.horizontal, 14)
-                    .background(Color.white)
+                    .background(Color.white.opacity(0.18))
                     .cornerRadius(10)
             }
         }

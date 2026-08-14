@@ -10,6 +10,7 @@ Start here:
 - [Feature status matrix](docs/current/FEATURE_STATUS_MATRIX.md)
 - [Current code anchors](docs/current/CODE_ANCHORS_CURRENT.md)
 - [Automation, timer, and preset-store system](docs/current/AUTOMATION_SYSTEM_OVERVIEW.md)
+- [Automation timer correctness](docs/current/AUTOMATION_TIMER_CORRECTNESS.md)
 - [Automation delete status](docs/current/AUTOMATION_DELETE_STATUS.md)
 - [Testing and log guide](docs/current/TESTING_AND_LOGS_CURRENT.md)
 - [Demo flows](docs/current/DEMO_FLOWS_CURRENT.md)

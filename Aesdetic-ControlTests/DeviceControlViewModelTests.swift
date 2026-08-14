@@ -46,6 +46,51 @@ struct DeviceControlViewModelTests {
         return condition()
     }
 
+    // MARK: - Device Identity Tests
+
+    @Test("WLED MAC formats resolve to one canonical identity")
+    func testWLEDCanonicalIdentity() {
+        #expect(WLEDDeviceIdentity.canonicalID(for: "AA:BB:CC:DD:EE:FF") == "aabbccddeeff")
+        #expect(WLEDDeviceIdentity.canonicalID(for: "aa-bb-cc-dd-ee-ff") == "aabbccddeeff")
+        #expect(WLEDDeviceIdentity.matches("AA:BB:CC:DD:EE:FF", "aabbccddeeff"))
+        #expect(WLEDDeviceIdentity.canonicalID(for: "ip:192.168.1.20") == "ip:192.168.1.20")
+    }
+
+    @Test("Duplicate WLED records preserve setup metadata and freshest connection")
+    func testWLEDDeviceReconciliation() {
+        let older = Date(timeIntervalSince1970: 1_000)
+        let newer = Date(timeIntervalSince1970: 2_000)
+        let configured = WLEDDevice(
+            id: "AA:BB:CC:DD:EE:FF",
+            name: "Desk Light",
+            ipAddress: "192.168.1.20",
+            isOnline: false,
+            setupState: .completed,
+            profileId: "desk-profile",
+            location: .livingRoom,
+            lastSeen: older
+        )
+        let rediscovered = WLEDDevice(
+            id: "aabbccddeeff",
+            name: "WLED",
+            ipAddress: "192.168.1.44",
+            isOnline: true,
+            brightness: 180,
+            setupState: .pendingSelection,
+            lastSeen: newer
+        )
+
+        let devices = WLEDDeviceIdentity.reconciledDevices([configured, rediscovered])
+
+        #expect(devices.count == 1)
+        #expect(devices[0].id == "aabbccddeeff")
+        #expect(devices[0].name == "Desk Light")
+        #expect(devices[0].ipAddress == "192.168.1.44")
+        #expect(devices[0].isOnline)
+        #expect(devices[0].setupState == .completed)
+        #expect(devices[0].profileId == "desk-profile")
+    }
+
     // MARK: - Smart Home Integration State Tests
 
     @Test("Home Assistant setup state derives checklist status")

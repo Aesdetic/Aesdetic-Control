@@ -29,6 +29,7 @@ private struct AesdeticRuntimeRoot: View {
     @StateObject private var wellnessViewModel = WellnessViewModel()
 
     private let coreDataManager = CoreDataManager.shared
+    private var isRunningUITests: Bool { AppRuntimeEnvironment.isRunningUITests }
 
     var body: some View {
         RootContainer()
@@ -51,16 +52,21 @@ private struct AesdeticRuntimeRoot: View {
                 }
 
                 // Prompt Local Network access immediately
-                LocalNetworkPrompter.shared.trigger()
+                if !isRunningUITests {
+                    LocalNetworkPrompter.shared.trigger()
+                }
 
                 // Listen for widget intents
-                setupWidgetNotificationListeners()
+                if !isRunningUITests {
+                    setupWidgetNotificationListeners()
+                }
             }
             .task {
                 // Warm caches shortly after launch to speed up first detail open after reinstall
                 Task.detached { @MainActor in
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    if let first = deviceControlViewModel.devices.first {
+                    if !isRunningUITests,
+                       let first = deviceControlViewModel.devices.first {
                         await deviceControlViewModel.prefetchDeviceDetailData(for: first)
                     }
                 }
@@ -68,6 +74,7 @@ private struct AesdeticRuntimeRoot: View {
             .onChange(of: scenePhase) { _, newPhase in
                 switch newPhase {
                 case .active:
+                    guard !isRunningUITests else { return }
                     // When app becomes active, ensure permission prompt (if still pending)
                     LocalNetworkPrompter.shared.trigger()
 
@@ -101,8 +108,6 @@ private struct AesdeticRuntimeRoot: View {
         UITableView.appearance().backgroundColor = .clear
         UICollectionView.appearance().backgroundColor = .clear
 
-        configureLegacyTabBarAppearanceIfNeeded()
-
         // Keep window transparent so shared AppBackground is always visible.
         DispatchQueue.main.async {
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
@@ -111,32 +116,6 @@ private struct AesdeticRuntimeRoot: View {
                 window.isOpaque = false
             }
         }
-    }
-
-    private func configureLegacyTabBarAppearanceIfNeeded() {
-        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
-        guard osVersion.majorVersion <= 26 else { return }
-
-        let tabAppearance = UITabBarAppearance()
-        tabAppearance.configureWithTransparentBackground()
-        tabAppearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
-        tabAppearance.backgroundColor = UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor.black.withAlphaComponent(0.18)
-                : UIColor.white.withAlphaComponent(0.16)
-        }
-        tabAppearance.shadowColor = UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor.white.withAlphaComponent(0.12)
-                : UIColor.black.withAlphaComponent(0.10)
-        }
-
-        let tabBar = UITabBar.appearance()
-        tabBar.standardAppearance = tabAppearance
-        tabBar.scrollEdgeAppearance = tabAppearance
-        tabBar.backgroundColor = UIColor.clear
-        tabBar.barTintColor = UIColor.clear
-        tabBar.isTranslucent = true
     }
 
     // MARK: - Widget Notification Listeners

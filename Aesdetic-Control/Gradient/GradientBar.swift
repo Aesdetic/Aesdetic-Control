@@ -21,13 +21,20 @@ struct GradientBar: View {
     private let handleHeight: CGFloat = 34
     private let epsilon: Double = 0.0001
 
+    private var renderedGradientStops: [Gradient.Stop] {
+        GradientSampler.previewStops(for: gradient).map {
+            .init(color: $0.color, location: $0.position)
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 // Rail background with current gradient
-                // Always sort stops before creating LinearGradient to avoid SwiftUI ordering errors
+                // Render through GradientSampler so this rail uses the same
+                // interpolation curve as the colors applied to WLED.
                 LinearGradient(
-                    gradient: Gradient(stops: gradient.stops.sorted { $0.position < $1.position }.map { .init(color: $0.color, location: $0.position) }),
+                    gradient: Gradient(stops: renderedGradientStops),
                     startPoint: .leading,
                     endPoint: .trailing
                 )

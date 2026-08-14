@@ -31,9 +31,11 @@ struct AutomationSchedulingTests {
 
     @Test("SolarTrigger offset clamping follows on-device WLED limits")
     func testSolarOffsetClamping() {
-        #expect(SolarTrigger.clampOnDeviceOffset(-120) == -120)
-        #expect(SolarTrigger.clampOnDeviceOffset(120) == 120)
+        #expect(SolarTrigger.clampOnDeviceOffset(-60) == -59)
+        #expect(SolarTrigger.clampOnDeviceOffset(-59) == -59)
         #expect(SolarTrigger.clampOnDeviceOffset(15) == 15)
+        #expect(SolarTrigger.clampOnDeviceOffset(59) == 59)
+        #expect(SolarTrigger.clampOnDeviceOffset(60) == 59)
     }
 
     @Test("SolarTrigger decodes legacy payloads without weekdays as all days")

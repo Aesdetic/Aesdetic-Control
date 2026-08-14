@@ -10,6 +10,7 @@ import Combine
 import os.log
 import SwiftUI
 import CoreLocation
+import CryptoKit
 
 // MARK: - API Service Protocol
 
@@ -24,13 +25,13 @@ protocol WLEDAPIServiceProtocol {
     func setCCT(for device: WLEDDevice, cct: Int, segmentId: Int) async throws -> WLEDResponse
     func setCCT(for device: WLEDDevice, cctKelvin: Int, segmentId: Int) async throws -> WLEDResponse
     func fetchPresets(for device: WLEDDevice) async throws -> [WLEDPreset]
-    func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws
+    func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws -> PresetStoreMutationOutcome
     func setEffect(_ effectId: Int, forSegment segmentId: Int, speed: Int?, intensity: Int?, palette: Int?, custom1: Int?, custom2: Int?, custom3: Int?, option1: Bool?, option2: Bool?, option3: Bool?, colors: [[Int]]?, device: WLEDDevice, turnOn: Bool?, releaseRealtime: Bool) async throws -> WLEDState
     func fetchPalettePreviewPage(for device: WLEDDevice, page: Int) async throws -> (maxPage: Int, palettes: [String: Any])
     func releaseRealtimeOverride(for device: WLEDDevice) async
     
     // Playlist management
-    func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws -> [WLEDPlaylist]
+    func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws -> PresetStoreMutationOutcome
     func fetchPlaylists(for device: WLEDDevice) async throws -> [WLEDPlaylist]
     func applyPlaylist(_ playlistId: Int, to device: WLEDDevice) async throws -> WLEDState
     func stopPlaylist(on device: WLEDDevice) async throws -> WLEDState
@@ -38,14 +39,24 @@ protocol WLEDAPIServiceProtocol {
     
     // Timer/Macro management
     func fetchTimers(for device: WLEDDevice) async throws -> [WLEDTimer]
+    func fetchDeviceAutomationSnapshot(for device: WLEDDevice) async throws -> DeviceAutomationSnapshot
     func updateTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws
+    func updateAndVerifyTimer(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async -> TimerMutationOutcome
     func disableTimer(slot: Int, device: WLEDDevice) async throws -> Bool
     func deleteTimerRows(matching candidates: [WLEDTimer], device: WLEDDevice) async throws -> Bool
     
-    // Preset-store deletion uses full-file rewrite. Do not use WLED pdel-style mutation.
-    func rewritePresetStoreDeletingRecords(playlistIds: [Int], presetIds: [Int], device: WLEDDevice) async throws -> Bool
-    func renamePresetRecord(id: Int, name: String, device: WLEDDevice) async throws
-    func renamePlaylistRecord(id: Int, name: String, device: WLEDDevice) async throws
+    // Preset-store deletion requires captured record identity and a conditional full-file rewrite.
+    func rewritePresetStoreConditionallyDeleting(
+        targets: [CleanupDeleteTarget],
+        device: WLEDDevice
+    ) async throws -> ConditionalDeleteReport
+    func capturePresetStoreCleanupTargets(
+        playlistIds: [Int],
+        presetIds: [Int],
+        device: WLEDDevice
+    ) async throws -> [CleanupDeleteTarget]
+    func renamePresetRecord(id: Int, name: String, device: WLEDDevice) async throws -> PresetStoreMutationOutcome
+    func renamePlaylistRecord(id: Int, name: String, device: WLEDDevice) async throws -> PresetStoreMutationOutcome
     
     // Preset saving helpers
     func saveColorPreset(_ preset: ColorPreset, to device: WLEDDevice, presetId: Int) async throws -> Int
@@ -66,6 +77,8 @@ protocol WLEDAPIServiceProtocol {
     func fetchPaletteNames(for device: WLEDDevice) async throws -> [String]
     func rebootDevice(_ device: WLEDDevice) async throws
     func isPresetStoreMutationInFlight(deviceId: String) async -> Bool
+    func presetStoreTransactionStatus(deviceId: String) async -> PresetStoreTransactionStatus
+    func resumePendingPresetStoreRecovery(for device: WLEDDevice) async -> PresetStoreMutationOutcome?
     func isPresetStoreReadUnstable(deviceId: String) async -> Bool
     func isPresetStoreDeleteSessionActive(deviceId: String) async -> Bool
     func isStateWriteBackoffActive(deviceId: String) async -> Bool
@@ -86,6 +99,14 @@ extension WLEDAPIServiceProtocol {
     func secondsSinceLastPresetStoreMutationEnd(deviceId: String) async -> TimeInterval? {
         nil
     }
+
+    func presetStoreTransactionStatus(deviceId: String) async -> PresetStoreTransactionStatus {
+        .idle
+    }
+
+    func resumePendingPresetStoreRecovery(for device: WLEDDevice) async -> PresetStoreMutationOutcome? {
+        nil
+    }
 }
 
 // MARK: - WLEDAPIService
@@ -104,7 +125,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     private let urlSession: URLSession
+    private let uploadURLSession: URLSession
     private let reportsPresetStoreHealth: Bool
+    private let presetStorePersistenceRoot: URL?
+    private let presetStoreObservationDelayNanos: UInt64
+    private let presetStoreSuccessfulUploadSettleNanos: UInt64
+    private let presetStoreUnknownOutcomeSettleNanos: UInt64
     private let logger = Logger(subsystem: "com.aesdetic.control", category: "APIService")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -114,9 +140,14 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let maxPresetSegmentCount: Int = 18
     private var presetQueues: [String: Task<Void, Never>] = [:]
     private var presetQueueTokens: [String: Int] = [:]
+    private var presetStoreIdleWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var timerConfigQueues: [String: Task<Void, Never>] = [:]
     private var timerConfigQueueTokens: [String: Int] = [:]
+    private var presetAutomationMutationVersionByQueueKey: [String: UInt64] = [:]
+    private var timerAutomationMutationVersionByDeviceId: [String: UInt64] = [:]
+    private var deviceAutomationSnapshotTasks: [String: Task<DeviceAutomationSnapshot, Error>] = [:]
     private var presetStoreQueueKeyByDeviceId: [String: String] = [:]
+    private var presetStoreTransactionStatusByQueueKey: [String: PresetStoreTransactionStatus] = [:]
     private var lastPresetStoreMutationEndedAtByQueueKey: [String: Date] = [:]
     private let presetWriteCooldownNanos: UInt64 = 700_000_000
     private let presetStoreReadSettleWindowSeconds: TimeInterval = 1.5
@@ -127,6 +158,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     private let presetStoreRewriteScratchReserveBytes = 9_000
     private let presetStoreMinimumLowWatermarkBytes = 16 * 1024
     private let presetStoreMaximumLowWatermarkBytes = 64 * 1024
+    private let presetStoreRecoveryMaximumAttempts = 3
+    private let presetStoreVerifiedSnapshotRetentionCount = 3
     private var activePresetStoreDeleteSessionDeviceIds: Set<String> = []
     
     // Performance optimization: Request batching and caching
@@ -157,12 +190,23 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     
     private init() {
         self.reportsPresetStoreHealth = true
+        self.presetStorePersistenceRoot = nil
+        self.presetStoreObservationDelayNanos = 1_000_000_000
+        self.presetStoreSuccessfulUploadSettleNanos = 1_000_000_000
+        self.presetStoreUnknownOutcomeSettleNanos = 5_000_000_000
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 8.0 // Reduced timeout for better responsiveness
         config.timeoutIntervalForResource = 20.0
         config.httpMaximumConnectionsPerHost = 4 // Limit connections per host
         config.requestCachePolicy = .useProtocolCachePolicy
         self.urlSession = URLSession(configuration: config)
+
+        let uploadConfig = URLSessionConfiguration.default
+        uploadConfig.timeoutIntervalForRequest = 60.0
+        uploadConfig.timeoutIntervalForResource = 180.0
+        uploadConfig.httpMaximumConnectionsPerHost = 1
+        uploadConfig.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        self.uploadURLSession = URLSession(configuration: uploadConfig)
         
         // Configure JSON encoder to omit nil values
         // This ensures CCT-only updates don't include col: null
@@ -172,10 +216,38 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     #if DEBUG
-    init(testURLSession: URLSession) {
+    init(
+        testURLSession: URLSession,
+        presetStorePersistenceRoot: URL? = nil
+    ) {
         self.reportsPresetStoreHealth = false
+        self.presetStorePersistenceRoot = presetStorePersistenceRoot
+            ?? FileManager.default.temporaryDirectory
+                .appendingPathComponent("WLEDAPIServiceTests", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        self.presetStoreObservationDelayNanos = 1_000_000
+        self.presetStoreSuccessfulUploadSettleNanos = 1_000_000
+        self.presetStoreUnknownOutcomeSettleNanos = 1_000_000
         self.urlSession = testURLSession
+        self.uploadURLSession = testURLSession
         self.encoder.outputFormatting = [.prettyPrinted]
+    }
+
+    func _presetStoreTransactionJournalForTesting(
+        deviceId: String
+    ) throws -> PresetStoreTransactionJournal? {
+        try loadPresetStoreTransactionJournal(deviceId: deviceId)
+    }
+
+    func _verifiedPresetStoreSnapshotCountForTesting(
+        device: WLEDDevice
+    ) throws -> Int {
+        let directory = try verifiedPresetStoreSnapshotDirectory(device: device)
+        return try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).count
     }
     #endif
 
@@ -193,14 +265,68 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         #if DEBUG
         logger.debug("preset_store.mutation.wait_idle device=\(deviceId, privacy: .public)")
         #endif
-        while presetQueues[queueKey] != nil {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        guard presetQueues[queueKey] != nil else { return }
+        await withCheckedContinuation { continuation in
+            presetStoreIdleWaiters[queueKey, default: []].append(continuation)
         }
     }
 
     func isPresetStoreMutationInFlight(deviceId: String) async -> Bool {
         let queueKey = resolvedPresetStoreQueueKey(forDeviceId: deviceId)
         return presetQueues[queueKey] != nil
+    }
+
+    func presetStoreTransactionStatus(deviceId: String) async -> PresetStoreTransactionStatus {
+        let queueKey = resolvedPresetStoreQueueKey(forDeviceId: deviceId)
+        if let status = presetStoreTransactionStatusByQueueKey[queueKey] {
+            return status
+        }
+        if (try? loadPresetStoreTransactionJournal(deviceId: deviceId)) != nil {
+            return .verificationNeeded
+        }
+        return .idle
+    }
+
+    private func setPresetStoreTransactionStatus(
+        _ status: PresetStoreTransactionStatus,
+        device: WLEDDevice,
+        message: String? = nil
+    ) async {
+        let queueKey = presetStoreQueueKey(for: device)
+        if status == .idle {
+            presetStoreTransactionStatusByQueueKey.removeValue(forKey: queueKey)
+        } else {
+            presetStoreTransactionStatusByQueueKey[queueKey] = status
+        }
+        guard reportsPresetStoreHealth else { return }
+        await MainActor.run {
+            if status == .needsRepair {
+                DeviceControlViewModel.shared.notePresetStoreRecoveryRequired(
+                    deviceId: device.id,
+                    message: message ?? "The lamp's preset store needs manual repair.",
+                    pauseSeconds: 24 * 60 * 60
+                )
+            }
+            DeviceControlViewModel.shared.notePresetStoreTransactionStatus(
+                deviceId: device.id,
+                status: status,
+                message: message
+            )
+        }
+    }
+
+    private func ensurePresetStoreActivationAvailable(for device: WLEDDevice) throws {
+        let queueKey = presetStoreQueueKey(for: device)
+        let status = presetStoreTransactionStatusByQueueKey[queueKey] ?? .idle
+        let hasDurablePendingTransaction =
+            (try? loadPresetStoreTransactionJournal(deviceId: device.id)) != nil
+        guard presetQueues[queueKey] == nil,
+              !status.blocksPersistentEdits,
+              !hasDurablePendingTransaction else {
+            throw WLEDAPIError.deviceBusy(
+                "\(device.name) is finishing a saved preset or playlist update"
+            )
+        }
     }
 
     func isPresetStoreReadUnstable(deviceId: String) async -> Bool {
@@ -284,6 +410,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         label: String? = nil,
         operation: @escaping () async throws -> T
     ) async throws -> T {
+        presetAutomationMutationVersionByQueueKey[deviceId, default: 0] &+= 1
         let previous = presetQueues[deviceId]
         let token = (presetQueueTokens[deviceId] ?? 0) + 1
         presetQueueTokens[deviceId] = token
@@ -332,8 +459,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             if presetQueueTokens[deviceId] == token {
                 presetQueues.removeValue(forKey: deviceId)
                 presetQueueTokens.removeValue(forKey: deviceId)
+                let waiters = presetStoreIdleWaiters.removeValue(forKey: deviceId) ?? []
+                waiters.forEach { $0.resume() }
             }
             lastPresetStoreMutationEndedAtByQueueKey[deviceId] = Date()
+            presetAutomationMutationVersionByQueueKey[deviceId, default: 0] &+= 1
             // Preset/playlist writes mutate preset store records; discard cached raw payloads.
             presetRecordPayloadCacheByStoreKey.removeValue(forKey: deviceId)
             #if DEBUG
@@ -359,6 +489,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         label: String,
         operation: @escaping () async throws -> T
     ) async throws -> T {
+        timerAutomationMutationVersionByDeviceId[deviceId, default: 0] &+= 1
         let previous = timerConfigQueues[deviceId]
         let token = (timerConfigQueueTokens[deviceId] ?? 0) + 1
         timerConfigQueueTokens[deviceId] = token
@@ -397,6 +528,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
                 timerConfigQueues.removeValue(forKey: deviceId)
                 timerConfigQueueTokens.removeValue(forKey: deviceId)
             }
+            timerAutomationMutationVersionByDeviceId[deviceId, default: 0] &+= 1
             #if DEBUG
             logger.debug("timer.config.mutation.end device=\(deviceId, privacy: .public) label=\(label, privacy: .public)")
             #endif
@@ -944,25 +1076,64 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
     
-    func savePreset(_ request: WLEDPresetSaveRequest, to device: WLEDDevice) async throws {
+    func savePreset(
+        _ request: WLEDPresetSaveRequest,
+        to device: WLEDDevice
+    ) async throws -> PresetStoreMutationOutcome {
         guard (1...250).contains(request.id) else {
             throw WLEDAPIError.invalidConfiguration
         }
+        let record = try presetStoreRecordPayload(
+            from: request,
+            maxSegmentCount: nil
+        )
         let queueKey = presetStoreQueueKey(for: device)
-        try await enqueuePresetOperation(deviceId: queueKey, label: "preset.save") {
-            try await self.savePresetViaState(request, device: device)
+        let outcome = try await enqueuePresetOperation(deviceId: queueKey, label: "preset.save") {
+            try await self.rewritePresetStoreUpsertingRecordsQueued(
+                presetRecords: [request.id: record],
+                playlistRecords: [:],
+                operation: .presetSave,
+                device: device
+            )
+        }
+        guard outcome.isCommitted else { return outcome }
+        if request.applyAtBoot == true {
+            try await updateAndVerifyBootPreset(request.id, device: device)
+        }
+        return outcome
+    }
+
+    private func updateAndVerifyBootPreset(
+        _ presetId: Int,
+        device: WLEDDevice
+    ) async throws {
+        _ = try await postState(device, body: ["bootps": presetId])
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        let config = try await fetchRawConfig(for: device)
+        let configRoot = (config["cfg"] as? [String: Any]) ?? config
+        let defaults = configRoot["def"] as? [String: Any]
+        guard decodeInt(defaults?["ps"]) == presetId else {
+            throw WLEDAPIError.invalidResponse
         }
     }
     
     // MARK: - Playlist Management
     
-    func savePlaylist(_ request: WLEDPlaylistSaveRequest, to device: WLEDDevice) async throws -> [WLEDPlaylist] {
+    func savePlaylist(
+        _ request: WLEDPlaylistSaveRequest,
+        to device: WLEDDevice
+    ) async throws -> PresetStoreMutationOutcome {
         let normalizedRequest = try validatedPlaylistRequest(request)
+        let record = playlistStoreRecordPayload(from: normalizedRequest)
         let queueKey = presetStoreQueueKey(for: device)
-        try await enqueuePresetOperation(deviceId: queueKey, label: "playlist.save") {
-            try await self.savePlaylistViaState(normalizedRequest, device: device)
+        return try await enqueuePresetOperation(deviceId: queueKey, label: "playlist.save") {
+            try await self.rewritePresetStoreUpsertingRecordsQueued(
+                presetRecords: [:],
+                playlistRecords: [normalizedRequest.id: record],
+                operation: .playlistSave,
+                device: device
+            )
         }
-        return (try? await fetchPlaylists(for: device)) ?? []
     }
     
     func fetchPlaylists(for device: WLEDDevice) async throws -> [WLEDPlaylist] {
@@ -1078,6 +1249,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard playlistId > 0 && playlistId <= 250 else {
             throw WLEDAPIError.invalidConfiguration
         }
+        try ensurePresetStoreActivationAvailable(for: device)
         let clampedTransition = transitionDeciseconds.map { min(max(0, $0), maxWLEDTransitionDeciseconds) }
         let stateUpdate = WLEDStateUpdate(
             on: true,
@@ -1427,9 +1599,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
     private func timerConfigReadModifyWritePayload(
         _ timersArray: [[String: Any]],
-        device: WLEDDevice
-    ) async throws -> [String: Any] {
-        var configPayload = try await fetchRawConfig(for: device)
+        applyingTo originalConfig: [String: Any]
+    ) -> [String: Any] {
+        var configPayload = originalConfig
         applyTimersArray(timersArray, to: &configPayload)
         if var cfg = configPayload["cfg"] as? [String: Any] {
             applyTimersArray(timersArray, to: &cfg)
@@ -1437,6 +1609,35 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         _ = enforceColorGammaCorrection(in: &configPayload)
         return configPayload
+    }
+
+    private struct TimerConfigSnapshot {
+        let payload: [String: Any]
+        let timers: [WLEDTimer]
+    }
+
+    /// One strict configuration read supplies both the merge base and the
+    /// decoded timer rows. This prevents a timer edit from combining two
+    /// different `/json/cfg` generations.
+    private func fetchTimerConfigSnapshot(for device: WLEDDevice) async throws -> TimerConfigSnapshot {
+        guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            try validateHTTPResponse(response, device: device)
+            guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                throw WLEDAPIError.invalidResponse
+            }
+            return TimerConfigSnapshot(
+                payload: json,
+                timers: decodeTimersFromConfig(json).timers
+            )
+        } catch {
+            throw handleError(error, device: device)
+        }
     }
 
     private func normalizedTimerDateWindow(for timer: WLEDTimer) -> (startMonth: Int?, startDay: Int?, endMonth: Int?, endDay: Int?) {
@@ -1513,34 +1714,162 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         do {
             let (data, response) = try await urlSession.data(for: request)
             try validateHTTPResponse(response, device: device)
-            let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
-
-            // /json/cfg can be either flat or nested under "cfg" depending on firmware/proxy path.
-            let resolvedCfg = (json?["cfg"] as? [String: Any]) ?? json ?? [:]
-            let rootTimersObject = json?["timers"] as? [String: Any]
-            let resolvedTimersObject = (resolvedCfg["timers"] as? [String: Any]) ?? rootTimersObject
-
-            let strictCodec = isStrictTimerCodecEnabled()
-            let rawTimersArray = resolvedTimersObject?["ins"] as? [[String: Any]]
-            let timersArray = rawTimersArray ?? []
-            let timers: [WLEDTimer]
-            if strictCodec {
-                timers = decodeWLEDTimers(from: timersArray)
-            } else {
-                timers = legacyDecodeWLEDTimers(from: timersArray)
-                if !didLogTimerCodecLegacyFallback {
-                    logger.warning("timer.codec.legacy_fallback enabled=true")
-                    didLogTimerCodecLegacyFallback = true
-                }
+            guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                throw WLEDAPIError.invalidResponse
             }
+            let decoded = decodeTimersFromConfig(json)
 
             #if DEBUG
-            print("timer.slots.reported device=\(device.id) cfgInsCount=\(timersArray.count) logicalSlots=\(timers.count)")
+            print("timer.slots.reported device=\(device.id) cfgInsCount=\(decoded.rawRowCount) logicalSlots=\(decoded.timers.count)")
             #endif
-            return timers.sorted { $0.id < $1.id }
+            return decoded.timers
         } catch {
             throw handleError(error, device: device)
         }
+    }
+
+    func fetchDeviceAutomationSnapshot(for device: WLEDDevice) async throws -> DeviceAutomationSnapshot {
+        if let existing = deviceAutomationSnapshotTasks[device.id] {
+            return try await existing.value
+        }
+
+        let task = Task<DeviceAutomationSnapshot, Error> { [self] in
+            try await captureDeviceAutomationSnapshot(for: device)
+        }
+        deviceAutomationSnapshotTasks[device.id] = task
+        defer {
+            deviceAutomationSnapshotTasks.removeValue(forKey: device.id)
+        }
+        return try await task.value
+    }
+
+    private func captureDeviceAutomationSnapshot(for device: WLEDDevice) async throws -> DeviceAutomationSnapshot {
+        let queueKey = presetStoreQueueKey(for: device)
+        let transactionStatus = presetStoreTransactionStatusByQueueKey[queueKey] ?? .idle
+        let hasPendingTransactionJournal =
+            (try? loadPresetStoreTransactionJournal(deviceId: device.id)) != nil
+        let permitsReadOnlyVerification = transactionStatus == .idle
+            || (transactionStatus == .verificationNeeded && !hasPendingTransactionJournal)
+        guard presetQueues[queueKey] == nil,
+              timerConfigQueues[device.id] == nil,
+              permitsReadOnlyVerification else {
+            throw DeviceAutomationSnapshotError.busy
+        }
+
+        let presetVersion = presetAutomationMutationVersionByQueueKey[queueKey, default: 0]
+        let timerVersion = timerAutomationMutationVersionByDeviceId[device.id, default: 0]
+
+        guard let configURL = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WLEDAPIError.invalidURL
+        }
+        var configRequest = URLRequest(url: configURL)
+        configRequest.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        let configData: Data
+        let configJSON: [String: Any]
+        do {
+            let (data, response) = try await urlSession.data(for: configRequest)
+            try validateHTTPResponse(response, device: device)
+            guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                throw DeviceAutomationSnapshotError.timerConfigurationUnavailable
+            }
+            configData = data
+            configJSON = json
+        } catch let error as DeviceAutomationSnapshotError {
+            throw error
+        } catch {
+            throw handleError(error, device: device)
+        }
+
+        let decodedTimers = decodeTimersFromConfig(configJSON).timers
+        let timeZone = parseSolarReference(from: configJSON).timeZone
+
+        guard let presetURL = URL(string: "http://\(device.ipAddress)/presets.json") else {
+            throw WLEDAPIError.invalidURL
+        }
+        var presetRequest = URLRequest(url: presetURL)
+        presetRequest.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        let presetData: Data
+        let records: [Int: [String: Any]]
+        do {
+            let (data, response) = try await urlSession.data(for: presetRequest)
+            try validateHTTPResponse(response, device: device)
+            if wledErrorCode(from: data) != nil {
+                throw DeviceAutomationSnapshotError.presetStoreUnavailable
+            }
+            records = try parsePresetPayloadMapById(data: data, mode: .strict)
+            presetData = data
+        } catch let error as DeviceAutomationSnapshotError {
+            throw error
+        } catch {
+            // Readiness observations never classify corruption or start recovery.
+            throw handleError(error, device: device)
+        }
+
+        let finalTransactionStatus = presetStoreTransactionStatusByQueueKey[queueKey] ?? .idle
+        let finalHasPendingTransactionJournal =
+            (try? loadPresetStoreTransactionJournal(deviceId: device.id)) != nil
+        let stillPermitsReadOnlyVerification = finalTransactionStatus == .idle
+            || (finalTransactionStatus == .verificationNeeded && !finalHasPendingTransactionJournal)
+        guard presetQueues[queueKey] == nil,
+              timerConfigQueues[device.id] == nil,
+              presetVersion == presetAutomationMutationVersionByQueueKey[queueKey, default: 0],
+              timerVersion == timerAutomationMutationVersionByDeviceId[device.id, default: 0],
+              stillPermitsReadOnlyVerification else {
+            throw DeviceAutomationSnapshotError.superseded
+        }
+
+        cachePresetRecordPayloads(records: records, device: device)
+        var presetIds = Set<Int>()
+        var playlistIds = Set<Int>()
+        var presetStoreRecordHashes: [Int: String] = [:]
+        for (id, record) in records {
+            let signature = canonicalJSONSignature(record)
+            presetStoreRecordHashes[id] = presetStoreHash(Data(signature.utf8))
+            if record["playlist"] is [String: Any] {
+                playlistIds.insert(id)
+            } else {
+                presetIds.insert(id)
+            }
+        }
+        await reportPresetStoreHealthyReadSuccess(deviceId: device.id)
+
+        return DeviceAutomationSnapshot(
+            deviceId: device.id,
+            capturedAt: Date(),
+            generation: DeviceAutomationGeneration(
+                timerConfigHash: presetStoreHash(configData),
+                presetStoreHash: presetStoreHash(presetData)
+            ),
+            timers: decodedTimers,
+            presetIds: presetIds,
+            playlistIds: playlistIds,
+            presetStoreRecordHashes: presetStoreRecordHashes,
+            presets: try parsePresets(from: presetData),
+            playlists: try parsePlaylistsFromPresets(data: presetData),
+            deviceTimeZone: timeZone
+        )
+    }
+
+    private func decodeTimersFromConfig(
+        _ json: [String: Any]
+    ) -> (timers: [WLEDTimer], rawRowCount: Int) {
+        // /json/cfg can be either flat or nested under "cfg" depending on firmware/proxy path.
+        let resolvedCfg = (json["cfg"] as? [String: Any]) ?? json
+        let rootTimersObject = json["timers"] as? [String: Any]
+        let resolvedTimersObject = (resolvedCfg["timers"] as? [String: Any]) ?? rootTimersObject
+        let timersArray = resolvedTimersObject?["ins"] as? [[String: Any]] ?? []
+
+        let timers: [WLEDTimer]
+        if isStrictTimerCodecEnabled() {
+            timers = decodeWLEDTimers(from: timersArray)
+        } else {
+            timers = legacyDecodeWLEDTimers(from: timersArray)
+            if !didLogTimerCodecLegacyFallback {
+                logger.warning("timer.codec.legacy_fallback enabled=true")
+                didLogTimerCodecLegacyFallback = true
+            }
+        }
+        return (timers.sorted { $0.id < $1.id }, timersArray.count)
     }
     
     /// Update a timer configuration on a WLED device
@@ -1554,7 +1883,48 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
 
-    private func updateTimerUnlocked(_ timerUpdate: WLEDTimerUpdate, on device: WLEDDevice) async throws {
+    func updateAndVerifyTimer(
+        _ timerUpdate: WLEDTimerUpdate,
+        on device: WLEDDevice
+    ) async -> TimerMutationOutcome {
+        do {
+            return try await enqueueTimerConfigMutation(
+                deviceId: device.id,
+                label: "timer.update_verified"
+            ) { [self] in
+                try await updateTimerUnlocked(timerUpdate, on: device)
+                do {
+                    let verified = try await verifyTimerWithBackoff(
+                        timerUpdate,
+                        on: device,
+                        attempts: timerDeleteVerifyRetryAttempts,
+                        initialDelayMs: timerDeleteVerifyInitialDelayMs,
+                        context: "timer.update"
+                    )
+                    return verified ? .committed : .notCommitted
+                } catch {
+                    if isTransientTimerVerificationError(error) {
+                        logger.warning(
+                            "timer.update.outcome_unknown device=\(device.id, privacy: .public) slot=\(timerUpdate.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                        )
+                        return .verificationNeeded
+                    }
+                    throw error
+                }
+            }
+        } catch {
+            logger.error(
+                "timer.update.failed device=\(device.id, privacy: .public) slot=\(timerUpdate.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            return isTransientTimerVerificationError(error) ? .verificationNeeded : .notCommitted
+        }
+    }
+
+    private func updateTimerUnlocked(
+        _ timerUpdate: WLEDTimerUpdate,
+        on device: WLEDDevice,
+        using existingSnapshot: TimerConfigSnapshot? = nil
+    ) async throws {
         guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
             throw WLEDAPIError.invalidURL
         }
@@ -1563,8 +1933,14 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         let strictCodec = isStrictTimerCodecEnabled()
 
-        // First, fetch current config to get timers array
-        let fetchedTimers = try await fetchTimers(for: device)
+        // One read supplies both the timer rows and the full merge base.
+        let configSnapshot: TimerConfigSnapshot
+        if let existingSnapshot {
+            configSnapshot = existingSnapshot
+        } else {
+            configSnapshot = try await fetchTimerConfigSnapshot(for: device)
+        }
+        let fetchedTimers = configSnapshot.timers
         let currentTimers = strictCodec
             ? (fetchedTimers.isEmpty ? defaultLogicalWLEDTimers() : fetchedTimers)
             : fetchedTimers
@@ -1622,7 +1998,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         var httpRequest = URLRequest(url: url)
         httpRequest.httpMethod = "POST"
         httpRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let configPayload = try await timerConfigReadModifyWritePayload(timersArray, device: device)
+        let configPayload = timerConfigReadModifyWritePayload(
+            timersArray,
+            applyingTo: configSnapshot.payload
+        )
         httpRequest.httpBody = try JSONSerialization.data(withJSONObject: configPayload, options: [])
         
         let (_, response) = try await urlSession.data(for: httpRequest)
@@ -1857,12 +2236,22 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     /// - Returns: true if successful, false otherwise
     /// - Throws: WLEDAPIError if the request fails
     func disableTimer(slot: Int, device: WLEDDevice) async throws -> Bool {
-        guard slot >= 0 else {
+        guard (0..<wledTimerSlotCount).contains(slot) else {
             throw WLEDAPIError.invalidConfiguration
         }
+        return try await enqueueTimerConfigMutation(
+            deviceId: device.id,
+            label: "timer.disable"
+        ) { [self] in
+            try await disableTimerUnlocked(slot: slot, device: device)
+        }
+    }
 
-        // Fetch current timers
-        let currentTimers = try await fetchTimers(for: device)
+    private func disableTimerUnlocked(slot: Int, device: WLEDDevice) async throws -> Bool {
+        // One configuration generation supplies both the ownership observation
+        // and the write merge base.
+        let configSnapshot = try await fetchTimerConfigSnapshot(for: device)
+        let currentTimers = configSnapshot.timers
 
         guard let current = currentTimers.first(where: { $0.id == slot }) else {
             logger.warning("timer.delete.slot_missing device=\(device.id, privacy: .public) slot=\(slot, privacy: .public)")
@@ -1893,7 +2282,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )
 
         do {
-            try await updateTimer(clearUpdate, on: device)
+            try await updateTimerUnlocked(
+                clearUpdate,
+                on: device,
+                using: configSnapshot
+            )
         } catch {
             logger.error("timer.delete.update_failed device=\(device.id, privacy: .public) slot=\(slot, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
             throw error
@@ -1963,7 +2356,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard !candidates.isEmpty else {
             return true
         }
-        let currentTimers = try await fetchTimers(for: device)
+        let configSnapshot = try await fetchTimerConfigSnapshot(for: device)
+        let currentTimers = configSnapshot.timers
         let remainingTimers: [WLEDTimer]
         switch timerRowsAfterDeleting(candidates: candidates, from: currentTimers) {
         case .noMatches:
@@ -1989,7 +2383,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             "timer.rows_delete.write_plan device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public) remainingRows=\(remainingTimers.count, privacy: .public) encodedRows=\(deletePayload.rows.count, privacy: .public) forceClearedSlot=\(forceClearedSlotDescription, privacy: .public)"
         )
         do {
-            try await writeTimerRows(deletePayload.rows, device: device)
+            try await writeTimerRows(
+                deletePayload.rows,
+                applyingTo: configSnapshot.payload,
+                device: device
+            )
         } catch {
             logger.error(
                 "timer.rows_delete.write_failed device=\(device.id, privacy: .public) candidates=\(candidates.map(\.id), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
@@ -2048,7 +2446,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         return (rows, forceClearedSlot)
     }
 
-    private func writeTimerRows(_ timersArray: [[String: Any]], device: WLEDDevice) async throws {
+    private func writeTimerRows(
+        _ timersArray: [[String: Any]],
+        applyingTo originalConfig: [String: Any],
+        device: WLEDDevice
+    ) async throws {
         guard let url = URL(string: "http://\(device.ipAddress)/json/cfg") else {
             throw WLEDAPIError.invalidURL
         }
@@ -2056,7 +2458,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let configPayload = try await timerConfigReadModifyWritePayload(timersArray, device: device)
+        let configPayload = timerConfigReadModifyWritePayload(
+            timersArray,
+            applyingTo: originalConfig
+        )
         request.httpBody = try JSONSerialization.data(withJSONObject: configPayload, options: [])
 
         let (_, response) = try await urlSession.data(for: request)
@@ -2582,72 +2987,176 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
     
-    func rewritePresetStoreDeletingRecords(
-        playlistIds: [Int],
-        presetIds: [Int],
+    func rewritePresetStoreConditionallyDeleting(
+        targets: [CleanupDeleteTarget],
         device: WLEDDevice
-    ) async throws -> Bool {
-        let normalizedPlaylistIds = Set(playlistIds.filter { (1...250).contains($0) })
-        let normalizedPresetIds = Set(presetIds.filter { (1...250).contains($0) })
-        let targetIds = normalizedPlaylistIds.union(normalizedPresetIds)
-        guard !targetIds.isEmpty else {
-            return true
+    ) async throws -> ConditionalDeleteReport {
+        let normalizedTargets = Set(
+            targets.filter {
+                (1...250).contains($0.id)
+                    && ($0.resourceType == .preset || $0.resourceType == .playlist)
+            }
+        )
+        guard !normalizedTargets.isEmpty else {
+            return ConditionalDeleteReport(
+                outcome: .committed,
+                deleted: [],
+                alreadyAbsent: [],
+                superseded: [],
+                needsReview: []
+            )
         }
 
         let queueKey = presetStoreQueueKey(for: device)
-        return try await enqueuePresetOperation(deviceId: queueKey, label: "preset_store.full_rewrite_delete") {
-            try await self.rewritePresetStoreDeletingRecordsQueued(
-                playlistIds: normalizedPlaylistIds,
-                presetIds: normalizedPresetIds,
-                targetIds: targetIds,
+        return try await enqueuePresetOperation(
+            deviceId: queueKey,
+            label: "preset_store.conditional_delete"
+        ) { [self] in
+            activePresetStoreDeleteSessionDeviceIds.insert(device.id)
+            defer {
+                activePresetStoreDeleteSessionDeviceIds.remove(device.id)
+            }
+            var deleted = Set<CleanupDeleteTarget>()
+            var alreadyAbsent = Set<CleanupDeleteTarget>()
+            var superseded = Set<CleanupDeleteTarget>()
+            var needsReview = Set<CleanupDeleteTarget>()
+
+            let outcome = try await performPresetStoreTransactionQueued(
+                operation: .delete,
+                playlistIds: normalizedTargets.filter { $0.resourceType == .playlist }.map(\.id),
+                presetIds: normalizedTargets.filter { $0.resourceType == .preset }.map(\.id),
                 device: device
+            ) { originalData in
+                let originalRecords = try self.parsePresetPayloadMapById(
+                    data: originalData,
+                    mode: .strict
+                )
+                var idsToDelete = Set<Int>()
+                for target in normalizedTargets {
+                    guard let record = originalRecords[target.id] else {
+                        alreadyAbsent.insert(target)
+                        continue
+                    }
+                    let isPlaylist = record["playlist"] is [String: Any]
+                    guard (target.resourceType == .playlist) == isPlaylist else {
+                        superseded.insert(target)
+                        continue
+                    }
+                    guard target.ownership.canAutomaticallyDeletePresetStoreRecord else {
+                        needsReview.insert(target)
+                        continue
+                    }
+
+                    let semanticSignature = self.canonicalJSONSignature(record)
+                    let recordHash = self.presetStoreHash(Data(semanticSignature.utf8))
+                    let hashMatches = target.ownership.recordHash == recordHash
+                    let semanticMatches = target.ownership.semanticSignature == semanticSignature
+                    let actualMarker = (record["n"] as? String)
+                        .flatMap(AesdeticWLEDPresetNameMarker.parse)
+                    let provenanceMatches =
+                        target.ownership.markerKind?.isInternalAsset == true
+                            && actualMarker?.kind == target.ownership.markerKind
+                            && actualMarker?.ownershipToken == target.ownership.resolvedOwnerToken
+                    guard hashMatches || semanticMatches || provenanceMatches else {
+                        superseded.insert(target)
+                        continue
+                    }
+                    idsToDelete.insert(target.id)
+                    deleted.insert(target)
+                }
+
+                guard !idsToDelete.isEmpty else {
+                    return originalData
+                }
+                return try self.makePresetStoreRewriteDeleting(
+                    ids: idsToDelete,
+                    from: originalData
+                )
+            }
+            return ConditionalDeleteReport(
+                outcome: outcome,
+                deleted: deleted,
+                alreadyAbsent: alreadyAbsent,
+                superseded: superseded,
+                needsReview: needsReview
             )
         }
     }
 
-    func deletePreset(id: Int, device: WLEDDevice) async throws -> Bool {
+    func capturePresetStoreCleanupTargets(
+        playlistIds: [Int],
+        presetIds: [Int],
+        device: WLEDDevice
+    ) async throws -> [CleanupDeleteTarget] {
+        let normalizedPlaylistIds = Set(playlistIds.filter { (1...250).contains($0) })
+        let normalizedPresetIds = Set(presetIds.filter { (1...250).contains($0) })
+        let records = try await fetchPresetPayloadMapByIdStrict(device: device)
+
+        func target(
+            id: Int,
+            resourceType: CleanupResourceType
+        ) -> CleanupDeleteTarget {
+            guard let record = records[id] else {
+                return CleanupDeleteTarget(
+                    resourceType: resourceType,
+                    id: id,
+                    ownership: .legacyUnverified
+                )
+            }
+            let signature = canonicalJSONSignature(record)
+            let markerKind = (record["n"] as? String)
+                .flatMap(AesdeticWLEDPresetNameMarker.parse)?
+                .kind
+            return CleanupDeleteTarget(
+                resourceType: resourceType,
+                id: id,
+                ownership: CleanupOwnershipEvidence(
+                    recordHash: presetStoreHash(Data(signature.utf8)),
+                    semanticSignature: signature,
+                    markerKind: markerKind,
+                    expectedTimerSignature: nil,
+                    ownerAutomationId: nil
+                )
+            )
+        }
+
+        return normalizedPlaylistIds.sorted().map {
+            target(id: $0, resourceType: .playlist)
+        } + normalizedPresetIds.sorted().map {
+            target(id: $0, resourceType: .preset)
+        }
+    }
+
+    func deletePreset(id: Int, device: WLEDDevice) async throws -> PresetStoreMutationOutcome {
         guard (1...250).contains(id) else {
             throw WLEDAPIError.invalidConfiguration
         }
-        return try await rewritePresetStoreDeletingRecords(
+        let targets = try await capturePresetStoreCleanupTargets(
             playlistIds: [],
             presetIds: [id],
             device: device
         )
+        let report = try await rewritePresetStoreConditionallyDeleting(
+            targets: targets,
+            device: device
+        )
+        return report.needsReview.isEmpty ? report.outcome : .recoveredWithoutCommit
     }
 
-    func deletePlaylist(id: Int, device: WLEDDevice) async throws -> Bool {
+    func deletePlaylist(id: Int, device: WLEDDevice) async throws -> PresetStoreMutationOutcome {
         guard (1...250).contains(id) else {
             throw WLEDAPIError.invalidConfiguration
         }
-        return try await rewritePresetStoreDeletingRecords(
+        let targets = try await capturePresetStoreCleanupTargets(
             playlistIds: [id],
             presetIds: [],
             device: device
         )
-    }
-
-    func makePresetStoreDeleteRequestLikeWLED(
-        id: Int,
-        device: WLEDDevice,
-        timestamp: Int = Int(Date().timeIntervalSince1970)
-    ) async throws -> URLRequest {
-        guard (1...250).contains(id) else {
-            throw WLEDAPIError.invalidConfiguration
-        }
-        guard let url = URL(string: "http://\(device.ipAddress)/json/si") else {
-            throw WLEDAPIError.invalidURL
-        }
-        let body: [String: Any] = [
-            "pdel": id,
-            "v": true,
-            "time": timestamp
-        ]
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        return request
+        let report = try await rewritePresetStoreConditionallyDeleting(
+            targets: targets,
+            device: device
+        )
+        return report.needsReview.isEmpty ? report.outcome : .recoveredWithoutCommit
     }
 
     func rewritePresetStoreUpsertingRecords(
@@ -2655,9 +3164,15 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         playlistRequests: [WLEDPlaylistSaveRequest],
         device: WLEDDevice,
         maxSegmentCount: Int? = nil
-    ) async throws -> Bool {
+    ) async throws -> PresetStoreMutationOutcome {
         guard !presetRequests.isEmpty || !playlistRequests.isEmpty else {
-            return true
+            return .committed
+        }
+        let bootPresetIds = presetRequests
+            .filter { $0.applyAtBoot == true }
+            .map(\.id)
+        guard bootPresetIds.count <= 1 else {
+            throw WLEDAPIError.invalidConfiguration
         }
 
         var presetRecords: [Int: [String: Any]] = [:]
@@ -2685,13 +3200,18 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
 
         let queueKey = presetStoreQueueKey(for: device)
-        return try await enqueuePresetOperation(deviceId: queueKey, label: "preset_store.full_rewrite_create") {
+        let outcome = try await enqueuePresetOperation(deviceId: queueKey, label: "preset_store.full_rewrite_create") {
             try await self.rewritePresetStoreUpsertingRecordsQueued(
                 presetRecords: presetRecords,
                 playlistRecords: playlistRecords,
+                operation: .batchUpsert,
                 device: device
             )
         }
+        if outcome.isCommitted, let bootPresetId = bootPresetIds.first {
+            try await updateAndVerifyBootPreset(bootPresetId, device: device)
+        }
+        return outcome
     }
 
     func syncAlexaPresetMirrors(
@@ -2724,258 +3244,90 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         device: WLEDDevice,
         allowReplacingExisting: Bool
     ) async throws -> WLEDAlexaMirrorSyncResult {
-        let originalData = try await fetchPresetStoreRawData(device: device)
-        let plan = try alexaMirrorRewritePlan(
-            data: originalData,
+        let preflightData = try await fetchPresetStoreRawData(device: device)
+        let preflightPlan = try alexaMirrorRewritePlan(
+            data: preflightData,
             favorites: favorites,
             allowReplacingExisting: allowReplacingExisting
         )
-        guard plan.conflictSlots.isEmpty, plan.missingSourceIds.isEmpty else {
+        guard preflightPlan.conflictSlots.isEmpty, preflightPlan.missingSourceIds.isEmpty else {
             return WLEDAlexaMirrorSyncResult(
                 mirroredSlots: [],
                 deletedSlots: [],
-                conflictSlots: plan.conflictSlots,
-                missingSourceIds: plan.missingSourceIds
+                conflictSlots: preflightPlan.conflictSlots,
+                missingSourceIds: preflightPlan.missingSourceIds
             )
         }
 
-        let rewrittenData = try makePresetStoreRewriteReplacingAlexaMirrors(
-            upserting: plan.upsertRecords,
-            deleting: Set(plan.deleteSlots),
-            from: originalData
-        )
-        try await ensurePresetStoreFilesystemHeadroom(
-            originalData: originalData,
-            rewrittenData: rewrittenData,
-            device: device,
-            context: "preset_store.alexa_mirror"
-        )
-        let originalRecords = try parsePresetPayloadMapById(data: originalData, mode: .strict)
-        let originalIds = Set(originalRecords.keys)
-        let changedIds = Set(plan.upsertRecords.keys).union(plan.deleteSlots)
-        let preservedIds = originalIds.subtracting(changedIds)
-        let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
-        let rewrittenIds = Set(rewrittenRecords.keys)
-        let missingUpserts = Set(plan.upsertRecords.keys).subtracting(rewrittenIds)
-        let remainingDeletes = Set(plan.deleteSlots).intersection(rewrittenIds)
-        let missingPreserved = preservedIds.subtracting(rewrittenIds)
-
-        guard missingUpserts.isEmpty, remainingDeletes.isEmpty, missingPreserved.isEmpty else {
-            logger.error(
-                "preset_store.alexa_mirror.preflight_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(missingUpserts).sorted(), privacy: .public) remainingDeletes=\(Array(remainingDeletes).sorted(), privacy: .public) missingPreserved=\(Array(missingPreserved).sorted(), privacy: .public)"
+        let outcome = try await performPresetStoreTransactionQueued(
+            operation: .alexaMirror,
+            playlistIds: [],
+            presetIds: Array(Set(preflightPlan.upsertRecords.keys).union(preflightPlan.deleteSlots)),
+            device: device
+        ) { originalData in
+            let plan = try self.alexaMirrorRewritePlan(
+                data: originalData,
+                favorites: favorites,
+                allowReplacingExisting: allowReplacingExisting
             )
-            throw WLEDAPIError.invalidResponse
-        }
-
-        do {
-            persistLocalPresetStoreBackup(data: originalData, device: device)
-            try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
-            try? await Task.sleep(nanoseconds: 500_000_000)
-
-            let verificationData = try await fetchPresetStoreRawData(device: device)
-            let verificationRecords = try parsePresetPayloadMapById(data: verificationData, mode: .strict)
-            let verifiedIds = Set(verificationRecords.keys)
-            let verifyMissingUpserts = Set(plan.upsertRecords.keys).subtracting(verifiedIds)
-            let verifyRemainingDeletes = Set(plan.deleteSlots).intersection(verifiedIds)
-            let verifyMissingPreserved = preservedIds.subtracting(verifiedIds)
-
-            guard verifyMissingUpserts.isEmpty,
-                  verifyRemainingDeletes.isEmpty,
-                  verifyMissingPreserved.isEmpty else {
-                logger.error(
-                    "preset_store.alexa_mirror.verify_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(verifyMissingUpserts).sorted(), privacy: .public) remainingDeletes=\(Array(verifyRemainingDeletes).sorted(), privacy: .public) missingPreserved=\(Array(verifyMissingPreserved).sorted(), privacy: .public)"
-                )
-                try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
-                throw WLEDAPIError.invalidResponse
+            guard plan.conflictSlots.isEmpty, plan.missingSourceIds.isEmpty else {
+                throw WLEDAPIError.invalidConfiguration
             }
-
-            cachePresetRecordPayloads(records: verificationRecords, device: device)
-            recordSuccessfulRequest(deviceId: device.id)
-            return WLEDAlexaMirrorSyncResult(
-                mirroredSlots: plan.upsertRecords.keys.sorted(),
-                deletedSlots: plan.deleteSlots.sorted(),
-                conflictSlots: [],
-                missingSourceIds: []
+            return try self.makePresetStoreRewriteReplacingAlexaMirrors(
+                upserting: plan.upsertRecords,
+                deleting: Set(plan.deleteSlots),
+                from: originalData
             )
-        } catch {
-            logger.warning(
-                "preset_store.alexa_mirror.error device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-            )
-            try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
-            throw error
         }
+        guard outcome.isCommitted else {
+            throw WLEDAPIError.presetStoreUnreadable(
+                "Alexa favorites were not committed because the preset store required recovery."
+            )
+        }
+        return WLEDAlexaMirrorSyncResult(
+            mirroredSlots: preflightPlan.upsertRecords.keys.sorted(),
+            deletedSlots: preflightPlan.deleteSlots.sorted(),
+            conflictSlots: [],
+            missingSourceIds: []
+        )
     }
 
     private func rewritePresetStoreUpsertingRecordsQueued(
         presetRecords: [Int: [String: Any]],
         playlistRecords: [Int: [String: Any]],
+        operation: PresetStoreTransactionJournal.OperationKind,
         device: WLEDDevice
-    ) async throws -> Bool {
+    ) async throws -> PresetStoreMutationOutcome {
         let upsertRecords = presetRecords.merging(playlistRecords) { _, _ in [:] }
         let upsertIds = Set(upsertRecords.keys)
-        guard !upsertIds.isEmpty else { return true }
+        guard !upsertIds.isEmpty else { return .committed }
 
-        let originalData = try await fetchPresetStoreRawData(device: device)
-        let originalRecords = try parsePresetPayloadMapById(data: originalData, mode: .strict)
-        let originalIds = Set(originalRecords.keys)
-        let preservedIds = originalIds.subtracting(upsertIds)
-
-        let rewrittenData = try makePresetStoreRewriteUpserting(records: upsertRecords, from: originalData)
-        try await ensurePresetStoreFilesystemHeadroom(
-            originalData: originalData,
-            rewrittenData: rewrittenData,
-            device: device,
-            context: "preset_store.full_rewrite_create"
-        )
-        let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
-        let rewrittenIds = Set(rewrittenRecords.keys)
-        let missingUpserts = upsertIds.subtracting(rewrittenIds)
-        let missingPreserved = preservedIds.subtracting(rewrittenIds)
-        let invalidPlaylistIds = playlistRecords.keys.filter { rewrittenRecords[$0]?["playlist"] == nil }
-        let invalidPresetIds = presetRecords.keys.filter { rewrittenRecords[$0]?["playlist"] != nil }
-
-        guard missingUpserts.isEmpty,
-              missingPreserved.isEmpty,
-              invalidPlaylistIds.isEmpty,
-              invalidPresetIds.isEmpty else {
-            logger.error(
-                "preset_store.full_rewrite_create.preflight_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(missingUpserts).sorted(), privacy: .public) missingPreserved=\(Array(missingPreserved).sorted(), privacy: .public) invalidPlaylists=\(invalidPlaylistIds.sorted(), privacy: .public) invalidPresets=\(invalidPresetIds.sorted(), privacy: .public)"
+        return try await performPresetStoreTransactionQueued(
+            operation: operation,
+            playlistIds: Array(playlistRecords.keys),
+            presetIds: Array(presetRecords.keys),
+            device: device
+        ) { originalData in
+            let originalRecords = try self.parsePresetPayloadMapById(data: originalData, mode: .strict)
+            let originalIds = Set(originalRecords.keys)
+            let preservedIds = originalIds.subtracting(upsertIds)
+            let rewrittenData = try self.makePresetStoreRewriteUpserting(
+                records: upsertRecords,
+                from: originalData
             )
-            return false
-        }
-
-        do {
-            persistLocalPresetStoreBackup(data: originalData, device: device)
-            try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
-            try? await Task.sleep(nanoseconds: 500_000_000)
-
-            let verificationData = try await fetchPresetStoreRawData(device: device)
-            let verificationRecords = try parsePresetPayloadMapById(data: verificationData, mode: .strict)
-            let verifiedIds = Set(verificationRecords.keys)
-            let verifyMissingUpserts = upsertIds.subtracting(verifiedIds)
-            let verifyMissingPreserved = preservedIds.subtracting(verifiedIds)
-            let verifyInvalidPlaylistIds = playlistRecords.keys.filter { verificationRecords[$0]?["playlist"] == nil }
-            let verifyInvalidPresetIds = presetRecords.keys.filter { verificationRecords[$0]?["playlist"] != nil }
-
-            guard verifyMissingUpserts.isEmpty,
-                  verifyMissingPreserved.isEmpty,
-                  verifyInvalidPlaylistIds.isEmpty,
-                  verifyInvalidPresetIds.isEmpty else {
-                logger.error(
-                    "preset_store.full_rewrite_create.verify_failed device=\(device.id, privacy: .public) missingUpserts=\(Array(verifyMissingUpserts).sorted(), privacy: .public) missingPreserved=\(Array(verifyMissingPreserved).sorted(), privacy: .public) invalidPlaylists=\(verifyInvalidPlaylistIds.sorted(), privacy: .public) invalidPresets=\(verifyInvalidPresetIds.sorted(), privacy: .public)"
-                )
-                try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
-                return false
+            let rewrittenRecords = try self.parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
+            let rewrittenIds = Set(rewrittenRecords.keys)
+            let missingUpserts = upsertIds.subtracting(rewrittenIds)
+            let missingPreserved = preservedIds.subtracting(rewrittenIds)
+            let invalidPlaylistIds = playlistRecords.keys.filter { rewrittenRecords[$0]?["playlist"] == nil }
+            let invalidPresetIds = presetRecords.keys.filter { rewrittenRecords[$0]?["playlist"] != nil }
+            guard missingUpserts.isEmpty,
+                  missingPreserved.isEmpty,
+                  invalidPlaylistIds.isEmpty,
+                  invalidPresetIds.isEmpty else {
+                throw WLEDAPIError.invalidResponse
             }
-
-            cachePresetRecordPayloads(records: verificationRecords, device: device)
-            recordSuccessfulRequest(deviceId: device.id)
-            logger.info(
-                "preset_store.full_rewrite_create.success device=\(device.id, privacy: .public) upserted=\(Array(upsertIds).sorted(), privacy: .public) preserved=\(preservedIds.count, privacy: .public)"
-            )
-            return true
-        } catch {
-            logger.warning(
-                "preset_store.full_rewrite_create.error device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-            )
-            try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
-            return false
-        }
-    }
-
-    private func rewritePresetStoreDeletingRecordsQueued(
-        playlistIds normalizedPlaylistIds: Set<Int>,
-        presetIds normalizedPresetIds: Set<Int>,
-        targetIds: Set<Int>,
-        device: WLEDDevice
-    ) async throws -> Bool {
-        activePresetStoreDeleteSessionDeviceIds.insert(device.id)
-        defer {
-            activePresetStoreDeleteSessionDeviceIds.remove(device.id)
-        }
-
-        let originalData = try await fetchPresetStoreRawData(device: device)
-        let originalRecords = try parsePresetPayloadMapById(data: originalData, mode: .strict)
-        let originalIds = Set(originalRecords.keys)
-        let existingTargetIds = originalIds.intersection(targetIds)
-        guard !existingTargetIds.isEmpty else {
-            logger.info(
-                "preset_store.full_rewrite_delete.noop device=\(device.id, privacy: .public) playlistIds=\(Array(normalizedPlaylistIds).sorted(), privacy: .public) presetIds=\(Array(normalizedPresetIds).sorted(), privacy: .public)"
-            )
-            return true
-        }
-
-        let rewrittenData = try makePresetStoreRewriteDeleting(ids: targetIds, from: originalData)
-        try await ensurePresetStoreFilesystemHeadroom(
-            originalData: originalData,
-            rewrittenData: rewrittenData,
-            device: device,
-            context: "preset_store.full_rewrite_delete"
-        )
-        let rewrittenRecords = try parsePresetPayloadMapById(data: rewrittenData, mode: .strict)
-        let preflightRemainingTargets = Set(rewrittenRecords.keys).intersection(targetIds)
-        guard preflightRemainingTargets.isEmpty else {
-            logger.error(
-                "preset_store.full_rewrite_delete.preflight_failed device=\(device.id, privacy: .public) remaining=\(Array(preflightRemainingTargets).sorted(), privacy: .public)"
-            )
-            return false
-        }
-
-        let preservedIds = originalIds.subtracting(targetIds)
-        let preflightMissingPreserved = preservedIds.subtracting(Set(rewrittenRecords.keys))
-        guard preflightMissingPreserved.isEmpty else {
-            logger.error(
-                "preset_store.full_rewrite_delete.preflight_preserve_failed device=\(device.id, privacy: .public) missing=\(Array(preflightMissingPreserved).sorted(), privacy: .public)"
-            )
-            return false
-        }
-
-        do {
-            persistLocalPresetStoreBackup(data: originalData, device: device)
-            try await uploadWLEDFile(named: "presets.json", data: rewrittenData, device: device)
-            try? await Task.sleep(nanoseconds: 500_000_000)
-
-            let verificationData = try await fetchPresetStoreRawData(device: device)
-            let verificationRecords = try parsePresetPayloadMapById(data: verificationData, mode: .strict)
-            let verifiedIds = Set(verificationRecords.keys)
-            let remainingTargets = verifiedIds.intersection(targetIds)
-            let missingPreserved = preservedIds.subtracting(verifiedIds)
-
-            guard remainingTargets.isEmpty, missingPreserved.isEmpty else {
-                logger.error(
-                    "preset_store.full_rewrite_delete.verify_failed device=\(device.id, privacy: .public) remaining=\(Array(remainingTargets).sorted(), privacy: .public) missingPreserved=\(Array(missingPreserved).sorted(), privacy: .public)"
-                )
-                try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
-                return false
-            }
-
-            cachePresetRecordPayloads(records: verificationRecords, device: device)
-            recordSuccessfulRequest(deviceId: device.id)
-            logger.info(
-                "preset_store.full_rewrite_delete.success device=\(device.id, privacy: .public) removed=\(Array(existingTargetIds).sorted(), privacy: .public) preserved=\(preservedIds.count, privacy: .public)"
-            )
-            return true
-        } catch {
-            logger.warning(
-                "preset_store.full_rewrite_delete.error device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-            )
-            try? await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
-            return false
-        }
-    }
-
-    private func persistLocalPresetStoreBackup(data: Data, device: WLEDDevice) {
-        do {
-            let directory = try localPresetStoreBackupDirectory()
-            let fileURL = directory.appendingPathComponent("\(safeBackupFileComponent(device.id))-presets.json")
-            try data.write(to: fileURL, options: .atomic)
-            logger.info(
-                "preset_store.full_rewrite.local_backup_saved device=\(device.id, privacy: .public) bytes=\(data.count, privacy: .public)"
-            )
-        } catch {
-            logger.warning(
-                "preset_store.full_rewrite.local_backup_failed device=\(device.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-            )
+            return rewrittenData
         }
     }
 
@@ -3051,15 +3403,26 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     private func localPresetStoreBackupDirectory() throws -> URL {
-        let base = try FileManager.default.url(
+        let base = try presetStorePersistenceBaseDirectory()
+        let directory = base.appendingPathComponent("PresetStoreBackups", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func presetStorePersistenceBaseDirectory() throws -> URL {
+        if let presetStorePersistenceRoot {
+            try FileManager.default.createDirectory(
+                at: presetStorePersistenceRoot,
+                withIntermediateDirectories: true
+            )
+            return presetStorePersistenceRoot
+        }
+        return try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
         )
-        let directory = base.appendingPathComponent("PresetStoreBackups", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
     }
 
     private func safeBackupFileComponent(_ value: String) -> String {
@@ -3069,6 +3432,664 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
         let name = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
         return name.isEmpty ? "unknown-device" : name
+    }
+
+    private enum StablePresetStoreObservation {
+        case valid(data: Data, hash: String)
+        case malformed(data: Data, hash: String)
+        case unavailable(String)
+        case changing
+    }
+
+    private func presetStoreHash(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func presetStoreTransactionRootDirectory() throws -> URL {
+        let base = try presetStorePersistenceBaseDirectory()
+        let directory = base.appendingPathComponent("PresetStoreTransactions", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func presetStoreTransactionDirectory(deviceId: String) throws -> URL {
+        let directory = try presetStoreTransactionRootDirectory()
+            .appendingPathComponent(safeBackupFileComponent(deviceId), isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func presetStoreTransactionJournalURL(deviceId: String) throws -> URL {
+        try presetStoreTransactionDirectory(deviceId: deviceId)
+            .appendingPathComponent("journal.json")
+    }
+
+    private func loadPresetStoreTransactionJournal(deviceId: String) throws -> PresetStoreTransactionJournal? {
+        let url = try presetStoreTransactionJournalURL(deviceId: deviceId)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try decoder.decode(PresetStoreTransactionJournal.self, from: Data(contentsOf: url))
+    }
+
+    private func persistPresetStoreTransactionJournal(_ journal: PresetStoreTransactionJournal) throws {
+        let data = try encoder.encode(journal)
+        try data.write(to: presetStoreTransactionJournalURL(deviceId: journal.deviceId), options: .atomic)
+    }
+
+    private func transactionSnapshotData(
+        named filename: String,
+        deviceId: String
+    ) throws -> Data {
+        let url = try presetStoreTransactionDirectory(deviceId: deviceId)
+            .appendingPathComponent(filename)
+        return try Data(contentsOf: url)
+    }
+
+    private func preparePresetStoreTransactionJournal(
+        operation: PresetStoreTransactionJournal.OperationKind,
+        playlistIds: [Int],
+        presetIds: [Int],
+        originalData: Data,
+        candidateData: Data,
+        device: WLEDDevice,
+        replayCount: Int = 0
+    ) throws -> PresetStoreTransactionJournal {
+        _ = try parsePresetPayloadMapById(data: originalData, mode: .strict)
+        _ = try parsePresetPayloadMapById(data: candidateData, mode: .strict)
+
+        let transactionId = UUID()
+        let originalName = "\(transactionId.uuidString)-original.json"
+        let candidateName = "\(transactionId.uuidString)-candidate.json"
+        let directory = try presetStoreTransactionDirectory(deviceId: device.id)
+        try originalData.write(
+            to: directory.appendingPathComponent(originalName),
+            options: .atomic
+        )
+        try candidateData.write(
+            to: directory.appendingPathComponent(candidateName),
+            options: .atomic
+        )
+
+        let now = Date()
+        let journal = PresetStoreTransactionJournal(
+            id: transactionId,
+            deviceId: device.id,
+            deviceIPAddress: device.ipAddress,
+            deviceName: device.name,
+            operation: operation,
+            playlistIds: Array(Set(playlistIds)).sorted(),
+            presetIds: Array(Set(presetIds)).sorted(),
+            originalHash: presetStoreHash(originalData),
+            candidateHash: presetStoreHash(candidateData),
+            originalByteCount: originalData.count,
+            candidateByteCount: candidateData.count,
+            originalSnapshotName: originalName,
+            candidateSnapshotName: candidateName,
+            createdAt: now,
+            updatedAt: now,
+            phase: .prepared,
+            replayCount: replayCount,
+            recoveryAttemptCount: 0,
+            lastError: nil
+        )
+        try persistPresetStoreTransactionJournal(journal)
+        try persistVerifiedPresetStoreSnapshot(data: originalData, device: device)
+        return journal
+    }
+
+    private func updatePresetStoreTransactionJournal(
+        _ journal: inout PresetStoreTransactionJournal,
+        phase: PresetStoreTransactionJournal.Phase,
+        error: String? = nil
+    ) throws {
+        journal.phase = phase
+        journal.updatedAt = Date()
+        journal.lastError = error
+        try persistPresetStoreTransactionJournal(journal)
+    }
+
+    private func clearPresetStoreTransactionJournal(_ journal: PresetStoreTransactionJournal) {
+        do {
+            let directory = try presetStoreTransactionDirectory(deviceId: journal.deviceId)
+            let fileManager = FileManager.default
+            for name in [
+                journal.originalSnapshotName,
+                journal.candidateSnapshotName,
+                "journal.json"
+            ] {
+                let url = directory.appendingPathComponent(name)
+                if fileManager.fileExists(atPath: url.path) {
+                    try fileManager.removeItem(at: url)
+                }
+            }
+        } catch {
+            logger.warning(
+                "preset_store.transaction.cleanup_failed device=\(journal.deviceId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    private func verifiedPresetStoreSnapshotDirectory(device: WLEDDevice) throws -> URL {
+        let directory = try localPresetStoreBackupDirectory()
+            .appendingPathComponent(safeBackupFileComponent(device.id), isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func persistVerifiedPresetStoreSnapshot(data: Data, device: WLEDDevice) throws {
+        _ = try parsePresetPayloadMapById(data: data, mode: .strict)
+        let hash = presetStoreHash(data)
+        let directory = try verifiedPresetStoreSnapshotDirectory(device: device)
+        let fileManager = FileManager.default
+        let existing = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+        if existing.contains(where: { $0.lastPathComponent.contains(hash) }) {
+            return
+        }
+
+        let filename = "\(Int(Date().timeIntervalSince1970 * 1_000))-\(hash)-presets.json"
+        try data.write(to: directory.appendingPathComponent(filename), options: .atomic)
+
+        let snapshots = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ).sorted {
+            let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhs > rhs
+        }
+        for staleURL in snapshots.dropFirst(presetStoreVerifiedSnapshotRetentionCount) {
+            try? fileManager.removeItem(at: staleURL)
+        }
+    }
+
+    private func loadLatestVerifiedPresetStoreSnapshot(device: WLEDDevice) throws -> Data? {
+        let directory = try verifiedPresetStoreSnapshotDirectory(device: device)
+        let snapshots = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ).sorted {
+            let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhs > rhs
+        }
+        for snapshot in snapshots {
+            guard let data = try? Data(contentsOf: snapshot),
+                  (try? parsePresetPayloadMapById(data: data, mode: .strict)) != nil else {
+                continue
+            }
+            return data
+        }
+        return nil
+    }
+
+    private func stablePresetStoreObservation(
+        device: WLEDDevice,
+        attempts: Int = 3
+    ) async -> StablePresetStoreObservation {
+        var previous: (data: Data, hash: String, valid: Bool)?
+        for attempt in 0..<max(2, attempts) {
+            let data: Data
+            do {
+                data = try await fetchPresetStoreRawData(device: device)
+            } catch {
+                return .unavailable(error.localizedDescription)
+            }
+            let hash = presetStoreHash(data)
+            let valid = (try? parsePresetPayloadMapById(data: data, mode: .strict)) != nil
+            if let previous,
+               previous.hash == hash,
+               previous.valid == valid {
+                return valid
+                    ? .valid(data: data, hash: hash)
+                    : .malformed(data: data, hash: hash)
+            }
+            previous = (data, hash, valid)
+            if attempt + 1 < max(2, attempts) {
+                try? await Task.sleep(nanoseconds: presetStoreObservationDelayNanos)
+            }
+        }
+        return .changing
+    }
+
+    private func completePresetStoreTransaction(
+        _ journal: PresetStoreTransactionJournal,
+        outcome: PresetStoreMutationOutcome,
+        verifiedData: Data?,
+        device: WLEDDevice
+    ) async -> PresetStoreMutationOutcome {
+        if let verifiedData,
+           (try? parsePresetPayloadMapById(data: verifiedData, mode: .strict)) != nil {
+            try? persistVerifiedPresetStoreSnapshot(data: verifiedData, device: device)
+            if let records = try? parsePresetPayloadMapById(data: verifiedData, mode: .strict) {
+                cachePresetRecordPayloads(records: records, device: device)
+            }
+        }
+        clearPresetStoreTransactionJournal(journal)
+        recordSuccessfulRequest(deviceId: device.id)
+        await setPresetStoreTransactionStatus(.idle, device: device)
+        await reportPresetStoreHealthyReadSuccess(deviceId: device.id)
+        return outcome
+    }
+
+    private func markPresetStoreTransactionNeedsRepair(
+        _ journal: inout PresetStoreTransactionJournal,
+        device: WLEDDevice,
+        reason: String
+    ) async -> PresetStoreMutationOutcome {
+        try? updatePresetStoreTransactionJournal(&journal, phase: .needsRepair, error: reason)
+        await setPresetStoreTransactionStatus(.needsRepair, device: device, message: reason)
+        return .needsRepair
+    }
+
+    private func executePresetStoreCandidateAttempt(
+        journal: PresetStoreTransactionJournal,
+        device: WLEDDevice,
+        candidateBuilder: ((Data) throws -> Data)?
+    ) async -> PresetStoreMutationOutcome {
+        var journal = journal
+        let candidateData: Data
+        do {
+            candidateData = try transactionSnapshotData(
+                named: journal.candidateSnapshotName,
+                deviceId: journal.deviceId
+            )
+            _ = try parsePresetPayloadMapById(data: candidateData, mode: .strict)
+        } catch {
+            return await markPresetStoreTransactionNeedsRepair(
+                &journal,
+                device: device,
+                reason: "The pending save snapshot is missing or invalid."
+            )
+        }
+
+        do {
+            let phase: PresetStoreTransactionJournal.Phase =
+                journal.replayCount > 0 ? .replayingCandidate : .uploadingCandidate
+            try updatePresetStoreTransactionJournal(&journal, phase: phase)
+            await setPresetStoreTransactionStatus(.saving, device: device)
+            try await uploadWLEDFile(named: "presets.json", data: candidateData, device: device)
+            try updatePresetStoreTransactionJournal(&journal, phase: .verifyingCandidate)
+            await setPresetStoreTransactionStatus(.verifying, device: device)
+            try? await Task.sleep(nanoseconds: presetStoreSuccessfulUploadSettleNanos)
+        } catch {
+            try? updatePresetStoreTransactionJournal(
+                &journal,
+                phase: .outcomeUnknown,
+                error: error.localizedDescription
+            )
+            await setPresetStoreTransactionStatus(
+                .verificationNeeded,
+                device: device,
+                message: "Save outcome is unknown; waiting for a stable device read."
+            )
+            try? await Task.sleep(nanoseconds: presetStoreUnknownOutcomeSettleNanos)
+        }
+
+        return await resolvePresetStoreTransaction(
+            journal: journal,
+            device: device,
+            candidateBuilder: candidateBuilder
+        )
+    }
+
+    private func resolvePresetStoreTransaction(
+        journal: PresetStoreTransactionJournal,
+        device: WLEDDevice,
+        candidateBuilder: ((Data) throws -> Data)?
+    ) async -> PresetStoreMutationOutcome {
+        var journal = journal
+        let observation = await stablePresetStoreObservation(device: device)
+        switch observation {
+        case .valid(let data, let hash):
+            if hash == journal.candidateHash {
+                return await completePresetStoreTransaction(
+                    journal,
+                    outcome: .committed,
+                    verifiedData: data,
+                    device: device
+                )
+            }
+
+            if hash == journal.originalHash {
+                if journal.operation != .recovery, journal.replayCount < 1 {
+                    journal.replayCount += 1
+                    journal.updatedAt = Date()
+                    try? persistPresetStoreTransactionJournal(journal)
+                    return await executePresetStoreCandidateAttempt(
+                        journal: journal,
+                        device: device,
+                        candidateBuilder: candidateBuilder
+                    )
+                }
+                return await completePresetStoreTransaction(
+                    journal,
+                    outcome: .recoveredWithoutCommit,
+                    verifiedData: data,
+                    device: device
+                )
+            }
+
+            guard let candidateBuilder, journal.replayCount < 1 else {
+                return await completePresetStoreTransaction(
+                    journal,
+                    outcome: .recoveredWithoutCommit,
+                    verifiedData: data,
+                    device: device
+                )
+            }
+
+            do {
+                let rebasedCandidate = try candidateBuilder(data)
+                _ = try parsePresetPayloadMapById(data: rebasedCandidate, mode: .strict)
+                try persistVerifiedPresetStoreSnapshot(data: data, device: device)
+                clearPresetStoreTransactionJournal(journal)
+                let rebasedJournal = try preparePresetStoreTransactionJournal(
+                    operation: journal.operation,
+                    playlistIds: journal.playlistIds,
+                    presetIds: journal.presetIds,
+                    originalData: data,
+                    candidateData: rebasedCandidate,
+                    device: device,
+                    replayCount: 1
+                )
+                return await executePresetStoreCandidateAttempt(
+                    journal: rebasedJournal,
+                    device: device,
+                    candidateBuilder: candidateBuilder
+                )
+            } catch {
+                return await markPresetStoreTransactionNeedsRepair(
+                    &journal,
+                    device: device,
+                    reason: "The save could not be safely rebased on the device's newer valid preset store."
+                )
+            }
+
+        case .malformed:
+            return await restorePresetStoreTransaction(
+                journal: journal,
+                device: device,
+                candidateBuilder: candidateBuilder
+            )
+
+        case .unavailable(let reason):
+            try? updatePresetStoreTransactionJournal(
+                &journal,
+                phase: .outcomeUnknown,
+                error: reason
+            )
+            await setPresetStoreTransactionStatus(
+                .verificationNeeded,
+                device: device,
+                message: reason
+            )
+            return .recoveryPending
+
+        case .changing:
+            try? updatePresetStoreTransactionJournal(
+                &journal,
+                phase: .outcomeUnknown,
+                error: "Preset store changed between verification reads."
+            )
+            await setPresetStoreTransactionStatus(
+                .verificationNeeded,
+                device: device,
+                message: "Waiting for the lamp's preset store to settle."
+            )
+            return .recoveryPending
+        }
+    }
+
+    private func restorePresetStoreTransaction(
+        journal: PresetStoreTransactionJournal,
+        device: WLEDDevice,
+        candidateBuilder: ((Data) throws -> Data)?
+    ) async -> PresetStoreMutationOutcome {
+        var journal = journal
+        guard journal.recoveryAttemptCount < presetStoreRecoveryMaximumAttempts else {
+            return await markPresetStoreTransactionNeedsRepair(
+                &journal,
+                device: device,
+                reason: "Automatic preset-store recovery reached its safe retry limit."
+            )
+        }
+
+        let originalData: Data
+        do {
+            originalData = try transactionSnapshotData(
+                named: journal.originalSnapshotName,
+                deviceId: journal.deviceId
+            )
+            guard presetStoreHash(originalData) == journal.originalHash else {
+                throw WLEDAPIError.invalidResponse
+            }
+            _ = try parsePresetPayloadMapById(data: originalData, mode: .strict)
+        } catch {
+            return await markPresetStoreTransactionNeedsRepair(
+                &journal,
+                device: device,
+                reason: "No verified local preset-store backup is available for recovery."
+            )
+        }
+
+        journal.recoveryAttemptCount += 1
+        do {
+            try updatePresetStoreTransactionJournal(&journal, phase: .restoringBackup)
+            await setPresetStoreTransactionStatus(.recovering, device: device)
+            try await uploadWLEDFile(named: "presets.json", data: originalData, device: device)
+            try updatePresetStoreTransactionJournal(&journal, phase: .verifyingRestore)
+            try? await Task.sleep(nanoseconds: presetStoreSuccessfulUploadSettleNanos)
+        } catch {
+            try? updatePresetStoreTransactionJournal(
+                &journal,
+                phase: .verifyingRestore,
+                error: error.localizedDescription
+            )
+            try? await Task.sleep(nanoseconds: presetStoreUnknownOutcomeSettleNanos)
+        }
+
+        switch await stablePresetStoreObservation(device: device) {
+        case .valid(let data, let hash):
+            if hash == journal.candidateHash {
+                return await completePresetStoreTransaction(
+                    journal,
+                    outcome: .committed,
+                    verifiedData: data,
+                    device: device
+                )
+            }
+            if hash == journal.originalHash {
+                try? persistVerifiedPresetStoreSnapshot(data: data, device: device)
+                if journal.operation != .recovery, journal.replayCount < 1 {
+                    journal.replayCount += 1
+                    journal.updatedAt = Date()
+                    try? persistPresetStoreTransactionJournal(journal)
+                    return await executePresetStoreCandidateAttempt(
+                        journal: journal,
+                        device: device,
+                        candidateBuilder: candidateBuilder
+                    )
+                }
+                return await completePresetStoreTransaction(
+                    journal,
+                    outcome: .recoveredWithoutCommit,
+                    verifiedData: data,
+                    device: device
+                )
+            }
+            return await completePresetStoreTransaction(
+                journal,
+                outcome: .recoveredWithoutCommit,
+                verifiedData: data,
+                device: device
+            )
+
+        case .malformed:
+            guard journal.recoveryAttemptCount < presetStoreRecoveryMaximumAttempts else {
+                return await markPresetStoreTransactionNeedsRepair(
+                    &journal,
+                    device: device,
+                    reason: "The lamp still returned a corrupted preset store after automatic recovery."
+                )
+            }
+            try? await Task.sleep(nanoseconds: presetStoreUnknownOutcomeSettleNanos)
+            return await restorePresetStoreTransaction(
+                journal: journal,
+                device: device,
+                candidateBuilder: candidateBuilder
+            )
+
+        case .unavailable(let reason):
+            try? updatePresetStoreTransactionJournal(
+                &journal,
+                phase: .verifyingRestore,
+                error: reason
+            )
+            await setPresetStoreTransactionStatus(.recovering, device: device, message: reason)
+            return .recoveryPending
+
+        case .changing:
+            try? updatePresetStoreTransactionJournal(
+                &journal,
+                phase: .verifyingRestore,
+                error: "Preset store changed between recovery reads."
+            )
+            await setPresetStoreTransactionStatus(
+                .recovering,
+                device: device,
+                message: "Waiting to verify the restored preset store."
+            )
+            return .recoveryPending
+        }
+    }
+
+    private func performPresetStoreTransactionQueued(
+        operation: PresetStoreTransactionJournal.OperationKind,
+        playlistIds: [Int],
+        presetIds: [Int],
+        device: WLEDDevice,
+        candidateBuilder: @escaping (Data) throws -> Data
+    ) async throws -> PresetStoreMutationOutcome {
+        if let pending = try loadPresetStoreTransactionJournal(deviceId: device.id) {
+            let pendingOutcome = await resolvePresetStoreTransaction(
+                journal: pending,
+                device: device,
+                candidateBuilder: nil
+            )
+            switch pendingOutcome {
+            case .committed, .recoveredWithoutCommit:
+                // This call arrived while an older durable transaction still
+                // owned the store. Recovery may finish that older transaction,
+                // but the newly requested mutation must not be queued behind it.
+                return .recoveredWithoutCommit
+            case .recoveryPending, .needsRepair:
+                return pendingOutcome
+            }
+        }
+
+        var originalData = try await fetchPresetStoreRawData(device: device)
+        if (try? parsePresetPayloadMapById(data: originalData, mode: .strict)) == nil {
+            switch await stablePresetStoreObservation(device: device) {
+            case .valid(let data, _):
+                originalData = data
+            case .malformed:
+                guard let backup = try loadLatestVerifiedPresetStoreSnapshot(device: device) else {
+                    await setPresetStoreTransactionStatus(
+                        .needsRepair,
+                        device: device,
+                        message: "The preset store is corrupted and no verified backup is available."
+                    )
+                    return .needsRepair
+                }
+                var recoveryJournal = try preparePresetStoreTransactionJournal(
+                    operation: .recovery,
+                    playlistIds: [],
+                    presetIds: [],
+                    originalData: backup,
+                    candidateData: backup,
+                    device: device,
+                    replayCount: 1
+                )
+                try updatePresetStoreTransactionJournal(
+                    &recoveryJournal,
+                    phase: .restoringBackup
+                )
+                let recoveryOutcome = await executePresetStoreCandidateAttempt(
+                    journal: recoveryJournal,
+                    device: device,
+                    candidateBuilder: nil
+                )
+                guard recoveryOutcome == .committed else {
+                    return recoveryOutcome
+                }
+                originalData = backup
+            case .unavailable(let reason):
+                await setPresetStoreTransactionStatus(
+                    .verificationNeeded,
+                    device: device,
+                    message: reason
+                )
+                return .recoveryPending
+            case .changing:
+                await setPresetStoreTransactionStatus(
+                    .verificationNeeded,
+                    device: device,
+                    message: "Waiting for the lamp's preset store to settle."
+                )
+                return .recoveryPending
+            }
+        }
+
+        let candidateData = try candidateBuilder(originalData)
+        _ = try parsePresetPayloadMapById(data: candidateData, mode: .strict)
+        if presetStoreHash(candidateData) == presetStoreHash(originalData) {
+            try persistVerifiedPresetStoreSnapshot(data: originalData, device: device)
+            await setPresetStoreTransactionStatus(.idle, device: device)
+            await reportPresetStoreHealthyReadSuccess(deviceId: device.id)
+            return .committed
+        }
+        try await ensurePresetStoreFilesystemHeadroom(
+            originalData: originalData,
+            rewrittenData: candidateData,
+            device: device,
+            context: "preset_store.transaction.\(operation.rawValue)"
+        )
+        let journal = try preparePresetStoreTransactionJournal(
+            operation: operation,
+            playlistIds: playlistIds,
+            presetIds: presetIds,
+            originalData: originalData,
+            candidateData: candidateData,
+            device: device
+        )
+        return await executePresetStoreCandidateAttempt(
+            journal: journal,
+            device: device,
+            candidateBuilder: candidateBuilder
+        )
+    }
+
+    func resumePendingPresetStoreRecovery(for device: WLEDDevice) async -> PresetStoreMutationOutcome? {
+        guard let journal = try? loadPresetStoreTransactionJournal(deviceId: device.id) else {
+            return nil
+        }
+        let queueKey = presetStoreQueueKey(for: device)
+        return try? await enqueuePresetOperation(
+            deviceId: queueKey,
+            label: "preset_store.recovery"
+        ) {
+            try? await Task.sleep(nanoseconds: self.presetStoreUnknownOutcomeSettleNanos)
+            return await self.resolvePresetStoreTransaction(
+                journal: journal,
+                device: device,
+                candidateBuilder: nil
+            )
+        }
     }
 
     func orderedPresetStoreDeleteTargets(
@@ -3217,6 +4238,19 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     private func reportPresetStoreHealthyReadSuccess(deviceId: String) async {
+        let queueKey = resolvedPresetStoreQueueKey(forDeviceId: deviceId)
+        if presetStoreTransactionStatusByQueueKey[queueKey] == .verificationNeeded,
+           (try? loadPresetStoreTransactionJournal(deviceId: deviceId)) == nil {
+            presetStoreTransactionStatusByQueueKey.removeValue(forKey: queueKey)
+            if reportsPresetStoreHealth {
+                await MainActor.run {
+                    DeviceControlViewModel.shared.notePresetStoreTransactionStatus(
+                        deviceId: deviceId,
+                        status: .idle
+                    )
+                }
+            }
+        }
         guard reportsPresetStoreHealth else { return }
 
         await MainActor.run {
@@ -3348,38 +4382,69 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         }
     }
 
-    func renamePresetRecord(id: Int, name: String, device: WLEDDevice) async throws {
+    func renamePresetRecord(
+        id: Int,
+        name: String,
+        device: WLEDDevice
+    ) async throws -> PresetStoreMutationOutcome {
         guard (1...250).contains(id) else {
             throw WLEDAPIError.invalidConfiguration
         }
-        let sanitizedName = sanitizedPresetName(name, fallback: "Preset \(id)")
         let queueKey = presetStoreQueueKey(for: device)
-        try await enqueuePresetOperation(deviceId: queueKey, label: "preset.rename") {
-            var payload = try await self.fetchPresetRecordPayload(id: id, device: device)
-            payload["psave"] = id
-            payload["n"] = sanitizedName
-            payload["o"] = true
-            payload.removeValue(forKey: "v")
-            payload.removeValue(forKey: "time")
-            payload.removeValue(forKey: "error")
-            _ = try await self.postState(device, body: payload)
+        return try await enqueuePresetOperation(deviceId: queueKey, label: "preset.rename") {
+            try await self.performPresetStoreTransactionQueued(
+                operation: .rename,
+                playlistIds: [],
+                presetIds: [id],
+                device: device
+            ) { originalData in
+                let records = try self.parsePresetPayloadMapById(data: originalData, mode: .strict)
+                guard var record = records[id], record["playlist"] == nil else {
+                    throw WLEDAPIError.invalidConfiguration
+                }
+                let renamed = AesdeticWLEDPresetNameMarker.preservingExistingMarker(
+                    from: record["n"] as? String,
+                    newDisplayName: name
+                )
+                record["n"] = self.sanitizedPresetName(renamed, fallback: "Preset \(id)")
+                return try self.makePresetStoreRewriteUpserting(
+                    records: [id: record],
+                    from: originalData
+                )
+            }
         }
     }
 
-    func renamePlaylistRecord(id: Int, name: String, device: WLEDDevice) async throws {
+    func renamePlaylistRecord(
+        id: Int,
+        name: String,
+        device: WLEDDevice
+    ) async throws -> PresetStoreMutationOutcome {
         guard (1...250).contains(id) else {
             throw WLEDAPIError.invalidConfiguration
         }
         let queueKey = presetStoreQueueKey(for: device)
-        try await enqueuePresetOperation(deviceId: queueKey, label: "playlist.rename") {
-            var payload = try await self.fetchPresetRecordPayload(id: id, device: device)
-            payload["psave"] = id
-            payload["n"] = self.sanitizedPresetName(name, fallback: "Playlist \(id)")
-            payload["o"] = true
-            payload.removeValue(forKey: "v")
-            payload.removeValue(forKey: "time")
-            payload.removeValue(forKey: "error")
-            _ = try await self.postState(device, body: payload)
+        return try await enqueuePresetOperation(deviceId: queueKey, label: "playlist.rename") {
+            try await self.performPresetStoreTransactionQueued(
+                operation: .rename,
+                playlistIds: [id],
+                presetIds: [],
+                device: device
+            ) { originalData in
+                let records = try self.parsePresetPayloadMapById(data: originalData, mode: .strict)
+                guard var record = records[id], record["playlist"] != nil else {
+                    throw WLEDAPIError.invalidConfiguration
+                }
+                let renamed = AesdeticWLEDPresetNameMarker.preservingExistingMarker(
+                    from: record["n"] as? String,
+                    newDisplayName: name
+                )
+                record["n"] = self.sanitizedPresetName(renamed, fallback: "Playlist \(id)")
+                return try self.makePresetStoreRewriteUpserting(
+                    records: [id: record],
+                    from: originalData
+                )
+            }
         }
     }
     
@@ -3400,7 +4465,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         )
         let saveRequest = WLEDPresetSaveRequest(
             id: presetId,
-            name: preset.name,
+            name: AesdeticWLEDPresetNameMarker.markedName(preset.name, as: .savedColor),
             quickLoad: preset.quickLoadTag,
             state: stateUpdate,
             includeBrightness: preset.includeBrightness,
@@ -3415,7 +4480,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             device: device,
             maxSegmentCount: device.state?.segments.count
         )
-        guard rewritten else {
+        guard rewritten.isCommitted else {
             throw WLEDAPIError.invalidResponse
         }
         
@@ -3476,7 +4541,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             presetRequests.append(
                 WLEDPresetSaveRequest(
                     id: presetId,
-                    name: "\(preset.name) Step \(idx + 1)",
+                    name: AesdeticWLEDPresetNameMarker.markedName(
+                        "\(preset.name) Step \(idx + 1)",
+                        as: .transitionStep,
+                        ownerId: preset.id
+                    ),
                     quickLoad: nil,
                     state: state,
                     includeBrightness: true,
@@ -3490,7 +4559,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         // Create playlist: A→B, one cycle
         let playlistRequest = WLEDPlaylistSaveRequest(
             id: playlistId,
-            name: preset.name,
+            name: AesdeticWLEDPresetNameMarker.markedName(
+                preset.name,
+                as: .savedTransition,
+                ownerId: preset.id
+            ),
             ps: presetIds,
             dur: stepPlan.durations,
             transition: stepPlan.transitions,
@@ -3505,7 +4578,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             device: device,
             maxSegmentCount: device.state?.segments.count
         )
-        guard rewritten else {
+        guard rewritten.isCommitted else {
             throw WLEDAPIError.invalidResponse
         }
 
@@ -3513,11 +4586,35 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let newIds = Set(presetIds)
             let staleIds = existingStepIds.filter { !newIds.contains($0) }
             if !staleIds.isEmpty {
-                _ = try? await rewritePresetStoreDeletingRecords(
-                    playlistIds: [],
-                    presetIds: staleIds,
+                let cleanupTargets = staleIds.map {
+                    CleanupDeleteTarget(
+                        resourceType: .preset,
+                        id: $0,
+                        ownership: CleanupOwnershipEvidence(
+                            recordHash: nil,
+                            semanticSignature: nil,
+                            markerKind: .transitionStep,
+                            expectedTimerSignature: nil,
+                            ownerAutomationId: preset.id
+                        )
+                    )
+                }
+                let cleanupReport = try? await rewritePresetStoreConditionallyDeleting(
+                    targets: cleanupTargets,
                     device: device
                 )
+                if cleanupReport?.outcome.isCommitted != true
+                    || cleanupReport?.needsReview.isEmpty != true {
+                    await MainActor.run {
+                        DeviceCleanupManager.shared.enqueuePresetStoreDelete(
+                            deviceId: device.id,
+                            playlistIds: [],
+                            presetIds: staleIds,
+                            verificationRequired: true,
+                            targets: cleanupTargets
+                        )
+                    }
+                }
             }
         }
         
@@ -3551,7 +4648,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         
         let saveRequest = WLEDPresetSaveRequest(
             id: presetId,
-            name: preset.name,
+            name: AesdeticWLEDPresetNameMarker.markedName(preset.name, as: .savedAnimation),
             quickLoad: preset.quickLoadTag,
             state: stateUpdate,
             includeBrightness: preset.includeBrightness,
@@ -3567,7 +4664,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             device: device,
             maxSegmentCount: device.state?.segments.count
         )
-        guard rewritten else {
+        guard rewritten.isCommitted else {
             throw WLEDAPIError.invalidResponse
         }
         
@@ -3723,7 +4820,9 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let reference = parseSolarReference(from: config)
         return WLEDDeviceTimeSettings(
             ntpEnabled: decodeBool(ntp["en"]),
-            timeZone: reference.timeZone
+            timeZone: reference.timeZone,
+            timeZoneIndex: decodeInt(ntp["tz"]),
+            utcOffsetSeconds: decodeInt(ntp["offset"])
         )
     }
 
@@ -3777,9 +4876,10 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             body: ["time": Int(Date().timeIntervalSince1970)]
         )
 
+        let updatedReference = parseSolarReference(from: configPayload)
         solarReferenceCache[device.id] = (
-            coordinate: coordinate,
-            timeZone: timeZone,
+            coordinate: updatedReference.coordinate,
+            timeZone: updatedReference.timeZone,
             timestamp: Date()
         )
     }
@@ -4467,6 +5567,7 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         guard presetId > 0 && presetId <= 250 else {
             throw WLEDAPIError.invalidConfiguration
         }
+        try ensurePresetStoreActivationAvailable(for: device)
 
         if let directBody = await directPresetApplyBody(
             presetId: presetId,
@@ -5256,12 +6357,12 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
 
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "POST"
-        request.timeoutInterval = 20
+        request.timeoutInterval = 60
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
         request.httpBody = body
 
-        let (responseData, response) = try await urlSession.data(for: request)
+        let (responseData, response) = try await uploadURLSession.data(for: request)
         try validateHTTPResponse(response, device: device)
         recordSuccessfulRequest(deviceId: device.id)
 
@@ -5366,8 +6467,11 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         if let cached = cachedPresetRecordPayload(id: presetId, device: device) {
             storedPayload = cached
         } else {
-            // Keep tap-to-apply hot; a cold presets.json read can delay the visible preset change.
-            return nil
+            do {
+                storedPayload = try await fetchPresetRecordPayload(id: presetId, device: device)
+            } catch {
+                return nil
+            }
         }
 
         var payload = storedPayload
@@ -5593,18 +6697,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
     }
 
     private func parseJSONObjectDictionaryStrict(from data: Data) throws -> [String: Any] {
-        let baseSanitized = sanitizePresetPayloadBytes(data)
-        let permissive = sanitizePresetPayloadBytesPermissive(baseSanitized)
-        let sanitized = permissive.data
         do {
-            let json = try JSONSerialization.jsonObject(with: sanitized, options: [])
+            // Transaction verification must classify the exact bytes returned
+            // by WLED. Byte repair, partial-root extraction, or lossy decoding
+            // would make a malformed store look healthy and could promote it
+            // to a recovery snapshot.
+            let json = try JSONSerialization.jsonObject(with: data, options: [])
             guard let dictionary = json as? [String: Any] else {
                 throw WLEDAPIError.invalidResponse
             }
             return dictionary
         } catch {
-            // Strict mode may drop invalid bytes outside JSON strings, but it must not
-            // recover partial roots or tail garbage. Verification needs the whole file valid.
             throw wrappedPresetPayloadError(error)
         }
     }
@@ -5933,7 +7036,8 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
         let colors = presetSegmentColors(for: gradient, count: segmentCount)
         let sortedStops = gradient.stops.sorted { $0.position < $1.position }
         let isSolidColor = sortedStops.count == 1 || sortedStops.allSatisfy { $0.hexColor == sortedStops.first?.hexColor }
-        let cctValue = isSolidColor ? temperature.map { Int(round($0 * 255.0)) } : nil
+        let usesKelvinCCT = presetUsesKelvinCCT(for: device)
+        let cctValue = isSolidColor ? temperature.map { presetCCTValue(fromNormalized: $0, usesKelvin: usesKelvinCCT) } : nil
         let whiteValue = whiteLevel.map { Int(round(max(0.0, min(1.0, $0)) * 255.0)) }
         let useCCTOnly = isSolidColor && cctValue != nil && whiteValue == nil
         let includeBounds = includeSegmentBounds && totalLEDs != nil
@@ -5992,6 +7096,17 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             seg: updates,
             mainSegment: device.state?.mainSegment
         )
+    }
+
+    private func presetUsesKelvinCCT(for device: WLEDDevice) -> Bool {
+        guard let segments = device.state?.segments else { return false }
+        return segments.contains { $0.cctIsKelvin }
+    }
+
+    private func presetCCTValue(fromNormalized normalized: Double, usesKelvin: Bool) -> Int {
+        usesKelvin
+            ? Segment.kelvinValue(fromNormalized: normalized)
+            : Segment.eightBitValue(fromNormalized: normalized)
     }
 
     private func segmentedEffectPresetState(
@@ -6233,96 +7348,6 @@ actor WLEDAPIService: WLEDAPIServiceProtocol, CleanupCapable {
             let color = GradientSampler.sampleColor(at: t, stops: sortedStops, interpolation: gradient.interpolation)
             return color.toRGBArray()
         }
-    }
-
-    private func savePresetViaState(_ request: WLEDPresetSaveRequest, device: WLEDDevice) async throws {
-        let includeBrightness = request.includeBrightness ?? true
-        let saveBounds = request.saveSegmentBounds ?? true
-        let selectedOnly = request.selectedSegmentsOnly ?? false
-        let presetName = sanitizedPresetName(request.name, fallback: "Preset \(request.id)")
-        let customCommand = request.customAPICommand?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let customCommand, !customCommand.isEmpty {
-            var body: [String: Any] = [
-                "psave": request.id,
-                "n": presetName,
-                "o": true
-            ]
-            if let quickLoad = request.quickLoad {
-                body["ql"] = quickLoad
-            }
-            if request.applyAtBoot == true {
-                body["bootps"] = request.id
-            }
-            if let data = customCommand.data(using: .utf8),
-               let jsonObject = try? JSONSerialization.jsonObject(with: data, options: []),
-               let jsonDict = jsonObject as? [String: Any] {
-                for (key, value) in jsonDict {
-                    body[key] = value
-                }
-            } else {
-                body["win"] = customCommand
-            }
-            _ = try await postState(device, body: body)
-            return
-        }
-        var body: [String: Any] = [
-            "psave": request.id,
-            "n": presetName,
-            "ib": includeBrightness,
-            "sb": saveBounds,
-            "sc": selectedOnly
-        ]
-        if request.applyAtBoot == true {
-            body["bootps"] = request.id
-        }
-        if request.saveOnly == true {
-            body["o"] = true
-        }
-        if let transition = request.transitionDeciseconds {
-            body["transition"] = transition
-        }
-        if let quickLoad = request.quickLoad {
-            body["ql"] = quickLoad
-        }
-        if let state = request.state {
-            let stateData = try encoder.encode(state)
-            if let stateDict = try JSONSerialization.jsonObject(with: stateData, options: []) as? [String: Any] {
-                for (key, value) in stateDict {
-                    body[key] = value
-                }
-            }
-        }
-        #if DEBUG
-        let keys = body.keys.sorted().joined(separator: ",")
-        print("🔎 Preset psave request for \(device.name): id=\(request.id) keys=[\(keys)]")
-        if presetName.hasPrefix("Auto Step ") || presetName.hasPrefix("Automation Step ") {
-            let ttPresent = body["tt"] != nil
-            assert(!ttPresent, "Generated transition step presets must not include tt; playlist.transition[] drives timing.")
-            print("🔎 Generated step preset timing for \(device.name): source=playlist.transition[] preset.transition_ignored_if_playlist_active=true tt_present=\(ttPresent)")
-        }
-        #endif
-        _ = try await postState(device, body: body)
-    }
-
-    private func savePlaylistViaState(_ request: WLEDPlaylistSaveRequest, device: WLEDDevice) async throws {
-        let playlistName = sanitizedPresetName(request.name, fallback: "Playlist \(request.id)")
-        let playlist = playlistPayload(from: request)
-        let body: [String: Any] = [
-            "psave": request.id,
-            "n": playlistName,
-            "playlist": playlist,
-            "o": true
-        ]
-        #if DEBUG
-        let keys = body.keys.sorted().joined(separator: ",")
-        print("🔎 Playlist psave request for \(device.name): id=\(request.id) keys=[\(keys)]")
-        if let jsonData = try? JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted]),
-           let jsonString = String(data: jsonData, encoding: .utf8) {
-            print("🔎 Playlist psave JSON for \(device.name):")
-            print(jsonString)
-        }
-        #endif
-        _ = try await postState(device, body: body)
     }
 
     private func presetStoreRecordPayload(

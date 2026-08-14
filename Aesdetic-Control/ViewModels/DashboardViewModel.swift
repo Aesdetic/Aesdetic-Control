@@ -287,7 +287,10 @@ final class DashboardViewModel: ObservableObject {
 
     private func naturalSunriseSubtitle(referenceDate: Date) async -> String? {
         guard let device = preferredDashboardDevice(),
-              let reference = await automationStore.currentSolarReference(for: device),
+              let reference = await automationStore.currentSolarReference(
+                for: device,
+                requestAuthorization: false
+              ),
               let sunrise = automationStore.resolveSolarTriggerDate(
                 event: .sunrise,
                 coordinate: reference.coordinate,

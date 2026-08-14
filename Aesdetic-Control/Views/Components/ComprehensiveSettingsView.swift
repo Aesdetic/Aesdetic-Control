@@ -12,6 +12,7 @@ import UIKit
 private enum UpdateCheckStatus: Equatable {
     case idle
     case checking
+    case updating(String)
     case upToDate(current: String, latest: String)
     case updateAvailable(current: String, latest: String)
     case error(String)
@@ -22,9 +23,101 @@ private struct WLEDWebDestination: Identifiable {
     let url: URL
 }
 
+private enum SavedWiFiAction {
+    case saveOnly
+    case changeNow
+}
+
+struct EmbeddedSettingsHeaderChrome: Equatable {
+    var backTitle: String
+    var backAccessibilityLabel: String
+    var headerTitle: String
+    var headerActionEnabled: Bool
+    var headerAccessibilityLabel: String
+
+    static let settings = EmbeddedSettingsHeaderChrome(
+        backTitle: "Controls",
+        backAccessibilityLabel: "Back to controls",
+        headerTitle: "Settings",
+        headerActionEnabled: false,
+        headerAccessibilityLabel: "Settings status"
+    )
+}
+
+struct EmbeddedSettingsHeaderActions {
+    var back: (() -> Void)?
+    var primary: (() -> Void)?
+
+    static let none = EmbeddedSettingsHeaderActions(back: nil, primary: nil)
+}
+
+final class EmbeddedSettingsHeaderActionStore: ObservableObject {
+    private var backAction: (() -> Void)?
+    private var primaryAction: (() -> Void)?
+
+    func update(_ actions: EmbeddedSettingsHeaderActions) {
+        backAction = actions.back
+        primaryAction = actions.primary
+    }
+
+    func reset() {
+        backAction = nil
+        primaryAction = nil
+    }
+
+    func performBack() {
+        backAction?()
+    }
+
+    func performPrimary() {
+        primaryAction?()
+    }
+}
+
+enum SettingsDescriptionTone {
+    case secondary
+    case warning
+    case error
+}
+
+struct SettingsDescriptionText: View {
+    let markdown: String
+    var tone: SettingsDescriptionTone = .secondary
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+
+    private var attributedText: AttributedString {
+        (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
+    }
+
+    private var color: Color {
+        switch tone {
+        case .secondary:
+            return theme.settingsText(.secondary)
+        case .warning:
+            return theme.status.warning
+        case .error:
+            return theme.status.negative
+        }
+    }
+
+    var body: some View {
+        Text(attributedText)
+            .font(AppTypography.style(.caption))
+            .foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct ComprehensiveSettingsView: View {
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.setupJourneyActions) private var setupJourneyActions
     @ObservedObject private var presetsStore = PresetsStore.shared
     @ObservedObject private var smartHomeStore = SmartHomeIntegrationStore.shared
     @ObservedObject private var automationStore = AutomationStore.shared
@@ -32,6 +125,11 @@ struct ComprehensiveSettingsView: View {
     let initialCategory: SettingsCategory
     let presentationMode: PresentationMode
     let contentBottomPadding: CGFloat
+    let onSettingsHeaderStatusChange: ((String) -> Void)?
+    let onSettingsHeaderChromeChange: ((EmbeddedSettingsHeaderChrome) -> Void)?
+    let onSettingsHeaderActionsChange: ((EmbeddedSettingsHeaderActions) -> Void)?
+    let onReconnectDevice: ((WLEDDevice) -> Void)?
+    let onDeviceRemoved: (() -> Void)?
 
     @State private var isOn: Bool = false
     @State private var brightnessDouble: Double = 50
@@ -46,12 +144,12 @@ struct ComprehensiveSettingsView: View {
     @State private var nightLightMode: Int = 0
     @State private var nightLightTargetBri: Int = 0
     @State private var timerDrafts: [NativeTimerDraft] = NativeTimerDraft.standardDefaults
-    @State private var sunriseTimer: WLEDTimer?
-    @State private var sunsetTimer: WLEDTimer?
     @State private var isLoadingTimers: Bool = false
     @State private var savingTimerSlotIds: Set<Int> = []
-    @State private var isEditingName: Bool = false
+    @State private var timerFeedbackBySlotId: [Int: TimerEditorFeedback] = [:]
     @State private var editingName: String = ""
+    @State private var isCommittingDeviceRename: Bool = false
+    @FocusState private var isLampNameFieldFocused: Bool
     @State private var temperatureStopsUseCCT: Bool = false
     @State private var macroButtonPress: Int = 0
     @State private var macroButtonLongPress: Int = 0
@@ -64,14 +162,20 @@ struct ComprehensiveSettingsView: View {
     @State private var alexaInvocationName: String = ""
     @State private var alexaPresetCount: Int = 0
     @State private var alexaIntegrationSupported: Bool = true
+    @State private var hasLoadedAlexaIntegrationSettings: Bool = false
     @State private var isLoadingAlexaSettings: Bool = false
     @State private var isSavingAlexaSettings: Bool = false
     @State private var alexaSettingsMessage: String?
     @State private var alexaSettingsMessageIsError: Bool = false
     @State private var showAlexaDiscoveryInstructions: Bool = false
+    @State private var showFactoryResetRecoveryActions: Bool = false
+    @State private var isRemovingFactoryResetDevice: Bool = false
+    @State private var isAlexaQuickSetupExpanded: Bool = false
+    @State private var isHomeAssistantQuickSetupExpanded: Bool = false
     @State private var nativeIntegrationSettings: WLEDNativeIntegrationSettings = .defaults
     @State private var isLoadingNativeIntegrations: Bool = false
     @State private var isSavingNativeIntegrations: Bool = false
+    @State private var hasLoadedNativeIntegrationSettings: Bool = false
     @State private var nativeIntegrationsMessage: String?
     @State private var nativeIntegrationsMessageIsError: Bool = false
     @State private var isSyncingDeviceTime: Bool = false
@@ -90,7 +194,7 @@ struct ComprehensiveSettingsView: View {
     @State private var wledWebDestination: WLEDWebDestination?
     @State private var showFirmwareUpdate: Bool = false
     @State private var showAutomaticFirmwareUpdate: Bool = false
-    @State private var showProductSetup: Bool = false
+    @State private var showRecommendedSoftwareConfirmation: Bool = false
     @State private var showPostRenameWiFiPrompt: Bool = false
     @State private var updateCheckStatus: UpdateCheckStatus = .idle
     @State private var latestStableVersion: String?
@@ -100,34 +204,47 @@ struct ComprehensiveSettingsView: View {
     @State private var didLoadWiFiSettings: Bool = false
     @State private var didLoadIntegrationSettings: Bool = false
     @State private var didLoadAdvancedSettings: Bool = false
+    @State private var isAdvancedCategoryDetailActive: Bool = false
+    @State private var advancedInitialCategoryID: String?
     @State private var ledConfiguration: LEDConfiguration?
     @State private var isLoadingLEDConfiguration: Bool = false
     @State private var ledConfigurationMessage: String?
 
     // WiFi state variables
     @State private var availableNetworks: [WiFiNetwork] = []
-    @State private var isScanning: Bool = false
-    @State private var selectedNetwork: WiFiNetwork?
-    @State private var password: String = ""
     @State private var isConnecting: Bool = false
-    @State private var connectionStatus: WiFiSetupView.ConnectionStatus = .idle
-    @State private var showPasswordField: Bool = false
     @State private var currentWiFiInfo: WiFiInfo?
-    @State private var showAllNetworks: Bool = true
-    @State private var showConnectedMessage: Bool = true
+    @State private var isLoadingWiFiInfo: Bool = false
+    @State private var savedNetworkSnapshot: WLEDSavedNetworkSnapshot?
+    @State private var isLoadingSavedNetworks: Bool = false
+    @State private var isMutatingSavedNetworks: Bool = false
+    @State private var savedNetworkMessage: String?
+    @State private var savedNetworkMessageIsError: Bool = false
+    @State private var showManualNetworkEntry: Bool = false
+    @State private var showAddNetworkFlow: Bool = false
+    @State private var addNetworkUsesManualEntry: Bool = false
+    @State private var isScanningAddNetworks: Bool = false
+    @State private var addNetworkScanError: String?
+    @State private var addNetworkSaveError: String?
+    @State private var addNetworkSelection: WiFiNetwork?
+    @State private var showAllAddNetworkScanResults: Bool = false
+    @State private var addNetworkScanRequestID = UUID()
+    @State private var manualNetworkDraft = WLEDSavedNetworkDraft()
+    @State private var replacementSlot: Int?
+    @State private var pendingNetworkRemoval: WLEDSavedNetwork?
     @State private var advancedNetworkDraft = WLEDNetworkConfiguration()
     @State private var isLoadingAdvancedNetwork: Bool = false
     @State private var isSavingAdvancedNetwork: Bool = false
+    @State private var hasLoadedAdvancedNetworkConfiguration: Bool = false
     @State private var advancedNetworkMessage: String?
     @State private var advancedNetworkMessageIsError: Bool = false
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
     @AppStorage("showSegmentControlsInColorTabAdvanced") private var showSegmentControlsInColorTabAdvanced: Bool = true
-    @Environment(\.colorScheme) private var colorScheme
 
     enum SettingsCategory: String, CaseIterable {
-        case overview = "Overview"
+        case overview = "Device"
         case timeSchedules = "Time & Schedules"
-        case wifiUpdates = "WiFi & Updates"
+        case wifiUpdates = "WiFi"
         case integrations = "Integrations"
         case advanced = "Advanced"
 
@@ -141,12 +258,19 @@ struct ComprehensiveSettingsView: View {
             }
         }
 
-        func title(for presentationMode: PresentationMode) -> String {
+        func title(for presentationMode: PresentationMode, productType: ProductType) -> String {
+            if self == .overview {
+                return productType.settingsObjectName
+            }
             switch (self, presentationMode) {
             case (.timeSchedules, .embedded):
                 return "Time"
-            case (.wifiUpdates, .embedded):
+            case (.timeSchedules, .standalone):
+                return "Time & Routines"
+            case (.wifiUpdates, _):
                 return "WiFi"
+            case (.integrations, _):
+                return "Smart Home"
             default:
                 return rawValue
             }
@@ -174,6 +298,18 @@ struct ComprehensiveSettingsView: View {
             return matchedByIP
         }
         return device
+    }
+
+    private var theme: AppSemanticTheme {
+        AppTheme.tokens(for: colorScheme)
+    }
+
+    private var settingsObjectName: String {
+        activeDevice.productType.settingsObjectName
+    }
+
+    private var settingsObjectNameLowercased: String {
+        activeDevice.productType.settingsObjectNameLowercased
     }
 
     private var alexaFavoritesCount: Int {
@@ -249,12 +385,22 @@ struct ComprehensiveSettingsView: View {
         device: WLEDDevice,
         initialCategory: SettingsCategory = .overview,
         presentationMode: PresentationMode = .standalone,
-        contentBottomPadding: CGFloat = 20
+        contentBottomPadding: CGFloat = 20,
+        onSettingsHeaderStatusChange: ((String) -> Void)? = nil,
+        onSettingsHeaderChromeChange: ((EmbeddedSettingsHeaderChrome) -> Void)? = nil,
+        onSettingsHeaderActionsChange: ((EmbeddedSettingsHeaderActions) -> Void)? = nil,
+        onReconnectDevice: ((WLEDDevice) -> Void)? = nil,
+        onDeviceRemoved: (() -> Void)? = nil
     ) {
         self.device = device
         self.initialCategory = initialCategory
         self.presentationMode = presentationMode
         self.contentBottomPadding = contentBottomPadding
+        self.onSettingsHeaderStatusChange = onSettingsHeaderStatusChange
+        self.onSettingsHeaderChromeChange = onSettingsHeaderChromeChange
+        self.onSettingsHeaderActionsChange = onSettingsHeaderActionsChange
+        self.onReconnectDevice = onReconnectDevice
+        self.onDeviceRemoved = onDeviceRemoved
         _selectedSettingsCategory = State(initialValue: initialCategory)
     }
 
@@ -280,27 +426,33 @@ struct ComprehensiveSettingsView: View {
                     headerSection
                 }
 
-                // Category selector chips
-                categorySelector
+                if !shouldHideSettingsCategorySelector {
+                    categorySelector
+                }
 
                 // Content based on selected category
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 12) {
-                        switch selectedSettingsCategory {
-                        case .overview:
-                            overviewSection
-                        case .timeSchedules:
-                            timeSchedulesSection
-                        case .wifiUpdates:
-                            wifiUpdatesSection
-                        case .integrations:
-                            integrationsSection
-                        case .advanced:
-                            advancedSection
+                if selectedSettingsCategory == .advanced {
+                    advancedSection
+                        .padding(
+                            .horizontal,
+                            presentationMode == .embedded ? DeviceDetailPresentation.contentHorizontalInset : 0
+                        )
+                } else {
+                    GeometryReader { proxy in
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(spacing: 12) {
+                                nonAdvancedPageHeading
+                                selectedNonAdvancedSection
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                            }
+                            .frame(
+                                width: max(0, proxy.size.width - settingsContentHorizontalInset * 2),
+                                alignment: .topLeading
+                            )
+                            .padding(.horizontal, settingsContentHorizontalInset)
+                            .padding(.bottom, contentBottomPadding)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, contentBottomPadding)
                 }
             }
             .disabled(isRebootWaitActive)
@@ -315,7 +467,28 @@ struct ComprehensiveSettingsView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .presentationBackground(.ultraThinMaterial)
         .task(id: selectedSettingsCategory) {
+            // Let the pill selection render first and avoid launching network
+            // work for rapid intermediate taps.
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
             await loadSettingsForCurrentCategory()
+        }
+        .onChange(of: selectedSettingsCategory) { _, category in
+            if category != .advanced {
+                isAdvancedCategoryDetailActive = false
+                onSettingsHeaderChromeChange?(.settings)
+                onSettingsHeaderActionsChange?(.none)
+                onSettingsHeaderStatusChange?("Settings")
+            }
+        }
+        .onDisappear {
+            manualNetworkDraft.clearSensitiveValues()
+            onSettingsHeaderChromeChange?(.settings)
+            onSettingsHeaderActionsChange?(.none)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active else { return }
+            manualNetworkDraft.clearSensitiveValues()
         }
         .sheet(item: $wledWebDestination) { destination in
             WLEDWebConfigView(url: destination.url)
@@ -327,52 +500,69 @@ struct ComprehensiveSettingsView: View {
             WLEDWebConfigView(url: URL(string: "http://\(device.ipAddress)/update")!)
         }
         .overlay {
-            if showProductSetup {
-                productSetupOverlay
-            }
         }
         .confirmationDialog(
-            "Check WiFi After Renaming?",
+            "\(settingsObjectName) Name Updated",
             isPresented: $showPostRenameWiFiPrompt,
             titleVisibility: .visible
         ) {
-            Button("Review WiFi Now") {
+            Button("Review WiFi Settings") {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     selectedSettingsCategory = .wifiUpdates
                 }
             }
             Button("Done", role: .cancel) {}
         } message: {
-            Text("Confirm this device is on the correct network or switch WiFi now.")
+            Text("Your local web address stays unchanged unless you edit it in Advanced WiFi & Network.")
+        }
+        .confirmationDialog(
+            "Install recommended software?",
+            isPresented: $showRecommendedSoftwareConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Install Update") {
+                Task { await installRecommendedSoftware() }
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text("Your lamp will restart while we install the Aesdetic-recommended software. Keep your phone on the same Wi-Fi network and do not remove power.")
+        }
+        .confirmationDialog(
+            "Factory Reset Sent",
+            isPresented: $showFactoryResetRecoveryActions,
+            titleVisibility: .visible
+        ) {
+            Button("Set Up Again") {
+                onReconnectDevice?(activeDevice)
+            }
+            Button("Remove From App", role: .destructive) {
+                removeFactoryResetDeviceFromApp()
+            }
+            Button("Keep Offline", role: .cancel) {}
+        } message: {
+            Text("WLED erased its settings and WiFi credentials. Choose whether to reconnect it, remove its saved app record, or keep it offline for later.")
+        }
+        .alert(item: $pendingNetworkRemoval) { network in
+            Alert(
+                title: Text("Remove \(network.ssid)?"),
+                message: Text("The device will no longer connect to this network automatically."),
+                primaryButton: .destructive(Text("Remove")) {
+                    removeSavedNetwork(network)
+                },
+                secondaryButton: .cancel()
+            )
         }
     }
 
-    @ViewBuilder
-    private var productSetupOverlay: some View {
-        GeometryReader { proxy in
-            let maxPopupHeight = max(320, proxy.size.height - proxy.safeAreaInsets.bottom - 80)
-            ZStack(alignment: .top) {
-                Rectangle()
-                    .fill(Color.black.opacity(0.08))
-                    .background(.ultraThinMaterial)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        showProductSetup = false
-                    }
+    private var shouldHideSettingsCategorySelector: Bool {
+        selectedSettingsCategory == .advanced && isAdvancedCategoryDetailActive
+    }
 
-                ProductSetupFlowView(
-                    device: activeDevice,
-                    onClose: { self.showProductSetup = false }
-                )
-                .environmentObject(viewModel)
-                .frame(maxHeight: maxPopupHeight, alignment: .top)
-                .padding(.horizontal, 16)
-                .padding(.top, 26)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private var settingsContentHorizontalInset: CGFloat {
+        if presentationMode == .embedded {
+            return DeviceDetailPresentation.contentHorizontalInset + 16
         }
-        .transition(.identity)
-        .zIndex(4)
+        return 16
     }
 
     private var rebootWaitOverlay: some View {
@@ -393,12 +583,12 @@ struct ComprehensiveSettingsView: View {
                         .progressViewStyle(.circular)
                         .tint(.white)
                         .scaleEffect(1.2)
-                    Text("Rebooting Device")
+                    Text("Restarting \(settingsObjectName)")
                         .font(AppTypography.style(.headline, weight: .semibold))
-                        .foregroundColor(.white)
+                        .settingsForegroundStyle(.primary)
                     Text("Reconnecting... \(max(0, rebootWaitRemainingSeconds))s")
                         .font(AppTypography.style(.subheadline))
-                        .foregroundColor(.white.opacity(0.8))
+                        .settingsForegroundStyle(.secondary)
                 }
                 .frame(maxWidth: maxCardWidth)
                 .padding(.horizontal, 20)
@@ -425,48 +615,18 @@ struct ComprehensiveSettingsView: View {
         VStack(spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    if isEditingName {
-                        TextField("Device Name", text: $editingName)
-                            .textFieldStyle(.plain)
-                            .foregroundColor(.white)
-                            .font(AppTypography.style(.title2, weight: .semibold))
-                            .onSubmit {
-                                Task {
-                                    await commitDeviceRenameFromHeader()
-                                }
-                            }
-                            .onAppear {
-                                editingName = activeDevice.name
-                            }
-                    } else {
-                        Text(activeDevice.name)
-                            .font(AppTypography.style(.title2, weight: .semibold))
-                            .foregroundColor(.white)
-                    }
+                    Text(activeDevice.name)
+                        .font(AppTypography.style(.title2, weight: .semibold))
+                        .settingsForegroundStyle(.primary)
 
                     Text(activeDevice.ipAddress)
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.6))
+                        .settingsForegroundStyle(.secondary)
                 }
 
                 Spacer()
 
                 HStack(spacing: 12) {
-                    AppGlassIconButton(
-                        systemName: isEditingName ? "xmark" : "pencil",
-                        isProminent: false,
-                        size: 38
-                    ) {
-                        if isEditingName {
-                            isEditingName = false
-                            editingName = activeDevice.name
-                        } else {
-                            isEditingName = true
-                            editingName = activeDevice.name
-                        }
-                    }
-                    .accessibilityLabel(isEditingName ? "Cancel rename" : "Rename device")
-
                     AppGlassIconButton(
                         systemName: "arrow.clockwise",
                         isProminent: false,
@@ -485,74 +645,125 @@ struct ComprehensiveSettingsView: View {
     // MARK: - Category Selector
 
     private var categorySelector: some View {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(SettingsCategory.allCases, id: \.self) { category in
-                        AppGlassPillButton(
-                            title: category.title(for: presentationMode),
-                            isSelected: selectedSettingsCategory == category,
-                            iconName: category.icon,
-                            size: presentationMode == .embedded ? .compact : .regular,
-                            useControlGlassRecipe: true,
-                            useAppleSelectedStyle: true
-                        ) {
-                        selectedSettingsCategory = category
+        // The viewport is intentionally full-width in the embedded detail panel;
+        // only the resting tab content receives an inset.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SettingsCategory.allCases, id: \.self) { category in
+                    AppGlassPillButton(
+                        title: category.title(for: presentationMode, productType: activeDevice.productType),
+                        isSelected: selectedSettingsCategory == category,
+                        iconName: category.icon,
+                        size: presentationMode == .embedded ? .compact : .regular,
+                        useControlGlassRecipe: true,
+                        useAppleSelectedStyle: true,
+                        selectedGlassRole: .control,
+                        selectedFrostUsesMaterial: false,
+                        foregroundColorOverride: .white
+                    ) {
+                        guard selectedSettingsCategory != category else { return }
+                        if category == .advanced {
+                            advancedInitialCategoryID = nil
+                        }
+                        var transaction = Transaction()
+                        transaction.animation = nil
+                        withTransaction(transaction) {
+                            selectedSettingsCategory = category
+                        }
                     }
+                    .accessibilityIdentifier("settings-tab-\(category.rawValue)")
+                    .accessibilityValue(selectedSettingsCategory == category ? "Selected" : "Not selected")
                 }
-                }
-                .padding(.horizontal, 16)
             }
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .clipped()
+            .padding(.vertical, 2)
+            .padding(.horizontal, 16)
+        }
+        .accessibilityIdentifier("settings-category-selector")
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     // MARK: - Settings Sections
 
+    private var nonAdvancedPageHeading: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(selectedSettingsCategory.title(for: presentationMode, productType: activeDevice.productType))
+                .font(AppTypography.style(.title2, weight: .semibold))
+                .foregroundStyle(theme.settingsText(.primary))
+                .accessibilityAddTraits(.isHeader)
+
+            Text(nonAdvancedPageSubtitle)
+                .font(AppTypography.style(.subheadline))
+                .foregroundStyle(theme.settingsText(.secondary))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 2)
+        .padding(.bottom, 2)
+    }
+
+    private var nonAdvancedPageSubtitle: String {
+        switch selectedSettingsCategory {
+        case .overview:
+            return "Everyday behavior, connection, and software for this \(settingsObjectNameLowercased)."
+        case .timeSchedules:
+            return "Clock, location, sunrise, sunset, and scheduled routines."
+        case .wifiUpdates:
+            return "Current connection, saved networks, and recovery access."
+        case .integrations:
+            return "Connect Alexa, Home Assistant, and advanced services."
+        case .advanced:
+            return ""
+        }
+    }
+
+    @ViewBuilder
+    private var selectedNonAdvancedSection: some View {
+        switch selectedSettingsCategory {
+        case .overview:
+            overviewSection
+        case .timeSchedules:
+            timeSchedulesSection
+        case .wifiUpdates:
+            wifiUpdatesSection
+        case .integrations:
+            compactIntegrationsSection
+        case .advanced:
+            EmptyView()
+        }
+    }
+
     private var overviewSection: some View {
         VStack(spacing: 12) {
-            SettingsCard(title: "Lamp Profile") {
+            SettingsCard(title: "\(settingsObjectName) Profile", glassStyle: .detailControl) {
                 VStack(spacing: 12) {
-                    InfoRow(label: "Lamp name", value: activeDevice.name)
+                    lampNameOverviewRow
                     InfoRow(label: "Room", value: activeDevice.location.displayName)
-                    InfoRow(label: "Setup", value: activeDevice.setupState.displayName)
-                    InfoRow(label: "Product", value: activeDevice.productType.displayName)
                     InfoRow(label: "Look", value: activeDevice.lookId ?? "Default")
-                    if activeDevice.profileVersionApplied > 0 {
-                        InfoRow(label: "Profile Version", value: "v\(activeDevice.profileVersionApplied)")
-                    }
 
-                    Button(action: { showProductSetup = true }) {
+                    Button(action: { setupJourneyActions.beginProductSetup(activeDevice, nil) }) {
                         SettingsButton(
                             title: activeDevice.setupState == .pendingSelection ? "Complete Setup" : "Change Product",
-                            icon: "sparkles"
+                            icon: "sparkles",
+                            style: .overviewRow
                         )
-                    }
-
-                    if activeDevice.productType != .generic {
-                        Button(action: {
-                            Task {
-                                _ = await viewModel.reapplyCurrentProfile(activeDevice)
-                            }
-                        }) {
-                            SettingsButton(title: "Reapply Recommended Setup", icon: "arrow.triangle.2.circlepath")
-                        }
                     }
                 }
             }
 
-            SettingsCard(title: "Status") {
+            DeviceBehaviorSettingsCard(
+                device: activeDevice,
+                objectName: settingsObjectName,
+                glassStyle: .detailControl,
+                openAdvanced: { openAdvancedCategory("led-hardware") }
+            )
+            .id("behavior-\(activeDevice.id)-\(activeDevice.ipAddress)")
+
+            SettingsCard(title: "Status", glassStyle: .detailControl) {
                 VStack(spacing: 12) {
                     InfoRow(label: "Connection", value: viewModel.isDeviceOnline(activeDevice) || activeDevice.isOnline ? "Online" : "Offline")
                     InfoRow(label: "Device address", value: activeDevice.ipAddress)
-                    if let ver = info?.ver {
-                        InfoRow(label: "Software version", value: ver)
-                    }
-                    if let deviceTime = info?.time, !deviceTime.isEmpty {
-                        InfoRow(label: "Lamp clock", value: deviceTime)
-                    } else {
-                        InfoRow(label: "Lamp clock", value: "Unavailable")
-                    }
 
                     if let wifiInfo = currentWiFiInfo {
                         InfoRow(label: "Network", value: wifiInfo.ssid)
@@ -563,7 +774,7 @@ struct ComprehensiveSettingsView: View {
                                 .scaleEffect(0.8)
                             Text("Loading network status...")
                                 .font(AppTypography.style(.subheadline))
-                                .foregroundColor(.white.opacity(0.7))
+                                .settingsForegroundStyle(.secondary)
                             Spacer()
                         }
                     }
@@ -572,46 +783,118 @@ struct ComprehensiveSettingsView: View {
                         selectedSettingsCategory = .wifiUpdates
                         Task { await loadCurrentWiFiInfo() }
                     }) {
-                        SettingsButton(title: "Manage Network & Updates", icon: "wifi")
+                        SettingsButton(title: "Manage WiFi", icon: "wifi", style: .overviewRow)
                     }
                 }
             }
 
-            SettingsCard(title: "Setup & Support Actions") {
-                VStack(spacing: 12) {
-                    Button(action: syncDeviceTimeFromPhone) {
-                        SyncLampClockButton(isSyncing: isSyncingDeviceTime)
-                    }
-                    .disabled(isSyncingDeviceTime)
+            healthAndRecoveryCard
 
-                    if let deviceTimeSyncMessage {
-                        Text(deviceTimeSyncMessage)
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(deviceTimeSyncMessageIsError ? .orange : .green)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            softwareUpdateCard
+        }
+    }
 
-                    Button(action: { Task { await checkForStableUpdate() } }) {
-                        SettingsButton(title: "Check for Software Update", icon: "arrow.clockwise")
-                    }
+    private var healthAndRecoveryCard: some View {
+        SettingsCard(title: "Health & Recovery", glassStyle: .detailControl) {
+            VStack(spacing: 12) {
+                InfoRow(label: "Last checked", value: lastSeenSummary)
+                InfoRow(label: "WLED version", value: info?.ver ?? "Not checked")
 
-                    Button(action: { selectedSettingsCategory = .timeSchedules }) {
-                        SettingsButton(title: "Time, Automations & Timers", icon: "clock")
+                if !isWiFiDeviceReachable, let onReconnectDevice {
+                    Button {
+                        onReconnectDevice(activeDevice)
+                    } label: {
+                        SettingsButton(title: "Set Up or Reconnect", icon: "wifi.exclamationmark", style: .overviewRow)
                     }
+                }
 
-                    Button(action: { openWLEDPath("/settings") }) {
-                        SettingsButton(title: "Open Full WLED Web Settings", icon: "globe")
-                    }
+                Button(action: { Task { await viewModel.rebootDevice(device) } }) {
+                    SettingsButton(
+                        title: isRebootWaitActive
+                            ? "Restarting... \(max(0, rebootWaitRemainingSeconds))s"
+                            : "Restart \(settingsObjectName)",
+                        icon: "arrow.clockwise.circle",
+                        style: .overviewRow
+                    )
+                }
+                .disabled(isRebootWaitActive || !isWiFiDeviceReachable)
 
-                    Button(action: { Task { await viewModel.rebootDevice(device) } }) {
-                        SettingsButton(
-                            title: isRebootWaitActive ? "Rebooting... \(max(0, rebootWaitRemainingSeconds))s" : "Restart Lamp",
-                            icon: "arrow.clockwise.circle"
-                        )
-                    }
-                    .disabled(isRebootWaitActive)
+                Button(action: { openAdvancedCategory("security-updates") }) {
+                    SettingsButton(title: "Backup & Recovery", icon: "externaldrive", style: .overviewRow)
                 }
             }
+        }
+    }
+
+    private var lastSeenSummary: String {
+        if isWiFiDeviceReachable {
+            return "Now"
+        }
+
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: activeDevice.lastSeen, relativeTo: Date())
+    }
+
+    private var lampNameOverviewRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("\(settingsObjectName) name")
+                .font(AppTypography.style(.subheadline, weight: .medium))
+                .foregroundColor(AppTheme.tokens(for: colorScheme).settingsText(.secondary))
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                if isCommittingDeviceRename {
+                    ProgressView()
+                        .scaleEffect(0.72)
+                        .tint(AppTheme.tokens(for: colorScheme).settingsText(.primary))
+                }
+
+                TextField("\(settingsObjectName) name", text: $editingName)
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .foregroundColor(AppTheme.tokens(for: colorScheme).settingsText(.primary))
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .focused($isLampNameFieldFocused)
+                    .disabled(isCommittingDeviceRename)
+                    .frame(minWidth: 120, maxWidth: 210, alignment: .trailing)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(AppTheme.tokens(for: colorScheme).surfaceMuted.opacity(isLampNameFieldFocused ? 1 : 0.42))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(
+                                isLampNameFieldFocused
+                                    ? AppTheme.tokens(for: colorScheme).divider.opacity(0.9)
+                                    : AppTheme.tokens(for: colorScheme).divider.opacity(0.45),
+                                lineWidth: 1
+                            )
+                    )
+                    .onSubmit {
+                        Task { await commitDeviceRename() }
+                    }
+                    .onChange(of: isLampNameFieldFocused) { _, isFocused in
+                        if !isFocused {
+                            Task { await commitDeviceRename() }
+                        }
+                    }
+                    .onAppear {
+                        if editingName.isEmpty {
+                            editingName = activeDevice.name
+                        }
+                    }
+                    .onChange(of: activeDevice.name) { _, name in
+                        if !isLampNameFieldFocused {
+                            editingName = name
+                        }
+                    }
+                }
         }
     }
 
@@ -635,30 +918,35 @@ struct ComprehensiveSettingsView: View {
         return "\(quality) (\(rssi) dBm)"
     }
 
-    private func solarTimerSummary(_ timer: WLEDTimer?, eventName: String) -> String {
-        guard let timer, timer.enabled, timer.macroId > 0 else {
-            return "Not configured"
-        }
-
-        let offset = timer.minute
-        let timing: String
-        if offset == 0 {
-            timing = "At \(eventName)"
-        } else if offset < 0 {
-            timing = "\(abs(offset)) min before \(eventName)"
-        } else {
-            timing = "\(offset) min after \(eventName)"
-        }
-
-        return "\(timing) · Preset \(timer.macroId)"
-    }
-
     private func loadSettingsForCurrentCategory() async {
         let category = await MainActor.run { selectedSettingsCategory }
+
+        // UI tests use a deterministic offline fixture. Keep navigation tests
+        // read-only and local instead of probing the fixture's reserved IP.
+        if AppRuntimeEnvironment.isRunningUITests {
+            await MainActor.run {
+                didLoadBaseSettings = true
+                switch category {
+                case .overview:
+                    break
+                case .timeSchedules:
+                    didLoadScheduleSettings = true
+                case .wifiUpdates:
+                    didLoadWiFiSettings = true
+                case .integrations:
+                    didLoadIntegrationSettings = true
+                case .advanced:
+                    didLoadAdvancedSettings = true
+                }
+            }
+            return
+        }
+
         let needsBaseLoad = await MainActor.run { !didLoadBaseSettings }
 
         if needsBaseLoad {
             await loadState()
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 didLoadBaseSettings = true
             }
@@ -671,33 +959,35 @@ struct ComprehensiveSettingsView: View {
             }
             if shouldLoadOverviewWiFi {
                 await loadCurrentWiFiInfo()
+                guard !Task.isCancelled else { return }
             }
         case .timeSchedules:
             let shouldLoad = await MainActor.run { !didLoadScheduleSettings }
             if shouldLoad {
                 await loadTimersAndMacros()
+                guard !Task.isCancelled else { return }
                 await MainActor.run { didLoadScheduleSettings = true }
             }
         case .wifiUpdates:
             let shouldLoad = await MainActor.run { !didLoadWiFiSettings }
             if shouldLoad {
-                await loadCurrentWiFiInfo()
-                await loadAdvancedNetworkConfiguration()
-                scanForNetworks()
+                await loadSavedNetworkSnapshot()
+                guard !Task.isCancelled else { return }
                 await MainActor.run { didLoadWiFiSettings = true }
             }
         case .integrations:
             let shouldLoad = await MainActor.run { !didLoadIntegrationSettings }
             if shouldLoad {
-                await loadAlexaIntegrationSettings()
-                await loadNativeIntegrationSettings()
-                await loadUDPSyncState()
+                // Keep tab navigation cheap. Integration loading touches WLED,
+                // shared stores, and the large integrations view, so load it
+                // from explicit Refresh actions instead of pill selection.
                 await MainActor.run { didLoadIntegrationSettings = true }
             }
         case .advanced:
             let shouldLoad = await MainActor.run { !didLoadAdvancedSettings }
             if shouldLoad {
                 await loadLEDConfigurationSummary()
+                guard !Task.isCancelled else { return }
                 await MainActor.run { didLoadAdvancedSettings = true }
             }
         }
@@ -746,22 +1036,21 @@ struct ComprehensiveSettingsView: View {
 
     private var timeSchedulesSection: some View {
         VStack(spacing: 12) {
-            SettingsCard(title: "Time & Location") {
+            SettingsCard(title: "Time & Location", glassStyle: .detailControl) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Keeps WLED's clock, timezone index, and solar reference aligned with this phone.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SettingsDescriptionText(
+                        markdown: "**Sync from this phone:** Updates WLED's clock, timezone, and solar location."
+                    )
 
                     if let deviceTime = info?.time, !deviceTime.isEmpty {
-                        InfoRow(label: "Lamp clock", value: deviceTime)
+                        InfoRow(label: "\(settingsObjectName) clock", value: deviceTime)
                     } else {
-                        InfoRow(label: "Lamp clock", value: "Unavailable")
+                        InfoRow(label: "\(settingsObjectName) clock", value: "Unavailable")
                     }
                     InfoRow(label: "Phone timezone", value: TimeZone.current.identifier)
 
                     Button(action: syncDeviceTimeFromPhone) {
-                        SyncLampClockButton(isSyncing: isSyncingDeviceTime)
+                        SyncLampClockButton(isSyncing: isSyncingDeviceTime, objectName: settingsObjectName)
                     }
                     .disabled(isSyncingDeviceTime)
 
@@ -772,471 +1061,721 @@ struct ComprehensiveSettingsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Button(action: { openWLEDPath("/settings/time") }) {
-                        SettingsButton(title: "Open WLED Time Settings", icon: "clock")
-                    }
                 }
             }
 
-            SettingsCard(title: "Automations & Sunrise/Sunset") {
+            SettingsCard(title: "Automations & Sunrise/Sunset", glassStyle: .detailControl) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Customer automations live in the device Automations tab. Native WLED sunrise and sunset rows are shown below when firmware timers are configured.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SettingsDescriptionText(
+                        markdown: "**Aesdetic routines:** Sunrise, sunset, and schedules. Firmware timers stay in Advanced."
+                    )
 
                     InfoRow(label: "App automations", value: "\(deviceScheduleAutomationCount)")
                     InfoRow(label: "Sunrise automations", value: "\(deviceSolarAutomationCount(isSunrise: true))")
                     InfoRow(label: "Sunset automations", value: "\(deviceSolarAutomationCount(isSunrise: false))")
 
-                    Divider()
-                        .background(Color.white.opacity(0.16))
+                    if enabledNativeTimerCount > 0 {
+                        Divider()
+                            .background(Color.white.opacity(0.16))
+                        InfoRow(label: "Firmware timers", value: "\(enabledNativeTimerCount) active")
+                        SettingsDescriptionText(
+                            markdown: "**Runs separately:** Check firmware timers if the light changes unexpectedly."
+                        )
+                    }
 
-                    SolarTimerStatusRow(
-                        title: "WLED Sunrise Timer",
-                        value: solarTimerSummary(sunriseTimer, eventName: "sunrise"),
-                        icon: "sunrise.fill"
-                    )
-                    SolarTimerStatusRow(
-                        title: "WLED Sunset Timer",
-                        value: solarTimerSummary(sunsetTimer, eventName: "sunset"),
-                        icon: "sunset.fill"
-                    )
-
-                    Button(action: { openWLEDPath("/settings/time") }) {
-                        SettingsButton(title: "Edit WLED Sunrise/Sunset Timers", icon: "sun.max")
+                    Button(action: { openAdvancedCategory("time-macros") }) {
+                        SettingsButton(title: "Open Advanced Time & Macros", icon: "slider.horizontal.3")
                     }
                 }
             }
-
-            SettingsCard(title: "Native WLED Timers") {
-                nativeWLEDTimersContent
-            }
-
-            SettingsCard(title: "Timed Light") {
-                timedLightContent
-            }
         }
+    }
+
+    private var enabledNativeTimerCount: Int {
+        timerDrafts.filter(\.enabled).count
     }
 
     private var wifiUpdatesSection: some View {
         VStack(spacing: 12) {
             SettingsCard(title: "Current Network", content: {
                 VStack(spacing: 12) {
-                    if let wifiInfo = currentWiFiInfo {
-                        InfoRow(label: "Network", value: wifiInfo.ssid)
-                        InfoRow(label: "Signal", value: wifiSignalSummary(wifiInfo.signalStrength))
-                        InfoRow(label: "Channel", value: "\(wifiInfo.channel)")
-                        InfoRow(label: "Security", value: wifiInfo.security)
+                    if !isWiFiDeviceReachable {
+                        InfoRow(label: "Connection", value: "Offline")
+                        SettingsDescriptionText(
+                            markdown: "**Offline:** Reconnect this \(settingsObjectNameLowercased) to manage saved networks."
+                        )
 
-                        Text("To move this lamp to another network, choose a network below and connect again.")
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.7))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 4)
+                        if let onReconnectDevice {
+                            Button {
+                                onReconnectDevice(activeDevice)
+                            } label: {
+                                SettingsButton(title: "Reconnect Device", icon: "wifi.exclamationmark")
+                            }
+                        }
+                    } else if let snapshot = savedNetworkSnapshot {
+                        InfoRow(label: "Network", value: snapshot.connectedSSID ?? "Could not identify")
+                        if let signal = snapshot.signalStrength {
+                            InfoRow(label: "Signal", value: wifiSignalSummary(signal))
+                        }
+                        if snapshot.connectedSSID == nil {
+                            SettingsDescriptionText(
+                                markdown: "**Network not identified:** Refresh before replacing or removing a saved network."
+                            )
+                        }
                     } else {
-                        HStack {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Loading WiFi information...")
+                        HStack(spacing: 8) {
+                            if isLoadingSavedNetworks {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                            Text(isLoadingSavedNetworks ? "Checking connection..." : "Tap Refresh to check the connection.")
                                 .font(AppTypography.style(.subheadline))
-                                .foregroundColor(.white.opacity(0.7))
+                                .settingsForegroundStyle(.secondary)
                         }
                         .padding(.vertical, 8)
                     }
                 }
             }, headerContent: {
                 AnyView(
-                        Button("Refresh") {
-                            Task {
-                                await loadCurrentWiFiInfo()
-                                await loadAdvancedNetworkConfiguration()
-                                scanForNetworks()
-                            }
+                    Button("Refresh") {
+                        Task {
+                            await loadSavedNetworkSnapshot()
                         }
+                    }
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(.black)
+                    .settingsForegroundStyle(.primary)
                     .padding(.vertical, 6)
                     .padding(.horizontal, 12)
-                    .background(Color.white)
+                    .background(Color.white.opacity(0.18))
                     .cornerRadius(8)
                 )
             })
 
-            SettingsCard(title: "Available Networks", content: {
-                VStack(spacing: 12) {
-                    if availableNetworks.isEmpty && !isScanning {
-                        Text("No networks found. Tap 'Scan' to search.")
-                            .font(AppTypography.style(.subheadline))
-                            .foregroundColor(.white.opacity(0.7))
-                            .padding(.vertical, 8)
-                    } else if !showAllNetworks && !availableNetworks.isEmpty {
-                        // Show only connected network when collapsed
-                        if let wifiInfo = currentWiFiInfo,
-                           let connectedNetwork = availableNetworks.first(where: { $0.ssid == wifiInfo.ssid }) {
-                            WiFiNetworkRow(
-                                network: connectedNetwork,
-                                isSelected: false,
-                                onSelect: { }
-                            )
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                if showConnectedMessage {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "checkmark")
-                                            .font(AppTypography.style(.subheadline, weight: .medium))
-                                            .foregroundColor(.green)
-
-                                        Text("Connected")
-                                            .font(AppTypography.style(.subheadline, weight: .medium))
-                                            .foregroundColor(.green)
-                                    }
+            if isWiFiDeviceReachable {
+                SettingsCard(title: "Networks", content: {
+                    VStack(spacing: 10) {
+                        if let snapshot = savedNetworkSnapshot {
+                            if !snapshot.supportsMultipleNetworks {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: "arrow.up.circle")
+                                        .settingsForegroundStyle(.primary)
+                                    SettingsDescriptionText(
+                                        markdown: "**Update required:** WLED 0.15 or newer supports multiple saved networks."
+                                    )
                                 }
+                            } else if snapshot.networks.isEmpty {
+                                Text("No saved networks were returned by the device.")
+                                    .font(AppTypography.style(.subheadline))
+                                    .settingsForegroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                ForEach(snapshot.networks) { network in
+                                    savedNetworkRow(network, snapshot: snapshot)
+                                }
+                            }
 
-                                Text("Tap 'Scan' to see all available networks")
+                            Divider().background(Color.white.opacity(0.16))
+
+                            HStack {
+                                Text("\(snapshot.networks.count) of \(snapshot.capacity) saved")
                                     .font(AppTypography.style(.caption))
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 12)
-                            .background(Color.green.opacity(0.1))
-                            .cornerRadius(8)
-                            .onAppear {
-                                // Auto-hide the success message after 5 seconds
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                                    showConnectedMessage = false
+                                    .foregroundColor(.white.opacity(0.78))
+                                Spacer()
+                                Button {
+                                    presentAddNetworkFlow()
+                                } label: {
+                                    Label("Add Network", systemImage: "plus")
+                                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                                        .settingsForegroundStyle(.primary)
                                 }
+                                .disabled(
+                                    !snapshot.supportsMultipleNetworks ||
+                                        isMutatingSavedNetworks ||
+                                        showAddNetworkFlow
+                                )
                             }
-                        }
-                    } else {
-                        // Show all networks when expanded
-                        ForEach(availableNetworks, id: \.ssid) { network in
-                            WiFiNetworkRow(
-                                network: network,
-                                isSelected: selectedNetwork?.ssid == network.ssid,
-                                onSelect: { selectNetwork(network) }
-                            )
 
-                            // Password field and connect button - right below selected network
-                            if selectedNetwork?.ssid == network.ssid {
-                                VStack(spacing: 12) {
-                                    Divider()
-                                        .background(Color.white.opacity(0.2))
-
-                                    if network.security == "Open" {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Text("Open Network")
-                                                .font(AppTypography.style(.subheadline, weight: .medium))
-                                                .foregroundColor(.white)
-
-                                            Text("No password required for \(network.ssid)")
-                                                .font(AppTypography.style(.caption))
-                                                .foregroundColor(.white.opacity(0.7))
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 8)
-                                        .padding(.horizontal, 12)
-                                        .background(Color.white.opacity(0.1))
-                                        .cornerRadius(8)
-                                    } else {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Text("Password Required")
-                                                .font(AppTypography.style(.subheadline, weight: .medium))
-                                                .foregroundColor(.white)
-
-                                            SecureField("Enter network password", text: $password)
-                                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                                .font(AppTypography.style(.subheadline))
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 8)
-                                        .padding(.horizontal, 12)
-                                        .background(Color.white.opacity(0.1))
-                                        .cornerRadius(8)
-                                    }
-
-                                    Button("Connect to \(network.ssid)") {
-                                        connectToNetwork()
-                                    }
-                                    .font(AppTypography.style(.subheadline, weight: .semibold))
-                                    .foregroundColor(.black)
-                                    .padding(.vertical, 10)
-                                    .padding(.horizontal, 14)
-                                    .background(Color.white)
-                                    .cornerRadius(10)
-                                    .disabled(isConnecting || (network.security != "Open" && password.isEmpty))
-
-                                    if isConnecting {
-                                        HStack {
-                                            ProgressView()
-                                                .scaleEffect(0.8)
-                                            Text("Connecting...")
-                                                .font(AppTypography.style(.caption))
-                                                .foregroundColor(.white.opacity(0.7))
-                                        }
-                                    }
-
-                                    // Connection status feedback
-                                    if connectionStatus != .idle {
-                                        VStack(spacing: 4) {
-                                            switch connectionStatus {
-                                            case .connecting:
-                                                HStack {
-                                                    ProgressView()
-                                                        .scaleEffect(0.8)
-                                                    Text("Connecting to \(selectedNetwork?.ssid ?? "network")...")
-                                                        .font(AppTypography.style(.caption))
-                                                        .foregroundColor(.white.opacity(0.8))
-                                                }
-                                            case .connected:
-                                                HStack {
-                                                    Image(systemName: "checkmark.circle.fill")
-                                                        .foregroundColor(.green)
-                                                    Text("Successfully connected!")
-                                                        .font(AppTypography.style(.caption))
-                                                        .foregroundColor(.green)
-                                                }
-                                            case .failed(let message):
-                                                HStack {
-                                                    Image(systemName: "exclamationmark.triangle.fill")
-                                                        .foregroundColor(.red)
-                                                    Text("Failed: \(message)")
-                                                        .font(AppTypography.style(.caption))
-                                                        .foregroundColor(.red)
-                                                }
-                                            default:
-                                                EmptyView()
-                                            }
-                                        }
-                                        .padding(.vertical, 4)
-                                    }
-                                }
+                            if showAddNetworkFlow {
+                                addSavedNetworkInlinePanel
+                            } else if showManualNetworkEntry {
+                                manualSavedNetworkPanel
                             }
+                        } else if isLoadingSavedNetworks {
+                            ProgressView().tint(.white)
                         }
                     }
-                }
-            }, headerContent: {
-                AnyView(
-                    HStack(spacing: 8) {
-                        Button("Scan") {
-                            scanForNetworks()
-                        }
-                        .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(.black)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .background(Color.white)
-                        .cornerRadius(8)
-                        .disabled(isScanning)
-
-                        if isScanning {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                        }
-                    }
-                )
-            })
-
-            SettingsCard(title: "Software Update") {
-                VStack(spacing: 12) {
-                    InfoRow(label: "Current version", value: info?.ver ?? "Unknown")
-
-                    HStack {
-                        Text("Update channel")
-                            .font(AppTypography.style(.subheadline, weight: .medium))
-                            .foregroundColor(.white.opacity(0.9))
-                        Spacer()
-                        Text("Stable")
-                            .font(AppTypography.style(.subheadline, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Capsule().fill(Color.white.opacity(0.15)))
-                    }
-
-                    updateStatusView
-
-                    if case .updateAvailable = updateCheckStatus {
-                        Button(action: { showAutomaticFirmwareUpdate = true }) {
-                            SettingsButton(title: "Open WLED Updater", icon: "arrow.up.circle.fill")
-                        }
-                    }
-
-                    Button(action: { Task { await checkForStableUpdate() } }) {
-                        SettingsButton(title: "Check for Software Update", icon: "arrow.clockwise")
-                    }
-
-                    Button(action: { showFirmwareUpdate = true }) {
-                        SettingsButton(title: "Open Manual WLED Upload", icon: "arrow.up.circle")
-                    }
-
-                    Text("Firmware install still uses WLED's updater page so the device can enforce board compatibility, upload handling, and reboot recovery.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.68))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                })
             }
 
-            advancedNetworkSection
+            if let savedNetworkMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: savedNetworkMessageIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    Text(savedNetworkMessage)
+                        .font(AppTypography.style(.caption))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .settingsForegroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background((savedNetworkMessageIsError ? Color.red : Color.green).opacity(0.18))
+                .cornerRadius(8)
+            }
+
+            advancedNetworkShortcutSection
         }
     }
 
-    private var advancedNetworkSection: some View {
-        SettingsCard(title: "Advanced Network") {
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Expert network settings are for static IP, fallback hotspot, and WiFi radio behavior. Multiple saved networks, BSSID pinning, WPA Enterprise, Ethernet, and ESP-NOW remain in WLED's WiFi page.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+    private var softwareUpdateCard: some View {
+        SettingsCard(title: "Software Update", glassStyle: .detailControl) {
+            VStack(spacing: 12) {
+                InfoRow(label: "Installed version", value: info?.ver ?? "Unknown")
 
-                    if isLoadingAdvancedNetwork {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Loading advanced network settings...")
-                                .font(AppTypography.style(.subheadline))
-                                .foregroundColor(.white.opacity(0.75))
-                        }
+                HStack {
+                    Text("Recommended software")
+                        .font(AppTypography.style(.subheadline, weight: .medium))
+                        .settingsForegroundStyle(.primary)
+                    Spacer()
+                    Text("Aesdetic")
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .settingsForegroundStyle(.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.white.opacity(0.15)))
+                }
+
+                updateStatusView
+
+                if case .updateAvailable = updateCheckStatus {
+                    Button(action: { showRecommendedSoftwareConfirmation = true }) {
+                        SettingsButton(title: "Update Recommended Software", icon: "arrow.up.circle.fill")
                     }
+                }
 
-                    AdvancedNetworkTextField(
-                        title: "mDNS name",
-                        placeholder: "lamp-name",
-                        text: advancedNetworkBinding(\.mdnsName)
-                    )
-                    AdvancedNetworkTextField(
-                        title: "Static IP",
-                        placeholder: "0.0.0.0",
-                        text: advancedNetworkBinding(\.staticIP),
-                        keyboardType: .numbersAndPunctuation
-                    )
-                    AdvancedNetworkTextField(
-                        title: "Gateway",
-                        placeholder: "0.0.0.0",
-                        text: advancedNetworkBinding(\.staticGateway),
-                        keyboardType: .numbersAndPunctuation
-                    )
-                    AdvancedNetworkTextField(
-                        title: "Subnet",
-                        placeholder: "255.255.255.0",
-                        text: advancedNetworkBinding(\.staticSubnet),
-                        keyboardType: .numbersAndPunctuation
-                    )
-                    AdvancedNetworkTextField(
-                        title: "DNS",
-                        placeholder: "0.0.0.0",
-                        text: advancedNetworkBinding(\.dnsServer),
-                        keyboardType: .numbersAndPunctuation
-                    )
+                Button(action: { Task { await checkForStableUpdate() } }) {
+                    SettingsButton(title: "Check Software Update", icon: "arrow.clockwise")
+                }
+                .disabled(isSoftwareUpdateInProgress)
+            }
+        }
+    }
 
-                    Divider()
-                        .background(Color.white.opacity(0.15))
+    private var isSoftwareUpdateInProgress: Bool {
+        if case .updating = updateCheckStatus { return true }
+        return false
+    }
 
-                    AdvancedNetworkTextField(
-                        title: "Fallback hotspot name",
-                        placeholder: "WLED-AP",
-                        text: advancedNetworkBinding(\.apSSID)
-                    )
-                    AdvancedNetworkTextField(
-                        title: advancedNetworkDraft.apPasswordConfigured ? "New hotspot password" : "Hotspot password",
-                        placeholder: advancedNetworkDraft.apPasswordConfigured ? "Leave blank to keep existing" : "8-63 characters",
-                        text: advancedNetworkBinding(\.apPassword),
-                        isSecure: true
-                    )
+    private var isWiFiDeviceReachable: Bool {
+        activeDevice.isOnline || viewModel.isDeviceOnline(activeDevice)
+    }
 
-                    Toggle("Hide fallback hotspot", isOn: advancedNetworkBinding(\.hideAP))
-                        .tint(.white)
-                        .foregroundColor(.white)
+    private var replacementOptions: [WLEDSavedNetwork] {
+        guard let snapshot = savedNetworkSnapshot,
+              snapshot.connectedSlot != nil else { return [] }
+        return snapshot.networks.filter { $0.slot != snapshot.connectedSlot }
+    }
 
-                    Stepper(
-                        "Fallback hotspot channel: \(advancedNetworkDraft.apChannel)",
-                        value: advancedNetworkBinding(\.apChannel),
-                        in: 1...13
-                    )
-                    .tint(.white)
-                    .foregroundColor(.white)
+    private func requiresReplacement(for ssid: String) -> Bool {
+        guard let snapshot = savedNetworkSnapshot else { return false }
+        let alreadySaved = snapshot.networks.contains {
+            $0.ssid.caseInsensitiveCompare(ssid.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+        }
+        let highestOccupiedSlot = snapshot.networks.map(\.slot).max() ?? -1
+        return !alreadySaved && highestOccupiedSlot + 1 >= snapshot.capacity
+    }
 
-                    Stepper(
-                        "Fallback hotspot behavior: \(advancedNetworkDraft.apBehavior)",
-                        value: advancedNetworkBinding(\.apBehavior),
-                        in: 0...4
-                    )
-                    .tint(.white)
-                    .foregroundColor(.white)
+    @ViewBuilder
+    private func savedNetworkRow(_ network: WLEDSavedNetwork, snapshot: WLEDSavedNetworkSnapshot) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: network.status == .connected ? "wifi.circle.fill" : "wifi")
+                .font(AppTypography.style(.title3))
+                .settingsForegroundStyle(.primary)
+                .frame(width: 28)
 
-                    Toggle("Disable WiFi sleep", isOn: advancedNetworkBinding(\.disableWiFiSleep))
-                        .tint(.white)
-                        .foregroundColor(.white)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(network.ssid)
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .settingsForegroundStyle(.primary)
+                    .lineLimit(2)
+                Text(savedNetworkStatusText(network.status))
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(.white.opacity(0.78))
+            }
 
-                    Toggle("Force 802.11g compatibility", isOn: advancedNetworkBinding(\.force80211g))
-                        .tint(.white)
-                        .foregroundColor(.white)
+            Spacer(minLength: 8)
 
-                    Picker("WiFi transmit power", selection: advancedNetworkBinding(\.txPower)) {
-                        Text("19.5 dBm").tag(78)
-                        Text("19 dBm").tag(76)
-                        Text("18.5 dBm").tag(74)
-                        Text("17 dBm").tag(68)
-                        Text("15 dBm").tag(60)
-                        Text("13 dBm").tag(52)
+            Image(systemName: network.hasPassword ? "lock.fill" : "lock.open")
+                .font(AppTypography.style(.caption))
+                .foregroundColor(.white.opacity(0.74))
+                .accessibilityLabel(network.hasPassword ? "Password protected" : "Open network")
+
+            Button {
+                beginEditingSavedNetwork(network)
+            } label: {
+                Image(systemName: "pencil")
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.white.opacity(0.9))
+            .disabled(isMutatingSavedNetworks)
+            .accessibilityLabel("Edit \(network.ssid)")
+
+            if network.slot != snapshot.connectedSlot {
+                Button(role: .destructive) {
+                    pendingNetworkRemoval = network
+                } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.white.opacity(0.9))
+                .disabled(snapshot.connectedSlot == nil || isMutatingSavedNetworks)
+                .accessibilityLabel("Remove \(network.ssid)")
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func savedNetworkStatusText(_ status: WLEDSavedNetworkStatus) -> String {
+        switch status {
+        case .connected: return "Connected now"
+        case .saved: return "Saved"
+        case .notTested: return "Saved, not tested yet"
+        }
+    }
+
+    private var addNetworkScanResults: [WiFiNetwork] {
+        WLEDSavedNetworkService.strongestNetworksBySSID(availableNetworks)
+    }
+
+    private var visibleAddNetworkScanResults: [WiFiNetwork] {
+        showAllAddNetworkScanResults
+            ? addNetworkScanResults
+            : Array(addNetworkScanResults.prefix(3))
+    }
+
+    private var addNetworkCanSubmit: Bool {
+        manualNetworkDraft.isValid &&
+            !isMutatingSavedNetworks &&
+            (!requiresReplacement(for: manualNetworkDraft.normalizedSSID) || replacementSlot != nil)
+    }
+
+    private var addSavedNetworkInlinePanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Divider().background(Color.white.opacity(0.16))
+
+            HStack {
+                Text("Add Network")
+                    .font(AppTypography.style(.headline, weight: .semibold))
+                    .settingsForegroundStyle(.primary)
+                Spacer()
+                Button {
+                    showAddNetworkFlow = false
+                    resetAddNetworkFlow()
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.white.opacity(0.9))
+                .disabled(isMutatingSavedNetworks)
+                .accessibilityLabel("Close add network")
+            }
+
+            if !addNetworkUsesManualEntry && addNetworkSelection == nil {
+                addNetworkScanSection
+            }
+
+            if addNetworkUsesManualEntry || addNetworkSelection != nil {
+                addNetworkCredentialsSection
+            }
+
+            if !addNetworkUsesManualEntry && addNetworkSelection == nil {
+                Button {
+                    addNetworkUsesManualEntry = true
+                    addNetworkSelection = nil
+                    replacementSlot = nil
+                    addNetworkSaveError = nil
+                    manualNetworkDraft = WLEDSavedNetworkDraft()
+                } label: {
+                    Label("Enter Network Manually", systemImage: "keyboard")
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .settingsForegroundStyle(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            } else if addNetworkUsesManualEntry {
+                Button {
+                    addNetworkUsesManualEntry = false
+                    addNetworkSelection = nil
+                    replacementSlot = nil
+                    addNetworkSaveError = nil
+                    manualNetworkDraft = WLEDSavedNetworkDraft()
+                    addNetworkScanRequestID = UUID()
+                } label: {
+                    Label("Choose a Nearby Network", systemImage: "wifi")
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .settingsForegroundStyle(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        addNetworkSelection = nil
+                        replacementSlot = nil
+                        addNetworkSaveError = nil
+                        manualNetworkDraft.clearSensitiveValues()
+                        manualNetworkDraft = WLEDSavedNetworkDraft()
                     }
-                    .pickerStyle(.menu)
-                    .tint(.white)
-                    .foregroundColor(.white)
+                } label: {
+                    Label("Choose Another Network", systemImage: "arrow.left")
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .settingsForegroundStyle(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .disabled(isMutatingSavedNetworks)
+            }
+        }
+        .task(id: addNetworkScanRequestID) {
+            await scanForAddNetwork()
+        }
+    }
 
-                    if let advancedNetworkMessage {
-                        Text(advancedNetworkMessage)
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(advancedNetworkMessageIsError ? .orange : .green)
+    private var addNetworkScanSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Nearby Networks")
+                    .font(AppTypography.style(.headline, weight: .semibold))
+                    .settingsForegroundStyle(.primary)
+                Spacer()
+                if isScanningAddNetworks && !addNetworkScanResults.isEmpty {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .tint(.white)
+                }
+                Button {
+                    addNetworkScanRequestID = UUID()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .settingsForegroundStyle(.primary)
+                .disabled(isScanningAddNetworks)
+                .accessibilityLabel("Scan again")
+            }
+
+            if isScanningAddNetworks && addNetworkScanResults.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView().tint(.white)
+                    Text("Searching...")
+                        .font(AppTypography.style(.subheadline))
+                        .settingsForegroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 16)
+            } else {
+                if let addNetworkScanError {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                        Text(addNetworkScanError)
+                            .font(AppTypography.style(.subheadline))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .settingsForegroundStyle(.primary)
+                    .padding(12)
+                    .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                }
 
-                    HStack(spacing: 10) {
-                        Button(action: {
-                            Task { await loadAdvancedNetworkConfiguration() }
-                        }) {
-                            SettingsInlineButton(title: "Reload", icon: "arrow.clockwise")
-                        }
-                        .disabled(isLoadingAdvancedNetwork || isSavingAdvancedNetwork)
+                if addNetworkScanResults.isEmpty {
+                    Text("Nearby networks have not loaded yet.")
+                        .font(AppTypography.style(.subheadline))
+                        .settingsForegroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
+                }
 
-                        Button(action: saveAdvancedNetworkConfiguration) {
-                            HStack(spacing: 8) {
-                                if isSavingAdvancedNetwork {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                        .tint(.black)
-                                }
-                                Text("Save Network Settings")
-                                    .font(AppTypography.style(.subheadline, weight: .semibold))
-                                    .foregroundColor(.black)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 12)
-                            .background(Color.white)
-                            .cornerRadius(10)
-                        }
-                        .disabled(isSavingAdvancedNetwork)
-                    }
-
-                    Button(action: { openWLEDPath("/settings/wifi") }) {
-                        SettingsButton(title: "Open WLED WiFi Settings", icon: "globe")
+                LazyVStack(spacing: 8) {
+                    ForEach(visibleAddNetworkScanResults) { network in
+                        addNetworkScanRow(network)
                     }
                 }
-                .padding(.top, 8)
-            } label: {
-                HStack {
-                    Image(systemName: "network")
-                        .foregroundColor(.white.opacity(0.75))
-                    Text("Static IP, fallback hotspot, radio options")
+
+                if addNetworkScanResults.count > 3 {
+                    Button {
+                        showAllAddNetworkScanResults.toggle()
+                    } label: {
+                        Text(
+                            showAllAddNetworkScanResults
+                                ? "Show Fewer"
+                                : "Show More (\(addNetworkScanResults.count - 3))"
+                        )
                         .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(.white)
-                    Spacer()
+                        .foregroundStyle(AppTheme.tokens(for: colorScheme).settingsText(.primary))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("wifi-show-more-networks")
                 }
             }
-            .tint(.white)
+        }
+    }
+
+    @ViewBuilder
+    private var addNetworkCredentialsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider().background(Color.white.opacity(0.16))
+
+            Text("Network Details")
+                .font(AppTypography.style(.headline, weight: .semibold))
+                .settingsForegroundStyle(.primary)
+
+            if addNetworkUsesManualEntry {
+                TextField("Network name", text: $manualNetworkDraft.ssid)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                Toggle("This network has no password", isOn: $manualNetworkDraft.isOpenNetwork)
+                    .settingsToggleStyle()
+                    .onChange(of: manualNetworkDraft.isOpenNetwork) { _, isOpen in
+                        if isOpen { manualNetworkDraft.clearSensitiveValues() }
+                        addNetworkSaveError = nil
+                    }
+            } else if let selection = addNetworkSelection {
+                HStack(spacing: 10) {
+                    Image(systemName: "wifi")
+                    Text(selection.ssid)
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                    Spacer()
+                    Image(systemName: manualNetworkDraft.isOpenNetwork ? "lock.open" : "lock.fill")
+                }
+                .settingsForegroundStyle(.primary)
+            }
+
+            if !manualNetworkDraft.isOpenNetwork {
+                SecureField("Network password", text: $manualNetworkDraft.password)
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.password)
+            } else {
+                Label("No password required", systemImage: "lock.open")
+                    .font(AppTypography.style(.caption, weight: .medium))
+                    .foregroundColor(.white.opacity(0.82))
+            }
+
+            if requiresReplacement(for: manualNetworkDraft.normalizedSSID) {
+                replacementPicker
+            }
+
+            SettingsDescriptionText(
+                markdown: "**Save for later** keeps the current connection. **Connect now** moves this device to the selected network."
+            )
+
+            if let addNetworkSaveError {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(addNetworkSaveError)
+                        .font(AppTypography.style(.caption))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .settingsForegroundStyle(.primary)
+                .padding(12)
+                .background(Color.red.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            VStack(spacing: 8) {
+                Button {
+                    performSavedNetworkAction(.saveOnly, draft: manualNetworkDraft)
+                } label: {
+                    SettingsButton(title: "Save for Later", icon: "plus.circle.fill")
+                }
+
+                Button {
+                    performSavedNetworkAction(.changeNow, draft: manualNetworkDraft)
+                } label: {
+                    SettingsButton(title: "Connect Now", icon: "arrow.triangle.swap")
+                }
+            }
+            .disabled(!addNetworkCanSubmit || isConnecting)
+
+            if isConnecting || isMutatingSavedNetworks {
+                HStack(spacing: 8) {
+                    ProgressView().tint(.white)
+                    Text(isConnecting ? "Moving to the new network..." : "Saving...")
+                        .font(AppTypography.style(.caption, weight: .medium))
+                        .settingsForegroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func addNetworkScanRow(_ network: WiFiNetwork) -> some View {
+        let status = addNetworkStatus(for: network)
+        let isSelected = addNetworkSelection?.ssid.caseInsensitiveCompare(network.ssid) == .orderedSame
+
+        return Button {
+            guard status == nil else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                addNetworkSelection = network
+                replacementSlot = nil
+                addNetworkSaveError = nil
+                manualNetworkDraft = WLEDSavedNetworkDraft(
+                    ssid: network.ssid,
+                    password: "",
+                    isOpenNetwork: isOpenNetwork(network)
+                )
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: status == "Connected" ? "wifi.circle.fill" : "wifi")
+                    .font(AppTypography.style(.title3))
+                    .settingsForegroundStyle(.primary)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(network.ssid)
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .settingsForegroundStyle(.primary)
+                        .lineLimit(2)
+                    Text(status ?? wifiSignalSummary(network.signalStrength))
+                        .font(AppTypography.style(.caption))
+                        .foregroundColor(.white.opacity(0.78))
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: isOpenNetwork(network) ? "lock.open" : "lock.fill")
+                    .font(AppTypography.style(.caption))
+                    .foregroundColor(.white.opacity(0.74))
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .settingsForegroundStyle(.primary)
+                } else if status == nil {
+                    Image(systemName: "chevron.right")
+                        .font(AppTypography.style(.caption, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.64))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.white.opacity(isSelected ? 0.14 : 0.07))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.white.opacity(isSelected ? 0.28 : 0.12), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(status != nil || isMutatingSavedNetworks)
+        .accessibilityLabel(status.map { "\(network.ssid), \($0)" } ?? "Add \(network.ssid)")
+    }
+
+    @ViewBuilder
+    private var manualSavedNetworkPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider().background(Color.white.opacity(0.16))
+
+            TextField("Network name", text: $manualNetworkDraft.ssid)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            Toggle("This network has no password", isOn: $manualNetworkDraft.isOpenNetwork)
+                .settingsToggleStyle()
+                .onChange(of: manualNetworkDraft.isOpenNetwork) { _, isOpen in
+                    if isOpen { manualNetworkDraft.clearSensitiveValues() }
+                }
+
+            if !manualNetworkDraft.isOpenNetwork {
+                SecureField("Network password", text: $manualNetworkDraft.password)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if requiresReplacement(for: manualNetworkDraft.normalizedSSID) {
+                replacementPicker
+            }
+
+            SettingsDescriptionText(
+                markdown: "**Save for later:** The password is tested when the device reaches that network."
+            )
+
+            VStack(spacing: 8) {
+                Button {
+                    performSavedNetworkAction(.saveOnly, draft: manualNetworkDraft)
+                } label: {
+                    Label("Save for Another Location", systemImage: "plus.circle")
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.16))
+                        .cornerRadius(8)
+                }
+
+                Button {
+                    performSavedNetworkAction(.changeNow, draft: manualNetworkDraft)
+                } label: {
+                    Label("Change to This Network", systemImage: "arrow.triangle.swap")
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.16))
+                        .cornerRadius(8)
+                }
+            }
+            .settingsForegroundStyle(.primary)
+            .disabled(
+                !manualNetworkDraft.isValid ||
+                isMutatingSavedNetworks ||
+                (requiresReplacement(for: manualNetworkDraft.normalizedSSID) && replacementSlot == nil)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var replacementPicker: some View {
+        if replacementOptions.isEmpty {
+            Text("Refresh the connection before choosing a saved network to replace.")
+                .font(AppTypography.style(.caption))
+                .settingsForegroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Replace a saved network")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .settingsForegroundStyle(.secondary)
+                Picker("Saved network to replace", selection: $replacementSlot) {
+                    Text("Choose a network").tag(Int?.none)
+                    ForEach(replacementOptions) { network in
+                        Text(network.ssid).tag(Optional(network.slot))
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.white)
+            }
+        }
+    }
+
+    private var advancedNetworkShortcutSection: some View {
+        SettingsCard(title: "Advanced Network") {
+            VStack(alignment: .leading, spacing: 12) {
+                SettingsDescriptionText(
+                    markdown: "**Technical network controls:** Local address, static IP, recovery hotspot, radio, Ethernet, and ESP-NOW."
+                )
+
+                Button(action: openAdvancedWiFiNetworkSettings) {
+                    SettingsButton(title: "Open Advanced WiFi & Network", icon: "slider.horizontal.3")
+                }
+            }
         }
     }
 
@@ -1244,30 +1783,36 @@ struct ComprehensiveSettingsView: View {
         VStack(spacing: 12) {
             SettingsCard(title: "Alexa") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Use Alexa for power, brightness, and color. Save these settings, then open the Alexa app and run Discover Devices.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SettingsDescriptionText(
+                        markdown: "**Basic Alexa control:** Power, brightness, and color. Save, then run Discover Devices."
+                    )
+
+                    Button(action: {
+                        Task { await loadAlexaIntegrationSettings() }
+                    }) {
+                        SettingsInlineButton(title: "Refresh Alexa Status", icon: "arrow.clockwise")
+                    }
+                    .disabled(isLoadingAlexaSettings)
 
                     SmartHomeIntegrationStatusRow(status: alexaIntegrationStatus)
 
                     if !alexaIntegrationSupported {
                         Text("This WLED firmware build does not include Alexa support.")
                             .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundColor(.orange)
+                            .settingsForegroundStyle(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     Toggle("Enable Alexa Control", isOn: $alexaEnabled)
                         .tint(.white)
                         .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(.white)
+                        .settingsForegroundStyle(.primary)
                         .disabled(!alexaIntegrationSupported || isLoadingAlexaSettings)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Alexa Name")
                             .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.8))
+                            .settingsForegroundStyle(.secondary)
                         TextField("Bedroom Lights", text: $alexaInvocationName)
                             .settingsTextFieldChrome(theme: AppTheme.tokens(for: colorScheme))
                             .textInputAutocapitalization(.words)
@@ -1298,7 +1843,7 @@ struct ComprehensiveSettingsView: View {
                                 .tint(.white)
                             Text("Loading Alexa settings...")
                                 .font(AppTypography.style(.caption))
-                                .foregroundColor(.white.opacity(0.72))
+                                .settingsForegroundStyle(.secondary)
                         }
                     }
 
@@ -1318,15 +1863,15 @@ struct ComprehensiveSettingsView: View {
                             if isSavingAlexaSettings {
                                 ProgressView()
                                     .scaleEffect(0.8)
-                                    .tint(.black)
+                                    .tint(.white)
                             }
                             Text("Save Alexa Setup")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.black)
+                                .settingsForegroundStyle(.primary)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                            .background(Color.white)
+                            .background(Color.white.opacity(0.18))
                             .cornerRadius(10)
                     }
                     .disabled(
@@ -1338,9 +1883,9 @@ struct ComprehensiveSettingsView: View {
                     if alexaIntegrationSupported {
                         DisclosureGroup {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("Optional WLED macro hooks. Set a preset number to run when Alexa turns this device on or off; use 0 to leave the action disabled.")
-                                    .font(AppTypography.style(.caption))
-                                    .foregroundColor(.white.opacity(0.7))
+                                SettingsDescriptionText(
+                                    markdown: "**Optional preset actions:** Use `0` to leave an action disabled."
+                                )
 
                                 IntStepperRow(title: "Alexa On Action", value: $macroAlexaOn, range: 0...250, onEnd: commitMacroBindings)
                                 IntStepperRow(title: "Alexa Off Action", value: $macroAlexaOff, range: 0...250, onEnd: commitMacroBindings)
@@ -1350,15 +1895,15 @@ struct ComprehensiveSettingsView: View {
                                         if isSavingMacroBindings {
                                             ProgressView()
                                                 .scaleEffect(0.8)
-                                                .tint(.black)
+                                                .tint(.white)
                                         }
                                         Text("Save Alexa Actions")
                                             .font(AppTypography.style(.subheadline, weight: .semibold))
-                                            .foregroundColor(.black)
+                                            .settingsForegroundStyle(.primary)
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 10)
-                                    .background(Color.white)
+                                    .background(Color.white.opacity(0.18))
                                     .cornerRadius(10)
                                 }
                                 .disabled(isSavingMacroBindings)
@@ -1367,10 +1912,10 @@ struct ComprehensiveSettingsView: View {
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "slider.horizontal.3")
-                                    .foregroundColor(.white.opacity(0.75))
+                                    .settingsForegroundStyle(.secondary)
                                 Text("Advanced Alexa Actions")
                                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                                    .foregroundColor(.white)
+                                    .settingsForegroundStyle(.primary)
                                 Spacer()
                             }
                         }
@@ -1381,10 +1926,9 @@ struct ComprehensiveSettingsView: View {
 
             SettingsCard(title: "Home Assistant") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Home Assistant is officially supported through WLED and is the best smart-home bridge for Aesdetic. After the lamp is on your Wi-Fi, Home Assistant usually discovers it automatically on the same network.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SettingsDescriptionText(
+                        markdown: "**Recommended bridge:** Home Assistant usually discovers this \(settingsObjectNameLowercased) on the same network."
+                    )
 
                     SmartHomeIntegrationStatusRow(status: homeAssistantIntegrationStatus)
 
@@ -1396,7 +1940,7 @@ struct ComprehensiveSettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Optional details")
                             .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.78))
+                            .settingsForegroundStyle(.secondary)
 
                         TextField("http://homeassistant.local:8123", text: homeAssistantTextBinding(\.homeAssistantURL))
                             .settingsTextFieldChrome(theme: AppTheme.tokens(for: colorScheme))
@@ -1435,19 +1979,18 @@ struct ComprehensiveSettingsView: View {
                             HomeAssistantInstructionRow(index: 3, text: "Press the select icon near the filters.")
                             HomeAssistantInstructionRow(index: 4, text: "Select entities whose names start with Segment. Do not select the main light entity.")
                             HomeAssistantInstructionRow(index: 5, text: "Open the top-right menu, choose Hide selected, then confirm Hide.")
-                            Text("Do not delete segment entities or app-managed presets. Home Assistant should expose the main light for power, brightness, and smart-home sync; Aesdetic should keep owning rich looks, saves, and device-local routines.")
-                                .font(AppTypography.style(.caption))
-                                .foregroundColor(.white.opacity(0.68))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            SettingsDescriptionText(
+                                markdown: "**Keep the main light:** Hide, but do not delete, segment entities or app-managed presets."
+                            )
                         }
                         .padding(.top, 8)
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "checklist")
-                                .foregroundColor(.white.opacity(0.75))
+                                .settingsForegroundStyle(.secondary)
                             Text("Batch-hide segment instructions")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.white)
+                                .settingsForegroundStyle(.primary)
                             Spacer()
                         }
                     }
@@ -1463,10 +2006,10 @@ struct ComprehensiveSettingsView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "slider.horizontal.3")
-                                .foregroundColor(.white.opacity(0.75))
+                                .settingsForegroundStyle(.secondary)
                             Text("Recommended use")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.white)
+                                .settingsForegroundStyle(.primary)
                             Spacer()
                         }
                     }
@@ -1482,10 +2025,10 @@ struct ComprehensiveSettingsView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "text.book.closed")
-                                .foregroundColor(.white.opacity(0.75))
+                                .settingsForegroundStyle(.secondary)
                             Text("Home Assistant wording")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.white)
+                                .settingsForegroundStyle(.primary)
                             Spacer()
                         }
                     }
@@ -1499,10 +2042,9 @@ struct ComprehensiveSettingsView: View {
 
             SettingsCard(title: "Smart Homes through Home Assistant") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("After WLED is set up in Home Assistant, expose the main light to Apple Home, Alexa, or Google from Home Assistant. For Apple Home, a HomePod or Apple TV is the hub; Home Assistant HomeKit Bridge is what translates WLED.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SettingsDescriptionText(
+                        markdown: "**Bridge from Home Assistant:** Expose the main light to Apple Home, Alexa, or Google."
+                    )
 
                     InfoRow(label: "Apple Home", value: "HomeKit Bridge")
                     InfoRow(label: "Alexa or Google", value: "Expose from Home Assistant")
@@ -1520,19 +2062,18 @@ struct ComprehensiveSettingsView: View {
                             HomeAssistantInstructionRow(index: 2, text: "Use include mode or selected entities.")
                             HomeAssistantInstructionRow(index: 3, text: "Select only the main WLED light entity, for example light.bedroom_lights.")
                             HomeAssistantInstructionRow(index: 4, text: "Add the HomeKit Bridge code in the Apple Home app.")
-                            Text("If you later use Alexa or Google through Home Assistant, apply the same rule: expose the main light or curated scenes, not every segment entity.")
-                                .font(AppTypography.style(.caption))
-                                .foregroundColor(.white.opacity(0.68))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            SettingsDescriptionText(
+                                markdown: "**Keep it focused:** Expose the main light or selected scenes, not every segment."
+                            )
                         }
                         .padding(.top, 8)
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "homekit")
-                                .foregroundColor(.white.opacity(0.75))
+                                .settingsForegroundStyle(.secondary)
                             Text("Apple Home bridge steps")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.white)
+                                .settingsForegroundStyle(.primary)
                             Spacer()
                         }
                     }
@@ -1547,89 +2088,190 @@ struct ComprehensiveSettingsView: View {
                 }
             }
 
-            SettingsCard(title: "Advanced Integrations") {
+            SettingsCard(title: "Advanced Connections") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Native WLED protocol settings for multi-controller sync, MQTT brokers, Hue polling, E1.31, Art-Net, and DMX-style realtime input. DDP and firmware-specific modules stay in the WLED pages.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SettingsDescriptionText(
+                        markdown: "**Technical connections:** Sync, MQTT, Hue, DMX, realtime input, and firmware extensions."
+                    )
 
-                    if isLoadingNativeIntegrations {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                                .tint(.white)
-                            Text("Loading WLED integration settings...")
-                                .font(AppTypography.style(.caption))
-                                .foregroundColor(.white.opacity(0.72))
-                        }
+                    Button(action: { openAdvancedCategory("sync-interfaces") }) {
+                        SettingsButton(title: "Open Network & Sync Settings", icon: "slider.horizontal.3")
                     }
+                }
+            }
+        }
+    }
 
-                    if let nativeIntegrationsMessage {
-                        Text(nativeIntegrationsMessage)
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(nativeIntegrationsMessageIsError ? .orange : .green)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+    private var compactIntegrationsSection: some View {
+        VStack(spacing: 12) {
+            SettingsCard(title: "Alexa", glassStyle: .detailControl) {
+                VStack(alignment: .leading, spacing: 12) {
+                    SmartHomeIntegrationStatusRow(status: alexaIntegrationStatus)
 
-                    nativeIntegrationControls
-
-                    Button(action: saveNativeIntegrationSettings) {
-                        HStack(spacing: 8) {
-                            if isSavingNativeIntegrations {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                    .tint(.black)
-                            }
-                            Text("Save WLED Integration Settings")
-                                .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.black)
+                    Button {
+                        isAlexaQuickSetupExpanded.toggle()
+                        if isAlexaQuickSetupExpanded && !hasLoadedAlexaIntegrationSettings {
+                            Task { await loadAlexaIntegrationSettings() }
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.white)
-                        .cornerRadius(10)
-                    }
-                    .disabled(isSavingNativeIntegrations)
-
-                    DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Button(action: { openWLEDPath("/settings/sync") }) {
-                                SettingsButton(title: "Open WLED Sync Page", icon: "network")
-                            }
-                            Button(action: { openWLEDPath("/settings/dmx") }) {
-                                SettingsButton(title: "Open WLED DMX Output Page", icon: "cable.connector")
-                            }
-                        }
-                        .padding(.top, 8)
                     } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "globe")
-                                .foregroundColor(.white.opacity(0.75))
-                            Text("Raw WLED Pages")
-                                .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.white)
-                            Spacer()
-                        }
+                        SettingsButton(
+                            title: isAlexaQuickSetupExpanded
+                                ? "Hide Alexa Setup"
+                                : (alexaIntegrationStatus.state == .enabled ? "Manage Alexa" : "Set Up Alexa"),
+                            icon: "waveform.circle"
+                        )
                     }
-                    .tint(.white)
+
+                    if isAlexaQuickSetupExpanded {
+                        Divider().overlay(AppTheme.tokens(for: colorScheme).divider)
+                        alexaQuickSetupContent
+                    }
                 }
             }
 
-            SettingsCard(title: "Physical Controls & Extensions") {
+            SettingsCard(title: "Home Assistant", glassStyle: .detailControl) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("These are firmware-specific WLED options for buttons, IR receivers, relays, and usermods.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SmartHomeIntegrationStatusRow(status: homeAssistantIntegrationStatus)
 
-                    Button(action: { openWLEDPath("/settings/leds") }) {
-                        SettingsButton(title: "IR, Relay & Button Hardware", icon: "switch.2")
+                    SettingsDescriptionText(
+                        markdown: "**Usually discovered automatically:** Keep the main light in Home Assistant and manage segments in Aesdetic."
+                    )
+
+                    Button {
+                        isHomeAssistantQuickSetupExpanded.toggle()
+                    } label: {
+                        SettingsButton(
+                            title: isHomeAssistantQuickSetupExpanded
+                                ? "Hide Home Assistant Setup"
+                                : (homeAssistantSetupState.hasStartedSetup ? "Continue Setup" : "Set Up Home Assistant"),
+                            icon: "house"
+                        )
                     }
-                    Button(action: { openWLEDPath("/settings/um") }) {
-                        SettingsButton(title: "Open WLED Extensions", icon: "puzzlepiece")
+
+                    if isHomeAssistantQuickSetupExpanded {
+                        Divider().overlay(AppTheme.tokens(for: colorScheme).divider)
+                        homeAssistantQuickSetupContent
                     }
                 }
+            }
+
+            SettingsCard(title: "Advanced Connections", glassStyle: .detailControl) {
+                VStack(alignment: .leading, spacing: 12) {
+                    SettingsDescriptionText(
+                        markdown: "**Technical connections:** Sync, MQTT, Hue, realtime input, DMX, and serial."
+                    )
+
+                    Button(action: { openAdvancedCategory("sync-interfaces") }) {
+                        SettingsButton(title: "Open Advanced Connections", icon: "slider.horizontal.3")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var alexaQuickSetupContent: some View {
+        let theme = AppTheme.tokens(for: colorScheme)
+
+        if isLoadingAlexaSettings {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .scaleEffect(0.85)
+                    .tint(.white)
+                Text("Loading Alexa settings...")
+                    .font(AppTypography.style(.subheadline))
+                    .foregroundStyle(theme.settingsText(.secondary))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if !alexaIntegrationSupported {
+            Text("Alexa control is not included in this WLED firmware build.")
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .foregroundStyle(theme.status.warning)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Toggle("Enable Alexa control", isOn: $alexaEnabled)
+                .settingsToggleStyle()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name Alexa will discover")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundStyle(theme.settingsText(.secondary))
+
+                TextField(activeDevice.name, text: $alexaInvocationName)
+                    .settingsTextFieldChrome(theme: theme)
+                    .textInputAutocapitalization(.words)
+                    .disableAutocorrection(true)
+
+                Text("Use a short, distinct name such as Bedroom Lamp.")
+                    .font(AppTypography.style(.caption2))
+                    .foregroundStyle(theme.settingsText(.secondary))
+            }
+
+            Button(action: saveAlexaIntegrationSettings) {
+                SettingsButton(
+                    title: isSavingAlexaSettings ? "Saving Alexa Setup..." : "Save Alexa Setup",
+                    icon: "checkmark.circle"
+                )
+            }
+            .disabled(
+                isSavingAlexaSettings
+                    || alexaInvocationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+        }
+
+        if let alexaSettingsMessage {
+            Text(alexaSettingsMessage)
+                .font(AppTypography.style(.caption, weight: .medium))
+                .foregroundStyle(alexaSettingsMessageIsError ? theme.status.warning : theme.settingsText(.secondary))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if showAlexaDiscoveryInstructions {
+            AlexaDiscoveryInstructionsView(deviceName: alexaInvocationName)
+        }
+    }
+
+    private var homeAssistantQuickSetupContent: some View {
+        let theme = AppTheme.tokens(for: colorScheme)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            SettingsDescriptionText(
+                markdown: "**Add the WLED integration:** Keep the main light visible, then mark each completed step."
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Home Assistant address")
+                    .font(AppTypography.style(.caption, weight: .semibold))
+                    .foregroundStyle(theme.settingsText(.secondary))
+                TextField("http://homeassistant.local:8123", text: homeAssistantTextBinding(\.homeAssistantURL))
+                    .settingsTextFieldChrome(theme: theme)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    .disableAutocorrection(true)
+            }
+
+            Button(action: openHomeAssistantIntegrations) {
+                SettingsButton(title: "Open Home Assistant Integrations", icon: "arrow.up.forward.app")
+            }
+
+            HomeAssistantChecklistRow(
+                title: "WLED device added",
+                detail: "In Home Assistant, add the WLED integration and select this device.",
+                isComplete: homeAssistantChecklistBinding(\.isWLEDAdded)
+            )
+            HomeAssistantChecklistRow(
+                title: "Main light kept",
+                detail: "Keep the main light entity for power and whole-device brightness.",
+                isComplete: homeAssistantChecklistBinding(\.isMainLightKept)
+            )
+            HomeAssistantChecklistRow(
+                title: "Extra segment entities hidden",
+                detail: "Hide segment entities unless you intentionally need separate segment control.",
+                isComplete: homeAssistantChecklistBinding(\.areSegmentsDisabled)
+            )
+
+            Button(action: { openExternalURL("https://www.home-assistant.io/integrations/wled/") }) {
+                SettingsButton(title: "Open WLED Integration Guide", icon: "book")
             }
         }
     }
@@ -1651,7 +2293,7 @@ struct ComprehensiveSettingsView: View {
 
                     Text("Receive")
                         .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.8))
+                        .settingsForegroundStyle(.secondary)
 
                     IntegrationToggleGrid(items: [
                         IntegrationToggleItem(title: "Brightness", binding: syncIntegrationBinding(\.receiveBrightness)),
@@ -1666,7 +2308,7 @@ struct ComprehensiveSettingsView: View {
 
                     Text("Send")
                         .font(AppTypography.style(.caption, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.8))
+                        .settingsForegroundStyle(.secondary)
 
                     IntegrationToggleGrid(items: [
                         IntegrationToggleItem(title: "On Start", binding: syncIntegrationBinding(\.sendOnStart)),
@@ -1756,11 +2398,11 @@ struct ComprehensiveSettingsView: View {
 
                     Text("MQTT credentials are sent to WLED over the local HTTP connection. Use a broker-specific password.")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.orange.opacity(0.9))
+                        .settingsForegroundStyle(.primary)
 
                     Text("MQTT is only available on firmware builds compiled with MQTT support.")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.68))
+                        .settingsForegroundStyle(.secondary)
                 }
                 .padding(.top, 8)
             } label: {
@@ -1782,10 +2424,10 @@ struct ComprehensiveSettingsView: View {
                     ])
                     Text("Press the Hue bridge link button before saving when pairing for the first time.")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.68))
+                        .settingsForegroundStyle(.secondary)
                     Text("Hue sync is only available on firmware builds compiled with Hue support.")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.68))
+                        .settingsForegroundStyle(.secondary)
                 }
                 .padding(.top, 8)
             } label: {
@@ -1845,7 +2487,7 @@ struct ComprehensiveSettingsView: View {
                         .tint(.white)
                     Text("Loading LED preferences...")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.72))
+                        .settingsForegroundStyle(.secondary)
                 }
             } else if let ledConfiguration {
                 InfoRow(label: "LED type", value: ledStripTypeName(ledConfiguration.stripType))
@@ -1858,14 +2500,14 @@ struct ComprehensiveSettingsView: View {
             } else {
                 Text(ledConfigurationMessage ?? "LED summary is unavailable. Use guided product setup or WLED's full LED preferences to review hardware details.")
                     .font(AppTypography.style(.caption))
-                    .foregroundColor(.white.opacity(0.72))
+                    .settingsForegroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if let ledConfigurationMessage, ledConfiguration != nil {
                 Text(ledConfigurationMessage)
                     .font(AppTypography.style(.caption))
-                    .foregroundColor(.orange.opacity(0.9))
+                    .settingsForegroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -1880,136 +2522,45 @@ struct ComprehensiveSettingsView: View {
     }
 
     private var advancedSection: some View {
-        VStack(spacing: 12) {
-            SettingsAreaCard(
-                title: "LED Preferences",
-                subtitle: "Product profile, LED output, GPIO, current limits, color order, gamma, and CCT behavior.",
-                icon: "lightbulb",
-                status: ledHardwareStatus,
-                exposure: .guided
-            ) {
-                ledHardwareSummary
-                Button(action: { showProductSetup = true }) {
-                    SettingsButton(
-                        title: activeDevice.setupState == .pendingSelection ? "Complete Product Setup" : "Change Product Setup",
-                        icon: "sparkles"
-                    )
+        WLEDAdvancedSettingsView(
+            device: activeDevice,
+            contentBottomPadding: contentBottomPadding,
+            initialCategoryID: advancedInitialCategoryID,
+            openWLEDPath: openWLEDPath,
+            openTimeSchedules: {
+                advancedInitialCategoryID = nil
+                isAdvancedCategoryDetailActive = false
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    selectedSettingsCategory = .timeSchedules
                 }
-                if activeDevice.productType != .generic {
-                    Button(action: {
-                        Task {
-                            _ = await viewModel.reapplyCurrentProfile(activeDevice)
-                        }
-                    }) {
-                        SettingsButton(title: "Reapply Recommended Setup", icon: "arrow.triangle.2.circlepath")
-                    }
-                }
-                if activeDevice.backupSnapshotId != nil {
-                    Button(action: {
-                        Task {
-                            _ = await viewModel.revertLastProfileInstall(activeDevice)
-                        }
-                    }) {
-                        SettingsButton(title: "Revert Last Install", icon: "arrow.uturn.backward")
-                    }
-                }
-                Button(action: { openWLEDPath("/settings/leds") }) {
-                    SettingsButton(title: "Open Full LED Preferences", icon: "lightbulb")
-                }
-                Button(action: { openWLEDPath("/settings/2D") }) {
-                    SettingsButton(title: "Open 2D Matrix Layout", icon: "rectangle.grid.2x2")
-                }
-                if supportsCCTInSettings {
-                    Toggle("Use native CCT for temperature stops", isOn: $temperatureStopsUseCCT)
-                        .tint(.white)
-                        .foregroundColor(.white)
-                        .onChange(of: temperatureStopsUseCCT) { _, value in
-                            viewModel.setTemperatureStopsUseCCT(value, for: device)
-                        }
-                    Text("Enabled sends temperature values directly to WLED when supported. Disabled maps temperature to RGB.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
-                }
+            },
+            onHeaderStatusChange: { status in
+                onSettingsHeaderStatusChange?(status)
+            },
+            onCategoryDetailActiveChange: { isActive in
+                isAdvancedCategoryDetailActive = isActive
+            },
+            onHeaderChromeChange: { chrome in
+                onSettingsHeaderChromeChange?(chrome)
+            },
+            onHeaderActionsChange: { actions in
+                onSettingsHeaderActionsChange?(actions)
+            },
+            onFactoryResetComplete: {
+                showFactoryResetRecoveryActions = true
             }
+        )
+    }
 
-            SettingsAreaCard(
-                title: "LED Layout & Segments",
-                subtitle: "Advanced segment density and manual overrides for installers or recovery.",
-                icon: "square.split.2x2",
-                status: "\(max(1, viewModel.getSegmentCount(for: activeDevice))) segment(s)",
-                exposure: .advancedNative
-            ) {
-                segmentsSection
-            }
-
-            SettingsAreaCard(
-                title: "WLED Built-In Schedules",
-                subtitle: "Native WLED timers, timed light, and clock setup. App automations stay in the detailed device view.",
-                icon: "clock",
-                status: scheduleStatusSummary,
-                exposure: .advancedNative
-            ) {
-                wledBuiltInSchedulesSection
-            }
-
-            SettingsAreaCard(
-                title: "Sync & Realtime",
-                subtitle: "Advanced native WLED protocols for external controllers and lighting networks.",
-                icon: "network",
-                status: protocolStatusSummary,
-                exposure: .advancedNative
-            ) {
-                Button(action: { openWLEDPath("/settings/sync") }) {
-                    SettingsButton(title: "Open Full Sync Settings", icon: "arrow.triangle.2.circlepath")
-                }
-                Button(action: { openWLEDPath("/settings/dmx") }) {
-                    SettingsButton(title: "Open DMX Output Setup", icon: "cable.connector")
-                }
-                Button(action: { openWLEDPath("/settings/um") }) {
-                    SettingsButton(title: "Open Extension Protocol Modules", icon: "puzzlepiece")
-                }
-            }
-
-            SettingsAreaCard(
-                title: "Diagnostics",
-                subtitle: "Connection tools for troubleshooting stale state, cache, and realtime updates.",
-                icon: "stethoscope",
-                status: viewModel.isDeviceOnline(activeDevice) || activeDevice.isOnline ? "Online" : "Offline",
-                exposure: .native
-            ) {
-                diagnosticsSection
-            }
-
-            SettingsAreaCard(
-                title: "Maintenance & Safety",
-                subtitle: "Security, backup, manual firmware upload, and reset actions. Review carefully before changing.",
-                icon: "exclamationmark.triangle",
-                status: "Review first",
-                exposure: .webFallback,
-                riskLevel: .warning
-            ) {
-                maintenanceSection
-            }
-
-            SettingsAreaCard(
-                title: "WLED Web Settings",
-                subtitle: "Complete WLED web settings are kept here for expert support and firmware parity.",
-                icon: "globe",
-                status: "Full firmware UI",
-                exposure: .webFallback
-            ) {
-                wledWebSettingsSection
-            }
-
-            SettingsAreaCard(
-                title: "WLED Compatibility",
-                subtitle: "Internal coverage map for native, guided, advanced, and web-fallback settings.",
-                icon: "checklist",
-                status: "Coverage map",
-                exposure: .plannedNative
-            ) {
-                firmwareCoverageSection
-            }
+    private func removeFactoryResetDeviceFromApp() {
+        guard !isRemovingFactoryResetDevice else { return }
+        isRemovingFactoryResetDevice = true
+        Task { @MainActor in
+            await viewModel.removeDevice(activeDevice)
+            isRemovingFactoryResetDevice = false
+            onDeviceRemoved?()
         }
     }
 
@@ -2020,7 +2571,7 @@ struct ComprehensiveSettingsView: View {
             }
 
             Button(action: syncDeviceTimeFromPhone) {
-                SyncLampClockButton(isSyncing: isSyncingDeviceTime)
+                SyncLampClockButton(isSyncing: isSyncingDeviceTime, objectName: settingsObjectName)
             }
             .disabled(isSyncingDeviceTime)
 
@@ -2039,10 +2590,9 @@ struct ComprehensiveSettingsView: View {
 
     private var nativeWLEDTimersContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("This guided editor exposes 8 regular WLED preset schedules. Sunrise, sunset, and extra firmware rows are preserved and shown separately.")
-                .font(AppTypography.style(.caption))
-                .foregroundColor(.white.opacity(0.7))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsDescriptionText(
+                markdown: "**Eight basic schedules:** Sunrise, sunset, and extra firmware rows remain separate."
+            )
 
             if isLoadingTimers {
                 HStack(spacing: 8) {
@@ -2050,7 +2600,7 @@ struct ComprehensiveSettingsView: View {
                         .scaleEffect(0.8)
                     Text("Loading timers...")
                         .font(AppTypography.style(.subheadline))
-                        .foregroundColor(.white.opacity(0.75))
+                        .settingsForegroundStyle(.secondary)
                 }
             } else {
                 ForEach(Array(timerDrafts.enumerated()), id: \.element.id) { index, draft in
@@ -2060,6 +2610,7 @@ struct ComprehensiveSettingsView: View {
                             set: { timerDrafts[index] = $0 }
                         ),
                         isSaving: savingTimerSlotIds.contains(draft.id),
+                        feedback: timerFeedbackBySlotId[draft.id],
                         onSave: {
                             commitTimerDraft(slotId: draft.id)
                         }
@@ -2080,14 +2631,13 @@ struct ComprehensiveSettingsView: View {
 
     private var timedLightContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Native WLED timed-light behavior. Use app automations for normal wake and sleep routines.")
-                .font(AppTypography.style(.caption))
-                .foregroundColor(.white.opacity(0.7))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsDescriptionText(
+                markdown: "**Firmware timed light:** Use Aesdetic automations for normal wake and sleep routines."
+            )
 
             Toggle("Enabled", isOn: $nightLightOn)
                 .tint(.white)
-                .foregroundColor(.white)
+                .settingsForegroundStyle(.primary)
             IntStepperRow(title: "Duration (min)", value: $nightLightDurationMin, range: 1...255, onEnd: commitNightLight)
             IntStepperRow(title: "Mode", value: $nightLightMode, range: 0...3, onEnd: commitNightLight)
             IntStepperRow(title: "Target Brightness", value: $nightLightTargetBri, range: 0...255, onEnd: commitNightLight)
@@ -2103,7 +2653,7 @@ struct ComprehensiveSettingsView: View {
             HStack {
                 Text("Realtime connection")
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(.white)
+                    .settingsForegroundStyle(.primary)
                 Spacer()
                 Toggle("", isOn: Binding(get: { viewModel.isRealTimeEnabled }, set: { v in
                     if v { viewModel.enableRealTimeUpdates() } else { viewModel.disableRealTimeUpdates() }
@@ -2130,10 +2680,10 @@ struct ComprehensiveSettingsView: View {
 
     private var maintenanceSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Use backup before firmware uploads, reset, or raw WLED configuration changes.")
-                .font(AppTypography.style(.caption))
-                .foregroundColor(.orange.opacity(0.95))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsDescriptionText(
+                markdown: "**Back up first:** Firmware uploads, resets, and raw config changes can be destructive.",
+                tone: .warning
+            )
 
             Button(action: { openWLEDPath("/settings/sec") }) {
                 SettingsButton(title: "Security, PIN & OTA Locks", icon: "lock.shield")
@@ -2179,18 +2729,14 @@ struct ComprehensiveSettingsView: View {
             Button(action: { openWLEDPath("/settings/sec") }) {
                 SettingsButton(title: "WLED Security Settings", icon: "lock.shield")
             }
-            Button(action: { openWLEDPath("/settings/ui") }) {
-                SettingsButton(title: "WLED Web UI Settings", icon: "paintbrush")
-            }
         }
     }
 
     private var firmwareCoverageSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Customer-critical setup is native or guided. Expert WLED firmware pages stay available here without crowding the main settings flow.")
-                .font(AppTypography.style(.caption))
-                .foregroundColor(.white.opacity(0.7))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsDescriptionText(
+                markdown: "**Native where safe:** Firmware-specific tools remain available on their WLED pages."
+            )
 
             ForEach(WLEDFirmwareSettingsArea.overviewAreas) { area in
                 FirmwareCoverageRow(area: area)
@@ -2219,13 +2765,13 @@ struct ComprehensiveSettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Toggle("Use CCT for temperature stops", isOn: $temperatureStopsUseCCT)
                             .tint(.white)
-                            .foregroundColor(.white)
+                            .settingsForegroundStyle(.primary)
                             .onChange(of: temperatureStopsUseCCT) { _, value in
                                 viewModel.setTemperatureStopsUseCCT(value, for: device)
                             }
-                        Text("Enabled: temperature-only stops send CCT per segment. Disabled: temperature maps to RGB.")
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.7))
+                        SettingsDescriptionText(
+                            markdown: "**Enabled:** Sends CCT per segment. **Disabled:** Maps temperature to RGB."
+                        )
                     }
                 }
             }
@@ -2294,9 +2840,9 @@ struct ComprehensiveSettingsView: View {
                     InfoRow(label: "Current Active Segments", value: "\(currentActiveSegments)")
                     InfoRow(label: "Max Usable (LED Count Cap)", value: "\(maxUsableSegments)")
                     InfoRow(label: "Recommended Active", value: "\(recommendedSegmentCount)")
-                    Text("Recommended defaults to about 18 active segments when supported, reducing preset size while keeping gradients smooth.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                    SettingsDescriptionText(
+                        markdown: "**Recommended:** About 18 active segments balances smooth gradients and preset size."
+                    )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -2310,39 +2856,39 @@ struct ComprehensiveSettingsView: View {
                     ) {
                         HStack {
                             Text("Active Segments")
-                                .foregroundColor(.white)
+                                .settingsForegroundStyle(.primary)
                             Spacer()
                             Text("\(activeSegmentCountDraft)")
-                                .foregroundColor(.white.opacity(0.9))
+                                .settingsForegroundStyle(.primary)
                         }
                     }
                     .tint(.white)
 
-                    Text("This controls segment density used by app-managed gradients and effects for this device.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                    SettingsDescriptionText(
+                        markdown: "**Segment density:** Used by Aesdetic gradients and effects."
+                    )
 
                     Button(action: applyActiveSegmentCountSetting) {
                         HStack(spacing: 8) {
                             if isApplyingSegmentCount {
                                 ProgressView()
                                     .scaleEffect(0.8)
-                                    .tint(.black)
+                                    .tint(.white)
                             }
                             Text("Apply Segment Count")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.black)
+                                .settingsForegroundStyle(.primary)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        .background(Color.white)
+                        .background(Color.white.opacity(0.18))
                         .cornerRadius(10)
                     }
                     .disabled(isApplyingSegmentCount)
 
                     Toggle("Show segment controls in Colors tab (Advanced UI)", isOn: $showSegmentControlsInColorTabAdvanced)
                         .tint(.white)
-                        .foregroundColor(.white)
+                        .settingsForegroundStyle(.primary)
 
                     if let segmentSettingsMessage {
                         Text(segmentSettingsMessage)
@@ -2354,25 +2900,25 @@ struct ComprehensiveSettingsView: View {
 
             SettingsCard(title: "3) Segment Detail Edit (Temporary Override)") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Manual segment color edits are temporary overrides. Applying color/gradient from the Colors tab will replace them.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                    SettingsDescriptionText(
+                        markdown: "**Temporary overrides:** Applying a color or gradient replaces them."
+                    )
 
                     if editableSegments.isEmpty {
                         Text("No segments detected yet. Refresh device state and try again.")
                             .font(AppTypography.style(.footnote))
-                            .foregroundColor(.white.opacity(0.7))
+                            .settingsForegroundStyle(.secondary)
                     } else {
                         ForEach(editableSegments, id: \.id) { segment in
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Text("Segment \(segment.id + 1)")
                                         .font(AppTypography.style(.subheadline, weight: .semibold))
-                                        .foregroundColor(.white)
+                                        .settingsForegroundStyle(.primary)
                                     Spacer()
                                     Text("LED \(segment.start)-\(segment.stop)")
                                         .font(AppTypography.style(.caption))
-                                        .foregroundColor(.white.opacity(0.7))
+                                        .settingsForegroundStyle(.secondary)
                                 }
 
                                 HStack(spacing: 10) {
@@ -2400,15 +2946,15 @@ struct ComprehensiveSettingsView: View {
                                             if applyingSegmentColorIds.contains(segment.id) {
                                                 ProgressView()
                                                     .scaleEffect(0.7)
-                                                    .tint(.black)
+                                                    .tint(.white)
                                             }
                                             Text("Apply")
                                                 .font(AppTypography.style(.caption, weight: .semibold))
-                                                .foregroundColor(.black)
+                                                .settingsForegroundStyle(.primary)
                                         }
                                         .padding(.vertical, 6)
                                         .padding(.horizontal, 10)
-                                        .background(Color.white)
+                                        .background(Color.white.opacity(0.18))
                                         .cornerRadius(8)
                                     }
                                     .disabled(applyingSegmentColorIds.contains(segment.id))
@@ -2433,10 +2979,10 @@ struct ComprehensiveSettingsView: View {
                             )
                         )
                         .tint(.white)
-                        .foregroundColor(.white)
-                        Text("Manual layout preserves custom segment bounds. Auto layout is used by app-managed gradient rendering.")
-                            .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.7))
+                        .settingsForegroundStyle(.primary)
+                        SettingsDescriptionText(
+                            markdown: "**Manual:** Keeps custom bounds. **Auto:** Optimizes Aesdetic gradients."
+                        )
 
                         if viewModel.isManualSegmentationEnabled(for: device.id) {
                             SegmentBoundsRow(
@@ -2458,25 +3004,12 @@ struct ComprehensiveSettingsView: View {
             SettingsCard(title: "Advanced UI") {
                 Toggle("Enable Advanced UI", isOn: $advancedUIEnabled)
                     .tint(.white)
-                    .foregroundColor(.white)
+                    .settingsForegroundStyle(.primary)
                     .onChange(of: advancedUIEnabled) { _, newValue in
                         if !newValue {
                             viewModel.resetManualSegmentationForAllDevices()
                         }
                     }
-            }
-            SettingsCard(title: "User Interface") {
-                VStack(spacing: 12) {
-                    Button(action: { openWLEDPath("/settings/ui") }) {
-                        SettingsButton(title: "UI Preferences", icon: "paintbrush")
-                    }
-                    Button(action: { openWLEDPath("/settings/ui") }) {
-                        SettingsButton(title: "Theme Settings", icon: "paintpalette")
-                    }
-                    Button(action: { openWLEDPath("/settings/ui") }) {
-                        SettingsButton(title: "Display Options", icon: "display")
-                    }
-                }
             }
         }
     }
@@ -2532,23 +3065,23 @@ struct ComprehensiveSettingsView: View {
                             if isSyncingDeviceTime {
                                 ProgressView()
                                     .scaleEffect(0.8)
-                                    .tint(.black)
+                                    .tint(.white)
                             } else {
                                 Image(systemName: "iphone.gen3.radiowaves.left.and.right")
                                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                                    .foregroundColor(.black)
+                                    .settingsForegroundStyle(.primary)
                             }
 
                             Text("Sync Device Time/Timezone from Phone")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.black)
+                                .settingsForegroundStyle(.primary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.9)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(Color.white.opacity(0.18))
                         .cornerRadius(10)
                     }
                     .disabled(isSyncingDeviceTime)
@@ -2564,9 +3097,9 @@ struct ComprehensiveSettingsView: View {
 
             SettingsCard(title: "Native Timers") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Timer slots 1-8 are available here for basic preset scheduling. Sunrise and sunset remain managed by the app's automation flow and WLED solar slots.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                    SettingsDescriptionText(
+                        markdown: "**Slots 1-8:** Basic preset schedules. Sunrise and sunset stay in Aesdetic automations."
+                    )
 
                     if isLoadingTimers {
                         HStack(spacing: 8) {
@@ -2574,7 +3107,7 @@ struct ComprehensiveSettingsView: View {
                                 .scaleEffect(0.8)
                             Text("Loading timers...")
                                 .font(AppTypography.style(.subheadline))
-                                .foregroundColor(.white.opacity(0.75))
+                                .settingsForegroundStyle(.secondary)
                         }
                     } else {
                         ForEach(Array(timerDrafts.enumerated()), id: \.element.id) { index, draft in
@@ -2584,6 +3117,7 @@ struct ComprehensiveSettingsView: View {
                                     set: { timerDrafts[index] = $0 }
                                 ),
                                 isSaving: savingTimerSlotIds.contains(draft.id),
+                                feedback: timerFeedbackBySlotId[draft.id],
                                 onSave: {
                                     commitTimerDraft(slotId: draft.id)
                                 }
@@ -2596,10 +3130,10 @@ struct ComprehensiveSettingsView: View {
                     }) {
                         Text("Refresh Timers & Macros")
                             .font(AppTypography.style(.subheadline, weight: .semibold))
-                            .foregroundColor(.black)
+                            .settingsForegroundStyle(.primary)
                             .padding(.vertical, 10)
                             .padding(.horizontal, 14)
-                            .background(Color.white)
+                            .background(Color.white.opacity(0.18))
                             .cornerRadius(10)
                     }
                 }
@@ -2609,7 +3143,7 @@ struct ComprehensiveSettingsView: View {
                 VStack(spacing: 12) {
                     Toggle("Enabled", isOn: $nightLightOn)
                         .tint(.white)
-                        .foregroundColor(.white)
+                        .settingsForegroundStyle(.primary)
 
                     IntStepperRow(
                         title: "Duration (min)",
@@ -2634,19 +3168,19 @@ struct ComprehensiveSettingsView: View {
 
                     Button("Apply Night Light") { commitNightLight() }
                         .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(.black)
+                        .settingsForegroundStyle(.primary)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(Color.white.opacity(0.18))
                         .cornerRadius(10)
                 }
             }
 
             SettingsCard(title: "Macro Triggers") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("0 disables the trigger. These are native WLED hardware and Alexa hooks, not app automations.")
-                        .font(AppTypography.style(.caption))
-                        .foregroundColor(.white.opacity(0.7))
+                    SettingsDescriptionText(
+                        markdown: "**Use `0` to disable:** These are WLED hooks, not Aesdetic automations."
+                    )
 
                     IntStepperRow(title: "Button Press", value: $macroButtonPress, range: 0...250, onEnd: commitMacroBindings)
                     IntStepperRow(title: "Button Long Press", value: $macroButtonLongPress, range: 0...250, onEnd: commitMacroBindings)
@@ -2660,15 +3194,15 @@ struct ComprehensiveSettingsView: View {
                             if isSavingMacroBindings {
                                 ProgressView()
                                     .scaleEffect(0.8)
-                                    .tint(.black)
+                                    .tint(.white)
                             }
                             Text("Apply Macro Triggers")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.black)
+                                .settingsForegroundStyle(.primary)
                         }
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(Color.white.opacity(0.18))
                         .cornerRadius(10)
                     }
                     .disabled(isSavingMacroBindings)
@@ -2713,7 +3247,7 @@ struct ComprehensiveSettingsView: View {
                     HStack {
                         Text("Realtime Updates")
                             .font(AppTypography.style(.headline, weight: .semibold))
-                            .foregroundColor(.white)
+                            .settingsForegroundStyle(.primary)
                         Spacer()
                         Toggle("", isOn: Binding(get: { viewModel.isRealTimeEnabled }, set: { v in
                             if v { viewModel.enableRealTimeUpdates() } else { viewModel.disableRealTimeUpdates() }
@@ -2726,20 +3260,20 @@ struct ComprehensiveSettingsView: View {
                         Button(action: { Task { await viewModel.forceReconnection(device) } }) {
                             Text("Reconnect")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.black)
+                                .settingsForegroundStyle(.primary)
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 14)
-                                .background(Color.white)
+                                .background(Color.white.opacity(0.18))
                                 .cornerRadius(10)
                         }
 
                         Button(action: { Task { await WLEDAPIService.shared.clearCache() } }) {
                             Text("Clear Cache")
                                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                                .foregroundColor(.black)
+                                .settingsForegroundStyle(.primary)
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 14)
-                                .background(Color.white)
+                                .background(Color.white.opacity(0.18))
                                 .cornerRadius(10)
                         }
                     }
@@ -2776,7 +3310,7 @@ struct ComprehensiveSettingsView: View {
                 }
             }
 
-            var coordinate = await AutomationStore.shared.currentCoordinate()
+            var coordinate = await AutomationStore.shared.currentCoordinate(requestAuthorization: true)
             if coordinate == nil {
                 let existingReference = try? await WLEDAPIService.shared.fetchSolarReference(for: device)
                 coordinate = existingReference?.coordinate
@@ -2861,10 +3395,10 @@ struct ComprehensiveSettingsView: View {
     private func integrationDisclosureLabel(_ title: String, icon: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .foregroundColor(.white.opacity(0.75))
+                .settingsForegroundStyle(.secondary)
             Text(title)
                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(.white)
+                .settingsForegroundStyle(.primary)
             Spacer()
         }
     }
@@ -2872,6 +3406,7 @@ struct ComprehensiveSettingsView: View {
     private func commitTimerDraft(slotId: Int) {
         guard let draft = timerDrafts.first(where: { $0.id == slotId }) else { return }
         savingTimerSlotIds.insert(slotId)
+        timerFeedbackBySlotId.removeValue(forKey: slotId)
 
         Task {
             defer {
@@ -2893,7 +3428,17 @@ struct ComprehensiveSettingsView: View {
                 endDay: nil
             )
 
-            try? await WLEDAPIService.shared.updateTimer(update, on: device)
+            let outcome = await WLEDAPIService.shared.updateAndVerifyTimer(update, on: device)
+            await MainActor.run {
+                switch outcome {
+                case .committed:
+                    timerFeedbackBySlotId[slotId] = .verified
+                case .verificationNeeded:
+                    timerFeedbackBySlotId[slotId] = .verificationNeeded
+                case .notCommitted:
+                    timerFeedbackBySlotId[slotId] = .notSaved
+                }
+            }
             await loadTimersAndMacros()
         }
     }
@@ -2932,6 +3477,7 @@ struct ComprehensiveSettingsView: View {
         do {
             let settings = try await WLEDAPIService.shared.fetchAlexaIntegrationSettings(for: activeDevice)
             await MainActor.run {
+                hasLoadedAlexaIntegrationSettings = true
                 alexaIntegrationSupported = settings.isSupported
                 alexaEnabled = settings.isSupported && settings.isEnabled
                 alexaInvocationName = settings.invocationName
@@ -2941,7 +3487,8 @@ struct ComprehensiveSettingsView: View {
                     settings.isSupported ? (settings.isEnabled ? .enabled : .notSetUp) : .unsupported,
                     for: .alexa,
                     deviceId: activeDevice.id,
-                    message: settings.isSupported ? nil : "This WLED firmware build does not include Alexa support."
+                    message: settings.isSupported ? nil : "This WLED firmware build does not include Alexa support.",
+                    verificationSource: .reportedByDevice
                 )
                 if !settings.isSupported {
                     alexaSettingsMessage = "This WLED firmware build does not include Alexa support."
@@ -2991,6 +3538,7 @@ struct ComprehensiveSettingsView: View {
             )
             await MainActor.run {
                 if success {
+                    hasLoadedAlexaIntegrationSettings = true
                     alexaInvocationName = String(trimmedName.prefix(32))
                     alexaPresetCount = alexaEnabled ? alexaFavoritesCount : 0
                     isSavingAlexaSettings = false
@@ -3021,6 +3569,7 @@ struct ComprehensiveSettingsView: View {
             let settings = try await WLEDAPIService.shared.fetchNativeIntegrationSettings(for: activeDevice)
             await MainActor.run {
                 nativeIntegrationSettings = settings
+                hasLoadedNativeIntegrationSettings = true
                 isLoadingNativeIntegrations = false
             }
         } catch {
@@ -3034,6 +3583,12 @@ struct ComprehensiveSettingsView: View {
     }
 
     private func saveNativeIntegrationSettings() {
+        guard hasLoadedNativeIntegrationSettings else {
+            nativeIntegrationsMessage = "Load WLED integration settings before saving."
+            nativeIntegrationsMessageIsError = true
+            return
+        }
+
         isSavingNativeIntegrations = true
         nativeIntegrationsMessage = nil
         nativeIntegrationsMessageIsError = false
@@ -3081,8 +3636,6 @@ struct ComprehensiveSettingsView: View {
                     guard let timer = timerById[fallback.id] else { return fallback }
                     return NativeTimerDraft(timer: timer)
                 }
-                sunriseTimer = timerById[8]
-                sunsetTimer = timerById[9]
             }
 
             if let macros {
@@ -3257,77 +3810,95 @@ struct ComprehensiveSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             switch updateCheckStatus {
             case .idle:
-                Text("Check for updates on the stable channel.")
+                Text("Check whether your lamp has Aesdetic-recommended software.")
                     .font(AppTypography.style(.subheadline))
-                    .foregroundColor(.white.opacity(0.7))
+                    .settingsForegroundStyle(.secondary)
             case .checking:
                 HStack(spacing: 8) {
                     ProgressView()
                         .scaleEffect(0.8)
-                    Text("Checking for updates...")
+                    Text("Checking software...")
                         .font(AppTypography.style(.subheadline))
-                        .foregroundColor(.white.opacity(0.8))
+                        .settingsForegroundStyle(.secondary)
+                }
+            case .updating(let message):
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text(message)
+                        .font(AppTypography.style(.subheadline))
+                        .settingsForegroundStyle(.secondary)
                 }
             case .upToDate(let current, let latest):
-                Text("Your device is up to date.")
+                Text("Your lamp software is ready.")
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(.white)
-                Text("Version \(current) (latest \(latest))")
+                    .settingsForegroundStyle(.primary)
+                Text("Version \(current) (recommended \(latest))")
                     .font(AppTypography.style(.caption))
-                    .foregroundColor(.white.opacity(0.7))
+                    .settingsForegroundStyle(.secondary)
             case .updateAvailable(let current, let latest):
-                Text("Update available.")
+                Text("A recommended update is ready.")
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(.white)
-                Text("Current \(current) → Latest \(latest)")
+                    .settingsForegroundStyle(.primary)
+                Text("Current \(current) → Recommended \(latest)")
                     .font(AppTypography.style(.caption))
-                    .foregroundColor(.white.opacity(0.7))
+                    .settingsForegroundStyle(.secondary)
             case .error(let message):
                 Text(message)
                     .font(AppTypography.style(.subheadline))
-                    .foregroundColor(.white.opacity(0.75))
+                    .settingsForegroundStyle(.secondary)
             }
 
             if let lastUpdateCheck {
                 Text("Last checked \(lastUpdateCheck.formatted(date: .abbreviated, time: .shortened))")
                     .font(AppTypography.style(.caption2))
-                    .foregroundColor(.white.opacity(0.5))
+                    .settingsForegroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func checkForStableUpdate() async {
-        guard let currentVersion = info?.ver, !currentVersion.isEmpty else {
-            await MainActor.run {
-                updateCheckStatus = .error("Current version unavailable.")
-            }
-            return
-        }
-
-        await MainActor.run {
-            updateCheckStatus = .checking
-        }
-
+        updateCheckStatus = .checking
         do {
-            let latest = try await WLEDUpdateService.shared.fetchLatestStableVersion()
-            let comparison = VersionComparator.compare(currentVersion, latest)
-            let hasBetaSuffix = currentVersion.contains("-b")
-
-            await MainActor.run {
-                latestStableVersion = latest
-                lastUpdateCheck = Date()
-                if comparison == .orderedAscending || (comparison == .orderedSame && hasBetaSuffix) {
-                    updateCheckStatus = .updateAvailable(current: currentVersion, latest: latest)
-                } else {
-                    updateCheckStatus = .upToDate(current: currentVersion, latest: latest)
-                }
+            let isAesdeticProduct = activeDevice.productType != .generic
+            let assessment = try await WLEDFirmwareUpdateService.shared.recommendedAssessment(
+                for: activeDevice,
+                isAesdeticProduct: isAesdeticProduct
+            )
+            lastUpdateCheck = Date()
+            switch assessment {
+            case .upToDate(let current, let target):
+                latestStableVersion = target
+                updateCheckStatus = .upToDate(current: current, latest: target)
+            case .available(let current, let target, _):
+                latestStableVersion = target
+                updateCheckStatus = .updateAvailable(current: current, latest: target)
+            case .manualUpdateRequired, .unavailable:
+                updateCheckStatus = .error("This lamp needs a manual software update.")
             }
         } catch {
-            await MainActor.run {
-                lastUpdateCheck = Date()
-                updateCheckStatus = .error("Could not check for updates.")
+            lastUpdateCheck = Date()
+            updateCheckStatus = .error("Could not check for software updates.")
+        }
+    }
+
+    private func installRecommendedSoftware() async {
+        updateCheckStatus = .updating(WLEDFirmwareUpdatePhase.preflight.customerMessage)
+        do {
+            let version = try await WLEDFirmwareUpdateService.shared.installRecommendedUpdate(for: activeDevice) { phase in
+                updateCheckStatus = .updating(phase.customerMessage)
             }
+            await viewModel.refreshDeviceState(activeDevice)
+            latestStableVersion = WLEDFirmwareUpdateService.approvedBaselineVersion
+            lastUpdateCheck = Date()
+            updateCheckStatus = .upToDate(
+                current: version,
+                latest: WLEDFirmwareUpdateService.approvedBaselineVersion
+            )
+        } catch {
+            lastUpdateCheck = Date()
+            updateCheckStatus = .error("We couldn’t complete the software update. Try again later or use Advanced update options.")
         }
     }
 
@@ -3340,6 +3911,45 @@ struct ComprehensiveSettingsView: View {
     private func openExternalURL(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
         openURL(url)
+    }
+
+    private func openHomeAssistantIntegrations() {
+        let savedAddress = homeAssistantSetupState.homeAssistantURL?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var address = savedAddress.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "http://homeassistant.local:8123"
+
+        if !address.contains("://") {
+            address = "http://\(address)"
+        }
+
+        guard var components = URLComponents(string: address) else {
+            openExternalURL("https://www.home-assistant.io/integrations/wled/")
+            return
+        }
+
+        if components.path.isEmpty || components.path == "/" {
+            components.path = "/config/integrations/dashboard"
+        }
+
+        guard let url = components.url else {
+            openExternalURL("https://www.home-assistant.io/integrations/wled/")
+            return
+        }
+        openURL(url)
+    }
+
+    private func openAdvancedWiFiNetworkSettings() {
+        openAdvancedCategory("wifi-network")
+    }
+
+    private func openAdvancedCategory(_ categoryID: String) {
+        advancedInitialCategoryID = categoryID
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            selectedSettingsCategory = .advanced
+        }
     }
 
     private func advancedNetworkBinding<Value>(_ keyPath: WritableKeyPath<WLEDNetworkConfiguration, Value>) -> Binding<Value> {
@@ -3360,6 +3970,7 @@ struct ComprehensiveSettingsView: View {
             let configuration = try await WLEDWiFiService.shared.getNetworkConfiguration(device: device)
             await MainActor.run {
                 advancedNetworkDraft = configuration
+                hasLoadedAdvancedNetworkConfiguration = true
                 isLoadingAdvancedNetwork = false
             }
         } catch {
@@ -3372,8 +3983,15 @@ struct ComprehensiveSettingsView: View {
     }
 
     private func saveAdvancedNetworkConfiguration() {
-        guard advancedNetworkDraft.isValid else {
-            advancedNetworkMessage = "Check network names, IP addresses, channel, password length, and transmit power."
+        guard hasLoadedAdvancedNetworkConfiguration else {
+            advancedNetworkMessage = "Load advanced network settings before saving."
+            advancedNetworkMessageIsError = true
+            return
+        }
+
+        let validationIssues = advancedNetworkDraft.validationIssues
+        guard validationIssues.isEmpty else {
+            advancedNetworkMessage = validationIssues.prefix(2).joined(separator: " ")
             advancedNetworkMessageIsError = true
             return
         }
@@ -3387,7 +4005,7 @@ struct ComprehensiveSettingsView: View {
                 try await WLEDWiFiService.shared.updateNetworkConfiguration(device: device, configuration: advancedNetworkDraft)
                 await MainActor.run {
                     isSavingAdvancedNetwork = false
-                    advancedNetworkMessage = "Advanced network settings saved. If the lamp address changed, use discovery or reopen the lamp from its new IP."
+                    advancedNetworkMessage = "Advanced network settings saved. If the \(settingsObjectNameLowercased) address changed, use discovery or reopen it from its new IP."
                     advancedNetworkMessageIsError = false
                 }
                 await refreshWiFiStatusAfterNetworkChange()
@@ -3404,53 +4022,123 @@ struct ComprehensiveSettingsView: View {
     // MARK: - WiFi Helper Functions
 
     private func loadCurrentWiFiInfo() async {
-        do {
-            let wifiInfo = try await WLEDWiFiService.shared.getCurrentWiFiInfo(device: device)
+        await loadSavedNetworkSnapshot()
+    }
+
+    private func loadSavedNetworkSnapshot(showLoading: Bool = true) async {
+        if showLoading {
             await MainActor.run {
-                if let previous = self.currentWiFiInfo,
-                   isUnknownWiFiValue(wifiInfo.ssid),
-                   !isUnknownWiFiValue(previous.ssid) {
-                    self.currentWiFiInfo = WiFiInfo(
-                        ssid: previous.ssid,
-                        signalStrength: wifiInfo.signalStrength,
-                        channel: wifiInfo.channel,
-                        security: isUnknownWiFiValue(wifiInfo.security) ? previous.security : wifiInfo.security,
-                        ipAddress: wifiInfo.ipAddress ?? previous.ipAddress,
-                        macAddress: wifiInfo.macAddress ?? previous.macAddress
-                    )
-                } else {
-                    self.currentWiFiInfo = wifiInfo
-                }
+                isLoadingWiFiInfo = true
+                isLoadingSavedNetworks = true
+            }
+        }
+        defer {
+            Task { @MainActor in
+                isLoadingWiFiInfo = false
+                isLoadingSavedNetworks = false
+            }
+        }
+
+        guard isWiFiDeviceReachable else { return }
+        do {
+            let snapshot = try await WLEDSavedNetworkService.shared.loadSnapshot(for: activeDevice)
+            await MainActor.run {
+                savedNetworkSnapshot = snapshot
+                currentWiFiInfo = WiFiInfo(
+                    ssid: snapshot.connectedSSID ?? "Unknown",
+                    signalStrength: snapshot.signalStrength ?? -100,
+                    channel: 0,
+                    security: "Unknown",
+                    ipAddress: activeDevice.ipAddress,
+                    macAddress: activeDevice.id,
+                    bssid: snapshot.connectedBSSID,
+                    firmwareVersion: snapshot.firmwareVersion
+                )
             }
         } catch {
-            #if DEBUG
-            print("Failed to load WiFi info: \(error)")
-            #endif
+            await MainActor.run {
+                savedNetworkMessage = "Could not load the device's saved networks."
+                savedNetworkMessageIsError = true
+            }
         }
     }
 
-    private func scanForNetworks() {
-        guard !isScanning else { return }
-        isScanning = true
-        showAllNetworks = true  // Show all networks when scanning
-        showConnectedMessage = true  // Reset success message for new connections
+    private func presentAddNetworkFlow() {
+        showManualNetworkEntry = false
+        addNetworkUsesManualEntry = false
+        isScanningAddNetworks = false
+        addNetworkScanError = nil
+        addNetworkSaveError = nil
+        addNetworkSelection = nil
+        showAllAddNetworkScanResults = false
+        replacementSlot = nil
+        manualNetworkDraft.clearSensitiveValues()
+        manualNetworkDraft = WLEDSavedNetworkDraft()
+        addNetworkScanRequestID = UUID()
+        showAddNetworkFlow = true
+    }
 
-        Task {
-            do {
-                let networks = try await WLEDWiFiService.shared.scanForNetworks(device: device)
-                await MainActor.run {
-                    self.availableNetworks = networks
-                    self.isScanning = false
+    private func resetAddNetworkFlow() {
+        addNetworkSelection = nil
+        showAllAddNetworkScanResults = false
+        addNetworkUsesManualEntry = false
+        isScanningAddNetworks = false
+        addNetworkScanError = nil
+        addNetworkSaveError = nil
+        replacementSlot = nil
+        manualNetworkDraft.clearSensitiveValues()
+        manualNetworkDraft = WLEDSavedNetworkDraft()
+    }
+
+    private func scanForAddNetwork() async {
+        await MainActor.run {
+            isScanningAddNetworks = true
+            addNetworkScanError = nil
+            showAllAddNetworkScanResults = false
+        }
+
+        do {
+            let networks = try await WLEDWiFiService.shared.scanForNetworks(device: activeDevice)
+            try Task.checkCancellation()
+            await MainActor.run {
+                if !networks.isEmpty {
+                    availableNetworks = networks
+                } else if availableNetworks.isEmpty {
+                    addNetworkScanError = "The network list is still loading. Tap refresh to try again."
+                } else {
+                    addNetworkScanError = "The latest search did not finish. Showing the previous results."
                 }
-            } catch {
-                await MainActor.run {
-                    self.isScanning = false
-                    #if DEBUG
-                    print("Failed to scan networks: \(error)")
-                    #endif
-                }
+                isScanningAddNetworks = false
+            }
+            await loadSavedNetworkSnapshot(showLoading: false)
+        } catch is CancellationError {
+            await MainActor.run {
+                isScanningAddNetworks = false
+            }
+        } catch {
+            await MainActor.run {
+                isScanningAddNetworks = false
+                addNetworkScanError = "The device could not search for nearby networks."
             }
         }
+    }
+
+    private func addNetworkStatus(for network: WiFiNetwork) -> String? {
+        if savedNetworkSnapshot?.connectedSSID?.caseInsensitiveCompare(network.ssid) == .orderedSame {
+            return "Connected"
+        }
+        if savedNetworkSnapshot?.networks.contains(where: {
+            $0.ssid.caseInsensitiveCompare(network.ssid) == .orderedSame
+        }) == true {
+            return "Saved"
+        }
+        return nil
+    }
+
+    private func isOpenNetwork(_ network: WiFiNetwork) -> Bool {
+        network.security
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("Open") == .orderedSame
     }
 
     private func isUnknownWiFiValue(_ value: String) -> Bool {
@@ -3458,88 +4146,208 @@ struct ComprehensiveSettingsView: View {
         return trimmed.isEmpty || trimmed.caseInsensitiveCompare("unknown") == .orderedSame
     }
 
-    private func selectNetwork(_ network: WiFiNetwork) {
-        selectedNetwork = network
-        password = ""
-        connectionStatus = .idle
+    private func beginEditingSavedNetwork(_ network: WLEDSavedNetwork) {
+        if showAddNetworkFlow {
+            showAddNetworkFlow = false
+            resetAddNetworkFlow()
+        }
+        manualNetworkDraft = WLEDSavedNetworkDraft(
+            ssid: network.ssid,
+            password: "",
+            isOpenNetwork: !network.hasPassword
+        )
+        replacementSlot = nil
+        showManualNetworkEntry = true
+    }
+
+    private func performSavedNetworkAction(_ action: SavedWiFiAction, draft: WLEDSavedNetworkDraft) {
+        guard draft.isValid, !isMutatingSavedNetworks else { return }
+        if requiresReplacement(for: draft.normalizedSSID), replacementSlot == nil {
+            savedNetworkMessage = "Choose a saved network to replace."
+            savedNetworkMessageIsError = true
+            return
+        }
+
+        switch action {
+        case .saveOnly:
+            saveAlternateNetwork(draft)
+        case .changeNow:
+            let network = WiFiNetwork(
+                ssid: draft.normalizedSSID,
+                signalStrength: -100,
+                security: draft.isOpenNetwork ? "Open" : "Secured",
+                channel: 0,
+                bssid: nil
+            )
+            changeCurrentNetwork(to: network, password: draft.isOpenNetwork ? nil : draft.password)
+        }
+    }
+
+    private func saveAlternateNetwork(_ draft: WLEDSavedNetworkDraft) {
+        isMutatingSavedNetworks = true
+        savedNetworkMessage = nil
+        savedNetworkMessageIsError = false
+        addNetworkSaveError = nil
+        let slotToReplace = replacementSlot
+
+        Task {
+            defer {
+                Task { @MainActor in
+                    isMutatingSavedNetworks = false
+                    manualNetworkDraft.clearSensitiveValues()
+                }
+            }
+            do {
+                let result = try await WLEDSavedNetworkService.shared.save(
+                    draft,
+                    for: activeDevice,
+                    replacingSlot: slotToReplace,
+                    restartAfterSave: false
+                )
+                if result == .requiresRediscovery {
+                    try await waitForSavedNetworkRediscovery()
+                }
+                await loadSavedNetworkSnapshot(showLoading: false)
+                await MainActor.run {
+                    savedNetworkMessage = "\(draft.normalizedSSID) is saved. It will be tested when the device can reach it."
+                    savedNetworkMessageIsError = false
+                    replacementSlot = nil
+                    showManualNetworkEntry = false
+                    showAddNetworkFlow = false
+                }
+            } catch {
+                await MainActor.run {
+                    if showAddNetworkFlow {
+                        addNetworkSaveError = error.localizedDescription
+                    } else {
+                        savedNetworkMessage = error.localizedDescription
+                        savedNetworkMessageIsError = true
+                    }
+                }
+            }
+        }
+    }
+
+    private func removeSavedNetwork(_ network: WLEDSavedNetwork) {
+        guard !isMutatingSavedNetworks else { return }
+        isMutatingSavedNetworks = true
+        savedNetworkMessage = nil
+
+        Task {
+            defer { Task { @MainActor in isMutatingSavedNetworks = false } }
+            do {
+                let result = try await WLEDSavedNetworkService.shared.remove(network, from: activeDevice)
+                if result == .requiresRediscovery {
+                    try await waitForSavedNetworkRediscovery()
+                }
+                await loadSavedNetworkSnapshot(showLoading: false)
+                await MainActor.run {
+                    savedNetworkMessage = "\(network.ssid) was removed."
+                    savedNetworkMessageIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    savedNetworkMessage = error.localizedDescription
+                    savedNetworkMessageIsError = true
+                }
+            }
+        }
+    }
+
+    private func waitForSavedNetworkRediscovery(timeout: TimeInterval = 35) async throws {
+        viewModel.startPassiveDiscovery()
+        viewModel.wledService.startDiscovery()
+        let expectedID = WLEDDeviceIdentity.canonicalID(for: activeDevice.id)
+        let deadline = Date().addingTimeInterval(timeout)
+
+        while !Task.isCancelled && Date() < deadline {
+            if let candidate = viewModel.devices.first(where: {
+                WLEDDeviceIdentity.canonicalID(for: $0.id) == expectedID && ($0.isOnline || viewModel.isDeviceOnline($0))
+            }), (try? await WLEDSavedNetworkService.shared.loadSnapshot(for: candidate)) != nil {
+                return
+            }
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        throw WiFiError.networkError("The device is still reconnecting. Keep it powered on and refresh in a moment.")
     }
 
     @MainActor
-    private func commitDeviceRenameFromHeader() async {
+    private func commitDeviceRename() async {
+        guard !isCommittingDeviceRename else { return }
+
         let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimmed.isEmpty else {
             editingName = activeDevice.name
-            isEditingName = false
             return
         }
 
         guard trimmed != activeDevice.name else {
             editingName = activeDevice.name
-            isEditingName = false
             return
         }
+
+        isCommittingDeviceRename = true
+        defer { isCommittingDeviceRename = false }
 
         await viewModel.renameDevice(activeDevice, to: trimmed)
 
         if viewModel.currentError == nil {
             editingName = trimmed
-            isEditingName = false
             showPostRenameWiFiPrompt = true
             return
         }
-
-        isEditingName = false
     }
 
-    private func connectToNetwork() {
-        guard let network = selectedNetwork else { return }
-
+    private func changeCurrentNetwork(to network: WiFiNetwork, password newPassword: String?) {
+        guard !isConnecting else { return }
         isConnecting = true
-        connectionStatus = .connecting
+        isMutatingSavedNetworks = true
+        savedNetworkMessage = nil
+        savedNetworkMessageIsError = false
+        addNetworkSaveError = nil
+        let slotToReplace = replacementSlot
 
         Task {
-            do {
-                try await WLEDWiFiService.shared.connectToNetwork(
-                    device: device,
-                    ssid: network.ssid,
-                    password: password.isEmpty ? nil : password
-                )
+            let outcome = await WLEDSafeWiFiChangeService.shared.changeNetwork(
+                device: activeDevice,
+                network: network,
+                password: newPassword,
+                viewModel: viewModel,
+                replacingSlot: slotToReplace
+            )
 
+            await MainActor.run {
+                isConnecting = false
+                isMutatingSavedNetworks = false
+                manualNetworkDraft.clearSensitiveValues()
+            }
+
+            guard case .verified = outcome else {
+                if outcome == .stayedOnPreviousNetwork || outcome == .returnedButCouldNotVerify {
+                    await loadSavedNetworkSnapshot(showLoading: false)
+                }
                 await MainActor.run {
-                    self.isConnecting = false
-                    self.connectionStatus = .connected
-                    self.showAllNetworks = false  // Collapse networks on successful connection
-                    self.showConnectedMessage = true  // Show success message
-
-                    // Clear password and selected network
-                    self.password = ""
-                    self.selectedNetwork = nil
-
-                    // Clear success message after 3 seconds
-                    Task {
-                        try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                        await MainActor.run {
-                            self.connectionStatus = .idle
-                        }
-                    }
-                    // Refresh WiFi info after WLED has had time to reconnect or change IP.
-                    Task {
-                        await self.refreshWiFiStatusAfterNetworkChange()
+                    let message = outcome.failureMessage ?? "The new Wi-Fi could not be verified."
+                    if showAddNetworkFlow {
+                        addNetworkSaveError = message
+                    } else {
+                        savedNetworkMessage = message
+                        savedNetworkMessageIsError = true
                     }
                 }
-            } catch {
-                await MainActor.run {
-                    self.isConnecting = false
-                    self.connectionStatus = .failed(error.localizedDescription)
-                    // Clear error message after 5 seconds
-                    Task {
-                        try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-                        await MainActor.run {
-                            self.connectionStatus = .idle
-                        }
-                    }
-                }
+                return
+            }
+
+            await loadSavedNetworkSnapshot(showLoading: false)
+            await MainActor.run {
+                showManualNetworkEntry = false
+                showAddNetworkFlow = false
+                addNetworkSelection = nil
+                addNetworkSaveError = nil
+                replacementSlot = nil
+                savedNetworkMessage = "Connected to \(network.ssid)."
+                savedNetworkMessageIsError = false
             }
         }
     }
@@ -3553,32 +4361,44 @@ struct ComprehensiveSettingsView: View {
 
         for delay in refreshDelays {
             try? await Task.sleep(nanoseconds: delay)
-            await loadCurrentWiFiInfo()
+            await loadSavedNetworkSnapshot(showLoading: false)
         }
     }
 }
 
 // MARK: - Supporting Views
 
+enum SettingsCardGlassStyle {
+    case standard
+    case clear
+    case detailControl
+    case miniDeviceCard
+}
+
 struct SettingsCard<Content: View>: View {
     let title: String
     let content: Content
     let headerContent: (() -> AnyView)?
+    let glassStyle: SettingsCardGlassStyle
     @Environment(\.colorScheme) private var colorScheme
 
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
-    private let cornerRadius: CGFloat = 16
+    private var cornerRadius: CGFloat {
+        glassStyle == .miniDeviceCard ? DeviceDetailPresentation.folderSourceCornerRadius : 16
+    }
 
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(title: String, glassStyle: SettingsCardGlassStyle = .detailControl, @ViewBuilder content: () -> Content) {
         self.title = title
         self.content = content()
         self.headerContent = nil
+        self.glassStyle = glassStyle
     }
 
-    init(title: String, @ViewBuilder content: () -> Content, @ViewBuilder headerContent: @escaping () -> AnyView) {
+    init(title: String, glassStyle: SettingsCardGlassStyle = .detailControl, @ViewBuilder content: () -> Content, @ViewBuilder headerContent: @escaping () -> AnyView) {
         self.title = title
         self.content = content()
         self.headerContent = headerContent
+        self.glassStyle = glassStyle
     }
 
     var body: some View {
@@ -3586,7 +4406,7 @@ struct SettingsCard<Content: View>: View {
             HStack {
                 Text(title)
                     .font(AppTypography.style(.headline, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(theme.settingsText(.primary))
                     .accessibilityAddTraits(.isHeader)
 
                 Spacer()
@@ -3599,21 +4419,20 @@ struct SettingsCard<Content: View>: View {
             content
         }
         .padding(16)
-        .background(
-            GlassCardBackground(
-                cornerRadius: cornerRadius,
-                fill: AppTheme.cardFill(for: colorScheme, isActive: true),
-                outerStroke: theme.cardStrokeOuter,
-                innerStroke: theme.cardStrokeInner,
-                keyShadow: theme.cardShadowKey,
-                ambientShadow: theme.cardShadowAmbient
-            )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .settingsCardGlassBackground(
+            style: glassStyle,
+            cornerRadius: cornerRadius,
+            colorScheme: colorScheme,
+            theme: theme
         )
         .overlay(
             LinearGradient(
                 colors: [
-                    Color.white.opacity(colorScheme == .dark ? 0.14 : 0.22),
-                    Color.white.opacity(0.02)
+                    Color.white.opacity(cardHighlightOpacity),
+                    Color.white.opacity(
+                        glassStyle == .detailControl || glassStyle == .miniDeviceCard ? 0 : 0.02
+                    )
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -3622,6 +4441,107 @@ struct SettingsCard<Content: View>: View {
             .allowsHitTesting(false)
         )
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    private var cardHighlightOpacity: Double {
+        switch glassStyle {
+        case .detailControl, .miniDeviceCard:
+            return 0
+        case .clear:
+            return colorScheme == .dark ? 0.06 : 0.08
+        case .standard:
+            return colorScheme == .dark ? 0.08 : 0.10
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func settingsCardGlassBackground(
+        style: SettingsCardGlassStyle,
+        cornerRadius: CGFloat,
+        colorScheme: ColorScheme,
+        theme: AppSemanticTheme
+    ) -> some View {
+        switch style {
+        case .standard:
+            background(
+                GlassCardBackground(
+                    cornerRadius: cornerRadius,
+                    fill: AppTheme.cardFill(for: colorScheme, isActive: true),
+                    outerStroke: theme.cardStrokeOuter,
+                    innerStroke: theme.cardStrokeInner,
+                    keyShadow: theme.cardShadowKey,
+                    ambientShadow: theme.cardShadowAmbient
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color.black.opacity(max(0, AppTheme.settingsGlassDarkTint(.card, for: colorScheme) - 0.03)))
+                )
+            )
+        case .clear:
+            background(Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(Color.white.opacity(colorScheme == .dark ? 0.16 : 0.20), lineWidth: 1)
+                )
+                .appLiquidGlass(
+                    role: .highContrast,
+                    cornerRadius: cornerRadius,
+                    highContrastDarkTintOpacity: AppTheme.settingsGlassDarkTint(.card, for: colorScheme)
+                )
+                .shadow(
+                    color: theme.controlShadowAmbient.color,
+                    radius: theme.controlShadowAmbient.radius,
+                    x: theme.controlShadowAmbient.x,
+                    y: theme.controlShadowAmbient.y
+                )
+                .shadow(
+                    color: theme.controlShadowKey.color,
+                    radius: theme.controlShadowKey.radius,
+                    x: theme.controlShadowKey.x,
+                    y: theme.controlShadowKey.y
+                )
+        case .detailControl:
+            settingsDetailControlBackground(cornerRadius: cornerRadius)
+        case .miniDeviceCard:
+            background(
+                FolderGlassContainerBackground(cornerRadius: cornerRadius)
+            )
+        }
+    }
+}
+
+struct SettingsDetailControlBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let cornerRadius: CGFloat
+
+    init(cornerRadius: CGFloat = 16) {
+        self.cornerRadius = cornerRadius
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        return shape
+            .fill(Color.white.opacity(0.12))
+            .overlay(
+                shape
+                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
+            )
+            .shadow(
+                color: Color.black.opacity(colorScheme == .dark ? 0.16 : 0.08),
+                radius: 7,
+                x: 0,
+                y: 4
+            )
+    }
+}
+
+extension View {
+    func settingsDetailControlBackground(cornerRadius: CGFloat = 16) -> some View {
+        background(SettingsDetailControlBackground(cornerRadius: cornerRadius))
     }
 }
 
@@ -3677,10 +4597,7 @@ private struct SettingsAreaCard<Content: View>: View {
     var body: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 12) {
-                Text(subtitle)
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(theme.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SettingsDescriptionText(markdown: subtitle)
 
                 content
             }
@@ -3695,7 +4612,7 @@ private struct SettingsAreaCard<Content: View>: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(title)
                         .font(AppTypography.style(.headline, weight: .semibold))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(theme.settingsText(.primary))
                         .accessibilityAddTraits(.isHeader)
 
                     HStack(spacing: 8) {
@@ -3707,7 +4624,7 @@ private struct SettingsAreaCard<Content: View>: View {
                 Spacer(minLength: 8)
             }
         }
-        .tint(theme.textPrimary)
+        .tint(theme.settingsText(.primary))
         .padding(16)
         .background(
             GlassCardBackground(
@@ -3755,49 +4672,14 @@ struct InfoRow: View {
         HStack {
             Text(label)
                 .font(AppTypography.style(.subheadline, weight: .medium))
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(theme.settingsText(.secondary))
             Spacer()
             Text(value)
                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(theme.settingsText(.primary))
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
         }
-    }
-}
-
-private struct SolarTimerStatusRow: View {
-    let title: String
-    let value: String
-    let icon: String
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(theme.textSecondary)
-                .frame(width: 22)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
-                Text(value)
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(theme.textSecondary)
-            }
-
-            Spacer()
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.08))
-        )
     }
 }
 
@@ -3834,13 +4716,13 @@ private struct WLEDFirmwareSettingsArea: Identifiable {
         WLEDFirmwareSettingsArea(
             id: "overview-wifi-firmware",
             title: "WiFi, IP address, update check",
-            location: "WiFi & Updates",
+            location: "Device > Status",
             exposure: .native
         ),
         WLEDFirmwareSettingsArea(
             id: "firmware-install",
             title: "Current firmware upload path",
-            location: "WiFi & Updates > WLED Updater",
+            location: "Device > Software Update",
             exposure: .webFallback
         ),
         WLEDFirmwareSettingsArea(
@@ -3922,7 +4804,7 @@ private struct FirmwareCoverageRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(area.title)
                     .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(theme.settingsText(.primary))
                     .fixedSize(horizontal: false, vertical: true)
                 Text(area.location)
                     .font(AppTypography.style(.caption2))
@@ -3933,7 +4815,7 @@ private struct FirmwareCoverageRow: View {
 
             Text(area.exposure.rawValue)
                 .font(AppTypography.style(.caption2, weight: .semibold))
-                .foregroundColor(area.exposure == .webFallback ? .white.opacity(0.82) : .black)
+                .foregroundColor(area.exposure == .webFallback ? .white.opacity(0.88) : .black)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
@@ -3946,15 +4828,30 @@ private struct FirmwareCoverageRow: View {
 }
 
 struct SettingsButton: View {
+    enum Style {
+        case fullGlass
+        case overviewRow
+    }
+
     let title: String
     let icon: String
+    var style: Style = .fullGlass
     @Environment(\.colorScheme) private var colorScheme
 
     private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
-    private var foreground: Color { theme.textPrimary }
+    private var foreground: Color { theme.settingsText(.primary) }
     private let cornerRadius: CGFloat = 12
 
     var body: some View {
+        switch style {
+        case .fullGlass:
+            fullGlassBody
+        case .overviewRow:
+            overviewRowBody
+        }
+    }
+
+    private var fullGlassBody: some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .foregroundColor(foreground.opacity(0.78))
@@ -3976,13 +4873,48 @@ struct SettingsButton: View {
         .padding(.horizontal, 16)
         .background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(theme.surfaceMuted)
+                .fill(Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(theme.divider, lineWidth: 1)
         )
-        .appLiquidGlass(role: .control, cornerRadius: cornerRadius)
+        .appLiquidGlass(
+            role: .highContrast,
+            cornerRadius: cornerRadius,
+            highContrastDarkTintOpacity: AppTheme.settingsGlassDarkTint(.control, for: colorScheme)
+        )
+    }
+
+    private var overviewRowBody: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(AppTypography.style(.subheadline, weight: .semibold))
+                .foregroundColor(foreground.opacity(0.78))
+                .frame(width: 24, height: 24)
+
+            Text(title)
+                .foregroundColor(foreground)
+                .font(AppTypography.style(.subheadline, weight: .semibold))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "chevron.right")
+                .font(AppTypography.style(.caption, weight: .bold))
+                .foregroundColor(foreground.opacity(0.72))
+                .frame(width: 30, height: 30)
+                .background(
+                    Circle()
+                        .fill(Color.clear)
+                )
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(colorScheme == .dark ? 0.16 : 0.20), lineWidth: 1)
+                )
+                .appLiquidGlass(role: .control, cornerRadius: 15)
+        }
+        .padding(.vertical, 8)
+        .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -4019,12 +4951,28 @@ struct SettingsInlineButton: View {
 }
 
 struct SyncLampClockButton: View {
+    enum Style {
+        case fullGlass
+        case overviewRow
+    }
+
     let isSyncing: Bool
+    var objectName: String = "Lamp"
+    var style: Style = .fullGlass
     @Environment(\.colorScheme) private var colorScheme
 
     private var foreground: Color { AppTheme.controlForeground(for: colorScheme, isActive: true) }
 
     var body: some View {
+        switch style {
+        case .fullGlass:
+            fullGlassBody
+        case .overviewRow:
+            overviewRowBody
+        }
+    }
+
+    private var fullGlassBody: some View {
         HStack(spacing: 10) {
             if isSyncing {
                 ProgressView()
@@ -4036,7 +4984,7 @@ struct SyncLampClockButton: View {
                     .foregroundColor(foreground)
             }
 
-            Text("Sync Lamp Clock from Phone")
+            Text("Sync \(objectName) Clock from Phone")
                 .font(AppTypography.style(.subheadline, weight: .semibold))
                 .foregroundColor(foreground)
                 .lineLimit(1)
@@ -4054,6 +5002,45 @@ struct SyncLampClockButton: View {
                 .stroke(AppTheme.controlStroke(for: colorScheme, isActive: true), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var overviewRowBody: some View {
+        HStack(spacing: 12) {
+            if isSyncing {
+                ProgressView()
+                    .scaleEffect(0.78)
+                    .tint(foreground)
+                    .frame(width: 24, height: 24)
+            } else {
+                Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .foregroundColor(foreground.opacity(0.78))
+                    .frame(width: 24, height: 24)
+            }
+
+            Text("Sync \(objectName) Clock from Phone")
+                .font(AppTypography.style(.subheadline, weight: .semibold))
+                .foregroundColor(foreground)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "arrow.clockwise")
+                .font(AppTypography.style(.caption, weight: .bold))
+                .foregroundColor(foreground.opacity(0.72))
+                .frame(width: 30, height: 30)
+                .background(
+                    Circle()
+                        .fill(Color.clear)
+                )
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(colorScheme == .dark ? 0.16 : 0.20), lineWidth: 1)
+                )
+                .appLiquidGlass(role: .control, cornerRadius: 15)
+        }
+        .padding(.vertical, 8)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -4122,7 +5109,7 @@ struct AdvancedNetworkTextField: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(AppTypography.style(.caption, weight: .semibold))
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(theme.settingsText(.secondary))
 
             if isSecure {
                 SecureField(placeholder, text: $text)
@@ -4135,6 +5122,36 @@ struct AdvancedNetworkTextField: View {
                     .keyboardType(keyboardType)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+            }
+        }
+    }
+}
+
+struct AdvancedNetworkMDNSField: View {
+    @Binding var text: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: AppSemanticTheme { AppTheme.tokens(for: colorScheme) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("mDNS address (leave empty for no mDNS)")
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .foregroundColor(theme.settingsText(.secondary))
+
+            HStack(spacing: 6) {
+                Text("http://")
+                    .font(AppTypography.style(.subheadline, weight: .medium))
+                    .foregroundColor(theme.settingsText(.primary))
+
+                TextField("device-name", text: $text)
+                    .settingsTextFieldChrome(theme: theme)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                Text(".local")
+                    .font(AppTypography.style(.subheadline, weight: .medium))
+                    .foregroundColor(theme.settingsText(.primary))
             }
         }
     }
@@ -4167,10 +5184,10 @@ struct SettingsDisclosureSection<Content: View>: View {
     var body: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 12) {
-                Text(subtitle)
-                    .font(AppTypography.style(.caption))
-                    .foregroundColor(isWarning ? .orange.opacity(0.9) : theme.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SettingsDescriptionText(
+                    markdown: subtitle,
+                    tone: isWarning ? .warning : .secondary
+                )
 
                 content
             }
@@ -4179,16 +5196,16 @@ struct SettingsDisclosureSection<Content: View>: View {
             HStack(spacing: 10) {
                 Image(systemName: icon)
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(isWarning ? .orange : theme.textSecondary)
+                    .foregroundColor(isWarning ? .orange : theme.settingsText(.secondary))
                     .frame(width: 22)
                 Text(title)
                     .font(AppTypography.style(.headline, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(theme.settingsText(.primary))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
             }
         }
-        .tint(theme.textPrimary)
+        .tint(theme.settingsText(.primary))
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -4206,7 +5223,7 @@ extension View {
     func settingsTextFieldChrome(theme: AppSemanticTheme) -> some View {
         self
             .font(AppTypography.style(.subheadline))
-            .foregroundColor(theme.textPrimary)
+            .foregroundColor(theme.settingsText(.primary))
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(
@@ -4223,7 +5240,7 @@ extension View {
         self
             .tint(.white)
             .font(AppTypography.style(.subheadline, weight: .medium))
-            .foregroundColor(.white)
+            .settingsForegroundStyle(.primary)
     }
 }
 
@@ -4242,7 +5259,7 @@ fileprivate struct IntegrationTextFieldRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(AppTypography.style(.caption, weight: .semibold))
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(theme.settingsText(.secondary))
 
             if secure {
                 SecureField(placeholder, text: $text)
@@ -4283,7 +5300,7 @@ fileprivate struct IntegrationNumberFieldRow: View {
         HStack(spacing: 10) {
             Text(title)
                 .font(AppTypography.style(.subheadline, weight: .medium))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(theme.settingsText(.primary))
                 .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 8)
@@ -4323,14 +5340,14 @@ fileprivate struct IntegrationPickerRow<SelectionValue: Hashable, Options: View>
         HStack(spacing: 10) {
             Text(title)
                 .font(AppTypography.style(.subheadline, weight: .medium))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(theme.settingsText(.primary))
             Spacer(minLength: 8)
             Picker(title, selection: $selection) {
                 options()
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .tint(theme.textPrimary)
+            .tint(theme.settingsText(.primary))
         }
     }
 }
@@ -4370,14 +5387,14 @@ fileprivate struct IntegrationGroupMaskRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(AppTypography.style(.caption, weight: .semibold))
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(theme.settingsText(.secondary))
 
             HStack(spacing: 8) {
                 ForEach(0..<8, id: \.self) { index in
                     Button(action: { toggle(index) }) {
                         Text("\(index + 1)")
                             .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundColor(isEnabled(index) ? .black : theme.textPrimary)
+                            .foregroundColor(isEnabled(index) ? .black : theme.settingsText(.primary))
                             .frame(width: 30, height: 30)
                             .background(
                                 Circle()
@@ -4423,13 +5440,22 @@ fileprivate struct SmartHomeIntegrationStatusRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(status.state.displayName)
                     .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.white)
+                    .settingsForegroundStyle(.primary)
                 if let message = status.message, !message.isEmpty {
                     Text(message)
                         .font(AppTypography.style(.caption2))
-                        .foregroundColor(.white.opacity(0.66))
+                        .settingsForegroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                HStack(spacing: 5) {
+                    Text(status.resolvedVerificationSource.displayName)
+                    if status.resolvedVerificationSource != .notVerified {
+                        Text("·")
+                        Text(statusTimestampLabel)
+                    }
+                }
+                .font(AppTypography.style(.caption2, weight: .medium))
+                .settingsForegroundStyle(.secondary)
             }
 
             Spacer(minLength: 0)
@@ -4456,6 +5482,13 @@ fileprivate struct SmartHomeIntegrationStatusRow: View {
         case .unsupported: return "minus.circle.fill"
         case .notSetUp: return "circle"
         }
+    }
+
+    private var statusTimestampLabel: String {
+        if Calendar.current.isDateInToday(status.updatedAt) {
+            return "Checked \(status.updatedAt.formatted(date: .omitted, time: .shortened))"
+        }
+        return "Checked \(status.updatedAt.formatted(date: .abbreviated, time: .omitted))"
     }
 
     private var statusColor: Color {
@@ -4488,18 +5521,18 @@ fileprivate struct HomeAssistantChecklistRow: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(isComplete ? .green : theme.textSecondary)
+                    .foregroundColor(isComplete ? .green : theme.settingsText(.secondary))
                     .frame(width: 22, height: 22)
                     .padding(.top, 1)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
                         .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(theme.settingsText(.primary))
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text(detail)
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(theme.textSecondary)
+                        .foregroundColor(theme.settingsText(.secondary))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -4526,14 +5559,14 @@ fileprivate struct HomeAssistantInstructionRow: View {
         HStack(alignment: .top, spacing: 10) {
             Text("\(index)")
                 .font(AppTypography.style(.caption, weight: .bold))
-                .foregroundColor(.black)
+                .settingsForegroundStyle(.primary)
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.white))
+                .background(Circle().fill(Color.white.opacity(0.18)))
                 .padding(.top, 1)
 
             Text(text)
                 .font(AppTypography.style(.caption))
-                .foregroundColor(.white.opacity(0.72))
+                .settingsForegroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -4574,11 +5607,11 @@ struct AlexaDiscoveryInstructionsView: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(.green)
+                .settingsForegroundStyle(.primary)
                 .frame(width: 22, height: 22)
             Text(title)
                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(.white)
+                .settingsForegroundStyle(.primary)
             Spacer(minLength: 0)
         }
     }
@@ -4596,7 +5629,7 @@ fileprivate struct PowerToggleRow: View {
         HStack {
             Text("Power")
                 .font(AppTypography.style(.headline, weight: .semibold))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(theme.settingsText(.primary))
             Spacer()
             Toggle("", isOn: $isOn)
                 .labelsHidden()
@@ -4622,7 +5655,7 @@ fileprivate struct UDPTogglesRow: View {
         HStack {
             Toggle("Send (UDPN)", isOn: $udpSend)
                 .tint(theme.accent)
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(theme.settingsText(.primary))
                 .onChange(of: udpSend) { _, v in
                     guard !suppressUpdates else { return }
                     Task { await viewModel.setUDPSync(device, send: v, recv: nil) }
@@ -4630,7 +5663,7 @@ fileprivate struct UDPTogglesRow: View {
             Spacer()
             Toggle("Receive", isOn: $udpRecv)
                 .tint(theme.accent)
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(theme.settingsText(.primary))
                 .onChange(of: udpRecv) { _, v in
                     guard !suppressUpdates else { return }
                     Task { await viewModel.setUDPSync(device, send: nil, recv: v) }
@@ -4653,11 +5686,11 @@ fileprivate struct SliderRow: View {
             HStack {
                 Text(label)
                     .font(AppTypography.style(.subheadline, weight: .medium))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(theme.settingsText(.primary))
                 Spacer()
                 Text("\(Int(value))")
                     .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(theme.settingsText(.secondary))
             }
             Slider(
                 value: Binding<Double>(get: { value }, set: { value = $0 }),
@@ -4683,7 +5716,7 @@ fileprivate struct IntStepperRow: View {
         HStack {
             Text(title)
                 .font(AppTypography.style(.subheadline, weight: .medium))
-                .foregroundColor(theme.textPrimary)
+                .foregroundColor(theme.settingsText(.primary))
             Spacer()
             Stepper("\(value)", value: $value, in: range, step: 1, onEditingChanged: { editing in
                 if !editing { onEnd?() }
@@ -4745,9 +5778,31 @@ private struct NativeTimerDraft: Identifiable, Equatable {
     }
 }
 
+private enum TimerEditorFeedback: Equatable {
+    case verified
+    case verificationNeeded
+    case notSaved
+
+    var message: String {
+        switch self {
+        case .verified:
+            return "Saved and verified on the lamp."
+        case .verificationNeeded:
+            return "The write result is uncertain. Refresh after the lamp reconnects."
+        case .notSaved:
+            return "The lamp did not confirm this timer change."
+        }
+    }
+
+    var isSuccess: Bool {
+        self == .verified
+    }
+}
+
 private struct TimerSlotEditorCard: View {
     @Binding var draft: NativeTimerDraft
     let isSaving: Bool
+    let feedback: TimerEditorFeedback?
     let onSave: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -4759,11 +5814,11 @@ private struct TimerSlotEditorCard: View {
             HStack {
                 Text("Timer \(draft.id + 1)")
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(theme.settingsText(.primary))
                 Spacer()
                 Text(draft.timeLabel)
                     .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(theme.settingsText(.secondary))
                 Toggle("", isOn: $draft.enabled)
                     .labelsHidden()
                     .tint(theme.accent)
@@ -4778,7 +5833,7 @@ private struct TimerSlotEditorCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Days")
                     .font(AppTypography.style(.caption2, weight: .semibold))
-                    .foregroundColor(theme.textSecondary)
+                    .foregroundColor(theme.settingsText(.secondary))
                 HStack(spacing: 6) {
                     ForEach(0..<7, id: \.self) { dayIndex in
                         let labels = ["S", "M", "T", "W", "T", "F", "S"]
@@ -4790,7 +5845,7 @@ private struct TimerSlotEditorCard: View {
                                 .foregroundColor(
                                     draft.weekdays[dayIndex]
                                         ? AppTheme.controlForeground(for: colorScheme, isActive: true)
-                                        : theme.textSecondary
+                                        : theme.settingsText(.secondary)
                                 )
                                 .frame(width: 28, height: 28)
                                 .background(
@@ -4805,6 +5860,15 @@ private struct TimerSlotEditorCard: View {
                         .buttonStyle(.plain)
                     }
                 }
+            }
+
+            if let feedback {
+                Label(
+                    feedback.message,
+                    systemImage: feedback.isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(AppTypography.style(.caption2, weight: .semibold))
+                .foregroundColor(feedback.isSuccess ? .green : .orange)
             }
 
             HStack {
@@ -4862,20 +5926,20 @@ private struct IntStepperMini: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(AppTypography.style(.caption2, weight: .semibold))
-                .foregroundColor(theme.textSecondary)
+                .foregroundColor(theme.settingsText(.secondary))
             HStack(spacing: 8) {
                 Button {
                     value = max(range.lowerBound, value - 1)
                 } label: {
                     Image(systemName: "minus")
                         .font(AppTypography.style(.caption, weight: .bold))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(theme.settingsText(.primary))
                 }
                 .buttonStyle(.plain)
 
                 Text("\(value)")
                     .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(theme.textPrimary)
+                    .foregroundColor(theme.settingsText(.primary))
                     .frame(minWidth: 28)
 
                 Button {
@@ -4883,7 +5947,7 @@ private struct IntStepperMini: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(AppTypography.style(.caption, weight: .bold))
-                        .foregroundColor(theme.textPrimary)
+                        .foregroundColor(theme.settingsText(.primary))
                 }
                 .buttonStyle(.plain)
             }

@@ -273,7 +273,7 @@ struct AutomationColorEditor: View {
                         } else if showSaveSuccess {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(AppTypography.style(.caption))
-                                .foregroundColor(.green)
+                                .foregroundColor(.white)
                         } else {
                             Image(systemName: "plus.circle.fill")
                                 .font(AppTypography.style(.caption))
@@ -817,7 +817,9 @@ struct AutomationColorEditor: View {
             showSaveSuccess = false
         }
         
-        let presetName = "Color Preset \(Date().presetNameTimestamp())"
+        let presetName = await MainActor.run {
+            PresetDefaultNaming.colorName(existingNames: PresetsStore.shared.colorPresets.map(\.name))
+        }
         var preset = ColorPreset(
             name: presetName,
             gradientStops: gradient.stops,

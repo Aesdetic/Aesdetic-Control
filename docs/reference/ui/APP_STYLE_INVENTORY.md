@@ -326,11 +326,11 @@ This inventory captures visual styles that exist in the SwiftUI codebase today. 
 | Stroke/border | Badge has no explicit stroke in header count; logo uses glass role |
 | Shadow/lift | Logo from glass role |
 | Typography | Local `DashboardTypography`: greeting display 30 semibold, section title 21, body 14, meta 12, micro 11 |
-| Contrast notes | Dashboard forces white text palette in many places, including light mode. |
+| Contrast notes | Dashboard uses white glass text plus a dashboard-local readability scrim and soft ambient text-only legibility blur on photo/background areas. |
 | Interaction states | Static, except action buttons |
 | Reuse status | Experimental |
-| Unification notes | Dashboard typography should be reconciled with `AppTypography` before design-system promotion. |
-| Known concerns | White text over photo/background must be checked in light mode. |
+| Unification notes | Dashboard typography now routes through `AppTypography` roles. Keep text legibility separate from glass container lift. |
+| Known concerns | White text over custom photos still needs visual checks; prefer adaptive tint/readability layers before increasing text shadow. |
 
 ### Dashboard Overview Metrics
 
@@ -341,7 +341,7 @@ This inventory captures visual styles that exist in the SwiftUI codebase today. 
 | Shape and radius | Current dashboard code passes corner radius 20 |
 | Fill/material/background | Current dashboard code uses `.systemGlass(tint:nil, interactive:false)`. iOS 26 path uses `.glassEffect(.clear)`; fallback uses `LiquidGlassBackground(.clear)`. |
 | Stroke/border | Native or fallback clear glass stroke; optional inner shine controlled by `AppOverviewCard` |
-| Shadow/lift | Native/fallback glass |
+| Shadow/lift | Native/fallback glass only; do not add local dashboard text-shadow/drop-shadow modifiers to the card container |
 | Typography | Dashboard value font 26 semibold, label 11 semibold; default `AppOverviewCard` value 28 display semibold and label 12 semibold |
 | Contrast notes | Dashboard overrides values to white/secondary white; divider uses white 0.24 in dark and tertiary white in light |
 | Interaction states | Static, no loading state |
@@ -358,12 +358,12 @@ This inventory captures visual styles that exist in the SwiftUI codebase today. 
 | Shape and radius | Square card, aspect 1:1, continuous radius 20 |
 | Fill/material/background | iOS 26 `.glassEffect(.clear, in:.rect(cornerRadius:20))`; fallback `LiquidGlassBackground(cornerRadius:20, clarity:.clear)` |
 | Stroke/border | Native/fallback clear glass stroke |
-| Shadow/lift | Native/fallback clear glass |
-| Typography | Dashboard card title 17, body strong 14 medium, micro 11 |
-| Contrast notes | Light mode uses white 0.92/0.74; dark mode uses white 0.92/0.74. This intentionally does not use dark text. |
-| Interaction states | Offline/on affects product opacity; power button has on/off/loading/disabled; tap opens detail |
+| Shadow/lift | Native/fallback clear glass only; avoid extra local drop shadows on the card surface |
+| Typography | Top metadata row uses a 6pt status dot plus micro location text; device name uses card title and may wrap to two lines |
+| Contrast notes | Light mode uses white 0.92/0.74; dark mode uses white 0.92/0.74. Text inside the glass card does not use dashboard legibility shadows. |
+| Interaction states | Online is a filled white status dot; offline/setup is a hollow white dot. On/off affects product image prominence and vertical offset; power button has its own hit target; tap elsewhere opens detail. |
 | Reuse status | Approved |
-| Unification notes | Detailed recipe lives in [Mini device card glass reference](./MINI_DEVICE_CARD_GLASS_REFERENCE.md). |
+| Unification notes | Detailed recipe lives in [Mini device card glass reference](./MINI_DEVICE_CARD_GLASS_REFERENCE.md). Avoid capsule metadata pills in the compact dashboard card. |
 | Known concerns | Existing detailed doc may contain older AppCardBackground wording; current source uses native/clear glass path. |
 
 ### Enhanced Device Card
@@ -667,8 +667,8 @@ This inventory captures visual styles that exist in the SwiftUI codebase today. 
 
 | Field | Current code |
 | --- | --- |
-| Source | `SaveSceneDialog`, `SaveColorPresetDialog`, `SaveEffectPresetDialog`, `SaveTransitionPresetDialog`, `EditPresetNameDialog`, `PlaylistEditorSheet`, `EditPresetNamePopup` |
-| Appears | Save flows, edit preset name, playlist editing |
+| Source | `SaveSceneDialog`, `SaveColorPresetDialog`, `SaveEffectPresetDialog`, `SaveTransitionPresetDialog`, `PlaylistEditorSheet` |
+| Appears | Save flows, playlist editing |
 | Shape and radius | Form panels radius 10 to 12; popup radius 18; bottom bar full-width; primary/secondary buttons radius 12 |
 | Fill/material/background | Black modal backgrounds, white 0.06/0.10 panels and fields; popup white 0.12 with white 0.20 stroke; playlist editor uses system fields plus bottom `.ultraThinMaterial` |
 | Stroke/border | White 0.20 to 0.30 in popup/checkboxes; delete button red 0.15 fill; primary button blue |

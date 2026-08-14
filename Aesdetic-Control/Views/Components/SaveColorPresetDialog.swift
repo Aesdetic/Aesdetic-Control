@@ -171,7 +171,7 @@ struct SaveColorPresetDialog: View {
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {
-            presetName = "Color Preset \(Date().presetNameTimestamp())"
+            presetName = PresetDefaultNaming.colorName(existingNames: PresetsStore.shared.colorPresets.map(\.name))
             // Auto-focus text field after a brief delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isTextFieldFocused = true

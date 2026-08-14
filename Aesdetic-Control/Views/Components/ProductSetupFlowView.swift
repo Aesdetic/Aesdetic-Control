@@ -3,6 +3,11 @@ import SwiftUI
 import UIKit
 
 struct ProductSetupFlowView: View {
+    enum PresentationStyle {
+        case popup
+        case journey
+    }
+
     private enum SetupStep: Int, CaseIterable {
         case product = 0
         case ledPreferences = 1
@@ -178,8 +183,11 @@ struct ProductSetupFlowView: View {
     }
 
     let device: WLEDDevice
+    let provisionedSSID: String?
     let onClose: (() -> Void)?
+    let onComplete: ((ProductSetupCompletion) -> Void)?
     let allowsManualClose: Bool
+    let presentationStyle: PresentationStyle
     @EnvironmentObject var viewModel: DeviceControlViewModel
     @ObservedObject private var smartHomeStore = SmartHomeIntegrationStore.shared
     @Environment(\.dismiss) private var dismiss
@@ -191,7 +199,7 @@ struct ProductSetupFlowView: View {
 
     @State private var selectedProductId: String = ProductOption.skyLantern.id
     @State private var deviceName: String
-    @State private var hasConfirmedWiFi: Bool = false
+    @State private var hasConfirmedWiFi: Bool
 
     @State private var currentWiFiInfo: WiFiInfo?
     @State private var isLoadingWiFiInfo: Bool = false
@@ -202,6 +210,7 @@ struct ProductSetupFlowView: View {
     @State private var isConnectingWiFi: Bool = false
     @State private var wifiConnectionStatus: WiFiSetupView.ConnectionStatus = .idle
     @State private var wifiScanTask: Task<Void, Never>?
+    @State private var showFullNetworkList: Bool = false
     @State private var selectedRoomLocation: DeviceLocation = .bedroom
     @State private var customRoomName: String = ""
     @State private var setupAlexaEnabled: Bool = false
@@ -232,16 +241,27 @@ struct ProductSetupFlowView: View {
     @State private var localError: String?
     @State private var showLocationSettingsAlert: Bool = false
     @State private var showsAdvancedLEDRecommendation: Bool = false
+    @State private var softwarePreparationPhase: WLEDFirmwareUpdatePhase?
+    @State private var softwarePreparationError: String?
+    @State private var showSoftwarePreparationRecovery: Bool = false
+    @State private var pendingSoftwareRecoverySkipsAutomation: Bool = false
 
     init(
         device: WLEDDevice,
+        provisionedSSID: String? = nil,
         onClose: (() -> Void)? = nil,
-        allowsManualClose: Bool = true
+        onComplete: ((ProductSetupCompletion) -> Void)? = nil,
+        allowsManualClose: Bool = true,
+        presentationStyle: PresentationStyle = .popup
     ) {
         self.device = device
+        self.provisionedSSID = provisionedSSID
         self.onClose = onClose
+        self.onComplete = onComplete
         self.allowsManualClose = allowsManualClose
+        self.presentationStyle = presentationStyle
         _deviceName = State(initialValue: device.name)
+        _hasConfirmedWiFi = State(initialValue: provisionedSSID != nil)
         _wakeTime = State(initialValue: Self.defaultWakeTime())
     }
 
@@ -299,6 +319,24 @@ struct ProductSetupFlowView: View {
 
     private var currentStepOrdinal: Int {
         (activeSetupSteps.firstIndex(of: step) ?? 0) + 1
+    }
+
+    private var usesProvisionedWiFi: Bool {
+        provisionedSSID != nil
+    }
+
+    private var currentStepTitle: String {
+        if step == .nameAndWiFi, usesProvisionedWiFi {
+            return "Name & Location"
+        }
+        return step.title
+    }
+
+    private var currentStepSubtitle: String {
+        if step == .nameAndWiFi, usesProvisionedWiFi {
+            return "Name your device and choose where it belongs."
+        }
+        return step.subtitle
     }
 
     private var canGoNext: Bool {
@@ -391,7 +429,7 @@ struct ProductSetupFlowView: View {
                     footerSection
                 }
                 .padding(16)
-                .appLiquidGlass(role: .highContrast, cornerRadius: 28)
+                .modifier(ProductSetupSurfaceModifier(style: presentationStyle))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             .navigationTitle("Product Setup")
@@ -418,13 +456,30 @@ struct ProductSetupFlowView: View {
             } message: {
                 Text("Enable location to use sunrise-based wake automation, or switch to specific time.")
             }
+            .alert("Software Update Not Finished", isPresented: $showSoftwarePreparationRecovery) {
+                Button("Finish Setup Anyway") {
+                    Task {
+                        await applySetup(
+                            skipAutomationCreation: pendingSoftwareRecoverySkipsAutomation,
+                            skipSoftwarePreparation: true
+                        )
+                    }
+                }
+                Button("Learn More") {
+                    openManualSoftwareUpdate()
+                }
+                Button("Not Now", role: .cancel) {}
+            } message: {
+                Text("We couldn’t complete the software update. You can still finish setup and update later.\n\n\(softwarePreparationError ?? "")")
+            }
             .task {
                 initializeSelectionIfNeeded()
+                guard provisionedSSID == nil else { return }
                 await loadCurrentWiFiInfo()
                 scanForWiFiNetworks()
             }
             .onChange(of: step) { _, newStep in
-                guard newStep == .nameAndWiFi else { return }
+                guard newStep == .nameAndWiFi, provisionedSSID == nil else { return }
                 Task {
                     await loadCurrentWiFiInfo()
                     scanForWiFiNetworks()
@@ -454,10 +509,10 @@ struct ProductSetupFlowView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(step.title)
+                    Text(currentStepTitle)
                         .font(AppTypography.display(size: 22, weight: .semibold, relativeTo: .title3))
                         .foregroundColor(theme.textPrimary)
-                    Text(step.subtitle)
+                    Text(currentStepSubtitle)
                         .font(AppTypography.style(.subheadline))
                         .foregroundStyle(theme.textSecondary)
                 }
@@ -503,7 +558,7 @@ struct ProductSetupFlowView: View {
                 if let localError {
                     Text(localError)
                         .font(AppTypography.style(.caption))
-                        .foregroundStyle(theme.status.negative)
+                        .foregroundStyle(theme.textSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -549,7 +604,7 @@ struct ProductSetupFlowView: View {
 
                 Image(systemName: selectedProductId == option.id ? "checkmark.circle.fill" : "circle")
                     .font(AppTypography.style(.headline, weight: .semibold))
-                    .foregroundStyle(selectedProductId == option.id ? theme.status.positive : theme.textTertiary)
+                    .foregroundStyle(selectedProductId == option.id ? theme.textPrimary : theme.textTertiary)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -578,7 +633,7 @@ struct ProductSetupFlowView: View {
                 Spacer(minLength: 6)
                 Image(systemName: selectedProductId == ProductOption.custom.id ? "checkmark.circle.fill" : "circle")
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundStyle(selectedProductId == ProductOption.custom.id ? theme.status.positive : theme.textTertiary)
+                    .foregroundStyle(selectedProductId == ProductOption.custom.id ? theme.textPrimary : theme.textTertiary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -639,12 +694,12 @@ struct ProductSetupFlowView: View {
                                 Text("Open LED Settings")
                             }
                             .font(AppTypography.style(.subheadline, weight: .semibold))
-                            .foregroundColor(.black)
+                            .foregroundColor(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color.white)
+                                    .fill(Color.white.opacity(0.18))
                             )
                         }
                         .buttonStyle(.plain)
@@ -702,7 +757,7 @@ struct ProductSetupFlowView: View {
                     if let setupLocationValidationError {
                         Text(setupLocationValidationError)
                             .font(AppTypography.style(.caption))
-                            .foregroundStyle(theme.status.negative)
+                            .foregroundStyle(theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         Text("Location helps organize your devices in the app.")
@@ -713,8 +768,9 @@ struct ProductSetupFlowView: View {
                 }
             }
 
-            infoPanel(title: "Wi-Fi Confirmation") {
-                VStack(alignment: .leading, spacing: 10) {
+            if !usesProvisionedWiFi {
+                infoPanel(title: "Wi-Fi Confirmation") {
+                    VStack(alignment: .leading, spacing: 10) {
                     if isLoadingWiFiInfo {
                         HStack(spacing: 8) {
                             ProgressView().scaleEffect(0.8)
@@ -744,12 +800,12 @@ struct ProductSetupFlowView: View {
                                 Text("Scan Networks")
                             }
                             .font(AppTypography.style(.subheadline, weight: .semibold))
-                            .foregroundColor(.black)
+                            .foregroundColor(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color.white)
+                                    .fill(Color.white.opacity(0.18))
                             )
                         }
                         .buttonStyle(.plain)
@@ -764,14 +820,14 @@ struct ProductSetupFlowView: View {
 
                     if !availableNetworks.isEmpty {
                         VStack(spacing: 8) {
-                            ForEach(availableNetworks, id: \.ssid) { network in
+                            ForEach(self.visibleAvailableNetworks, id: \.id) { network in
                                 WiFiNetworkRow(
                                     network: network,
-                                    isSelected: selectedNetwork?.ssid == network.ssid,
+                                    isSelected: selectedNetwork?.id == network.id,
                                     onSelect: { selectWiFiNetwork(network) }
                                 )
 
-                                if selectedNetwork?.ssid == network.ssid {
+                                if selectedNetwork?.id == network.id {
                                     VStack(spacing: 10) {
                                         Divider()
                                             .background(Color.white.opacity(0.2))
@@ -801,17 +857,17 @@ struct ProductSetupFlowView: View {
                                                 if isConnectingWiFi {
                                                     ProgressView()
                                                         .scaleEffect(0.8)
-                                                        .tint(.black)
+                                                        .tint(.white)
                                                 }
                                                 Text(isConnectingWiFi ? "Connecting..." : "Connect to \(network.ssid)")
                                             }
                                             .font(AppTypography.style(.subheadline, weight: .semibold))
-                                            .foregroundColor(.black)
+                                            .foregroundColor(.white)
                                             .padding(.horizontal, 14)
                                             .padding(.vertical, 10)
                                             .background(
                                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                    .fill(Color.white)
+                                                    .fill(Color.white.opacity(0.18))
                                             )
                                         }
                                         .buttonStyle(.plain)
@@ -821,6 +877,23 @@ struct ProductSetupFlowView: View {
                                     }
                                     .padding(.top, 4)
                                 }
+                            }
+
+                            if availableNetworks.count > self.compactNetworkListLimit {
+                                Button {
+                                    showFullNetworkList.toggle()
+                                } label: {
+                                    Text(showFullNetworkList ? "Show Fewer Networks" : "Show All \(availableNetworks.count) Networks")
+                                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(Color.white.opacity(0.12))
+                                        )
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     } else if !isScanningWiFi {
@@ -838,10 +911,11 @@ struct ProductSetupFlowView: View {
                             Text("I confirm this device is on the correct Wi-Fi")
                                 .font(AppTypography.style(.subheadline, weight: .medium))
                         }
-                        .foregroundStyle(hasConfirmedWiFi ? theme.status.positive : theme.textSecondary)
+                        .foregroundStyle(hasConfirmedWiFi ? theme.textPrimary : theme.textSecondary)
                     }
                     .buttonStyle(.plain)
                 }
+            }
             }
         }
     }
@@ -857,7 +931,7 @@ struct ProductSetupFlowView: View {
                     if !setupAlexaIntegrationSupported {
                         Text("This WLED firmware build does not include Alexa support.")
                             .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundStyle(theme.status.negative)
+                            .foregroundStyle(theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
@@ -906,7 +980,7 @@ struct ProductSetupFlowView: View {
                     if let setupSmartHomeMessage {
                         Text(setupSmartHomeMessage)
                             .font(AppTypography.style(.caption))
-                            .foregroundStyle(setupSmartHomeMessageIsError ? theme.status.negative : theme.status.positive)
+                            .foregroundStyle(setupSmartHomeMessageIsError ? theme.textSecondary : theme.textPrimary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
@@ -955,7 +1029,7 @@ struct ProductSetupFlowView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "checkmark.circle.fill")
                 .font(AppTypography.style(.caption, weight: .semibold))
-                .foregroundStyle(theme.status.positive)
+                .foregroundStyle(theme.textSecondary)
                 .padding(.top, 1)
             Text(text)
                 .font(AppTypography.style(.caption))
@@ -1091,7 +1165,7 @@ struct ProductSetupFlowView: View {
                     if !wakeWeekdays.contains(true) {
                         Text("Select at least one day to continue.")
                             .font(AppTypography.style(.caption))
-                            .foregroundStyle(theme.status.negative)
+                            .foregroundStyle(theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -1207,8 +1281,8 @@ struct ProductSetupFlowView: View {
 
     private func wakeModeChip(title: String, mode: WakeTriggerMode) -> some View {
         let isActive = wakeTriggerMode == mode
-        let foregroundColor = isActive ? Color.black : Color.white.opacity(0.92)
-        let fillColor = isActive ? Color.white.opacity(0.94) : Color.white.opacity(0.08)
+        let foregroundColor = isActive ? AppTheme.text(.selectedControlPrimary, for: colorScheme) : AppTheme.text(.controlPrimary, for: colorScheme)
+        let fillColor = isActive ? Color.white.opacity(0.22) : Color.white.opacity(0.08)
         let borderColor = isActive ? Color.white.opacity(0.2) : Color.white.opacity(0.12)
         let shadowColor = isActive ? Color.black.opacity(0.12) : Color.clear
         return Button {
@@ -1283,7 +1357,7 @@ struct ProductSetupFlowView: View {
     private func weekdayButtonBackground(isSelected: Bool) -> some View {
         if isSelected {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white)
+                .fill(Color.white.opacity(0.18))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(
@@ -1361,6 +1435,7 @@ struct ProductSetupFlowView: View {
     }
 
     private var primaryButtonTitle: String {
+        if let softwarePreparationPhase { return softwarePreparationPhase.customerMessage }
         if isApplying { return "Applying…" }
         if isSavingSetupSmartHome { return "Saving…" }
         if step == .smartHome {
@@ -1428,6 +1503,10 @@ struct ProductSetupFlowView: View {
             return
         }
 
+        if step == .nameAndWiFi {
+            guard await saveDeviceNameIfNeeded() else { return }
+        }
+
         if step == finalStep {
             await applySetup(skipAutomationCreation: false)
             return
@@ -1453,7 +1532,7 @@ struct ProductSetupFlowView: View {
             selectedProductId = ProductOption.skyLantern.id
         }
 
-        hasConfirmedWiFi = false
+        hasConfirmedWiFi = provisionedSSID != nil
         setupAlexaEnabled = false
         setupAlexaName = setupSuggestedName(for: live)
         isSavingSetupSmartHome = false
@@ -1490,13 +1569,28 @@ struct ProductSetupFlowView: View {
 
     private func setupSuggestedName(for device: WLEDDevice) -> String {
         let trimmed = device.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchesProvisionedSSID = provisionedSSID.map {
+            trimmed.caseInsensitiveCompare($0.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+        } ?? false
         if device.setupState == .pendingSelection {
             return "Aesdetic Sunrise Lamp"
         }
-        if trimmed.isEmpty || trimmed.caseInsensitiveCompare("wled") == .orderedSame || trimmed.lowercased().hasPrefix("wled-") {
+        if trimmed.isEmpty || matchesProvisionedSSID || trimmed.caseInsensitiveCompare("wled") == .orderedSame || trimmed.lowercased().hasPrefix("wled-") {
             return "Aesdetic Sunrise Lamp"
         }
         return device.name
+    }
+
+    private func saveDeviceNameIfNeeded() async -> Bool {
+        let target = activeDevice
+        guard trimmedDeviceName != target.name else { return true }
+
+        await viewModel.renameDevice(target, to: trimmedDeviceName)
+        if let error = viewModel.currentError {
+            localError = error.message
+            return false
+        }
+        return true
     }
 
     private func loadCurrentWiFiInfo() async {
@@ -1513,7 +1607,9 @@ struct ProductSetupFlowView: View {
                     channel: fetched.channel,
                     security: isUnknownWiFiValue(fetched.security) ? previous.security : fetched.security,
                     ipAddress: fetched.ipAddress ?? previous.ipAddress,
-                    macAddress: fetched.macAddress ?? previous.macAddress
+                    macAddress: fetched.macAddress ?? previous.macAddress,
+                    bssid: fetched.bssid ?? previous.bssid,
+                    firmwareVersion: fetched.firmwareVersion ?? previous.firmwareVersion
                 )
             } else {
                 currentWiFiInfo = fetched
@@ -1536,10 +1632,20 @@ struct ProductSetupFlowView: View {
         await viewModel.updateDeviceLocation(device, location: location)
     }
 
+    private var compactNetworkListLimit: Int { 3 }
+
+    private var visibleAvailableNetworks: [WiFiNetwork] {
+        guard !showFullNetworkList, availableNetworks.count > compactNetworkListLimit else {
+            return availableNetworks
+        }
+        return Array(availableNetworks.prefix(compactNetworkListLimit))
+    }
+
     private func scanForWiFiNetworks() {
         wifiScanTask?.cancel()
         isScanningWiFi = true
         wifiConnectionStatus = .scanning
+        showFullNetworkList = false
         let targetDevice = activeDevice
 
         wifiScanTask = Task {
@@ -1591,11 +1697,15 @@ struct ProductSetupFlowView: View {
 
         Task {
             do {
-                try await WLEDWiFiService.shared.connectToNetwork(
+                let outcome = await WLEDSafeWiFiChangeService.shared.changeNetwork(
                     device: targetDevice,
-                    ssid: network.ssid,
-                    password: wifiPassword.isEmpty ? nil : wifiPassword
+                    network: network,
+                    password: wifiPassword.isEmpty ? nil : wifiPassword,
+                    viewModel: viewModel
                 )
+                guard case .verified = outcome else {
+                    throw WiFiError.networkError(outcome.failureMessage ?? "The new Wi-Fi could not be verified.")
+                }
 
                 await MainActor.run {
                     isConnectingWiFi = false
@@ -1655,7 +1765,8 @@ struct ProductSetupFlowView: View {
                 .unsupported,
                 for: .alexa,
                 deviceId: activeDevice.id,
-                message: setupSmartHomeMessage
+                message: setupSmartHomeMessage,
+                verificationSource: .reportedByDevice
             )
             return false
         }
@@ -1699,7 +1810,8 @@ struct ProductSetupFlowView: View {
                 SmartHomeIntegrationStore.shared.setStatus(
                     settings.isEnabled ? .enabled : .notSetUp,
                     for: .alexa,
-                    deviceId: activeDevice.id
+                    deviceId: activeDevice.id,
+                    verificationSource: .reportedByDevice
                 )
             } else {
                 setupAlexaEnabled = false
@@ -1710,7 +1822,8 @@ struct ProductSetupFlowView: View {
                     .unsupported,
                     for: .alexa,
                     deviceId: activeDevice.id,
-                    message: setupSmartHomeMessage
+                    message: setupSmartHomeMessage,
+                    verificationSource: .reportedByDevice
                 )
             }
         } catch {
@@ -1718,7 +1831,7 @@ struct ProductSetupFlowView: View {
         }
     }
 
-    private func applySetup(skipAutomationCreation: Bool) async {
+    private func applySetup(skipAutomationCreation: Bool, skipSoftwarePreparation: Bool = false) async {
         guard !trimmedDeviceName.isEmpty else {
             localError = SetupError.invalidDeviceName.localizedDescription
             return
@@ -1743,9 +1856,20 @@ struct ProductSetupFlowView: View {
 
             if isCustomProduct {
                 await viewModel.setDeviceSetupMode(setupTarget, generic: true)
-                closeFlow()
+                completeFlow(with: activeDevice)
                 return
             } else {
+                if !skipSoftwarePreparation {
+                    do {
+                        try await prepareSupportedSoftware(for: setupTarget)
+                        setupTarget = activeDevice
+                    } catch {
+                        softwarePreparationError = error.localizedDescription
+                        pendingSoftwareRecoverySkipsAutomation = skipAutomationCreation
+                        showSoftwarePreparationRecovery = true
+                        return
+                    }
+                }
                 try await applyRecommendedLEDPreferences(to: setupTarget)
                 setupTarget = activeDevice
                 try await applyRecommendedSegmentLayout(to: setupTarget)
@@ -1765,15 +1889,35 @@ struct ProductSetupFlowView: View {
                     variantId: selectedProduct.id
                 )
             }
-            closeFlow()
+            completeFlow(with: activeDevice)
         } catch {
             localError = error.localizedDescription
         }
     }
 
+    private func prepareSupportedSoftware(for device: WLEDDevice) async throws {
+        guard WLEDFirmwareUpdateService.nativeInstallationEnabled else { return }
+        softwarePreparationPhase = .preflight
+        defer { softwarePreparationPhase = nil }
+        _ = try await WLEDFirmwareUpdateService.shared.installRecommendedUpdate(for: device) { phase in
+            softwarePreparationPhase = phase
+        }
+        // The updater has confirmed the new version. Refresh the device record
+        // before applying the Aesdetic profile to its restarted firmware.
+        await viewModel.refreshDeviceState(device)
+    }
+
     private func openCustomLEDSettingsInWebUI() {
         guard let url = URL(string: "http://\(activeDevice.ipAddress)/settings/leds") else {
             localError = "Unable to open LED settings URL."
+            return
+        }
+        openURL(url)
+    }
+
+    private func openManualSoftwareUpdate() {
+        guard let url = URL(string: "http://\(activeDevice.ipAddress)/update") else {
+            localError = "Unable to open the manual software update page."
             return
         }
         openURL(url)
@@ -1865,7 +2009,7 @@ struct ProductSetupFlowView: View {
         }
 
         if wakeTriggerMode == .sunrise {
-            let coordinate = await AutomationStore.shared.currentCoordinate()
+            let coordinate = await AutomationStore.shared.currentCoordinate(requestAuthorization: true)
             if coordinate == nil {
                 showLocationSettingsAlert = true
                 throw SetupError.locationRequired
@@ -2026,21 +2170,40 @@ struct ProductSetupFlowView: View {
         case .connected:
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(theme.status.positive)
+                    .foregroundStyle(theme.textSecondary)
                 Text("Connected. Wi-Fi confirmed.")
                     .font(AppTypography.style(.caption))
-                    .foregroundStyle(theme.status.positive)
+                    .foregroundStyle(theme.textSecondary)
             }
         case .failed(let message):
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(theme.status.negative)
+                    .foregroundStyle(theme.textSecondary)
                 Text(message)
                     .font(AppTypography.style(.caption))
-                    .foregroundStyle(theme.status.negative)
+                    .foregroundStyle(theme.textSecondary)
                     .lineLimit(2)
             }
         }
+    }
+
+    private func completeFlow(with completedDevice: WLEDDevice) {
+        wifiScanTask?.cancel()
+        viewModel.isMandatorySetupFlowActive = false
+        if let onComplete {
+            onComplete(
+                ProductSetupCompletion(
+                    canonicalDeviceID: WLEDDeviceIdentity.canonicalID(for: completedDevice.id),
+                    device: completedDevice,
+                    productImageName: selectedProduct.imageName,
+                    deviceName: completedDevice.name,
+                    roomName: completedDevice.location.displayName,
+                    initialColorHex: transitionStartGradient.stops.first?.hexColor ?? "#FF6B4A"
+                )
+            )
+            return
+        }
+        closeFlow()
     }
 
     private func closeFlow() {
@@ -2120,5 +2283,19 @@ struct ProductSetupFlowView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.25), lineWidth: 1)
         )
+    }
+}
+
+private struct ProductSetupSurfaceModifier: ViewModifier {
+    let style: ProductSetupFlowView.PresentationStyle
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch style {
+        case .popup:
+            content.appLiquidGlass(role: .highContrast, cornerRadius: 28)
+        case .journey:
+            content
+        }
     }
 }

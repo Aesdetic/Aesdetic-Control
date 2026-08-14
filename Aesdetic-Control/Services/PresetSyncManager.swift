@@ -64,14 +64,28 @@ actor PresetSyncManager {
                 _ = try await self.apiService.saveColorPreset(preset, to: device, presetId: presetId)
             }
             try await self.verifyPresetExists(id: presetId, device: device)
+            await MainActor.run {
+                DeviceCleanupManager.shared.removeIds(type: .presetStore, deviceId: device.id, ids: [presetId])
+            }
             if let existingId, existingId != presetId, !alexaReservedPresetRange.contains(existingId) {
-                await DeviceCleanupManager.shared.requestDelete(
-                    type: .preset,
-                    device: device,
-                    ids: [existingId],
-                    source: .presetRenameSync,
-                    verificationRequired: true
+                let cleanupTargets = try? await self.apiService.capturePresetStoreCleanupTargets(
+                    playlistIds: [],
+                    presetIds: [existingId],
+                    device: device
                 )
+                await MainActor.run {
+                    DeviceCleanupManager.shared.enqueuePresetStoreDelete(
+                        deviceId: device.id,
+                        playlistIds: [],
+                        presetIds: [existingId],
+                        source: .presetRenameSync,
+                        verificationRequired: true,
+                        targets: cleanupTargets
+                    )
+                }
+                if device.isOnline {
+                    await DeviceCleanupManager.shared.processQueue(for: device.id)
+                }
             }
             return presetId
         }
@@ -90,14 +104,28 @@ actor PresetSyncManager {
                 _ = try await self.apiService.saveEffectPreset(preset, to: device, presetId: presetId)
             }
             try await self.verifyPresetExists(id: presetId, device: device)
+            await MainActor.run {
+                DeviceCleanupManager.shared.removeIds(type: .presetStore, deviceId: device.id, ids: [presetId])
+            }
             if let existingId, existingId != presetId, !alexaReservedPresetRange.contains(existingId) {
-                await DeviceCleanupManager.shared.requestDelete(
-                    type: .preset,
-                    device: device,
-                    ids: [existingId],
-                    source: .presetRenameSync,
-                    verificationRequired: true
+                let cleanupTargets = try? await self.apiService.capturePresetStoreCleanupTargets(
+                    playlistIds: [],
+                    presetIds: [existingId],
+                    device: device
                 )
+                await MainActor.run {
+                    DeviceCleanupManager.shared.enqueuePresetStoreDelete(
+                        deviceId: device.id,
+                        playlistIds: [],
+                        presetIds: [existingId],
+                        source: .presetRenameSync,
+                        verificationRequired: true,
+                        targets: cleanupTargets
+                    )
+                }
+                if device.isOnline {
+                    await DeviceCleanupManager.shared.processQueue(for: device.id)
+                }
             }
             return presetId
         }

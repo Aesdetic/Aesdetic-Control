@@ -11,7 +11,7 @@ struct ScenesListView: View {
                 HStack {
                     VStack(alignment: .leading) {
                         Text(scene.name).font(AppTypography.style(.headline))
-                        Text("Saved: \(scene.createdAt.formatted(date: .abbreviated, time: .shortened))").font(AppTypography.style(.caption)).foregroundColor(.secondary)
+                        Text("Saved: \(scene.createdAt.formatted(date: .abbreviated, time: .shortened))").font(AppTypography.style(.caption)).foregroundColor(.white.opacity(0.72))
                     }
                     Spacer()
                     Button("Apply") {

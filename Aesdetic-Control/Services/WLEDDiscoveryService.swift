@@ -436,7 +436,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject, @unchecked Sendable {
         do {
             let info = try JSONDecoder().decode(WLEDInfo.self, from: data)
             let wledDevice = WLEDDevice(
-                id: info.mac,
+                id: WLEDDeviceIdentity.canonicalID(for: info.mac),
                 name: info.name.isEmpty ? "WLED" : info.name,
                 ipAddress: ipAddress,
                 isOnline: true,
@@ -460,6 +460,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject, @unchecked Sendable {
     private var deviceUpdateTimer: Timer?
     
     private func addOrUpdateDevice(_ device: WLEDDevice) {
+        let device = WLEDDeviceIdentity.normalized(device)
         // Batch device updates to avoid flooding main queue
         syncQueue.async {
             self.pendingDeviceUpdates.append(device)
@@ -481,7 +482,9 @@ class WLEDDiscoveryService: NSObject, ObservableObject, @unchecked Sendable {
             
             DispatchQueue.main.async {
                 for device in updates {
-                    if let index = self.discoveredDevices.firstIndex(where: { $0.id == device.id }) {
+                    if let index = self.discoveredDevices.firstIndex(where: {
+                        WLEDDeviceIdentity.matches($0.id, device.id)
+                    }) {
                         // Update existing device - preserve user-customized name
                         let existingName = self.discoveredDevices[index].name
                         let resolvedName = self.resolvedDeviceName(existing: existingName, incoming: device.name)
@@ -532,6 +535,7 @@ class WLEDDiscoveryService: NSObject, ObservableObject, @unchecked Sendable {
                         userInfo: ["deviceId": device.id, "isOnline": true]
                     )
                 }
+                self.discoveredDevices = WLEDDeviceIdentity.reconciledDevices(self.discoveredDevices)
             }
         }
     }
@@ -646,8 +650,9 @@ private extension WLEDDiscoveryService {
         guard !cleanAddress.isEmpty else { return }
 
         if let macAddress, !macAddress.isEmpty {
+            let canonicalMAC = WLEDDeviceIdentity.canonicalID(for: macAddress)
             Task {
-                if let existing = await coreDataManager.fetchDevice(id: macAddress) {
+                if let existing = await coreDataManager.fetchDevice(id: canonicalMAC) {
                     var updated = existing
                     if updated.ipAddress != cleanAddress {
                         updated.ipAddress = cleanAddress

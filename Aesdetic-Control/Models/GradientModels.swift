@@ -58,6 +58,36 @@ struct LEDGradient: Identifiable, Codable, Hashable {
 }
 
 enum GradientSampler {
+    /// Stops used to render an on-screen gradient preview.
+    ///
+    /// SwiftUI's `LinearGradient` always blends directly between its supplied
+    /// colors. Expanding the stops through this sampler means the rail follows
+    /// the same easing curve used for the colors sent to WLED.
+    static func previewStops(
+        for gradient: LEDGradient,
+        sampleCount: Int = 128
+    ) -> [GradientStop] {
+        let sortedStops = gradient.stops.sorted { $0.position < $1.position }
+        guard sortedStops.count > 1 else { return sortedStops }
+
+        let resolvedSampleCount = max(2, sampleCount)
+        var positions = Set(sortedStops.map(\.position))
+        for index in 0..<resolvedSampleCount {
+            positions.insert(Double(index) / Double(resolvedSampleCount - 1))
+        }
+
+        return positions.sorted().map { position in
+            GradientStop(
+                position: position,
+                hexColor: sampleColor(
+                    at: position,
+                    stops: sortedStops,
+                    interpolation: gradient.interpolation
+                ).toHex()
+            )
+        }
+    }
+
     /// Sample a gradient across LED count, returning hex color strings
     /// - Parameters:
     ///   - gradient: The gradient to sample
@@ -208,5 +238,4 @@ extension Array where Element == Double {
         return best?.mid
     }
 }
-
 

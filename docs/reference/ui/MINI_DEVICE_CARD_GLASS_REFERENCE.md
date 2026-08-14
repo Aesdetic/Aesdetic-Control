@@ -15,6 +15,12 @@ This document captures the **current** Dashboard mini device card container styl
 - Corner radius: `20` (`miniCardCornerRadius`)
 - Background entry point: `miniCardBackground`
 - Clip shape: rounded rectangle (continuous)
+- Top content hierarchy:
+  - first row: 6pt status dot followed by small location label
+  - second row: device name, larger title text, up to two lines
+- Do not show compact metadata as capsule pills inside the mini card.
+- Product image peeks from the lower card area. Powered-on devices use the higher/more visible image offset; powered-off devices sit lower and quieter.
+- Online is shown with a filled white dot. Offline/setup is shown with a hollow white dot.
 
 ## Light Mode Container (Current Approved Glass Look)
 
@@ -61,6 +67,11 @@ Extra lift is added on the card container in dark mode:
 - Dark mode:
   - `AppTheme.tokens(for: .dark).textPrimary`
   - `AppTheme.tokens(for: .dark).textSecondary`
+
+Text treatment:
+
+- Mini-card text sits inside the liquid-glass card and should not use dashboard text legibility shadows.
+- Use hierarchy, opacity, material strength, and local glass readability instead of adding text drop shadows inside the card.
 
 ## Notes
 

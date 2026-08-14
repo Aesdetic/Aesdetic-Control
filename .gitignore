@@ -43,6 +43,9 @@ Aesdetic-Control.xcworkspace/xcuserdata/
 .codex_tmp/
 tmp/
 
+# Separate research repository (not part of the iOS app)
+/research/onboarding-benchmark-report/
+
 # Swift Package Manager
 /.build/
 /Packages/
@@ -56,5 +59,7 @@ tmp/
 
 # Other
 *.orig
-*.rejtest-results/
+*.rej
+*.xcresult
+/test-results/
 WLED-main.zip

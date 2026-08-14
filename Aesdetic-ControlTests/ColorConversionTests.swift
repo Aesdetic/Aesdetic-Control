@@ -12,59 +12,62 @@ import Testing
 @testable import Aesdetic_Control
 
 struct ColorConversionTests {
+    private let kelvinMin = 1900
+    private let kelvinMax = 10091
+    private var kelvinRange: Double { Double(kelvinMax - kelvinMin) }
     
     // MARK: - CCT Kelvin Conversion Tests
     
-    @Test("kelvinValue converts normalized 0.0 to minimum Kelvin (1000K)")
+    @Test("kelvinValue converts normalized 0.0 to minimum Kelvin")
     func testKelvinValueMinimum() {
         let normalized: Double = 0.0
         let kelvin = Segment.kelvinValue(fromNormalized: normalized)
-        #expect(kelvin == 1000, "Normalized 0.0 should map to 1000K")
+        #expect(kelvin == kelvinMin, "Normalized 0.0 should map to minimum Kelvin")
     }
     
-    @Test("kelvinValue converts normalized 1.0 to maximum Kelvin (20000K)")
+    @Test("kelvinValue converts normalized 1.0 to maximum Kelvin")
     func testKelvinValueMaximum() {
         let normalized: Double = 1.0
         let kelvin = Segment.kelvinValue(fromNormalized: normalized)
-        #expect(kelvin == 20000, "Normalized 1.0 should map to 20000K")
+        #expect(kelvin == kelvinMax, "Normalized 1.0 should map to maximum Kelvin")
     }
     
-    @Test("kelvinValue converts normalized 0.5 to midpoint Kelvin (~10500K)")
+    @Test("kelvinValue converts normalized 0.5 to midpoint Kelvin")
     func testKelvinValueMidpoint() {
         let normalized: Double = 0.5
         let kelvin = Segment.kelvinValue(fromNormalized: normalized)
-        let expected = Int(round(1000.0 + 0.5 * (20000.0 - 1000.0)))
-        #expect(kelvin == expected, "Normalized 0.5 should map to midpoint (~10500K)")
+        let expected = Int(round(Double(kelvinMin) + 0.5 * kelvinRange))
+        #expect(kelvin == expected, "Normalized 0.5 should map to midpoint Kelvin")
     }
     
     @Test("kelvinValue clamps values below 0.0")
     func testKelvinValueClampsBelow() {
         let normalized: Double = -0.5
         let kelvin = Segment.kelvinValue(fromNormalized: normalized)
-        #expect(kelvin == 1000, "Negative normalized should clamp to 1000K")
+        #expect(kelvin == kelvinMin, "Negative normalized should clamp to minimum Kelvin")
     }
     
     @Test("kelvinValue clamps values above 1.0")
     func testKelvinValueClampsAbove() {
         let normalized: Double = 1.5
         let kelvin = Segment.kelvinValue(fromNormalized: normalized)
-        #expect(kelvin == 20000, "Normalized > 1.0 should clamp to 20000K")
+        #expect(kelvin == kelvinMax, "Normalized > 1.0 should clamp to maximum Kelvin")
     }
     
     @Test("kelvinValue handles common color temperatures")
     func testKelvinValueCommonTemperatures() {
         // Warm white ~2700K
-        let warmNormalized = (2700.0 - 1000.0) / (20000.0 - 1000.0)
+        let warmNormalized = (2700.0 - Double(kelvinMin)) / kelvinRange
         let warmKelvin = Segment.kelvinValue(fromNormalized: warmNormalized)
         #expect(warmKelvin >= 2700 && warmKelvin <= 2700, "Warm white should be ~2700K")
         
         // Neutral white ~4000K
-        let neutralNormalized = (4000.0 - 1000.0) / (20000.0 - 1000.0)
+        let neutralNormalized = (4000.0 - Double(kelvinMin)) / kelvinRange
         let neutralKelvin = Segment.kelvinValue(fromNormalized: neutralNormalized)
         #expect(neutralKelvin >= 4000 && neutralKelvin <= 4000, "Neutral white should be ~4000K")
         
         // Cool white ~6500K
-        let coolNormalized = (6500.0 - 1000.0) / (20000.0 - 1000.0)
+        let coolNormalized = (6500.0 - Double(kelvinMin)) / kelvinRange
         let coolKelvin = Segment.kelvinValue(fromNormalized: coolNormalized)
         #expect(coolKelvin >= 6500 && coolKelvin <= 6500, "Cool white should be ~6500K")
     }
@@ -164,25 +167,26 @@ struct ColorConversionTests {
     
     @Test("cctNormalized converts Kelvin to normalized 0.0-1.0")
     func testCCTNormalizedFromKelvin() {
-        // Minimum Kelvin (1000K) should normalize to 0.0
-        let segmentMin = createSegment(cct: 1000)
+        // Minimum Kelvin should normalize to 0.0
+        let segmentMin = createSegment(cct: kelvinMin)
         let normalizedMin = segmentMin.cctNormalized ?? -1.0
-        #expect(abs(normalizedMin - 0.0) < 0.001, "1000K should normalize to ~0.0")
+        #expect(abs(normalizedMin - 0.0) < 0.001, "Minimum Kelvin should normalize to ~0.0")
         
-        // Maximum Kelvin (20000K) should normalize to 1.0
-        let segmentMax = createSegment(cct: 20000)
+        // Maximum Kelvin should normalize to 1.0
+        let segmentMax = createSegment(cct: kelvinMax)
         let normalizedMax = segmentMax.cctNormalized ?? -1.0
-        #expect(abs(normalizedMax - 1.0) < 0.001, "20000K should normalize to ~1.0")
+        #expect(abs(normalizedMax - 1.0) < 0.001, "Maximum Kelvin should normalize to ~1.0")
         
-        // Midpoint Kelvin (~10500K) should normalize to ~0.5
-        let segmentMid = createSegment(cct: 10500)
+        // Midpoint Kelvin should normalize to ~0.5
+        let midpoint = Int(round(Double(kelvinMin) + 0.5 * kelvinRange))
+        let segmentMid = createSegment(cct: midpoint)
         let normalizedMid = segmentMid.cctNormalized ?? -1.0
-        #expect(abs(normalizedMid - 0.5) < 0.01, "10500K should normalize to ~0.5")
+        #expect(abs(normalizedMid - 0.5) < 0.01, "Midpoint Kelvin should normalize to ~0.5")
         
         // Common temperatures
         let segment2700 = createSegment(cct: 2700)
         let normalized2700 = segment2700.cctNormalized ?? -1.0
-        let expected2700 = (2700.0 - 1000.0) / (20000.0 - 1000.0)
+        let expected2700 = (2700.0 - Double(kelvinMin)) / kelvinRange
         #expect(abs(normalized2700 - expected2700) < 0.001, "2700K should normalize correctly")
     }
     
@@ -326,5 +330,60 @@ struct ColorConversionTests {
         #expect(rgbwRed.count == 4, "Red color should have 4 elements")
         #expect(rgbwRed[3] == 0, "White channel should be 0 for pure red (no white component)")
     }
-}
 
+    // MARK: - Color Picker Spectrum Geometry Tests
+
+    @Test("spectrum position maps HSV values into visible indicator bounds")
+    func testSpectrumPositionUsesVisibleBounds() {
+        let size = CGSize(width: 300, height: 200)
+        let radius: CGFloat = 10
+
+        let minimum = ColorWheelSpectrumGeometry.position(hue: 0, saturation: 0, in: size, indicatorRadius: radius)
+        #expect(abs(minimum.x - 10) < 0.001)
+        #expect(abs(minimum.y - 10) < 0.001)
+
+        let maximum = ColorWheelSpectrumGeometry.position(hue: 1, saturation: 1, in: size, indicatorRadius: radius)
+        #expect(abs(maximum.x - 290) < 0.001)
+        #expect(abs(maximum.y - 190) < 0.001)
+    }
+
+    @Test("spectrum geometry clamps drag locations before deriving HSV")
+    func testSpectrumValuesClampDragLocation() {
+        let size = CGSize(width: 300, height: 200)
+        let values = ColorWheelSpectrumGeometry.values(
+            from: CGPoint(x: -50, y: 500),
+            in: size,
+            indicatorRadius: 10
+        )
+
+        #expect(abs(values.hue - 0.0) < 0.001)
+        #expect(abs(values.saturation - 1.0) < 0.001)
+    }
+
+    @Test("spectrum geometry keeps indicator stable for tiny palettes")
+    func testSpectrumGeometryHandlesTinyPalette() {
+        let point = ColorWheelSpectrumGeometry.position(
+            hue: 0.75,
+            saturation: 0.25,
+            in: CGSize(width: 12, height: 8),
+            indicatorRadius: 10
+        )
+
+        #expect(abs(point.x - 10) < 0.001)
+        #expect(abs(point.y - 10) < 0.001)
+    }
+
+    @Test("saved swatches preserve normalized CCT and white metadata")
+    func testSavedColorSwatchPreservesMetadata() throws {
+        let swatch = SavedColorSwatch(hexColor: "#ffa000", temperature: 1.5, whiteLevel: -0.2)
+
+        #expect(swatch.hexColor == "FFA000")
+        #expect(swatch.temperature == 1.0)
+        #expect(swatch.whiteLevel == 0.0)
+
+        let encoded = try JSONEncoder().encode(swatch)
+        let decoded = try JSONDecoder().decode(SavedColorSwatch.self, from: encoded)
+
+        #expect(decoded.matches(SavedColorSwatch(hexColor: "FFA000", temperature: 1.0, whiteLevel: 0.0)))
+    }
+}

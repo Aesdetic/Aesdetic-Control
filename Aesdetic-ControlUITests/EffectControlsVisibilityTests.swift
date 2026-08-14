@@ -17,6 +17,11 @@ final class EffectControlsVisibilityTests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["--uitesting"]
         app.launch()
+
+        let devicesTab = app.buttons["Devices"]
+        XCTAssertTrue(devicesTab.waitForExistence(timeout: 8), "Devices tab should be available")
+        devicesTab.tap()
+        XCTAssertTrue(app.staticTexts["UI Test Device"].waitForExistence(timeout: 8), "Missing deterministic UI-test device")
     }
     
     override func tearDownWithError() throws {
@@ -27,7 +32,8 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     /// Wait for device list to appear
     func waitForDeviceList(timeout: TimeInterval = 10.0) {
-        let deviceListExists = app.otherElements["DeviceControlView"].waitForExistence(timeout: timeout) ||
+        let deviceListExists = app.staticTexts["UI Test Device"].waitForExistence(timeout: timeout) ||
+                              app.otherElements["DeviceControlView"].waitForExistence(timeout: timeout) ||
                               app.staticTexts["No WLED Devices Found"].waitForExistence(timeout: timeout) ||
                               app.staticTexts["Discovering WLED Devices"].waitForExistence(timeout: timeout)
         
@@ -35,24 +41,20 @@ final class EffectControlsVisibilityTests: XCTestCase {
     }
     
     /// Navigate to device detail view for a device
-    func navigateToDeviceDetail(deviceName: String? = nil) {
+    func navigateToDeviceDetail(deviceName: String? = nil) throws {
         waitForDeviceList()
         
         // Wait a bit for devices to load
         Thread.sleep(forTimeInterval: 2.0)
         
-        // Try to find a device card
-        let deviceCards = app.buttons.matching(identifier: "DeviceCard")
-        
-        if deviceCards.count > 0 {
-            // Tap first device card
-            deviceCards.element(boundBy: 0).tap()
-            
-            // Wait for device detail view
-            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 5.0),
+        let cardName = app.staticTexts["UI Test Device"]
+
+        if cardName.exists {
+            cardName.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["device-options-menu"].waitForExistence(timeout: 5.0),
                          "Device detail view should appear")
         } else {
-            XCTSkip("No devices found - cannot test effect controls without devices")
+            throw XCTSkip("No devices found - cannot test effect controls without devices")
         }
     }
     
@@ -142,7 +144,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testSpeedSliderVisibleWhenEffectSupportsSpeed() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -167,7 +169,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testSpeedSliderHiddenWhenEffectDoesNotSupportSpeed() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -195,7 +197,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testIntensitySliderVisibleWhenEffectSupportsIntensity() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -219,7 +221,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testIntensitySliderHiddenWhenEffectDoesNotSupportIntensity() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -241,7 +243,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testPalettePickerVisibleWhenEffectSupportsPalette() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -264,7 +266,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testPalettePickerHiddenWhenEffectDoesNotSupportPalette() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -286,7 +288,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testControlsUpdateWhenEffectChanges() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -302,7 +304,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
         
         // Verify effects picker exists
         guard let effectPicker = getEffectPicker() else {
-            XCTSkip("Effect picker not found - cannot test effect changes")
+            throw XCTSkip("Effect picker not found - cannot test effect changes")
             return
         }
         
@@ -316,7 +318,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testEffectControlsAccessibility() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -358,7 +360,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
     
     @MainActor
     func testFullEffectsControlFlow() throws {
-        navigateToDeviceDetail()
+        try navigateToDeviceDetail()
         navigateToEffectsTab()
         
         // Wait for UI to stabilize
@@ -373,7 +375,7 @@ final class EffectControlsVisibilityTests: XCTestCase {
         
         // Verify effect picker exists
         guard let effectPicker = getEffectPicker() else {
-            XCTSkip("Effect picker not found")
+            throw XCTSkip("Effect picker not found")
             return
         }
         
@@ -409,4 +411,3 @@ final class EffectControlsVisibilityTests: XCTestCase {
         }
     }
 }
-

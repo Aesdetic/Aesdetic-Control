@@ -46,7 +46,7 @@ struct Automation: Codable, Identifiable, Equatable {
         case .scene(let payload):
             return payload.sceneName ?? "Scene"
         case .preset(let payload):
-            return "Preset \(payload.presetId)"
+            return payload.paletteName ?? "Preset \(payload.presetId)"
         case .playlist(let payload):
             return payload.playlistName ?? "Playlist \(payload.playlistId)"
         case .gradient(let payload):
@@ -287,8 +287,8 @@ struct SolarTrigger: Codable, Equatable {
     var location: LocationSource
     var weekdays: [Bool]
 
-    static let minOnDeviceOffsetMinutes = -120
-    static let maxOnDeviceOffsetMinutes = 120
+    static let minOnDeviceOffsetMinutes = -59
+    static let maxOnDeviceOffsetMinutes = 59
     
     init(
         offset: EventOffset = .minutes(0),

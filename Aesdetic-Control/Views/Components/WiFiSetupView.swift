@@ -11,6 +11,7 @@ import SystemConfiguration.CaptiveNetwork
 
 struct WiFiSetupView: View {
     let device: WLEDDevice
+    @ObservedObject private var viewModel = DeviceControlViewModel.shared
     @Environment(\.dismiss) private var dismiss
     
     @State private var availableNetworks: [WiFiNetwork] = []
@@ -21,6 +22,7 @@ struct WiFiSetupView: View {
     @State private var connectionStatus: ConnectionStatus = .idle
     @State private var showPasswordField: Bool = false
     @State private var currentWiFiInfo: WiFiInfo?
+    @State private var showFullNetworkList: Bool = false
     
     enum ConnectionStatus: Equatable {
         case idle
@@ -85,14 +87,14 @@ struct WiFiSetupView: View {
                     Button("Cancel") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
+                    .settingsForegroundStyle(.primary)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Scan") {
                         scanForNetworks()
                     }
-                    .foregroundColor(.white)
+                    .settingsForegroundStyle(.primary)
                     .disabled(isScanning)
                 }
             }
@@ -118,10 +120,10 @@ struct WiFiSetupView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("💡 To disconnect from WiFi:")
                             .font(AppTypography.style(.caption, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
+                            .settingsForegroundStyle(.secondary)
                         Text("Connect to a different network below")
                             .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.6))
+                            .settingsForegroundStyle(.secondary)
                     }
                     .padding(.top, 4)
                     
@@ -133,17 +135,17 @@ struct WiFiSetupView: View {
                         }
                     }
                     .font(AppTypography.style(.subheadline, weight: .semibold))
-                    .foregroundColor(.black)
+                    .settingsForegroundStyle(.primary)
                     .padding(.vertical, 10)
                     .padding(.horizontal, 14)
-                    .background(Color.white)
+                    .background(Color.white.opacity(0.18))
                     .cornerRadius(10)
                 } else {
                     HStack {
                         ProgressView()
                             .scaleEffect(0.8)
                         Text("Loading WiFi information...")
-                            .foregroundColor(.white.opacity(0.7))
+                            .settingsForegroundStyle(.secondary)
                     }
                 }
             }
@@ -160,32 +162,32 @@ struct WiFiSetupView: View {
                         ProgressView()
                             .scaleEffect(0.8)
                         Text("Scanning for networks...")
-                            .foregroundColor(.white.opacity(0.7))
+                            .settingsForegroundStyle(.secondary)
                     }
                     .padding(.vertical, 20)
                 } else if availableNetworks.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "wifi.slash")
                             .font(AppTypography.style(.title, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
+                            .settingsForegroundStyle(.secondary)
                         Text("No networks found")
-                            .foregroundColor(.white.opacity(0.7))
+                            .settingsForegroundStyle(.secondary)
                         Text("Tap 'Scan' to search for WiFi networks")
                             .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.5))
+                            .settingsForegroundStyle(.secondary)
                     }
                     .padding(.vertical, 20)
                 } else {
-                    ForEach(availableNetworks, id: \.ssid) { network in
+                    ForEach(visibleAvailableNetworks, id: \.id) { network in
                         VStack(spacing: 0) {
                             WiFiNetworkRow(
                                 network: network,
-                                isSelected: selectedNetwork?.ssid == network.ssid,
+                                isSelected: selectedNetwork?.id == network.id,
                                 onSelect: { selectNetwork(network) }
                             )
                             
                             // Password field and connect button - right below selected network
-                            if selectedNetwork?.ssid == network.ssid {
+                            if selectedNetwork?.id == network.id {
                                 VStack(spacing: 12) {
                                     Divider()
                                         .background(Color.white.opacity(0.2))
@@ -194,17 +196,17 @@ struct WiFiSetupView: View {
                                         VStack(alignment: .leading, spacing: 8) {
                                             Text("Open Network")
                                                 .font(AppTypography.style(.subheadline, weight: .medium))
-                                                .foregroundColor(.white)
+                                                .settingsForegroundStyle(.primary)
                                             
                                             Text("No password required for \(network.ssid)")
                                                 .font(AppTypography.style(.caption))
-                                                .foregroundColor(.white.opacity(0.7))
+                                                .settingsForegroundStyle(.secondary)
                                         }
                                     } else {
                                         VStack(alignment: .leading, spacing: 8) {
                                             Text("Password for \(network.ssid)")
                                                 .font(AppTypography.style(.subheadline, weight: .medium))
-                                                .foregroundColor(.white)
+                                                .settingsForegroundStyle(.primary)
                                             
                                             SecureField("Enter WiFi password", text: $password)
                                                 .textFieldStyle(PlainTextFieldStyle())
@@ -218,7 +220,7 @@ struct WiFiSetupView: View {
                                                                 .stroke(Color.white.opacity(0.2), lineWidth: 1)
                                                         )
                                                 )
-                                                .foregroundColor(.white)
+                                                .settingsForegroundStyle(.primary)
                                         }
                                     }
                                     
@@ -227,15 +229,15 @@ struct WiFiSetupView: View {
                                             if isConnecting {
                                                 ProgressView()
                                                     .scaleEffect(0.8)
-                                                    .foregroundColor(.black)
+                                                    .settingsForegroundStyle(.primary)
                                             }
                                             Text(isConnecting ? "Connecting..." : "Connect")
                                                 .font(AppTypography.style(.headline, weight: .semibold))
-                                                .foregroundColor(.black)
+                                                .settingsForegroundStyle(.primary)
                                         }
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 14)
-                                        .background(Color.white)
+                                        .background(Color.white.opacity(0.18))
                                         .cornerRadius(10)
                                     }
                                     .disabled(isConnecting || (network.security != "Open" && password.isEmpty))
@@ -244,9 +246,30 @@ struct WiFiSetupView: View {
                             }
                         }
                     }
+
+                    if availableNetworks.count > compactNetworkListLimit {
+                        Button(showFullNetworkList ? "Show Fewer Networks" : "Show All \(availableNetworks.count) Networks") {
+                            showFullNetworkList.toggle()
+                        }
+                        .font(AppTypography.style(.subheadline, weight: .semibold))
+                        .settingsForegroundStyle(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.12))
+                        .cornerRadius(10)
+                    }
                 }
             }
         }
+    }
+
+    private var compactNetworkListLimit: Int { 3 }
+
+    private var visibleAvailableNetworks: [WiFiNetwork] {
+        guard !showFullNetworkList, availableNetworks.count > compactNetworkListLimit else {
+            return availableNetworks
+        }
+        return Array(availableNetworks.prefix(compactNetworkListLimit))
     }
     
     // MARK: - Connection Status Card
@@ -263,7 +286,7 @@ struct WiFiSetupView: View {
                         ProgressView()
                             .scaleEffect(0.8)
                         Text("Scanning for networks...")
-                            .foregroundColor(.white.opacity(0.7))
+                            .settingsForegroundStyle(.secondary)
                     }
                     
                 case .connecting:
@@ -271,28 +294,28 @@ struct WiFiSetupView: View {
                         ProgressView()
                             .scaleEffect(0.8)
                         Text("Connecting to \(selectedNetwork?.ssid ?? "network")...")
-                            .foregroundColor(.white.opacity(0.7))
+                            .settingsForegroundStyle(.secondary)
                     }
                     
                 case .connected:
                     HStack {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
+                            .settingsForegroundStyle(.primary)
                         Text("Successfully connected!")
-                            .foregroundColor(.white)
+                            .settingsForegroundStyle(.primary)
                     }
                     
                 case .failed(let error):
                     VStack(spacing: 8) {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
+                                .settingsForegroundStyle(.primary)
                             Text("Connection failed")
-                                .foregroundColor(.white)
+                                .settingsForegroundStyle(.primary)
                         }
                         Text(error)
                             .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.7))
+                            .settingsForegroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
                 }
@@ -305,6 +328,7 @@ struct WiFiSetupView: View {
     private func scanForNetworks() {
         isScanning = true
         connectionStatus = .scanning
+        showFullNetworkList = false
         
         Task {
             do {
@@ -337,11 +361,15 @@ struct WiFiSetupView: View {
         
         Task {
             do {
-                try await WLEDWiFiService.shared.connectToNetwork(
+                let outcome = await WLEDSafeWiFiChangeService.shared.changeNetwork(
                     device: device,
-                    ssid: network.ssid,
-                    password: password.isEmpty ? nil : password
+                    network: network,
+                    password: password.isEmpty ? nil : password,
+                    viewModel: viewModel
                 )
+                guard case .verified = outcome else {
+                    throw WiFiError.networkError(outcome.failureMessage ?? "The new Wi-Fi could not be verified.")
+                }
                 
                 await MainActor.run {
                     self.isConnecting = false
@@ -389,7 +417,9 @@ struct WiFiSetupView: View {
                         channel: wifiInfo.channel,
                         security: isUnknownSSID(wifiInfo.security) ? previous.security : wifiInfo.security,
                         ipAddress: wifiInfo.ipAddress ?? previous.ipAddress,
-                        macAddress: wifiInfo.macAddress ?? previous.macAddress
+                        macAddress: wifiInfo.macAddress ?? previous.macAddress,
+                        bssid: wifiInfo.bssid ?? previous.bssid,
+                        firmwareVersion: wifiInfo.firmwareVersion ?? previous.firmwareVersion
                     )
                 } else {
                     self.currentWiFiInfo = wifiInfo
@@ -424,22 +454,22 @@ struct WiFiNetworkRow: View {
                 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(network.ssid)
-                        .foregroundColor(.white)
+                        .settingsForegroundStyle(.primary)
                         .font(AppTypography.style(.headline))
                     
                     HStack(spacing: 8) {
                         Text(network.security)
                             .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.6))
+                            .settingsForegroundStyle(.secondary)
                         
                         Text("\(network.signalStrength) dBm")
                             .font(AppTypography.style(.caption))
-                            .foregroundColor(.white.opacity(0.6))
+                            .settingsForegroundStyle(.secondary)
                         
                         if network.channel > 0 {
                             Text("Ch \(network.channel)")
                                 .font(AppTypography.style(.caption))
-                                .foregroundColor(.white.opacity(0.6))
+                                .settingsForegroundStyle(.secondary)
                         }
                     }
                 }
@@ -448,7 +478,7 @@ struct WiFiNetworkRow: View {
                 
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.white)
+                        .settingsForegroundStyle(.primary)
                         .font(AppTypography.style(.headline))
                 }
             }
@@ -515,9 +545,40 @@ struct WiFiInfo: Codable {
     let security: String
     let ipAddress: String?
     let macAddress: String?
+    let bssid: String?
+    let firmwareVersion: String?
+}
+
+struct WLEDNetworkOption: Equatable, Identifiable {
+    let value: Int
+    let label: String
+
+    var id: Int { value }
 }
 
 struct WLEDNetworkConfiguration: Equatable {
+    static let apBehaviorOptions: [WLEDNetworkOption] = [
+        WLEDNetworkOption(value: 0, label: "No connection after boot"),
+        WLEDNetworkOption(value: 1, label: "Disconnected"),
+        WLEDNetworkOption(value: 2, label: "Always"),
+        WLEDNetworkOption(value: 3, label: "Never (not recommended)"),
+        WLEDNetworkOption(value: 4, label: "Temporary (no connection after boot)")
+    ]
+
+    static let txPowerOptions: [WLEDNetworkOption] = [
+        WLEDNetworkOption(value: 78, label: "19.5 dBm"),
+        WLEDNetworkOption(value: 76, label: "19 dBm"),
+        WLEDNetworkOption(value: 74, label: "18.5 dBm"),
+        WLEDNetworkOption(value: 68, label: "17 dBm"),
+        WLEDNetworkOption(value: 60, label: "15 dBm"),
+        WLEDNetworkOption(value: 52, label: "13 dBm"),
+        WLEDNetworkOption(value: 44, label: "11 dBm"),
+        WLEDNetworkOption(value: 34, label: "8.5 dBm"),
+        WLEDNetworkOption(value: 28, label: "7 dBm"),
+        WLEDNetworkOption(value: 20, label: "5 dBm"),
+        WLEDNetworkOption(value: 8, label: "2 dBm")
+    ]
+
     var mdnsName: String
     var stationSSID: String
     var staticIP: String
@@ -568,25 +629,82 @@ struct WLEDNetworkConfiguration: Equatable {
         self.txPower = txPower
     }
 
+    var normalizedMDNSName: String {
+        Self.normalizeMDNSName(mdnsName)
+    }
+
+    var validationIssues: [String] {
+        var issues: [String] = []
+
+        if !isValidHostnamePart(mdnsName) {
+            issues.append("mDNS must be empty or a valid .local host name.")
+        }
+        if !isValidIPv4(staticIP) {
+            issues.append("Static IP must be four numbers from 0 to 255.")
+        }
+        if !isValidIPv4(staticGateway) {
+            issues.append("Gateway must be four numbers from 0 to 255.")
+        }
+        if !isValidIPv4(staticSubnet) {
+            issues.append("Subnet must be four numbers from 0 to 255.")
+        }
+        if !isValidIPv4(dnsServer) {
+            issues.append("DNS must be four numbers from 0 to 255.")
+        }
+        if apSSID.trimmingCharacters(in: .whitespacesAndNewlines).count > 32 {
+            issues.append("Fallback hotspot name must be 32 characters or fewer.")
+        }
+        if !apPassword.isEmpty && !(8...63).contains(apPassword.count) {
+            issues.append("Fallback hotspot password must be empty to preserve it or 8-63 characters to replace it.")
+        }
+        if !(1...13).contains(apChannel) {
+            issues.append("Fallback hotspot channel must be 1-13.")
+        }
+        if !Self.apBehaviorOptions.contains(where: { $0.value == apBehavior }) {
+            issues.append("Fallback hotspot behavior must match one of WLED's AP opens options.")
+        }
+        if !Self.txPowerOptions.contains(where: { $0.value == txPower }) {
+            issues.append("WiFi transmit power must match one of WLED's supported TX power options.")
+        }
+
+        return issues
+    }
+
     var isValid: Bool {
-        isValidHostnamePart(mdnsName)
-            && isValidIPv4(staticIP)
-            && isValidIPv4(staticGateway)
-            && isValidIPv4(staticSubnet)
-            && isValidIPv4(dnsServer)
-            && apSSID.count <= 32
-            && (apPassword.isEmpty || (apPassword.count >= 8 && apPassword.count <= 63))
-            && (1...13).contains(apChannel)
-            && (0...4).contains(apBehavior)
-            && [78, 76, 74, 68, 60, 52].contains(txPower)
+        validationIssues.isEmpty
+    }
+
+    static func apBehaviorLabel(for value: Int) -> String {
+        apBehaviorOptions.first { $0.value == value }?.label ?? "Unknown"
+    }
+
+    static func txPowerLabel(for value: Int) -> String {
+        txPowerOptions.first { $0.value == value }?.label ?? "\(value)"
     }
 
     private func isValidHostnamePart(_ value: String) -> Bool {
-        guard value.count <= 32 else { return false }
-        guard !value.hasPrefix("-"), !value.hasSuffix("-") else { return false }
-        return value.allSatisfy { character in
-            character.isLetter || character.isNumber || character == "-"
+        let normalized = Self.normalizeMDNSName(value)
+        guard normalized.count <= 32 else { return false }
+        guard !normalized.hasPrefix("-"), !normalized.hasPrefix("."),
+              !normalized.hasSuffix("-"), !normalized.hasSuffix("."),
+              !normalized.contains("..") else { return false }
+        return normalized.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "-" || character == "."
         }
+    }
+
+    private static func normalizeMDNSName(_ value: String) -> String {
+        var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.lowercased().hasPrefix("http://") {
+            normalized.removeFirst("http://".count)
+        } else if normalized.lowercased().hasPrefix("https://") {
+            normalized.removeFirst("https://".count)
+        }
+        normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/").union(.whitespacesAndNewlines))
+        if normalized.lowercased().hasSuffix(".local") {
+            normalized.removeLast(".local".count)
+        }
+        return normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/").union(.whitespacesAndNewlines))
     }
 
     private func isValidIPv4(_ value: String) -> Bool {
@@ -633,21 +751,54 @@ enum WiFiError: LocalizedError {
 
 class WLEDWiFiService {
     static let shared = WLEDWiFiService()
-    
-    private init() {}
+    static let provisioningRestartResponseTimeout: TimeInterval = 3
+    static let provisioning = WLEDWiFiService(
+        session: makeProvisioningSession(),
+        restartResponseTimeout: provisioningRestartResponseTimeout,
+        restartSettleDelay: 0.2
+    )
+
+    private let session: URLSession
+    private let restartResponseTimeout: TimeInterval
+    private let restartSettleDelay: TimeInterval
+    private let scanMaxAttempts: Int
+    private let scanRetryDelayNanoseconds: UInt64
+
+    init(
+        session: URLSession = .shared,
+        restartResponseTimeout: TimeInterval = 15,
+        restartSettleDelay: TimeInterval = 1,
+        scanMaxAttempts: Int = 9,
+        scanRetryDelay: TimeInterval = 0.75
+    ) {
+        self.session = session
+        self.restartResponseTimeout = restartResponseTimeout
+        self.restartSettleDelay = restartSettleDelay
+        self.scanMaxAttempts = max(1, scanMaxAttempts)
+        self.scanRetryDelayNanoseconds = UInt64(max(0, scanRetryDelay) * 1_000_000_000)
+    }
+
+    private static func makeProvisioningSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.allowsCellularAccess = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
+        return URLSession(configuration: configuration)
+    }
     
     func scanForNetworks(device: WLEDDevice) async throws -> [WiFiNetwork] {
-        // WLED scans can return an empty list on the first poll.
-        // Retry briefly before surfacing "no networks".
-        let maxAttempts = 5
-        for attempt in 0..<maxAttempts {
+        // `/json/net` starts an asynchronous radio scan and may return an empty
+        // list for several seconds before the completed result is available.
+        for attempt in 0..<scanMaxAttempts {
+            try Task.checkCancellation()
             let networks = try await fetchNetworksOnce(device: device)
             if !networks.isEmpty {
                 return networks
             }
 
-            if attempt < maxAttempts - 1 {
-                try? await Task.sleep(nanoseconds: 700_000_000)
+            if attempt < scanMaxAttempts - 1 {
+                try await Task.sleep(nanoseconds: scanRetryDelayNanoseconds)
             }
         }
 
@@ -664,7 +815,7 @@ class WLEDWiFiService {
         request.timeoutInterval = 5.0
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
@@ -677,47 +828,22 @@ class WLEDWiFiService {
         let wifiInfo = json?["wifi"] as? [String: Any]
         let signalStrength = parseInt(wifiInfo?["rssi"]) ?? -100
         let channel = parseInt(wifiInfo?["channel"]) ?? 0
-        let bssid = (wifiInfo?["bssid"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let ipAddress = json?["ip"] as? String ?? device.ipAddress
         let macAddress = json?["mac"] as? String ?? device.id
+        let bssid = parseString(wifiInfo?["bssid"])
+        let firmwareVersion = parseString(json?["ver"])
 
         let directSSID = parseString(wifiInfo?["ssid"]) ?? parseString(json?["ssid"])
         
-        // Prefer BSSID match from scan results when available.
         var ssid = directSSID?.isEmpty == false ? directSSID! : "Unknown"
-        var security = "Unknown"
+        let security = "Unknown"
 
-        let normalizedCurrentBSSID = normalizeBSSID(bssid)
-        var networks: [WiFiNetwork] = []
-        let shouldScan = !normalizedCurrentBSSID.isEmpty || isUnknownSSID(ssid)
-        if shouldScan {
-            do {
-                networks = try await scanForNetworks(device: device)
-                if !normalizedCurrentBSSID.isEmpty,
-                   let currentNetwork = networks.first(where: { normalizeBSSID($0.bssid ?? "") == normalizedCurrentBSSID }) {
-                    ssid = currentNetwork.ssid
-                    security = currentNetwork.security
-                } else if !isUnknownSSID(ssid),
-                          let matchedBySSID = networks.first(where: {
-                              $0.ssid.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(ssid) == .orderedSame
-                          }) {
-                    security = matchedBySSID.security
-                }
-            } catch {
-                networks = []
-            }
-        }
-
-        // If BSSID lookup fails (or scanner returns none), use configured SSID.
+        // Keep status loading cheap. A full network scan is intentionally only
+        // run from explicit Scan actions because WLED scans can take seconds.
         if isUnknownSSID(ssid) {
             let configuredSSID = (try? await fetchConfiguredSSID(device: device))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !configuredSSID.isEmpty {
                 ssid = configuredSSID
-                if let configuredNetwork = networks.first(where: {
-                    $0.ssid.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(configuredSSID) == .orderedSame
-                }) {
-                    security = configuredNetwork.security
-                }
             }
         }
         
@@ -727,7 +853,9 @@ class WLEDWiFiService {
             channel: channel,
             security: security,
             ipAddress: ipAddress,
-            macAddress: macAddress
+            macAddress: macAddress,
+            bssid: bssid,
+            firmwareVersion: firmwareVersion
         )
     }
     
@@ -742,7 +870,7 @@ class WLEDWiFiService {
         }
         
         // Step 1: GET /json/cfg to read current configuration
-        let (configData, configResponse) = try await URLSession.shared.data(from: configUrl)
+        let (configData, configResponse) = try await session.data(from: configUrl)
         
         guard let httpConfigResponse = configResponse as? HTTPURLResponse,
               httpConfigResponse.statusCode == 200 else {
@@ -754,15 +882,22 @@ class WLEDWiFiService {
             throw WiFiError.invalidResponse
         }
         
+        if password == nil {
+            try await connectToOpenNetwork(device: device, ssid: ssid, config: config)
+            return
+        }
+
         // Step 2: Update WiFi credentials in WLED-native config paths.
         // WLED stores station credentials under `nw.ins[]`.
         applyWiFiCredentials(to: &config, ssid: ssid, password: password)
+        config["sv"] = true
+        config["rb"] = true
         
         // Step 3: POST the full, edited object back to /json/cfg
         var request = URLRequest(url: configUrl)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15.0 // Longer timeout for configuration changes
+        request.timeoutInterval = restartResponseTimeout
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: config)
@@ -770,16 +905,32 @@ class WLEDWiFiService {
             throw WiFiError.encodingError(error.localizedDescription)
         }
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw WiFiError.connectionFailed
         }
         
-        // Wait for device to process configuration and potentially reboot
-        // Some builds may require a reboot to apply WiFi changes
-        try await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+        // Give the response a brief moment to leave the device before iOS drops its setup network.
+        if restartSettleDelay > 0 {
+            try await Task.sleep(nanoseconds: UInt64(restartSettleDelay * 1_000_000_000))
+        }
+    }
+
+    func connectToNetworkPreservingFallback(device: WLEDDevice, ssid: String, password: String?) async throws {
+        var config = try await fetchConfig(device: device)
+
+        if password == nil {
+            try await connectToOpenNetworkPreservingFallback(device: device, ssid: ssid, config: config)
+            return
+        }
+        guard let password else { return }
+
+        applyWiFiCredentialsPreservingFallback(to: &config, ssid: ssid, password: password)
+        config["sv"] = true
+        config["rb"] = true
+        try await postRestartingConfig(config, to: device)
     }
 
     func getNetworkConfiguration(device: WLEDDevice) async throws -> WLEDNetworkConfiguration {
@@ -808,7 +959,7 @@ class WLEDWiFiService {
         request.timeoutInterval = 15.0
         request.httpBody = try JSONSerialization.data(withJSONObject: config)
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw WiFiError.connectionFailed
@@ -819,7 +970,7 @@ class WLEDWiFiService {
         guard let configURL = URL(string: "http://\(device.ipAddress)/json/cfg") else {
             throw WiFiError.invalidURL
         }
-        let (data, response) = try await URLSession.shared.data(from: configURL)
+        let (data, response) = try await session.data(from: configURL)
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200,
               let config = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -856,6 +1007,206 @@ class WLEDWiFiService {
         root["nw"] = nw
     }
 
+    private func applyWiFiCredentialsPreservingFallback(
+        to config: inout [String: Any],
+        ssid: String,
+        password: String
+    ) {
+        applyWiFiCredentialsPreservingFallbackInRoot(&config, ssid: ssid, password: password)
+        if var wrapped = config["cfg"] as? [String: Any] {
+            applyWiFiCredentialsPreservingFallbackInRoot(&wrapped, ssid: ssid, password: password)
+            config["cfg"] = wrapped
+        }
+    }
+
+    private func applyWiFiCredentialsPreservingFallbackInRoot(
+        _ root: inout [String: Any],
+        ssid: String,
+        password: String
+    ) {
+        var networkConfig = root["nw"] as? [String: Any] ?? [:]
+        var stations = networkConfig["ins"] as? [[String: Any]] ?? []
+        let targetIndex = stations.firstIndex { station in
+            (parseString(station["ssid"]) ?? "").caseInsensitiveCompare(ssid) == .orderedSame
+        }
+
+        if let targetIndex {
+            stations[targetIndex]["ssid"] = ssid
+            stations[targetIndex]["psk"] = password
+            stations[targetIndex].removeValue(forKey: "pskl")
+        } else {
+            stations.append([
+                "ssid": ssid,
+                "psk": password,
+                "ip": [0, 0, 0, 0],
+                "gw": [0, 0, 0, 0],
+                "sn": [255, 255, 255, 0]
+            ])
+        }
+
+        networkConfig["ins"] = stations
+        root["nw"] = networkConfig
+    }
+
+    private func postRestartingConfig(_ config: [String: Any], to device: WLEDDevice) async throws {
+        guard let configURL = URL(string: "http://\(device.ipAddress)/json/cfg") else {
+            throw WiFiError.invalidURL
+        }
+
+        var request = URLRequest(url: configURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = restartResponseTimeout
+        request.httpBody = try JSONSerialization.data(withJSONObject: config)
+
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw WiFiError.connectionFailed
+        }
+
+        if restartSettleDelay > 0 {
+            try await Task.sleep(nanoseconds: UInt64(restartSettleDelay * 1_000_000_000))
+        }
+    }
+
+    private func connectToOpenNetworkPreservingFallback(
+        device: WLEDDevice,
+        ssid: String,
+        config: [String: Any]
+    ) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/settings/wifi") else {
+            throw WiFiError.invalidURL
+        }
+
+        let root = (config["cfg"] as? [String: Any]) ?? config
+        var values = openNetworkFormValues(from: root, ssid: nil)
+        var networkConfig = root["nw"] as? [String: Any] ?? [:]
+        var stations = networkConfig["ins"] as? [[String: Any]] ?? []
+        let targetIndex = stations.firstIndex { station in
+            (parseString(station["ssid"]) ?? "").caseInsensitiveCompare(ssid) == .orderedSame
+        } ?? stations.count
+
+        if targetIndex == stations.count {
+            stations.append(["ssid": ssid])
+            values.append(("CS\(targetIndex)", ssid))
+            values.append(("PW\(targetIndex)", ""))
+            values.append(("BS\(targetIndex)", ""))
+            appendIPv4FormValues(nil, prefix: "IP\(targetIndex)", to: &values)
+            appendIPv4FormValues(nil, prefix: "GW\(targetIndex)", to: &values)
+            appendIPv4FormValues([255, 255, 255, 0], prefix: "SN\(targetIndex)", to: &values)
+        } else {
+            values.removeAll { key, _ in key == "PW\(targetIndex)" }
+            values.append(("PW\(targetIndex)", ""))
+        }
+        networkConfig["ins"] = stations
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = restartResponseTimeout
+        request.httpBody = formEncodedData(values)
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...399).contains(httpResponse.statusCode) else {
+            throw WiFiError.connectionFailed
+        }
+    }
+
+    private func connectToOpenNetwork(device: WLEDDevice, ssid: String, config: [String: Any]) async throws {
+        guard let url = URL(string: "http://\(device.ipAddress)/settings/wifi") else {
+            throw WiFiError.invalidURL
+        }
+
+        let root = (config["cfg"] as? [String: Any]) ?? config
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = restartResponseTimeout
+        request.httpBody = formEncodedData(openNetworkFormValues(from: root, ssid: ssid))
+
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...399).contains(httpResponse.statusCode) else {
+            throw WiFiError.connectionFailed
+        }
+
+        // WLED's Wi-Fi form sets forceReconnect when PW0 changes to empty.
+        if restartSettleDelay > 0 {
+            try await Task.sleep(nanoseconds: UInt64(restartSettleDelay * 1_000_000_000))
+        }
+    }
+
+    private func openNetworkFormValues(from root: [String: Any], ssid: String?) -> [(String, String)] {
+        let nw = root["nw"] as? [String: Any] ?? [:]
+        let stations = nw["ins"] as? [[String: Any]] ?? []
+        var values: [(String, String)] = []
+
+        for (index, station) in stations.enumerated() {
+            values.append(("CS\(index)", index == 0 ? (ssid ?? (parseString(station["ssid"]) ?? "")) : (parseString(station["ssid"]) ?? "")))
+            let passwordLength = parseInt(station["pskl"]) ?? 0
+            let shouldClearPrimaryPassword = index == 0 && ssid != nil
+            values.append(("PW\(index)", shouldClearPrimaryPassword ? "" : String(repeating: "*", count: passwordLength)))
+            values.append(("BS\(index)", parseString(station["bssid"]) ?? ""))
+            appendIPv4FormValues(station["ip"], prefix: "IP\(index)", to: &values)
+            appendIPv4FormValues(station["gw"], prefix: "GW\(index)", to: &values)
+            appendIPv4FormValues(station["sn"], prefix: "SN\(index)", to: &values)
+            if let encryptionType = parseInt(station["enc_type"]) {
+                values.append(("ET\(index)", String(encryptionType)))
+                values.append(("EA\(index)", parseString(station["e_anon_ident"]) ?? ""))
+                values.append(("EI\(index)", parseString(station["e_ident"]) ?? ""))
+            }
+        }
+
+        if stations.isEmpty {
+            values.append(("CS0", ssid ?? ""))
+            values.append(("PW0", ""))
+            values.append(("BS0", ""))
+            appendIPv4FormValues(nil, prefix: "IP0", to: &values)
+            appendIPv4FormValues(nil, prefix: "GW0", to: &values)
+            appendIPv4FormValues([255, 255, 255, 0], prefix: "SN0", to: &values)
+        }
+
+        appendIPv4FormValues(nw["dns"], prefix: "D", to: &values)
+        values.append(("CM", parseString((root["id"] as? [String: Any])?["mdns"]) ?? ""))
+
+        let ap = root["ap"] as? [String: Any] ?? [:]
+        values.append(("AS", parseString(ap["ssid"]) ?? ""))
+        values.append(("AP", String(repeating: "*", count: parseInt(ap["pskl"]) ?? 0)))
+        values.append(("AC", String(parseInt(ap["chan"]) ?? 1)))
+        values.append(("AB", String(parseInt(ap["behav"]) ?? 0)))
+        if parseBool(ap["hide"]) == true { values.append(("AH", "on")) }
+
+        let wifi = root["wifi"] as? [String: Any] ?? [:]
+        values.append(("TX", String(parseInt(wifi["txpwr"]) ?? 78)))
+        if parseBool(wifi["phy"]) == true { values.append(("FG", "on")) }
+        if parseBool(wifi["sleep"]) == false { values.append(("WS", "on")) }
+
+        if parseBool(nw["espnow"]) == true { values.append(("RE", "on")) }
+        if let remotes = nw["linked_remote"] as? [String] {
+            for (index, remote) in remotes.prefix(10).enumerated() {
+                values.append(("RM\(index)", remote))
+            }
+        }
+        if let ethernetType = parseInt((root["eth"] as? [String: Any])?["type"]) {
+            values.append(("ETH", String(ethernetType)))
+        }
+        return values
+    }
+
+    private func appendIPv4FormValues(_ value: Any?, prefix: String, to values: inout [(String, String)]) {
+        let parts = value as? [Any] ?? []
+        for index in 0..<4 {
+            values.append(("\(prefix)\(index)", String(index < parts.count ? parseInt(parts[index]) ?? 0 : 0)))
+        }
+    }
+
+    private func formEncodedData(_ values: [(String, String)]) -> Data {
+        var components = URLComponents()
+        components.queryItems = values.map { URLQueryItem(name: $0.0, value: $0.1) }
+        return Data((components.percentEncodedQuery ?? "").utf8)
+    }
+
     private func extractConfiguredSSID(from config: [String: Any]) -> String? {
         if let ssid = extractConfiguredSSID(fromRoot: config) {
             return ssid
@@ -873,7 +1224,7 @@ class WLEDWiFiService {
         var request = URLRequest(url: configURL)
         request.timeoutInterval = 10.0
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200,
               let config = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -911,7 +1262,7 @@ class WLEDWiFiService {
 
     private func applyNetworkConfiguration(_ configuration: WLEDNetworkConfiguration, to root: inout [String: Any]) {
         var id = root["id"] as? [String: Any] ?? [:]
-        id["mdns"] = configuration.mdnsName.trimmingCharacters(in: .whitespacesAndNewlines)
+        id["mdns"] = configuration.normalizedMDNSName
         root["id"] = id
 
         var nw = root["nw"] as? [String: Any] ?? [:]
@@ -982,7 +1333,7 @@ class WLEDWiFiService {
         request.timeoutInterval = 10.0
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {

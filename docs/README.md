@@ -10,6 +10,7 @@ Use [current](current/) for the latest working behavior and test expectations ac
 - [Feature status matrix](current/FEATURE_STATUS_MATRIX.md)
 - [Current code anchors](current/CODE_ANCHORS_CURRENT.md)
 - [Automation system overview](current/AUTOMATION_SYSTEM_OVERVIEW.md)
+- [Automation timer correctness](current/AUTOMATION_TIMER_CORRECTNESS.md)
 - [Automation delete status](current/AUTOMATION_DELETE_STATUS.md)
 - [Testing and logs](current/TESTING_AND_LOGS_CURRENT.md)
 - [Demo flows](current/DEMO_FLOWS_CURRENT.md)

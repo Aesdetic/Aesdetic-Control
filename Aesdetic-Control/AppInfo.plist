@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>WLEDFirmwareNativeInstallationEnabled</key>
+	<false/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
@@ -20,9 +22,25 @@
 	<string>1</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoadsInLocalNetwork</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>4.3.2.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
+	<key>NSAccessorySetupKitSupports</key>
+	<array>
+		<string>WiFi</string>
+	</array>
+	<key>NSAccessorySetupSupports</key>
+	<array>
+		<string>WiFi</string>
+	</array>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_wled._tcp</string>
@@ -36,7 +54,12 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Aesdetic Control needs local network access to discover and control WLED devices on your network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Your approximate location (city-level) is checked once to calculate sunrise and sunset times for automations.</string>
+	<string>Aesdetic Control uses your location to identify the current Wi-Fi network during device setup and calculate sunrise and sunset times for automations.</string>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>WiFiSetup</key>
+		<string>Precise location allows Aesdetic Control to identify the current Wi-Fi network during device setup.</string>
+	</dict>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Aesdetic Control can create and update wellness task reminders.</string>
 	<key>NSRemindersUsageDescription</key>

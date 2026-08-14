@@ -85,6 +85,14 @@ final class AutomationModelTests: XCTestCase {
         XCTAssertEqual(prefill.metadata?.templateId, "sunset")
     }
 
+    func testSolarTriggerClampsToWLEDNativeOffsetRange() {
+        XCTAssertEqual(SolarTrigger.clampOnDeviceOffset(-60), -59)
+        XCTAssertEqual(SolarTrigger.clampOnDeviceOffset(-59), -59)
+        XCTAssertEqual(SolarTrigger.clampOnDeviceOffset(0), 0)
+        XCTAssertEqual(SolarTrigger.clampOnDeviceOffset(59), 59)
+        XCTAssertEqual(SolarTrigger.clampOnDeviceOffset(60), 59)
+    }
+
     func testDefaultAutomationNameReusesLowestAvailableNumber() {
         let existing = [
             testAutomation(name: "Routine 2"),
@@ -98,6 +106,22 @@ final class AutomationModelTests: XCTestCase {
 
         let filledGap = existing + [testAutomation(name: "Automation 1")]
         XCTAssertEqual(AutomationDefaultNaming.defaultName(for: filledGap), "Routine 3")
+    }
+
+    func testPresetDefaultNamingUsesShortNumberedNames() {
+        XCTAssertEqual(PresetDefaultNaming.colorName(existingNames: []), "Color 1")
+        XCTAssertEqual(
+            PresetDefaultNaming.colorName(existingNames: ["Color 1", "Color 3", "Color Preset 2026-07-02_1545"]),
+            "Color 2"
+        )
+        XCTAssertEqual(
+            PresetDefaultNaming.transitionName(existingNames: ["Transition", "Transition 2"]),
+            "Transition 3"
+        )
+        XCTAssertEqual(
+            PresetDefaultNaming.animationName(existingNames: ["Animation 1", "Effect 2026-07-02_1545"]),
+            "Animation 2"
+        )
     }
     
     func testTimeTriggerNextDateAdvancesToNextValidDay() {
@@ -592,6 +616,55 @@ final class AutomationModelTests: XCTestCase {
             -1.0,
             "Expected deferred queue entry to respect notBefore"
         )
+        guard let scheduledAt = cleanup.scheduledProcessDateForTesting(deviceId: deviceId) else {
+            return XCTFail("Expected deferred cleanup to schedule its queue wake-up")
+        }
+        XCTAssertEqual(
+            scheduledAt.timeIntervalSince1970,
+            nextAttemptAt.timeIntervalSince1970,
+            accuracy: 0.01,
+            "Generic deferred preset cleanup must wake when it becomes eligible"
+        )
+    }
+
+    @MainActor
+    func testCleanupQueueSchedulerUsesEarliestPendingWorkForDevice() {
+        let cleanup = DeviceCleanupManager.shared
+        let deviceId = "cleanup-test-earliest-\(UUID().uuidString)"
+        let laterPresetId = 239
+        let earlierPlaylistId = 240
+        let laterDate = Date().addingTimeInterval(180)
+        let earlierDate = Date().addingTimeInterval(90)
+        defer {
+            cleanup.removeIds(type: .presetStore, deviceId: deviceId, ids: [laterPresetId, earlierPlaylistId])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [laterPresetId],
+            source: .automation,
+            verificationRequired: true,
+            notBefore: laterDate
+        )
+        cleanup.enqueue(
+            type: .playlist,
+            deviceId: deviceId,
+            ids: [earlierPlaylistId],
+            source: .automation,
+            verificationRequired: true,
+            notBefore: earlierDate
+        )
+
+        guard let scheduledAt = cleanup.scheduledProcessDateForTesting(deviceId: deviceId) else {
+            return XCTFail("Expected cleanup queue wake-up")
+        }
+        XCTAssertEqual(
+            scheduledAt.timeIntervalSince1970,
+            earlierDate.timeIntervalSince1970,
+            accuracy: 0.01,
+            "Later cleanup must not postpone earlier eligible work for the same device"
+        )
     }
 
     @MainActor
@@ -647,6 +720,61 @@ final class AutomationModelTests: XCTestCase {
         } else {
             XCTFail("Expected coalesced preset-store delete to have a nextAttemptAt")
         }
+    }
+
+    @MainActor
+    func testPresetStoreRecordPruneClearsSharedNamespaceQueuedDeletes() {
+        let cleanup = DeviceCleanupManager.shared
+        let deviceId = "cleanup-test-shared-namespace-\(UUID().uuidString)"
+        let reusedRecordId = 211
+        let remainingPresetId = 212
+        let remainingPlaylistId = 213
+        defer {
+            cleanup.removeIds(type: .presetStore, deviceId: deviceId, ids: [
+                reusedRecordId,
+                remainingPresetId,
+                remainingPlaylistId
+            ])
+        }
+
+        cleanup.enqueue(
+            type: .preset,
+            deviceId: deviceId,
+            ids: [reusedRecordId, remainingPresetId],
+            source: .automation,
+            verificationRequired: true
+        )
+        cleanup.enqueue(
+            type: .playlist,
+            deviceId: deviceId,
+            ids: [reusedRecordId, remainingPlaylistId],
+            source: .automation,
+            verificationRequired: true
+        )
+        cleanup.enqueuePresetStoreDelete(
+            deviceId: deviceId,
+            playlistIds: [reusedRecordId],
+            presetIds: [reusedRecordId],
+            source: .automation,
+            verificationRequired: true
+        )
+
+        cleanup.removeIds(type: .presetStore, deviceId: deviceId, ids: [reusedRecordId])
+
+        XCTAssertFalse(
+            cleanup.pendingDeletes.contains { entry in
+                entry.deviceId == deviceId
+                    && entry.deadLetteredAt == nil
+                    && (
+                        entry.ids.contains(reusedRecordId)
+                        || (entry.playlistIds ?? []).contains(reusedRecordId)
+                        || (entry.presetIds ?? []).contains(reusedRecordId)
+                    )
+            },
+            "A reused WLED record ID must be pruned from all preset/playlist cleanup queues."
+        )
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .preset, deviceId: deviceId, id: remainingPresetId))
+        XCTAssertTrue(cleanup.hasActiveDelete(type: .playlist, deviceId: deviceId, id: remainingPlaylistId))
     }
 
     @MainActor

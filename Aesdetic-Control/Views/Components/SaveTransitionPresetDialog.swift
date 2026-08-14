@@ -51,7 +51,7 @@ struct SaveTransitionPresetDialog: View {
                         
                         Image(systemName: "arrow.right")
                             .font(AppTypography.style(.caption))
-                            .foregroundColor(.blue.opacity(0.8))
+                            .foregroundColor(.white.opacity(0.8))
                         
                         GradientBar(
                             gradient: Binding(get: { currentGradientB }, set: { _ in }),
@@ -135,7 +135,9 @@ struct SaveTransitionPresetDialog: View {
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {
-            presetName = "Transition \(Date().presetNameTimestamp())"
+            presetName = PresetDefaultNaming.transitionName(
+                existingNames: PresetsStore.shared.transitionPresets(for: device.id).map(\.name)
+            )
             // Auto-focus text field after a brief delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isTextFieldFocused = true

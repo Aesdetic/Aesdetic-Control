@@ -47,19 +47,19 @@ enum GlassTheme {
         pagePrimaryText: Color(red: 0.227, green: 0.216, blue: 0.200), // softer than #2C2B29
         pageSecondaryText: Color(red: 0.424, green: 0.396, blue: 0.365),
         pageTertiaryText: Color(red: 0.557, green: 0.529, blue: 0.490),
-        pillTextSelected: Color(red: 0.227, green: 0.216, blue: 0.200),
-        pillTextDefault: Color(red: 0.227, green: 0.216, blue: 0.200),
-        pillSubtextSelected: Color(red: 0.424, green: 0.396, blue: 0.365),
-        pillSubtextDefault: Color(red: 0.424, green: 0.396, blue: 0.365)
+        pillTextSelected: Color.white.opacity(0.96),
+        pillTextDefault: Color.white.opacity(0.94),
+        pillSubtextSelected: Color.white.opacity(0.78),
+        pillSubtextDefault: Color.white.opacity(0.70)
     )
 
     private static let darkTextStyle = GlassTextStyle(
         pagePrimaryText: .white,
         pageSecondaryText: Color.white.opacity(0.78),
         pageTertiaryText: Color.white.opacity(0.58),
-        pillTextSelected: .black,
+        pillTextSelected: Color.white.opacity(0.96),
         pillTextDefault: .white,
-        pillSubtextSelected: Color.black.opacity(0.7),
+        pillSubtextSelected: Color.white.opacity(0.78),
         pillSubtextDefault: Color.white.opacity(0.68)
     )
 

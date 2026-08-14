@@ -19,9 +19,9 @@ struct AutomationCreationSheet: View {
             VStack(spacing: 16) {
                 Image(systemName: "lightbulb.slash")
                     .font(AppTypography.style(.largeTitle))
-                    .foregroundColor(.gray)
+                    .foregroundColor(.white.opacity(0.58))
                 Text("Add a device to create automations.")
-                    .foregroundColor(.gray)
+                    .foregroundColor(.white.opacity(0.58))
                 Button("Close") { isPresented = false }
                     .buttonStyle(.borderedProminent)
             }
@@ -111,16 +111,16 @@ struct DevicePickerSheet: View {
                         } label: {
                             HStack {
                                 Text(device.name)
-                                    .foregroundColor(.primary)
+                                    .foregroundColor(.white)
                                 Spacer()
                                 if device.isOnline {
                                     Text("Online")
                                         .font(AppTypography.style(.caption))
-                                        .foregroundColor(.green)
+                                        .foregroundColor(.white)
                                 } else {
                                     Text("Offline")
                                         .font(AppTypography.style(.caption))
-                                        .foregroundColor(.orange)
+                                        .foregroundColor(.white)
                                 }
                             }
                         }

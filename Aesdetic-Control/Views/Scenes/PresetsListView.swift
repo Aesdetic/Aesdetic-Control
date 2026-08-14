@@ -1,30 +1,17 @@
 import SwiftUI
 
 private struct PresetGlassCardModifier: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
     let cornerRadius: CGFloat
-    let tone: AppCardTone
 
     func body(content: Content) -> some View {
         content
-            .background(
-                AppCardBackground(
-                    style: AppCardStyles.glass(
-                        for: colorScheme,
-                        tone: tone,
-                        cornerRadius: cornerRadius
-                    )
-                )
-            )
+            .settingsDetailControlBackground(cornerRadius: cornerRadius)
     }
 }
 
 private extension View {
-    func presetGlassCard(
-        cornerRadius: CGFloat = 18,
-        tone: AppCardTone = .muted
-    ) -> some View {
-        modifier(PresetGlassCardModifier(cornerRadius: cornerRadius, tone: tone))
+    func presetGlassCard(cornerRadius: CGFloat = 18) -> some View {
+        modifier(PresetGlassCardModifier(cornerRadius: cornerRadius))
     }
 
     func recentPresetSaveHighlight(_ isActive: Bool, cornerRadius: CGFloat = 18) -> some View {
@@ -46,10 +33,11 @@ struct PresetsListView: View {
     @ObservedObject private var automationStore = AutomationStore.shared
     @EnvironmentObject var viewModel: DeviceControlViewModel
     let device: WLEDDevice
-    let onRequestRename: (PresetRenameContext) -> Void
     let onOpenIntegrations: () -> Void
     @AppStorage("advancedUIEnabled") private var advancedUIEnabled: Bool = false
-    @State private var isPlaylistEditorPresented = false
+    @State private var presentedSheet: PresetsSheet?
+    @State private var renameContext: PresetRenameContext?
+    @State private var renameDraft = ""
     @State private var playlistEditorOriginalId: Int?
     @State private var playlistEditorDraft = PlaylistEditorDraft.defaultDraft
     @State private var expandedAutomationFolders: Set<UUID> = []
@@ -59,11 +47,9 @@ struct PresetsListView: View {
 
     init(
         device: WLEDDevice,
-        onRequestRename: @escaping (PresetRenameContext) -> Void,
         onOpenIntegrations: @escaping () -> Void = {}
     ) {
         self.device = device
-        self.onRequestRename = onRequestRename
         self.onOpenIntegrations = onOpenIntegrations
     }
     
@@ -77,14 +63,47 @@ struct PresetsListView: View {
             }
         }
         .navigationTitle("Saves")
-        .sheet(isPresented: $isPlaylistEditorPresented) {
+        .sheet(item: $presentedSheet, content: sheetContent)
+        .alert(
+            renameContext?.navigationTitle ?? "Rename",
+            isPresented: renameAlertBinding
+        ) {
+            TextField("Name", text: $renameDraft)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled(false)
+            Button("Cancel", role: .cancel) {
+                cancelPresetRename()
+            }
+            Button("Save") {
+                commitPresetRename()
+            }
+            .disabled(!canCommitPresetRename)
+        }
+        .task {
+            await viewModel.refreshPresetsIfModified(for: device)
+            await viewModel.loadPresets(for: device, force: false)
+            await viewModel.loadPlaylists(for: device, force: false)
+        }
+        .onChange(of: advancedUIEnabled) { _, enabled in
+            guard enabled else { return }
+            Task {
+                await viewModel.loadPlaylists(for: device, force: false)
+                await viewModel.loadPresets(for: device, force: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ sheet: PresetsSheet) -> some View {
+        switch sheet {
+        case .playlistEditor:
             PlaylistEditorSheet(
                 draft: $playlistEditorDraft,
                 originalId: playlistEditorOriginalId,
                 device: device,
                 availablePresetIds: viewModel.presets(for: device).map(\.id),
                 onCancel: {
-                    isPlaylistEditorPresented = false
+                    presentedSheet = nil
                 },
                 onSave: { draft in
                     Task {
@@ -99,7 +118,7 @@ struct PresetsListView: View {
                         let request = draft.asSaveRequest(withId: resolvedId)
                         let success = await viewModel.savePlaylistRecord(request, for: device)
                         if success {
-                            isPlaylistEditorPresented = false
+                            presentedSheet = nil
                         }
                     }
                 },
@@ -132,20 +151,6 @@ struct PresetsListView: View {
             )
             .presentationDetents([.large])
         }
-        .task {
-            await viewModel.refreshPresetsIfModified(for: device)
-            if advancedUIEnabled {
-                await viewModel.loadPlaylists(for: device, force: false)
-                await viewModel.loadPresets(for: device, force: false)
-            }
-        }
-        .onChange(of: advancedUIEnabled) { _, enabled in
-            guard enabled else { return }
-            Task {
-                await viewModel.loadPlaylists(for: device, force: false)
-                await viewModel.loadPresets(for: device, force: false)
-            }
-        }
     }
 
     private var alexaFavoritesSection: some View {
@@ -176,10 +181,10 @@ struct PresetsListView: View {
                         }
                     }
                     .font(AppTypography.style(.caption, weight: .semibold))
-                    .foregroundColor(.black)
+                    .foregroundColor(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(Color.white)
+                    .background(Color.white.opacity(0.18))
                     .cornerRadius(8)
                 }
             }
@@ -245,7 +250,7 @@ struct PresetsListView: View {
     private func sectionHeader(_ title: String, icon: String, count: String? = nil) -> some View {
         HStack(spacing: 8) {
             Label(title, systemImage: icon)
-                .font(AppTypography.style(.headline, weight: .semibold))
+                .font(DeviceDetailTypography.sectionTitle)
                 .foregroundColor(.white)
                 .lineLimit(1)
 
@@ -306,6 +311,121 @@ struct PresetsListView: View {
             .sorted { $0.id < $1.id }
     }
 
+    private enum RecoveredDevicePresetKind {
+        case color
+        case animation
+        case hidden
+    }
+
+    private var playlistStepPresetIds: Set<Int> {
+        Set(viewModel.playlists(for: device).flatMap(\.presets).filter { $0 > 0 })
+    }
+
+    private var automationPlaylistIds: Set<Int> {
+        Set(automationFolders.compactMap(\.playlistId))
+    }
+
+    private var automationPresetIds: Set<Int> {
+        Set(automationFolders.compactMap(\.presetId))
+    }
+
+    private var localColorPresetWLEDIds: Set<Int> {
+        Set(store.colorPresets.compactMap { $0.wledPresetIds?[device.id] ?? $0.wledPresetId })
+    }
+
+    private var localEffectPresetWLEDIds: Set<Int> {
+        Set(store.effectPresets(for: device.id).compactMap(\.wledPresetId))
+    }
+
+    private var localTransitionPlaylistIds: Set<Int> {
+        Set(store.transitionPresets(for: device.id).compactMap(\.wledPlaylistId))
+    }
+
+    private var recoveredColorDevicePresets: [WLEDPreset] {
+        nonPlaylistDevicePresets.filter { preset in
+            !localColorPresetWLEDIds.contains(preset.id)
+                && recoveredKind(for: preset) == .color
+        }
+    }
+
+    private var recoveredEffectDevicePresets: [WLEDPreset] {
+        nonPlaylistDevicePresets.filter { preset in
+            !localEffectPresetWLEDIds.contains(preset.id)
+                && recoveredKind(for: preset) == .animation
+        }
+    }
+
+    private var recoveredTransitionDevicePlaylists: [WLEDPlaylist] {
+        viewModel.playlists(for: device).filter { playlist in
+            !localTransitionPlaylistIds.contains(playlist.id)
+                && isRecoveredSavedTransitionPlaylist(playlist)
+        }
+    }
+
+    private func recoveredKind(for preset: WLEDPreset) -> RecoveredDevicePresetKind? {
+        guard preset.id > 0 else { return nil }
+        if let marker = AesdeticWLEDPresetNameMarker.parse(preset.name) {
+            switch marker.kind {
+            case .savedColor:
+                return .color
+            case .savedAnimation:
+                return .animation
+            case .savedTransition, .transitionStep, .automation, .automationStep:
+                return .hidden
+            }
+        }
+        if playlistStepPresetIds.contains(preset.id) || automationPresetIds.contains(preset.id) {
+            return .hidden
+        }
+        let normalizedName = preset.displayName.lowercased()
+        if normalizedName.hasPrefix("automation ")
+            || normalizedName.hasPrefix("automation step ")
+            || normalizedName.hasPrefix("automation transition ")
+            || normalizedName.hasPrefix("transition step ")
+            || normalizedName.hasPrefix("auto step ") {
+            return .hidden
+        }
+        if isEffectDevicePreset(preset) {
+            return .animation
+        }
+        if devicePresetHasColorData(preset) {
+            return .color
+        }
+        return nil
+    }
+
+    private func isRecoveredSavedTransitionPlaylist(_ playlist: WLEDPlaylist) -> Bool {
+        guard playlist.id > 0 else { return false }
+        if let marker = AesdeticWLEDPresetNameMarker.parse(playlist.name) {
+            switch marker.kind {
+            case .savedTransition:
+                return true
+            case .automation, .automationStep, .transitionStep, .savedColor, .savedAnimation:
+                return false
+            }
+        }
+        if automationPlaylistIds.contains(playlist.id) {
+            return false
+        }
+        let normalizedName = playlist.displayName.lowercased()
+        if normalizedName.hasPrefix("automation ")
+            || normalizedName.hasPrefix("automation transition ")
+            || normalizedName.hasPrefix("auto transition ") {
+            return false
+        }
+        return !playlist.presets.isEmpty
+    }
+
+    private func devicePresetHasColorData(_ preset: WLEDPreset) -> Bool {
+        let segments = preset.state?.seg ?? (preset.segment.map { [$0] } ?? [])
+        return segments.contains { segment in
+            guard let colors = segment.col else { return false }
+            return colors.contains { color in
+                color.prefix(3).contains { $0 > 0 }
+            }
+        }
+    }
+
     private func colorAlexaCandidate(_ preset: ColorPreset) -> AlexaFavoriteCandidate? {
         guard let wledId = preset.wledPresetIds?[device.id] ?? preset.wledPresetId else { return nil }
         return viewModel.alexaFavoriteCandidate(sourceType: .color, sourceId: preset.id, wledPresetId: wledId, name: preset.name)
@@ -330,6 +450,106 @@ struct PresetsListView: View {
         _ = viewModel.addAlexaFavorite(candidate, for: device)
     }
 
+    private var renameAlertBinding: Binding<Bool> {
+        Binding(
+            get: { renameContext != nil },
+            set: { isPresented in
+                if !isPresented {
+                    cancelPresetRename()
+                }
+            }
+        )
+    }
+
+    private var trimmedRenameDraft: String {
+        renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canCommitPresetRename: Bool {
+        guard let context = renameContext else { return false }
+        return !trimmedRenameDraft.isEmpty && trimmedRenameDraft != context.currentName
+    }
+
+    private func startPresetRename(_ context: PresetRenameContext) {
+        renameContext = context
+        renameDraft = context.currentName
+    }
+
+    private func cancelPresetRename() {
+        renameContext = nil
+        renameDraft = ""
+    }
+
+    private func commitPresetRename() {
+        guard let context = renameContext, canCommitPresetRename else { return }
+        let newName = trimmedRenameDraft
+        cancelPresetRename()
+        applyPresetRename(newName, for: context)
+    }
+
+    private func applyPresetRename(_ newName: String, for context: PresetRenameContext) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        var presetRenameTargets: [(device: WLEDDevice, id: Int)] = []
+        var playlistRenameTargets: [(device: WLEDDevice, id: Int)] = []
+        let resolveDevice: (String) -> WLEDDevice? = { deviceId in
+            viewModel.devices.first(where: { $0.id == deviceId })
+                ?? (device.id == deviceId ? device : nil)
+        }
+
+        switch context {
+        case .color(let preset):
+            guard preset.name != trimmed else { return }
+            var updated = preset
+            updated.name = trimmed
+            store.updateColorPreset(updated)
+            if let idsByDevice = updated.wledPresetIds, !idsByDevice.isEmpty {
+                for (deviceId, presetId) in idsByDevice where (1...250).contains(presetId) {
+                    if let targetDevice = resolveDevice(deviceId) {
+                        presetRenameTargets.append((targetDevice, presetId))
+                    }
+                }
+            } else if let legacyId = updated.wledPresetId, (1...250).contains(legacyId) {
+                presetRenameTargets.append((device, legacyId))
+            }
+        case .transition(let preset):
+            guard preset.name != trimmed else { return }
+            var updated = preset
+            updated.name = trimmed
+            store.updateTransitionPreset(updated)
+            if let playlistId = updated.wledPlaylistId, (1...250).contains(playlistId),
+               let targetDevice = resolveDevice(updated.deviceId) {
+                playlistRenameTargets.append((targetDevice, playlistId))
+            }
+        case .effect(let preset):
+            guard preset.name != trimmed else { return }
+            var updated = preset
+            updated.name = trimmed
+            store.updateEffectPreset(updated)
+            if let presetId = updated.wledPresetId, (1...250).contains(presetId),
+               let targetDevice = resolveDevice(updated.deviceId) {
+                presetRenameTargets.append((targetDevice, presetId))
+            }
+        case .devicePreset(let presetId, let name, let targetDevice):
+            guard name != trimmed else { return }
+            presetRenameTargets.append((targetDevice, presetId))
+        case .devicePlaylist(let playlistId, let name, let targetDevice):
+            guard name != trimmed else { return }
+            playlistRenameTargets.append((targetDevice, playlistId))
+        }
+
+        guard !presetRenameTargets.isEmpty || !playlistRenameTargets.isEmpty else { return }
+        Task {
+            for target in presetRenameTargets {
+                _ = await viewModel.renamePresetRecord(target.id, to: trimmed, for: target.device)
+            }
+            for target in playlistRenameTargets {
+                _ = await viewModel.renamePlaylistRecord(target.id, to: trimmed, for: target.device)
+            }
+        }
+    }
+
     private func isEffectDevicePreset(_ preset: WLEDPreset) -> Bool {
         let segments = preset.state?.seg ?? (preset.segment.map { [$0] } ?? [])
         if let fx = segments.compactMap(\.fx).first {
@@ -345,7 +565,8 @@ struct PresetsListView: View {
             sectionHeader("Colors", icon: "sun.max")
             
             let colorPresets = store.colorPresets
-            if colorPresets.isEmpty {
+            let recoveredPresets = recoveredColorDevicePresets
+            if colorPresets.isEmpty && recoveredPresets.isEmpty {
                 emptyStateView(
                     icon: "paintbrush",
                     message: "No saved colors",
@@ -353,7 +574,7 @@ struct PresetsListView: View {
                 )
             } else {
                 VStack(spacing: 8) {
-                    let presetMutationLocked = viewModel.presetWriteInProgress.contains(device.id)
+                    let presetMutationLocked = viewModel.isPersistentPresetStoreEditBlocked(for: device.id)
                         || automationStore.hasAnyDeletionInProgress
                     ForEach(colorPresets) { preset in
                         let alexaCandidate = colorAlexaCandidate(preset)
@@ -413,7 +634,7 @@ struct PresetsListView: View {
                             }
                         }
                     }, onEdit: {
-                        onRequestRename(.color(preset))
+                        startPresetRename(.color(preset))
                     }, onDelete: {
                         guard !deletingColorPresetIds.contains(preset.id) else { return }
                         deletingColorPresetIds.insert(preset.id)
@@ -425,6 +646,35 @@ struct PresetsListView: View {
                             }
                         }
                     })
+                    }
+                    ForEach(recoveredPresets, id: \.id) { preset in
+                        let preview = devicePresetPreview(for: preset)
+                        DevicePresetRecordRow(
+                            preset: preset,
+                            previewGradient: preview.gradient,
+                            previewBrightness: preview.brightness,
+                            isDeleting: viewModel.isDeletingPresetRecord(preset.id, for: device),
+                            isInteractionLocked: presetMutationLocked,
+                            onApply: {
+                                Task {
+                                    await viewModel.cancelActiveTransitionIfNeeded(for: device)
+                                    _ = await viewModel.applyPresetId(
+                                        preset.id,
+                                        to: device,
+                                        transitionDeciseconds: 7,
+                                        preferWebSocketFirst: false
+                                    )
+                                }
+                            },
+                            onEdit: {
+                                startPresetRename(.devicePreset(id: preset.id, name: preset.displayName, device: device))
+                            },
+                            onDelete: {
+                                Task {
+                                    _ = await viewModel.deletePresetRecord(preset.id, for: device)
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -439,7 +689,8 @@ struct PresetsListView: View {
                 sectionHeader("Transitions", icon: "arrow.triangle.2.circlepath")
                 
                 let transitionPresets = store.transitionPresets(for: device.id)
-                if transitionPresets.isEmpty {
+                let recoveredPlaylists = recoveredTransitionDevicePlaylists
+                if transitionPresets.isEmpty && recoveredPlaylists.isEmpty {
                     emptyStateView(
                         icon: "arrow.triangle.2.circlepath",
                         message: "No saved transitions",
@@ -448,7 +699,7 @@ struct PresetsListView: View {
                 } else {
                     VStack(spacing: 8) {
                         let queuedPresetId = viewModel.queuedTransitionPresetApplyByDeviceId[device.id]
-                        let presetMutationLocked = viewModel.presetWriteInProgress.contains(device.id)
+                        let presetMutationLocked = viewModel.isPersistentPresetStoreEditBlocked(for: device.id)
                             || automationStore.hasAnyDeletionInProgress
                         ForEach(transitionPresets) { preset in
                             let alexaCandidate = transitionAlexaCandidate(preset)
@@ -466,7 +717,7 @@ struct PresetsListView: View {
                                     _ = await viewModel.applyTransitionPreset(preset, to: device)
                                 }
                             }, onEdit: {
-                                onRequestRename(.transition(preset))
+                                startPresetRename(.transition(preset))
                             }, onDelete: {
                                 guard !deletingTransitionPresetIds.contains(preset.id) else { return }
                                 deletingTransitionPresetIds.insert(preset.id)
@@ -479,6 +730,35 @@ struct PresetsListView: View {
                                 }
                             })
                         }
+                        let presetById = Dictionary(uniqueKeysWithValues: nonPlaylistDevicePresets.map { ($0.id, $0) })
+                        ForEach(recoveredPlaylists, id: \.id) { playlist in
+                            DevicePlaylistRecordRow(
+                                playlist: playlist,
+                                preview: devicePlaylistPreview(for: playlist, presetById: presetById),
+                                isDeleting: viewModel.isDeletingPlaylistRecord(playlist.id, for: device),
+                                onRun: {
+                                    Task {
+                                        _ = await viewModel.startPlaylist(
+                                            device: device,
+                                            playlistId: playlist.id,
+                                            runTitle: playlist.displayName,
+                                            expectedDurationSeconds: nil,
+                                            transitionDeciseconds: nil,
+                                            runKind: .transition,
+                                            preferWebSocketFirst: false
+                                        )
+                                    }
+                                },
+                                onEdit: {
+                                    startPresetRename(.devicePlaylist(id: playlist.id, name: playlist.displayName, device: device))
+                                },
+                                onDelete: {
+                                    Task {
+                                        await viewModel.deletePlaylist(playlist, for: device)
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -487,7 +767,8 @@ struct PresetsListView: View {
                 sectionHeader("Animations", icon: "sparkles")
                 
                 let effectPresets = store.effectPresets(for: device.id)
-                if effectPresets.isEmpty {
+                let recoveredPresets = recoveredEffectDevicePresets
+                if effectPresets.isEmpty && recoveredPresets.isEmpty {
                     emptyStateView(
                         icon: "sparkles",
                         message: "No saved animations",
@@ -495,7 +776,7 @@ struct PresetsListView: View {
                     )
                 } else {
                     VStack(spacing: 8) {
-                        let presetMutationLocked = viewModel.presetWriteInProgress.contains(device.id)
+                        let presetMutationLocked = viewModel.isPersistentPresetStoreEditBlocked(for: device.id)
                             || automationStore.hasAnyDeletionInProgress
                         ForEach(effectPresets) { preset in
                             let alexaCandidate = effectAlexaCandidate(preset)
@@ -571,7 +852,7 @@ struct PresetsListView: View {
                                 }
                             }
                         }, onEdit: {
-                            onRequestRename(.effect(preset))
+                            startPresetRename(.effect(preset))
                         }, onDelete: {
                             guard !deletingEffectPresetIds.contains(preset.id) else { return }
                             deletingEffectPresetIds.insert(preset.id)
@@ -583,6 +864,40 @@ struct PresetsListView: View {
                                 }
                             }
                         })
+                        }
+                        ForEach(recoveredPresets, id: \.id) { preset in
+                            let preview = devicePresetPreview(for: preset)
+                            DeviceEffectRecordRow(
+                                preset: preset,
+                                previewGradient: preview.gradient,
+                                previewBrightness: preview.brightness,
+                                effectId: effectIdForDevicePreset(preset),
+                                isDeleting: viewModel.isDeletingPresetRecord(preset.id, for: device),
+                                isInteractionLocked: presetMutationLocked,
+                                onApply: {
+                                    Task {
+                                        await viewModel.cancelActiveRun(
+                                            for: device,
+                                            force: true,
+                                            endReason: .cancelledByManualInput
+                                        )
+                                        _ = await viewModel.applyPresetId(
+                                            preset.id,
+                                            to: device,
+                                            transitionDeciseconds: 0,
+                                            preferWebSocketFirst: false
+                                        )
+                                    }
+                                },
+                                onEdit: {
+                                    startPresetRename(.devicePreset(id: preset.id, name: preset.displayName, device: device))
+                                },
+                                onDelete: {
+                                    Task {
+                                        _ = await viewModel.deletePresetRecord(preset.id, for: device)
+                                    }
+                                }
+                            )
                         }
                     }
                 }
@@ -601,7 +916,7 @@ struct PresetsListView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Automation Assets (Advanced)", systemImage: "folder")
-                    .font(AppTypography.style(.headline))
+                    .font(DeviceDetailTypography.sectionTitle)
                     .foregroundColor(.white)
                 Spacer()
             }
@@ -645,7 +960,7 @@ struct PresetsListView: View {
                                                 _ = await viewModel.startPlaylist(
                                                     device: device,
                                                     playlistId: playlist.id,
-                                                    runTitle: playlist.name,
+                                                    runTitle: playlist.displayName,
                                                     expectedDurationSeconds: nil,
                                                     transitionDeciseconds: nil,
                                                     runKind: .automation,
@@ -654,7 +969,7 @@ struct PresetsListView: View {
                                             }
                                         },
                                         onEdit: {
-                                            onRequestRename(.devicePlaylist(id: playlist.id, name: playlist.name, device: device))
+                                            startPresetRename(.devicePlaylist(id: playlist.id, name: playlist.displayName, device: device))
                                         },
                                         onDelete: {
                                             Task {
@@ -691,7 +1006,7 @@ struct PresetsListView: View {
                                             }
                                         },
                                         onEdit: {
-                                            onRequestRename(.devicePreset(id: preset.id, name: preset.name, device: device))
+                                            startPresetRename(.devicePreset(id: preset.id, name: preset.displayName, device: device))
                                         },
                                         onDelete: {
                                             Task {
@@ -707,7 +1022,7 @@ struct PresetsListView: View {
                                 Image(systemName: "folder.fill")
                                     .foregroundColor(.white.opacity(0.85))
                                 Text(folder.automationName)
-                                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                                    .font(DeviceDetailTypography.cardTitle)
                                     .foregroundColor(.white)
                                     .lineLimit(1)
                                 Spacer()
@@ -794,7 +1109,7 @@ struct PresetsListView: View {
                     ForEach(presets) { preset in
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(preset.name)
+                                Text(preset.displayName)
                                     .font(AppTypography.style(.subheadline, weight: .medium))
                                     .foregroundColor(.white)
                                 Text("Preset \(preset.id)")
@@ -839,7 +1154,7 @@ struct PresetsListView: View {
                 Button("New") {
                     playlistEditorOriginalId = nil
                     playlistEditorDraft = PlaylistEditorDraft.defaultDraft
-                    isPlaylistEditorPresented = true
+                    presentedSheet = .playlistEditor
                 }
                 .font(AppTypography.style(.caption, weight: .semibold))
                 .foregroundColor(.white)
@@ -885,7 +1200,7 @@ struct PresetsListView: View {
                     ForEach(playlists) { playlist in
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(playlist.name)
+                                Text(playlist.displayName)
                                     .font(AppTypography.style(.subheadline, weight: .medium))
                                     .foregroundColor(.white)
                                 Text("Steps: \(playlist.presets.count)")
@@ -906,7 +1221,7 @@ struct PresetsListView: View {
                                     _ = await viewModel.startPlaylist(
                                         device: device,
                                         playlistId: playlist.id,
-                                        runTitle: playlist.name,
+                                        runTitle: playlist.displayName,
                                         expectedDurationSeconds: nil,
                                         transitionDeciseconds: nil,
                                         runKind: .effect,
@@ -926,7 +1241,7 @@ struct PresetsListView: View {
                             Button("Edit") {
                                 playlistEditorOriginalId = playlist.id
                                 playlistEditorDraft = PlaylistEditorDraft(playlist: playlist)
-                                isPlaylistEditorPresented = true
+                                presentedSheet = .playlistEditor
                             }
                             .font(AppTypography.style(.caption, weight: .semibold))
                             .foregroundColor(.white)
@@ -1181,10 +1496,10 @@ struct PresetsListView: View {
                 .font(AppTypography.style(.title2))
                 .foregroundColor(.white.opacity(0.58))
             Text(message)
-                .font(AppTypography.style(.caption))
+                .font(DeviceDetailTypography.cardTitle)
                 .foregroundColor(.white.opacity(0.74))
             Text(hint)
-                .font(AppTypography.style(.caption2))
+                .font(DeviceDetailTypography.body)
                 .foregroundColor(.white.opacity(0.58))
         }
         .frame(maxWidth: .infinity)
@@ -1290,7 +1605,7 @@ struct ColorPresetRow: View {
             // Header row: Name + Edit icon
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
@@ -1344,6 +1659,28 @@ struct ColorPresetRow: View {
         .recentPresetSaveHighlight(isRecentlySaved)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
+        .contextMenu {
+            Button(action: handleApply) {
+                Label("Apply", systemImage: "play.fill")
+            }
+            if let onAddToAlexa {
+                Button(action: onAddToAlexa) {
+                    Label(
+                        isAlexaFavorite ? "In Alexa Favorites" : "Add to Alexa Favorites",
+                        systemImage: isAlexaFavorite ? "checkmark" : "plus"
+                    )
+                }
+                .disabled(isInteractionLocked || isAlexaFavorite || !canAddToAlexa)
+            }
+            Button(action: onEdit) {
+                Label("Rename", systemImage: "pencil")
+            }
+            .disabled(isInteractionLocked)
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(isDeleting || isInteractionLocked)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Color preset \(preset.name)")
         .accessibilityAddTraits(.isButton)
@@ -1422,13 +1759,13 @@ struct AlexaFavoriteRow: View {
         HStack(spacing: 10) {
             Text("\(favorite.slot)")
                 .font(AppTypography.style(.caption, weight: .bold))
-                .foregroundColor(.black)
+                .foregroundColor(.white)
                 .frame(width: 26, height: 26)
-                .background(Circle().fill(Color.white))
+                .background(Circle().fill(Color.white.opacity(0.18)))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(favorite.displayName)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
                     .lineLimit(1)
                 HStack(spacing: 6) {
@@ -1484,7 +1821,7 @@ struct TransitionPresetRow: View {
             // Header row aligning with color preset styling
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
@@ -1532,6 +1869,28 @@ struct TransitionPresetRow: View {
         .recentPresetSaveHighlight(isRecentlySaved)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
+        .contextMenu {
+            Button(action: handleApply) {
+                Label("Apply", systemImage: "play.fill")
+            }
+            if let onAddToAlexa {
+                Button(action: onAddToAlexa) {
+                    Label(
+                        isAlexaFavorite ? "In Alexa Favorites" : "Add to Alexa Favorites",
+                        systemImage: isAlexaFavorite ? "checkmark" : "plus"
+                    )
+                }
+                .disabled(isInteractionLocked || isAlexaFavorite || !canAddToAlexa)
+            }
+            Button(action: onEdit) {
+                Label("Rename", systemImage: "pencil")
+            }
+            .disabled(isInteractionLocked)
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(isDeleting || isInteractionLocked)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Transition preset \(preset.name)")
         .accessibilityAddTraits(.isButton)
@@ -1656,6 +2015,7 @@ struct DevicePresetRecordRow: View {
     let previewGradient: LEDGradient
     let previewBrightness: Int
     let isDeleting: Bool
+    var isInteractionLocked: Bool = false
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1663,8 +2023,8 @@ struct DevicePresetRecordRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text(preset.name)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                Text(preset.displayName)
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
                     .lineLimit(1)
 
@@ -1674,10 +2034,11 @@ struct DevicePresetRecordRow: View {
 
                 Spacer()
 
-                PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
+                PresetDeleteButton(isDeleting: isDeleting, isDisabled: isInteractionLocked, action: onDelete)
 
                 PresetIconButton(
                     systemName: "pencil",
+                    isDisabled: isInteractionLocked,
                     accessibilityLabel: "Rename device preset",
                     action: onEdit
                 )
@@ -1714,8 +2075,21 @@ struct DevicePresetRecordRow: View {
         .presetGlassCard(cornerRadius: 18)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
+        .contextMenu {
+            Button(action: handleApply) {
+                Label("Apply", systemImage: "play.fill")
+            }
+            Button(action: onEdit) {
+                Label("Rename", systemImage: "pencil")
+            }
+            .disabled(isInteractionLocked)
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(isDeleting || isInteractionLocked)
+        }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Device preset \(preset.name)")
+        .accessibilityLabel("Device preset \(preset.displayName)")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -1764,7 +2138,8 @@ struct DeviceEffectRecordRow: View {
     let previewGradient: LEDGradient
     let previewBrightness: Int
     let effectId: Int?
-    let isDeleting: Bool = false
+    let isDeleting: Bool
+    var isInteractionLocked: Bool = false
     let onApply: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1772,8 +2147,8 @@ struct DeviceEffectRecordRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text(preset.name)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                Text(preset.displayName)
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
                     .lineLimit(1)
 
@@ -1787,10 +2162,11 @@ struct DeviceEffectRecordRow: View {
 
                 Spacer()
 
-                PresetDeleteButton(isDeleting: isDeleting, action: onDelete)
+                PresetDeleteButton(isDeleting: isDeleting, isDisabled: isInteractionLocked, action: onDelete)
 
                 PresetIconButton(
                     systemName: "pencil",
+                    isDisabled: isInteractionLocked,
                     accessibilityLabel: "Rename device effect preset",
                     action: onEdit
                 )
@@ -1827,8 +2203,21 @@ struct DeviceEffectRecordRow: View {
         .presetGlassCard(cornerRadius: 18)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
+        .contextMenu {
+            Button(action: handleApply) {
+                Label("Apply", systemImage: "play.fill")
+            }
+            Button(action: onEdit) {
+                Label("Rename", systemImage: "pencil")
+            }
+            .disabled(isInteractionLocked)
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(isDeleting || isInteractionLocked)
+        }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Device effect preset \(preset.name)")
+        .accessibilityLabel("Device effect preset \(preset.displayName)")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -1879,8 +2268,8 @@ struct DevicePlaylistRecordRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text(playlist.name)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                Text(playlist.displayName)
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
                     .lineLimit(1)
 
@@ -1912,8 +2301,20 @@ struct DevicePlaylistRecordRow: View {
         .presetGlassCard(cornerRadius: 18)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleRun)
+        .contextMenu {
+            Button(action: handleRun) {
+                Label("Run", systemImage: "play.fill")
+            }
+            Button(action: onEdit) {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(isDeleting)
+        }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Device playlist \(playlist.name)")
+        .accessibilityLabel("Device playlist \(playlist.displayName)")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -2000,7 +2401,7 @@ struct EffectPresetRow: View {
             // Header row
             HStack(spacing: 8) {
                 Text(preset.name)
-                    .font(AppTypography.style(.subheadline, weight: .semibold))
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
                     .lineLimit(1)
                 
@@ -2085,6 +2486,28 @@ struct EffectPresetRow: View {
         .recentPresetSaveHighlight(isRecentlySaved)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onTapGesture(perform: handleApply)
+        .contextMenu {
+            Button(action: handleApply) {
+                Label("Apply", systemImage: "play.fill")
+            }
+            if let onAddToAlexa {
+                Button(action: onAddToAlexa) {
+                    Label(
+                        isAlexaFavorite ? "In Alexa Favorites" : "Add to Alexa Favorites",
+                        systemImage: isAlexaFavorite ? "checkmark" : "plus"
+                    )
+                }
+                .disabled(isInteractionLocked || isAlexaFavorite || !canAddToAlexa)
+            }
+            Button(action: onEdit) {
+                Label("Rename", systemImage: "pencil")
+            }
+            .disabled(isInteractionLocked)
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(isDeleting || isInteractionLocked)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Effect preset \(preset.name)")
         .accessibilityAddTraits(.isButton)
@@ -2254,7 +2677,7 @@ private struct PlaylistEditorDraft: Equatable {
             )
         }
         self.init(
-            name: playlist.name,
+            name: playlist.displayName,
             steps: builtSteps,
             repeatCount: min(max(playlist.repeat ?? 1, 0), 127),
             shuffle: playlist.shuffle == 1 ? 1 : 0,
@@ -2315,12 +2738,12 @@ private struct PlaylistEditorSheet: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Device: \(device.name)")
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.72))
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Playlist Name")
                             .font(AppTypography.style(.caption, weight: .semibold))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.white.opacity(0.72))
                         TextField("Playlist name", text: $draft.name)
                             .textFieldStyle(.roundedBorder)
                     }
@@ -2383,7 +2806,7 @@ private struct PlaylistEditorSheet: View {
                                         draft.steps.remove(at: index)
                                     } label: {
                                         Image(systemName: "trash")
-                                            .foregroundColor(.red)
+                                            .foregroundColor(.white)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -2470,112 +2893,42 @@ private struct PlaylistEditorSheet: View {
     }
 }
 
-// MARK: - Edit Preset Name Popup
+// MARK: - Modal Presentation
 
-struct EditPresetNamePopup: View {
-    let currentName: String
-    @Binding var editedName: String
-    @Binding var isPresented: Bool
-    @FocusState.Binding var isTextFieldFocused: Bool
-    let onSave: (String) -> Void
-    let onCancel: () -> Void
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("Edit Preset Name")
-                .font(AppTypography.style(.headline, weight: .semibold))
-                .foregroundColor(.white)
-                .padding(.top, 4)
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Preset Name")
-                    .font(AppTypography.style(.subheadline, weight: .medium))
-                    .foregroundColor(.white.opacity(0.9))
-                
-                TextField("Enter preset name", text: $editedName)
-                    .textFieldStyle(.plain)
-                    .font(AppTypography.style(.body))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.white.opacity(0.15))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                    )
-                    .focused($isTextFieldFocused)
-                    .submitLabel(.done)
-                    .onSubmit {
-                        if !editedName.isEmpty && editedName != currentName {
-                            onSave(editedName)
-                        }
-                    }
-            }
-            
-            HStack(spacing: 12) {
-                Button(action: {
-                    onCancel()
-                }) {
-                    Text("Cancel")
-                        .font(AppTypography.style(.subheadline, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.15))
-                        .cornerRadius(10)
-                        .contentShape(RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-                
-                Button(action: {
-                    if !editedName.isEmpty && editedName != currentName {
-                        onSave(editedName)
-                    }
-                }) {
-                    Text("Save")
-                        .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.25))
-                        .cornerRadius(10)
-                        .contentShape(RoundedRectangle(cornerRadius: 10))
-                        .opacity(editedName.isEmpty || editedName == currentName ? 0.4 : 1.0)
-                }
-                .buttonStyle(.plain)
-                .disabled(editedName.isEmpty || editedName == currentName)
-            }
-        }
-        .padding(24)
-        .frame(maxWidth: 320)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                )
-        )
-        .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 15)
-        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isPresented)
-        .onAppear {
-            editedName = currentName
+private enum PresetsSheet: Identifiable {
+    case playlistEditor
+
+    var id: String {
+        switch self {
+        case .playlistEditor:
+            return "playlist-editor"
         }
     }
 }
 
 // MARK: - Rename Helpers
 
-enum PresetRenameContext {
+enum PresetRenameContext: Identifiable {
     case color(ColorPreset)
     case transition(TransitionPreset)
     case effect(WLEDEffectPreset)
     case devicePreset(id: Int, name: String, device: WLEDDevice)
     case devicePlaylist(id: Int, name: String, device: WLEDDevice)
+
+    var id: String {
+        switch self {
+        case .color(let preset):
+            return "color-\(preset.id.uuidString)"
+        case .transition(let preset):
+            return "transition-\(preset.id.uuidString)"
+        case .effect(let preset):
+            return "effect-\(preset.id.uuidString)"
+        case .devicePreset(let id, _, let device):
+            return "device-preset-\(device.id)-\(id)"
+        case .devicePlaylist(let id, _, let device):
+            return "device-playlist-\(device.id)-\(id)"
+        }
+    }
     
     var currentName: String {
         switch self {
@@ -2591,4 +2944,20 @@ enum PresetRenameContext {
             return name
         }
     }
+
+    var navigationTitle: String {
+        switch self {
+        case .color:
+            return "Rename Color"
+        case .transition:
+            return "Rename Transition"
+        case .effect:
+            return "Rename Animation"
+        case .devicePreset:
+            return "Rename Preset"
+        case .devicePlaylist:
+            return "Rename Playlist"
+        }
+    }
+
 }

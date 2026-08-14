@@ -252,7 +252,7 @@ struct AutomationView: View {
                                 toggleShortcutPin(automation: automation, pinned: pinned)
                             },
                             onRetrySync: {
-                                automationStore.retryOnDeviceSync(for: automation.id)
+                                automationStore.retryRoutine(id: automation.id)
                             },
                             onDelete: {
                                 automationPendingDelete = automation
@@ -401,7 +401,7 @@ private extension AutomationView {
             let sceneName = payload.sceneName ?? scenesStore.scenes.first(where: { $0.id == payload.sceneId })?.name ?? "Scene"
             return "Scene · \(sceneName)"
         case .preset(let payload):
-            return "Preset · #\(payload.presetId)"
+            return payload.paletteName ?? "Saved color"
         case .playlist(let payload):
             let playlistName = payload.playlistName ?? "Playlist #\(payload.playlistId)"
             return "Playlist · \(playlistName)"
@@ -422,27 +422,31 @@ private extension AutomationView {
 
     var createAutomationButton: some View {
         Button(action: { beginCreateAutomation() }) {
-            HStack(spacing: 6) {
-                Image(systemName: "plus.circle")
-                    .font(AppTypography.style(.caption))
-                Text("Create Automation")
-                    .font(AppTypography.style(.caption, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .foregroundColor(.white.opacity(0.92))
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.12))
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                    )
-            )
+            createAutomationButtonLabel
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.12))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                        )
+                )
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Create automation")
+    }
+
+    var createAutomationButtonLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "plus.circle")
+                .font(AppTypography.style(.caption))
+            Text("Create Automation")
+                .font(AppTypography.style(.caption, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundColor(theme.textPrimary.opacity(0.92))
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
     }
 
     var nextAutomationID: UUID? {

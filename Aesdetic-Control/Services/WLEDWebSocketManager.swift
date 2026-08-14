@@ -346,12 +346,12 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     }
     
     /// Send a state update to a device via WebSocket
-    func sendStateUpdate(_ update: WLEDStateUpdate, to deviceId: String) {
+    func sendStateUpdate(_ update: WLEDStateUpdate, to deviceId: String, debugLogging: Bool = true) {
         guard let prepared = prepareOutgoingStateMessage(update, to: deviceId) else {
             return
         }
         #if DEBUG
-        if let jsonString = prepared.debugJSONString {
+        if debugLogging, let jsonString = prepared.debugJSONString {
             print("🔵 WebSocket sending to \(deviceId): \(jsonString)")
             if let seg = update.seg?.first {
                 print("🔵 Segment: id=\(seg.id ?? -1), col=\(seg.col?.description ?? "nil"), cct=\(seg.cct ?? -1), fx=\(seg.fx ?? -1)")
@@ -373,13 +373,14 @@ class WLEDWebSocketManager: ObservableObject, @unchecked Sendable {
     func sendStateUpdateAwaitingDispatch(
         _ update: WLEDStateUpdate,
         to deviceId: String,
-        timeout: TimeInterval = 0.35
+        timeout: TimeInterval = 0.35,
+        debugLogging: Bool = true
     ) async -> Bool {
         guard let prepared = prepareOutgoingStateMessage(update, to: deviceId) else {
             return false
         }
         #if DEBUG
-        if let jsonString = prepared.debugJSONString {
+        if debugLogging, let jsonString = prepared.debugJSONString {
             print("🔵 WebSocket sending to \(deviceId): \(jsonString)")
             if let seg = update.seg?.first {
                 print("🔵 Segment: id=\(seg.id ?? -1), col=\(seg.col?.description ?? "nil"), cct=\(seg.cct ?? -1), fx=\(seg.fx ?? -1)")

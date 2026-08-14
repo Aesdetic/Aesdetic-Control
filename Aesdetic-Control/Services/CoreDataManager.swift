@@ -53,6 +53,12 @@ class CoreDataManager: ObservableObject {
         context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         return context
     }()
+
+    private lazy var deviceWriteContext: NSManagedObjectContext = {
+        let context = persistentContainer.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        return context
+    }()
     
     var viewContext: NSManagedObjectContext {
         return persistentContainer.viewContext
@@ -98,16 +104,18 @@ class CoreDataManager: ObservableObject {
     
     /// Save a device using optimized background context
     func saveDevice(_ device: WLEDDevice) async {
-        await performBackgroundSave { context in
-            let deviceEntity = WLEDDeviceEntity.findOrCreate(for: device.id, in: context)
-            deviceEntity.updateFromDevice(device)
+        let normalizedDevice = WLEDDeviceIdentity.normalized(device)
+        await performDeviceSave { context in
+            let deviceEntity = WLEDDeviceEntity.findOrCreate(for: normalizedDevice.id, in: context)
+            deviceEntity.updateFromDevice(normalizedDevice)
         }
     }
     
     /// Save multiple devices efficiently in a single transaction
     func saveDevices(_ devices: [WLEDDevice]) async {
-        await performBackgroundSave { context in
-            for device in devices {
+        let reconciledDevices = WLEDDeviceIdentity.reconciledDevices(devices)
+        await performDeviceSave { context in
+            for device in reconciledDevices {
                 let deviceEntity = WLEDDeviceEntity.findOrCreate(for: device.id, in: context)
                 deviceEntity.updateFromDevice(device)
             }
@@ -122,7 +130,7 @@ class CoreDataManager: ObservableObject {
             let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
             do {
                 let entities = try context.fetch(request)
-                return entities.compactMap { $0.toWLEDDevice() }
+                return Self.reconcileDeviceEntities(entities, in: context, logger: logger)
             } catch {
                 logger.error("Failed to fetch devices: \(error.localizedDescription, privacy: .public)")
                 return []
@@ -139,7 +147,7 @@ class CoreDataManager: ObservableObject {
             let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
             do {
                 let entities = try context.fetch(request)
-                result = entities.compactMap { $0.toWLEDDevice() }
+                result = Self.reconcileDeviceEntities(entities, in: context, logger: logger)
             } catch {
                 logger.error("Failed to fetch devices (sync): \(error.localizedDescription, privacy: .public)")
                 result = []
@@ -154,10 +162,10 @@ class CoreDataManager: ObservableObject {
         let logger = logger
         return await context.perform {
             let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", id)
-            request.fetchLimit = 1
             do {
-                return try context.fetch(request).first?.toWLEDDevice()
+                let entities = try context.fetch(request)
+                return Self.reconcileDeviceEntities(entities, in: context, logger: logger)
+                    .first(where: { WLEDDeviceIdentity.matches($0.id, id) })
             } catch {
                 logger.error("Failed to fetch device \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 return nil
@@ -167,12 +175,13 @@ class CoreDataManager: ObservableObject {
     
     /// Delete a device by ID
     func deleteDevice(id: String) async {
-        await performBackgroundSave { context in
+        await performDeviceSave { context in
             let request: NSFetchRequest<WLEDDeviceEntity> = WLEDDeviceEntity.fetchRequest()
-            request.predicate = NSPredicate(format: "id == %@", id)
             
             do {
-                let entities = try context.fetch(request)
+                let entities = try context.fetch(request).filter {
+                    WLEDDeviceIdentity.matches($0.id, id)
+                }
                 for entity in entities {
                     context.delete(entity)
                 }
@@ -253,6 +262,64 @@ class CoreDataManager: ObservableObject {
     }
     
     // MARK: - Batch Operations for Performance
+
+    private func performDeviceSave(_ operation: @escaping (NSManagedObjectContext) -> Void) async {
+        let context = deviceWriteContext
+        let logger = logger
+
+        await context.perform {
+            operation(context)
+
+            guard context.hasChanges else { return }
+
+            do {
+                try context.save()
+            } catch {
+                logger.error("Device save failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private static func reconcileDeviceEntities(
+        _ entities: [WLEDDeviceEntity],
+        in context: NSManagedObjectContext,
+        logger: Logger
+    ) -> [WLEDDevice] {
+        let records = entities.compactMap { entity -> (WLEDDeviceEntity, WLEDDevice)? in
+            guard let device = entity.toWLEDDevice() else { return nil }
+            return (entity, device)
+        }
+        let reconciled = WLEDDeviceIdentity.reconciledDevices(records.map(\.1))
+        let entitiesByIdentity = Dictionary(grouping: records, by: {
+            WLEDDeviceIdentity.deduplicationKey(for: $0.1.id)
+        })
+
+        for device in reconciled {
+            let key = WLEDDeviceIdentity.deduplicationKey(for: device.id)
+            guard let matchingRecords = entitiesByIdentity[key],
+                  let keeper = matchingRecords.max(by: { $0.1.lastSeen < $1.1.lastSeen })?.0 else {
+                continue
+            }
+
+            if matchingRecords.count > 1 || keeper.id != device.id {
+                keeper.id = device.id
+                keeper.updateFromDevice(device)
+                for duplicate in matchingRecords.map(\.0) where duplicate != keeper {
+                    context.delete(duplicate)
+                }
+                logger.info("Reconciled \(matchingRecords.count, privacy: .public) records for device \(device.id, privacy: .public)")
+            }
+        }
+
+        if context.hasChanges {
+            do {
+                try context.save()
+            } catch {
+                logger.error("Failed to reconcile duplicate devices: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return reconciled
+    }
     
     private func performBackgroundSave(_ operation: @escaping (NSManagedObjectContext) -> Void) async {
         let context = persistentContainer.newBackgroundContext()

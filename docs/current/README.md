@@ -1,6 +1,6 @@
 # Current Documentation
 
-Last updated: 2026-06-04 (Asia/Hong_Kong)
+Last updated: 2026-07-10 (Asia/Hong_Kong)
 
 These files are the current source of truth for app behavior.
 
@@ -10,11 +10,13 @@ These files are the current source of truth for app behavior.
 2. [Feature status matrix](FEATURE_STATUS_MATRIX.md)
 3. [Code anchors](CODE_ANCHORS_CURRENT.md)
 4. [Automation system overview](AUTOMATION_SYSTEM_OVERVIEW.md)
-5. [Automation delete status](AUTOMATION_DELETE_STATUS.md)
-6. [Testing and logs](TESTING_AND_LOGS_CURRENT.md)
-7. [Demo flows](DEMO_FLOWS_CURRENT.md)
-8. [WLED API coverage](WLED_API_COVERAGE.md)
-9. [WLED settings production parity](WLED_SETTINGS_PRODUCTION_PARITY.md)
+5. [Automation timer correctness](AUTOMATION_TIMER_CORRECTNESS.md)
+6. [Automation delete status](AUTOMATION_DELETE_STATUS.md)
+7. [Testing and logs](TESTING_AND_LOGS_CURRENT.md)
+8. [Demo flows](DEMO_FLOWS_CURRENT.md)
+9. [WLED API coverage](WLED_API_COVERAGE.md)
+10. [WLED settings production parity](WLED_SETTINGS_PRODUCTION_PARITY.md)
+11. [Settings system QA and release gate](SETTINGS_SYSTEM_QA.md)
 
 ## What These Docs Cover
 

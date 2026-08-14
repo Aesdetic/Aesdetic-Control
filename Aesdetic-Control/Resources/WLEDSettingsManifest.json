@@ -1,0 +1,3145 @@
+{
+  "categories": [
+    {
+      "fields": [
+        {
+          "configPath": "eth.type",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "ETH",
+          "label": "Ethernet Type",
+          "options": [
+            {
+              "label": "None",
+              "value": "0"
+            },
+            {
+              "label": "IoTorero/ESP32Deux/RGB2Go",
+              "value": "6"
+            },
+            {
+              "label": "ABC! WLED V43 & compatible",
+              "value": "9"
+            },
+            {
+              "label": "ESP32-POE",
+              "value": "2"
+            },
+            {
+              "label": "ESP32-POE-WROVER",
+              "value": "11"
+            },
+            {
+              "label": "KIT-VE",
+              "value": "7"
+            },
+            {
+              "label": "LILYGO T-POE Pro",
+              "value": "12"
+            },
+            {
+              "label": "QuinLED Uno/Quad",
+              "value": "4"
+            },
+            {
+              "label": "QuinLED Octa & T-ETH-POE",
+              "value": "8"
+            },
+            {
+              "label": "QuinLED v4 Uno/Quad",
+              "value": "14"
+            },
+            {
+              "label": "QuinLED v4 Octa",
+              "value": "15"
+            },
+            {
+              "label": "Serg74-ETH32",
+              "value": "10"
+            },
+            {
+              "label": "TwilightLord-ESP32",
+              "value": "5"
+            },
+            {
+              "label": "WESP32",
+              "value": "3"
+            },
+            {
+              "label": "WT32-ETH01",
+              "value": "1"
+            },
+            {
+              "label": "Gledopto",
+              "value": "13"
+            }
+          ],
+          "section": "Ethernet Type",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "nw.dns[0]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "D0",
+          "label": "DNS server address",
+          "max": "255",
+          "min": "0",
+          "section": "DNS & mDNS",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "nw.dns[1]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "D1",
+          "label": ".",
+          "max": "255",
+          "min": "0",
+          "section": "DNS & mDNS",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "nw.dns[2]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "D2",
+          "label": ".",
+          "max": "255",
+          "min": "0",
+          "section": "DNS & mDNS",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "nw.dns[3]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "D3",
+          "label": ".",
+          "max": "255",
+          "min": "0",
+          "section": "DNS & mDNS",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "id.mdns",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "CM",
+          "label": "http://",
+          "section": "DNS & mDNS",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "ap.ssid",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "AS",
+          "label": "AP SSID (leave empty for no AP)",
+          "section": "Configure Access Point",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "ap.hide",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "AH",
+          "label": "Hide AP name",
+          "section": "Configure Access Point",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "ap.psk",
+          "control": "secret",
+          "htmlTag": "input",
+          "htmlType": "password",
+          "key": "AP",
+          "label": "AP password (leave empty for open)",
+          "secret": true,
+          "section": "Configure Access Point",
+          "sideEffects": [
+            "secret",
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "ap.chan",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "AC",
+          "label": "Access Point WiFi channel",
+          "max": "13",
+          "min": "1",
+          "section": "Configure Access Point",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "ap.behav",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "AB",
+          "label": "AP opens",
+          "options": [
+            {
+              "label": "No connection after boot",
+              "value": "0"
+            },
+            {
+              "label": "Disconnected",
+              "value": "1"
+            },
+            {
+              "label": "Always",
+              "value": "2"
+            },
+            {
+              "label": "Never (not recommended)",
+              "value": "3"
+            },
+            {
+              "label": "Temporary (no connection after boot)",
+              "value": "4"
+            }
+          ],
+          "section": "Configure Access Point",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "wifi.phy",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "FG",
+          "label": "Force 802.11g mode (ESP8266 only)",
+          "section": "WiFi Power",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "wifi.sleep",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "WS",
+          "label": "Disable WiFi sleep",
+          "section": "WiFi Power",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "wifi.txpwr",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "TX",
+          "label": "Max. TX power",
+          "options": [
+            {
+              "label": "19.5 dBm",
+              "value": "78"
+            },
+            {
+              "label": "19 dBm",
+              "value": "76"
+            },
+            {
+              "label": "18.5 dBm",
+              "value": "74"
+            },
+            {
+              "label": "17 dBm",
+              "value": "68"
+            },
+            {
+              "label": "15 dBm",
+              "value": "60"
+            },
+            {
+              "label": "13 dBm",
+              "value": "52"
+            },
+            {
+              "label": "11 dBm",
+              "value": "44"
+            },
+            {
+              "label": "8.5 dBm",
+              "value": "34"
+            },
+            {
+              "label": "7 dBm",
+              "value": "28"
+            },
+            {
+              "label": "5 dBm",
+              "value": "20"
+            },
+            {
+              "label": "2 dBm",
+              "value": "8"
+            }
+          ],
+          "section": "WiFi Power",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        },
+        {
+          "configPath": "nw.espnow",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RE",
+          "label": "Enable ESP-NOW",
+          "section": "ESP-NOW Wireless",
+          "sideEffects": [
+            "wifiReconnect"
+          ]
+        }
+      ],
+      "id": "wifi-network",
+      "page": "settings_wifi.htm",
+      "readOnly": false,
+      "requiresFeature": null,
+      "sections": [
+        "WiFi & Network Settings",
+        "Wireless network",
+        "Ethernet Type",
+        "DNS & mDNS",
+        "Configure Access Point",
+        "WiFi Power",
+        "ESP-NOW Wireless"
+      ],
+      "sourceFieldCount": 15,
+      "title": "WiFi & Network",
+      "webPath": "/settings/wifi"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "light.scale-bri",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "BF",
+          "label": "Global brightness factor",
+          "max": "255",
+          "min": "1",
+          "section": "LED setup",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "hw.led.maxpwr",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "ABL",
+          "label": "Enable automatic brightness limiter",
+          "section": "LED setup",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.led.maxpwr",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MA",
+          "label": "Maximum PSU Current",
+          "max": "65000",
+          "min": "250",
+          "section": "LED setup",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.led.ins[*].maxpwr",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "PPL",
+          "label": "Use per-output limiter",
+          "section": "LED setup",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "AS",
+          "label": "Show Advanced Settings",
+          "localOnly": true,
+          "section": "LED outputs:",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "light.aseg",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "MS",
+          "label": "Make a segment for each output",
+          "section": "LED outputs:",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "light.gc.col",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "GC",
+          "label": "Use Gamma correction for color",
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.gc.bri",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "GB",
+          "label": "Use Gamma correction for brightness",
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.gc.val",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "GV",
+          "label": "Use Gamma value",
+          "max": "3",
+          "min": "0.1",
+          "placeholder": "2.2",
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ],
+          "step": "0.1"
+        },
+        {
+          "configPath": "hw.led.cct",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "CCT",
+          "label": "White Balance correction",
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "hw.led.rgbwm",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "AW",
+          "label": "Global override for Auto-calculate white",
+          "options": [
+            {
+              "label": "Disabled",
+              "value": "255"
+            },
+            {
+              "label": "None",
+              "value": "0"
+            },
+            {
+              "label": "Brighter",
+              "value": "1"
+            },
+            {
+              "label": "Accurate",
+              "value": "2"
+            },
+            {
+              "label": "Dual",
+              "value": "3"
+            },
+            {
+              "label": "Max",
+              "value": "4"
+            }
+          ],
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "hw.led.cr",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "CR",
+          "label": "Calculate CCT from RGB",
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "hw.led.ic",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "IC",
+          "label": "CCT IC used (Athom 15W)",
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "hw.led.cb",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CB",
+          "label": "CCT blending (\u00b1100%)",
+          "max": "100",
+          "min": "-100",
+          "section": "Color & White",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "hw.btn.pull",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "IP",
+          "label": "Disable internal pull-up/down",
+          "section": "Buttons",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.btn.tt",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "TT",
+          "label": "Touch threshold",
+          "max": "100",
+          "min": "0",
+          "section": "Buttons",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.ir.pin",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "IR",
+          "label": "IR GPIO",
+          "max": "48",
+          "min": "-1",
+          "section": "IR Remote",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.ir.type",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "IT",
+          "label": "IR GPIO",
+          "options": [
+            {
+              "label": "Remote disabled",
+              "value": "0"
+            },
+            {
+              "label": "24-key RGB",
+              "value": "1"
+            },
+            {
+              "label": "24-key with CT",
+              "value": "2"
+            },
+            {
+              "label": "40-key blue",
+              "value": "3"
+            },
+            {
+              "label": "44-key RGB",
+              "value": "4"
+            },
+            {
+              "label": "21-key RGB",
+              "value": "5"
+            },
+            {
+              "label": "6-key black",
+              "value": "6"
+            },
+            {
+              "label": "9-key red",
+              "value": "7"
+            },
+            {
+              "label": "JSON remote",
+              "value": "8"
+            }
+          ],
+          "section": "IR Remote",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.ir.sel",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "MSO",
+          "label": "Apply IR change to main segment only",
+          "section": "IR Remote",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "file",
+          "fileUpload": true,
+          "htmlTag": "input",
+          "htmlType": "file",
+          "key": "data",
+          "label": "JSON file",
+          "section": "IR Remote",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.relay.pin",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "RL",
+          "label": "Relay GPIO",
+          "max": "48",
+          "min": "-1",
+          "section": "Relay",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.relay.rev",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RM",
+          "label": "Invert",
+          "section": "Relay",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.relay.odrain",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RO",
+          "label": "Open drain",
+          "section": "Relay",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "def.on",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "BO",
+          "label": "Turn LEDs on after power up/reset",
+          "section": "Power up",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "def.bri",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CA",
+          "label": "with brightness",
+          "max": "255",
+          "min": "1",
+          "section": "Power up",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "def.ps",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "BP",
+          "label": "Apply preset",
+          "max": "250",
+          "min": "0",
+          "section": "Power up",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.tr.dur",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "TD",
+          "label": "Default transition time",
+          "max": "65500",
+          "min": "0",
+          "section": "Transitions",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.tr.hrp",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "TH",
+          "label": "TH",
+          "section": "Random Palettes",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.tr.rpc",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "TP",
+          "label": "Cycle Time",
+          "max": "255",
+          "min": "1",
+          "section": "Random Palettes",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.nl.dur",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "TL",
+          "label": "Default duration",
+          "max": "255",
+          "min": "1",
+          "section": "Timed light",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.nl.tbri",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "TB",
+          "label": "Default target brightness",
+          "max": "255",
+          "min": "0",
+          "section": "Timed light",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.nl.mode",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "TW",
+          "label": "Mode",
+          "options": [
+            {
+              "label": "Wait and set",
+              "value": "0"
+            },
+            {
+              "label": "Fade",
+              "value": "1"
+            },
+            {
+              "label": "Fade Color",
+              "value": "2"
+            },
+            {
+              "label": "Sunrise",
+              "value": "3"
+            }
+          ],
+          "section": "Timed light",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "light.pal-mode",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "PB",
+          "label": "Palette wrapping",
+          "options": [
+            {
+              "label": "Linear (wrap if moving)",
+              "value": "0"
+            },
+            {
+              "label": "Linear (always wrap)",
+              "value": "1"
+            },
+            {
+              "label": "Linear (never wrap)",
+              "value": "2"
+            },
+            {
+              "label": "None (not recommended)",
+              "value": "3"
+            }
+          ],
+          "section": "Advanced",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "configPath": "hw.led.fps",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "FR",
+          "label": "Target refresh rate",
+          "max": "250",
+          "min": "0",
+          "section": "Advanced",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "control": "file",
+          "fileUpload": true,
+          "htmlTag": "input",
+          "htmlType": "file",
+          "key": "data2",
+          "label": "Config template",
+          "section": "Advanced",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        }
+      ],
+      "id": "led-hardware",
+      "page": "settings_leds.htm",
+      "readOnly": false,
+      "requiresFeature": null,
+      "sections": [
+        "LED setup",
+        "LED outputs:",
+        "Color & White",
+        "Hardware setup",
+        "Buttons",
+        "IR Remote",
+        "Relay",
+        "General settings",
+        "Power up",
+        "Transitions",
+        "Random Palettes",
+        "Timed light",
+        "Advanced"
+      ],
+      "sourceFieldCount": 35,
+      "title": "LED & Hardware",
+      "webPath": "/settings/leds"
+    },
+    {
+      "fields": [],
+      "id": "pin-info",
+      "page": "settings_pininfo.htm",
+      "readOnly": true,
+      "requiresFeature": null,
+      "sections": [
+        "Pin Info"
+      ],
+      "sourceFieldCount": 0,
+      "title": "Pin Info",
+      "webPath": "/settings/pins"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "hw.led.matrix.mpc",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "SOMP",
+          "label": "Strip or panel",
+          "localOnly": true,
+          "options": [
+            {
+              "label": "1D Strip",
+              "value": "0"
+            },
+            {
+              "label": "2D Matrix",
+              "value": "1"
+            }
+          ],
+          "section": "2D setup",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.led.matrix.panels[0].w",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "PW",
+          "label": "Panel dimensions (WxH)",
+          "localOnly": true,
+          "max": "128",
+          "min": "1",
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.led.matrix.panels[0].h",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "PH",
+          "label": "x",
+          "localOnly": true,
+          "max": "128",
+          "min": "1",
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MPH",
+          "label": "Horizontal panels",
+          "max": "8",
+          "min": "1",
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MPV",
+          "label": "Vertical panels",
+          "max": "8",
+          "min": "1",
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "select",
+          "htmlTag": "select",
+          "key": "PB",
+          "label": "panel",
+          "localOnly": true,
+          "options": [
+            {
+              "label": "Top",
+              "value": "0"
+            },
+            {
+              "label": "Bottom",
+              "value": "1"
+            }
+          ],
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit"
+          ]
+        },
+        {
+          "control": "select",
+          "htmlTag": "select",
+          "key": "PR",
+          "label": "Bottom",
+          "options": [
+            {
+              "label": "Left",
+              "value": "0"
+            },
+            {
+              "label": "Right",
+              "value": "1"
+            }
+          ],
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "select",
+          "htmlTag": "select",
+          "key": "PV",
+          "label": "Orientation",
+          "options": [
+            {
+              "label": "Horizontal",
+              "value": "0"
+            },
+            {
+              "label": "Vertical",
+              "value": "1"
+            }
+          ],
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "PS",
+          "label": "Serpentine",
+          "section": "Matrix Generator >",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "configPath": "hw.led.matrix.mpc",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MPC",
+          "label": "Number of panels",
+          "localOnly": true,
+          "max": "64",
+          "min": "1",
+          "section": "Panel set-up",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        },
+        {
+          "control": "file",
+          "fileUpload": true,
+          "htmlTag": "input",
+          "htmlType": "file",
+          "key": "data",
+          "label": "Gap file",
+          "section": "LED panel layout",
+          "sideEffects": [
+            "ledReinit",
+            "segmentRebuild"
+          ]
+        }
+      ],
+      "id": "2d-configuration",
+      "page": "settings_2D.htm",
+      "readOnly": true,
+      "requiresFeature": null,
+      "sections": [
+        "2D setup",
+        "Matrix Generator >",
+        "Panel set-up",
+        "LED panel layout"
+      ],
+      "sourceFieldCount": 11,
+      "title": "2D Configuration",
+      "webPath": "/settings/2D"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "id.name",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "DS",
+          "label": "Device Name",
+          "section": "User Interface",
+          "sideEffects": []
+        },
+        {
+          "configPath": "id.sui",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SU",
+          "label": "Enable simplified UI",
+          "section": "User Interface",
+          "sideEffects": []
+        },
+        {
+          "control": "file",
+          "fileUpload": true,
+          "htmlTag": "input",
+          "htmlType": "file",
+          "key": "data",
+          "label": "Custom CSS",
+          "section": "UI Appearance",
+          "sideEffects": []
+        },
+        {
+          "control": "file",
+          "fileUpload": true,
+          "htmlTag": "input",
+          "htmlType": "file",
+          "key": "data2",
+          "label": "Holidays",
+          "section": "Random BG image settings",
+          "sideEffects": []
+        }
+      ],
+      "id": "user-interface",
+      "page": "settings_ui.htm",
+      "readOnly": false,
+      "requiresFeature": null,
+      "sections": [
+        "User Interface",
+        "UI Appearance",
+        "UI Background",
+        "Random BG image settings"
+      ],
+      "sourceFieldCount": 4,
+      "title": "User Interface",
+      "webPath": "/settings/ui"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "dmx.e131proxy",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "PU",
+          "label": "Proxy Universe",
+          "max": "63999",
+          "min": "0",
+          "section": "Imma firin ma lazer (if it has DMX support)",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "dmx.chan",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CN",
+          "label": "Channels per fixture (15 max)",
+          "max": "15",
+          "min": "1",
+          "section": "Imma firin ma lazer (if it has DMX support)",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "dmx.start",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CS",
+          "label": "Start channel",
+          "max": "512",
+          "min": "1",
+          "section": "Imma firin ma lazer (if it has DMX support)",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "dmx.gap",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CG",
+          "label": "Spacing between start channels",
+          "max": "512",
+          "min": "1",
+          "section": "Imma firin ma lazer (if it has DMX support)",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "dmx.start-led",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "SL",
+          "label": "DMX fixtures start LED",
+          "max": "1500",
+          "min": "0",
+          "section": "Imma firin ma lazer (if it has DMX support)",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        }
+      ],
+      "id": "dmx-output",
+      "page": "settings_dmx.htm",
+      "readOnly": false,
+      "requiresFeature": "WLED_ENABLE_DMX",
+      "sections": [
+        "Imma firin ma lazer (if it has DMX support)",
+        "Channel functions"
+      ],
+      "sourceFieldCount": 5,
+      "title": "DMX Output",
+      "webPath": "/settings/dmx"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "if.sync.port0",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "UP",
+          "label": "UDP Port",
+          "max": "65535",
+          "min": "1",
+          "section": "WLED Broadcast",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.port1",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "U2",
+          "label": "2nd Port",
+          "max": "65535",
+          "min": "1",
+          "section": "WLED Broadcast",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.espnow",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "EN",
+          "label": "Use ESP-NOW sync",
+          "section": "ESP-NOW",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.send.grp",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "GS",
+          "label": "Sync groups",
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.recv.grp",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "GR",
+          "label": "Sync groups",
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G1",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G2",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G3",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G4",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G5",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G6",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G7",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "G8",
+          "label": "Send",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R1",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R2",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R3",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R4",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R5",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R6",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R7",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "R8",
+          "label": "Receive",
+          "localOnly": true,
+          "section": "Sync groups",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.recv.bri",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RB",
+          "label": "Receive",
+          "section": "Receive",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.recv.col",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RC",
+          "label": "Brightness,",
+          "section": "Receive",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.recv.fx",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RX",
+          "label": "Color,",
+          "section": "Receive",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.recv.pal",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RP",
+          "label": "and",
+          "section": "Receive",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.recv.seg",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SO",
+          "label": "Palette",
+          "section": "Receive",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.recv.sb",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SG",
+          "label": "Segment options,",
+          "section": "Receive",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.send.en",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SS",
+          "label": "Enable Sync on start",
+          "section": "Send",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.send.dir",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SD",
+          "label": "Send notifications on direct change",
+          "section": "Send",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.send.btn",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SB",
+          "label": "Send notifications on button press or IR",
+          "section": "Send",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.send.va",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SA",
+          "label": "Send Alexa notifications",
+          "section": "Send",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.send.hue",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SH",
+          "label": "Send Philips Hue change notifications",
+          "section": "Send",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.sync.send.ret",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "UR",
+          "label": "UDP packet retransmissions",
+          "max": "30",
+          "min": "0",
+          "section": "Send",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.nodes.list",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "NL",
+          "label": "Enable instance list",
+          "section": "Instance List",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.nodes.bcast",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "NB",
+          "label": "Make this instance discoverable",
+          "section": "Instance List",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.en",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RD",
+          "label": "Receive UDP realtime",
+          "section": "Realtime",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.mso",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "MO",
+          "label": "Use main segment only",
+          "section": "Realtime",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.rlm",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RLM",
+          "label": "Respect LED Maps",
+          "section": "Realtime",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "control": "select",
+          "htmlTag": "select",
+          "key": "DI",
+          "label": "Type",
+          "localOnly": true,
+          "options": [
+            {
+              "label": "E1.31 (sACN)",
+              "value": "5568"
+            },
+            {
+              "label": "Art-Net",
+              "value": "6454"
+            },
+            {
+              "label": "Custom port",
+              "value": "0"
+            }
+          ],
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.port",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "EP",
+          "label": "Port",
+          "max": "65535",
+          "min": "1",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.mc",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "EM",
+          "label": "Multicast",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.uni",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "EU",
+          "label": "Start universe",
+          "max": "63999",
+          "min": "0",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.seqskip",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "ES",
+          "label": "Skip out-of-sequence packets",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.addr",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "DA",
+          "label": "DMX start address",
+          "max": "510",
+          "min": "1",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.dss",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "XX",
+          "label": "DMX segment spacing",
+          "max": "150",
+          "min": "0",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.e131prio",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "PY",
+          "label": "E1.31 port priority",
+          "max": "200",
+          "min": "0",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.mode",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "DM",
+          "label": "DMX mode",
+          "options": [
+            {
+              "label": "Disabled",
+              "value": "0"
+            },
+            {
+              "label": "Single RGB",
+              "value": "1"
+            },
+            {
+              "label": "Single DRGB",
+              "value": "2"
+            },
+            {
+              "label": "Effect",
+              "value": "3"
+            },
+            {
+              "label": "Effect + White",
+              "value": "7"
+            },
+            {
+              "label": "Effect Segment",
+              "value": "8"
+            },
+            {
+              "label": "Effect Segment + White",
+              "value": "9"
+            },
+            {
+              "label": "Multi RGB",
+              "value": "4"
+            },
+            {
+              "label": "Dimmer + Multi RGB",
+              "value": "5"
+            },
+            {
+              "label": "Multi RGBW",
+              "value": "6"
+            },
+            {
+              "label": "Preset",
+              "value": "10"
+            }
+          ],
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.timeout",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "ET",
+          "label": "Timeout",
+          "max": "65000",
+          "min": "1",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.maxbri",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "FB",
+          "label": "Force max brightness",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.no-gc",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RG",
+          "label": "Disable realtime gamma correction",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.offset",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "WO",
+          "label": "Realtime LED offset",
+          "max": "255",
+          "min": "-255",
+          "section": "Network DMX input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.inputRxPin",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "IDMR",
+          "label": "DMX RX Pin",
+          "max": "99",
+          "min": "-1",
+          "section": "Wired DMX Input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.inputTxPin",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "IDMT",
+          "label": "DMX TX Pin",
+          "max": "99",
+          "min": "-1",
+          "section": "Wired DMX Input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.inputEnablePin",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "IDME",
+          "label": "DMX Enable Pin",
+          "max": "99",
+          "min": "-1",
+          "section": "Wired DMX Input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.live.dmx.dmxInputPort",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "IDMP",
+          "label": "DMX Port",
+          "max": "2",
+          "min": "1",
+          "section": "Wired DMX Input",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.va.alexa",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "AL",
+          "label": "Emulate Alexa device",
+          "section": "Alexa Voice Assistant",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "id.inv",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "AI",
+          "label": "Alexa invocation name",
+          "section": "Alexa Voice Assistant",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.va.p",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "AP",
+          "label": "Also emulate devices to call the first",
+          "max": "9",
+          "min": "0",
+          "section": "Alexa Voice Assistant",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.en",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "MQ",
+          "label": "Enable MQTT",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.broker",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "MS",
+          "label": "Broker",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.port",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MQPORT",
+          "label": "Port",
+          "max": "65535",
+          "min": "1",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.user",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "MQUSER",
+          "label": "Username",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.psk",
+          "control": "secret",
+          "htmlTag": "input",
+          "htmlType": "password",
+          "key": "MQPASS",
+          "label": "Password",
+          "secret": true,
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol",
+            "secret"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.cid",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "MQCID",
+          "label": "Client ID",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.topics.device",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "MD",
+          "label": "Device Topic",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.topics.group",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "MG",
+          "label": "Group Topic",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "hw.btn.mqtt",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "BM",
+          "label": "Publish on button press",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.mqtt.rtn",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RT",
+          "label": "Retain brightness & color messages",
+          "section": "MQTT",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.id",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "HL",
+          "label": "Poll Hue light",
+          "max": "99",
+          "min": "1",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.iv",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "HI",
+          "label": "every",
+          "max": "65000",
+          "min": "100",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.en",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "HP",
+          "label": "ms",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.recv.on",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "HO",
+          "label": "Then, receive",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.recv.bri",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "HB",
+          "label": "On/Off,",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.recv.col",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "HC",
+          "label": "Brightness, and",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.ip[0]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "H0",
+          "label": "Hue Bridge IP",
+          "max": "255",
+          "min": "0",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.ip[1]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "H1",
+          "label": ".",
+          "max": "255",
+          "min": "0",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.ip[2]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "H2",
+          "label": ".",
+          "max": "255",
+          "min": "0",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "if.hue.ip[3]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "H3",
+          "label": ".",
+          "max": "255",
+          "min": "0",
+          "section": "Philips Hue",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        },
+        {
+          "configPath": "hw.baud",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "BD",
+          "label": "Baud rate",
+          "options": [
+            {
+              "label": "115200",
+              "value": "1152"
+            },
+            {
+              "label": "230400",
+              "value": "2304"
+            },
+            {
+              "label": "460800",
+              "value": "4608"
+            },
+            {
+              "label": "500000",
+              "value": "5000"
+            },
+            {
+              "label": "576000",
+              "value": "5760"
+            },
+            {
+              "label": "921600",
+              "value": "9216"
+            },
+            {
+              "label": "1000000",
+              "value": "10000"
+            },
+            {
+              "label": "1500000",
+              "value": "15000"
+            }
+          ],
+          "section": "Serial",
+          "sideEffects": [
+            "realtimeProtocol"
+          ]
+        }
+      ],
+      "id": "sync-interfaces",
+      "page": "settings_sync.htm",
+      "readOnly": false,
+      "requiresFeature": null,
+      "sections": [
+        "Sync setup",
+        "WLED Broadcast",
+        "ESP-NOW",
+        "Sync groups",
+        "Receive",
+        "Send",
+        "Instance List",
+        "Realtime",
+        "Network DMX input",
+        "Wired DMX Input",
+        "Alexa Voice Assistant",
+        "MQTT",
+        "Philips Hue",
+        "Serial"
+      ],
+      "sourceFieldCount": 79,
+      "title": "Sync Interfaces",
+      "webPath": "/settings/sync"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "if.ntp.en",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "NT",
+          "label": "Get time from NTP server",
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.ntp.host",
+          "control": "text",
+          "htmlTag": "input",
+          "htmlType": "text",
+          "key": "NS",
+          "label": "Get time from NTP server",
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.ntp.ampm",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "CF",
+          "label": "Use 24h format",
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.ntp.tz",
+          "control": "select",
+          "htmlTag": "select",
+          "key": "TZ",
+          "label": "Time zone",
+          "options": [
+            {
+              "label": "GMT(UTC)",
+              "value": "0"
+            },
+            {
+              "label": "GMT/BST",
+              "value": "1"
+            },
+            {
+              "label": "CET/CEST",
+              "value": "2"
+            },
+            {
+              "label": "EET/EEST",
+              "value": "3"
+            },
+            {
+              "label": "US-EST/EDT",
+              "value": "4"
+            },
+            {
+              "label": "US-CST/CDT",
+              "value": "5"
+            },
+            {
+              "label": "US-MST/MDT",
+              "value": "6"
+            },
+            {
+              "label": "US-AZ",
+              "value": "7"
+            },
+            {
+              "label": "US-PST/PDT",
+              "value": "8"
+            },
+            {
+              "label": "CST (AWST, PHST)",
+              "value": "9"
+            },
+            {
+              "label": "JST (KST)",
+              "value": "10"
+            },
+            {
+              "label": "AEST/AEDT",
+              "value": "11"
+            },
+            {
+              "label": "NZST/NZDT",
+              "value": "12"
+            },
+            {
+              "label": "North Korea",
+              "value": "13"
+            },
+            {
+              "label": "IST (India)",
+              "value": "14"
+            },
+            {
+              "label": "CA-Saskatchewan",
+              "value": "15"
+            },
+            {
+              "label": "ACST",
+              "value": "16"
+            },
+            {
+              "label": "ACST/ACDT",
+              "value": "17"
+            },
+            {
+              "label": "HST (Hawaii)",
+              "value": "18"
+            },
+            {
+              "label": "NOVT (Novosibirsk)",
+              "value": "19"
+            },
+            {
+              "label": "AKST/AKDT (Anchorage)",
+              "value": "20"
+            },
+            {
+              "label": "MX-CST",
+              "value": "21"
+            },
+            {
+              "label": "PKT (Pakistan)",
+              "value": "22"
+            },
+            {
+              "label": "BRT (Bras\u00edlia)",
+              "value": "23"
+            },
+            {
+              "label": "AWST (Perth)",
+              "value": "24"
+            }
+          ],
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.ntp.offset",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "UO",
+          "label": "UTC offset",
+          "max": "65500",
+          "min": "-65500",
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "control": "select",
+          "htmlTag": "select",
+          "key": "LTR",
+          "label": "Latitude",
+          "localOnly": true,
+          "options": [
+            {
+              "label": "N",
+              "value": "N"
+            },
+            {
+              "label": "S",
+              "value": "S"
+            }
+          ],
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.ntp.lt",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "LT",
+          "label": "S",
+          "max": "66.6",
+          "min": "0",
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ],
+          "step": "0.01"
+        },
+        {
+          "control": "select",
+          "htmlTag": "select",
+          "key": "LNR",
+          "label": "Longitude",
+          "localOnly": true,
+          "options": [
+            {
+              "label": "E",
+              "value": "E"
+            },
+            {
+              "label": "W",
+              "value": "W"
+            }
+          ],
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.ntp.ln",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "LN",
+          "label": "W",
+          "max": "180",
+          "min": "0",
+          "section": "Time setup",
+          "sideEffects": [
+            "timeSync"
+          ],
+          "step": "0.01"
+        },
+        {
+          "configPath": "ol.clock",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "OL",
+          "label": "Analog Clock overlay",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "ol.o12pix",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "O1",
+          "label": "First LED",
+          "max": "1024",
+          "min": "0",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "ol.max",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "O2",
+          "label": "Last LED",
+          "max": "1024",
+          "min": "0",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "ol.min",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "OM",
+          "label": "12h LED",
+          "max": "1024",
+          "min": "0",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "ol.o5m",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "O5",
+          "label": "Show 5min marks",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "ol.osec",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "OS",
+          "label": "Seconds (as trail)",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "ol.osb",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "OB",
+          "label": "Show clock overlay only if all LEDs are solid black",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "ol.cntdwn",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "CE",
+          "label": "Countdown Mode",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "timers.cntdwn.goal[0]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CY",
+          "label": "20",
+          "max": "99",
+          "min": "0",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "timers.cntdwn.goal[1]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CI",
+          "label": "-",
+          "max": "12",
+          "min": "1",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "timers.cntdwn.goal[2]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CD",
+          "label": "-",
+          "max": "31",
+          "min": "1",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "timers.cntdwn.goal[3]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CH",
+          "label": "Time",
+          "max": "23",
+          "min": "0",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "timers.cntdwn.goal[4]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CM",
+          "label": "CM",
+          "max": "59",
+          "min": "0",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "timers.cntdwn.goal[5]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "CS",
+          "label": "CS",
+          "max": "59",
+          "min": "0",
+          "section": "Clock",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "timers.cntdwn.macro",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MC",
+          "label": "Countdown-Over Preset",
+          "max": "250",
+          "min": "0",
+          "section": "Timer & Alexa Presets",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "light.nl.macro",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MN",
+          "label": "Timed-Light-Over Presets",
+          "max": "250",
+          "min": "0",
+          "section": "Timer & Alexa Presets",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.va.macros[0]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "A0",
+          "label": "Alexa On/Off Preset",
+          "max": "250",
+          "min": "0",
+          "section": "Timer & Alexa Presets",
+          "sideEffects": [
+            "timeSync"
+          ]
+        },
+        {
+          "configPath": "if.va.macros[1]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "A1",
+          "label": "Alexa On/Off Preset",
+          "max": "250",
+          "min": "0",
+          "section": "Timer & Alexa Presets",
+          "sideEffects": [
+            "timeSync"
+          ]
+        }
+      ],
+      "id": "time-macros",
+      "page": "settings_time.htm",
+      "readOnly": false,
+      "requiresFeature": null,
+      "sections": [
+        "Time setup",
+        "Clock",
+        "Macro Presets",
+        "Timer & Alexa Presets",
+        "Button Action Presets",
+        "Time-Controlled Presets"
+      ],
+      "sourceFieldCount": 27,
+      "title": "Time & Macros",
+      "webPath": "/settings/time"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "hw.if.i2c-pin[0]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "SDA",
+          "label": "SDA",
+          "max": "48",
+          "min": "-1",
+          "placeholder": "SDA",
+          "section": "Global I 2 C & SPI",
+          "sideEffects": [
+            "reboot"
+          ]
+        },
+        {
+          "configPath": "hw.if.i2c-pin[1]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "SCL",
+          "label": "SCL",
+          "max": "48",
+          "min": "-1",
+          "placeholder": "SCL",
+          "section": "Global I 2 C & SPI",
+          "sideEffects": [
+            "reboot"
+          ]
+        },
+        {
+          "configPath": "hw.if.spi-pin[0]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MOSI",
+          "label": "MOSI",
+          "max": "48",
+          "min": "-1",
+          "placeholder": "MOSI",
+          "section": "Global I 2 C & SPI",
+          "sideEffects": [
+            "reboot"
+          ]
+        },
+        {
+          "configPath": "hw.if.spi-pin[2]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "MISO",
+          "label": "MISO",
+          "max": "48",
+          "min": "-1",
+          "placeholder": "MISO",
+          "section": "Global I 2 C & SPI",
+          "sideEffects": [
+            "reboot"
+          ]
+        },
+        {
+          "configPath": "hw.if.spi-pin[1]",
+          "control": "number",
+          "htmlTag": "input",
+          "htmlType": "number",
+          "key": "SCLK",
+          "label": "SCLK",
+          "max": "48",
+          "min": "-1",
+          "placeholder": "SCLK",
+          "section": "Global I 2 C & SPI",
+          "sideEffects": [
+            "reboot"
+          ]
+        },
+        {
+          "configPath": "rb",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RBT",
+          "label": "Reboot after save?",
+          "section": "Global I 2 C & SPI",
+          "sideEffects": [
+            "reboot"
+          ]
+        }
+      ],
+      "id": "usermods",
+      "page": "settings_um.htm",
+      "readOnly": false,
+      "requiresFeature": null,
+      "sections": [
+        "Usermod Setup",
+        "Global I 2 C & SPI"
+      ],
+      "sourceFieldCount": 6,
+      "title": "Usermods",
+      "webPath": "/settings/um"
+    },
+    {
+      "fields": [
+        {
+          "configPath": "sec.pin",
+          "control": "secret",
+          "htmlTag": "input",
+          "htmlType": "password",
+          "key": "PIN",
+          "label": "Settings PIN",
+          "secret": true,
+          "section": "Security & Update Setup",
+          "sideEffects": [
+            "reboot",
+            "secret",
+            "securityLockout"
+          ]
+        },
+        {
+          "configPath": "ota.lock",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "NO",
+          "label": "Lock wireless (OTA) software update",
+          "section": "Security & Update Setup",
+          "sideEffects": [
+            "reboot",
+            "securityLockout"
+          ]
+        },
+        {
+          "control": "secret",
+          "htmlTag": "input",
+          "htmlType": "password",
+          "key": "OP",
+          "label": "Passphrase",
+          "secret": true,
+          "section": "Security & Update Setup",
+          "sideEffects": [
+            "reboot",
+            "secret",
+            "securityLockout"
+          ]
+        },
+        {
+          "configPath": "ota.lock-wifi",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "OW",
+          "label": "Deny access to WiFi settings if locked",
+          "section": "Security & Update Setup",
+          "sideEffects": [
+            "reboot",
+            "securityLockout"
+          ]
+        },
+        {
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "RS",
+          "label": "Factory reset",
+          "localOnly": true,
+          "section": "Security & Update Setup",
+          "sideEffects": [
+            "reboot",
+            "securityLockout"
+          ]
+        },
+        {
+          "configPath": "ota.aota",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "AO",
+          "label": "Enable ArduinoOTA",
+          "section": "Software Update",
+          "sideEffects": [
+            "reboot",
+            "securityLockout"
+          ]
+        },
+        {
+          "configPath": "ota.same-subnet",
+          "control": "toggle",
+          "htmlTag": "input",
+          "htmlType": "checkbox",
+          "key": "SU",
+          "label": "Only allow update from same network/WiFi",
+          "section": "Software Update",
+          "sideEffects": [
+            "reboot",
+            "securityLockout"
+          ]
+        },
+        {
+          "control": "file",
+          "fileUpload": true,
+          "htmlTag": "input",
+          "htmlType": "file",
+          "key": "data",
+          "label": "Restore presets",
+          "section": "Backup & Restore",
+          "sideEffects": [
+            "reboot",
+            "securityLockout"
+          ]
+        },
+        {
+          "control": "file",
+          "fileUpload": true,
+          "htmlTag": "input",
+          "htmlType": "file",
+          "key": "data2",
+          "label": "Restore configuration",
+          "section": "Backup & Restore",
+          "sideEffects": [
+            "reboot",
+            "securityLockout"
+          ]
+        }
+      ],
+      "id": "security-updates",
+      "page": "settings_sec.htm",
+      "readOnly": false,
+      "requiresFeature": null,
+      "sections": [
+        "Security & Update Setup",
+        "Software Update",
+        "Backup & Restore",
+        "About"
+      ],
+      "sourceFieldCount": 9,
+      "title": "Security & Updates",
+      "webPath": "/settings/sec"
+    }
+  ],
+  "schemaVersion": 2,
+  "source": {
+    "archiveSHA256": "449309db0cdc8ea5fa0f6979eb093e688e8d767f67bbe54cb650bc54f4e7ab43",
+    "firmwareRoot": "WLED-main/wled00"
+  }
+}

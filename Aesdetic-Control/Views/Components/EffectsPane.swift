@@ -4,7 +4,6 @@ import Combine
 struct EffectsPane: View {
     @EnvironmentObject private var viewModel: DeviceControlViewModel
     @ObservedObject private var automationStore = AutomationStore.shared
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.openURL) private var openURL
     let device: WLEDDevice
     let segmentId: Int
@@ -26,6 +25,7 @@ struct EffectsPane: View {
     @State private var hasPendingGradientChanges = false
     @State private var autoApplyTask: Task<Void, Never>? = nil
     @State private var selectedColorPresetId: UUID? = nil
+    @State private var selectedRecoveredColorPresetId: Int? = nil
     @State private var segmentBrightness: Double = 255
     @State private var isAdjustingSegmentBrightness = false
     @State private var isInitializing = true
@@ -55,6 +55,15 @@ struct EffectsPane: View {
     
     private var colorPresets: [ColorPreset] {
         PresetsStore.shared.colorPresets
+    }
+
+    private var recoveredColorPresets: [WLEDRecoveredColorPreset] {
+        WLEDDevicePresetRecovery.recoveredColorPresets(
+            for: device.id,
+            presets: viewModel.presets(for: device),
+            playlists: viewModel.playlists(for: device),
+            localColorPresets: colorPresets
+        )
     }
     
     private var metadataBundle: EffectMetadataBundle? {
@@ -180,6 +189,7 @@ struct EffectsPane: View {
                 wheelInitial = color
                 hasPendingGradientChanges = true
                 selectedColorPresetId = nil
+                selectedRecoveredColorPresetId = nil
                 viewModel.updateEffectGradient(effectGradient, for: device)
                 if isEffectEnabled {
                     scheduleAutoApply()
@@ -193,6 +203,7 @@ struct EffectsPane: View {
                         effectGradient = LEDGradient(stops: stops.sorted { $0.position < $1.position })
                         hasPendingGradientChanges = true
                         selectedColorPresetId = nil
+                        selectedRecoveredColorPresetId = nil
                         viewModel.updateEffectGradient(effectGradient, for: device)
                         if isEffectEnabled {
                             scheduleAutoApply()
@@ -229,14 +240,7 @@ struct EffectsPane: View {
             }
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(backgroundFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(colorSchemeContrast == .increased ? 0.26 : 0.16), lineWidth: 1)
-                )
-        )
+        .settingsDetailControlBackground()
         .task {
             let needsFetch = metadataBundle?.effects.isEmpty ?? true
             if needsFetch {
@@ -447,52 +451,25 @@ struct EffectsPane: View {
                 .opacity((isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress || effectOptions.isEmpty) ? 0.45 : 1.0)
 
                 Text("Animations")
-                    .font(AppTypography.style(.headline))
+                    .font(DeviceDetailTypography.cardTitle)
                     .foregroundColor(.white)
 
                 Spacer()
 
                 if isExpanded {
-                    Button(action: {
+                    PresetSavePillButton(
+                        title: "Save Animation",
+                        isSaving: isSavingPreset,
+                        isSuccess: showSaveSuccess,
+                        isDisabled: isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress,
+                        minWidth: 138
+                    ) {
                         if advancedUIEnabled {
                             showSavePresetDialog = true
                         } else {
                             Task { await saveEffectPresetDirectly() }
                         }
-                    }) {
-                        HStack(spacing: 6) {
-                            if isSavingPreset {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .tint(.white)
-                            } else if showSaveSuccess {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(AppTypography.style(.caption))
-                                    .foregroundColor(.green.opacity(0.95))
-                            } else {
-                                Image(systemName: "plus.circle")
-                                    .font(AppTypography.style(.caption))
-                            }
-                            Text(showSaveSuccess ? "Saved" : "Save Animation")
-                                .lineLimit(1)
-                                .font(AppTypography.style(.caption, weight: .semibold))
-                        }
-                        .foregroundColor(showSaveSuccess ? Color.black.opacity(0.82) : .white.opacity(0.9))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(showSaveSuccess ? Color.white.opacity(0.92) : Color.white.opacity(0.12))
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(showSaveSuccess ? Color.green.opacity(0.95) : Color.white.opacity(0.16), lineWidth: showSaveSuccess ? 1.5 : 1)
-                                )
-                        )
-                        .shadow(color: showSaveSuccess ? Color.green.opacity(0.38) : Color.clear, radius: 10, x: 0, y: 4)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress)
-                    .opacity((isApplyingEffect || isSavingPreset || automationStore.hasAnyDeletionInProgress) ? 0.45 : 1.0)
                 }
             }
             
@@ -604,6 +581,7 @@ struct EffectsPane: View {
                         effectGradient = newGradient
                         hasPendingGradientChanges = true
                         selectedColorPresetId = nil
+                        selectedRecoveredColorPresetId = nil
                     }
                 ),
                 selectedStopId: $selectedStopId,
@@ -637,6 +615,7 @@ struct EffectsPane: View {
                     showColorPicker = true
                     hasPendingGradientChanges = true
                     selectedColorPresetId = nil
+                    selectedRecoveredColorPresetId = nil
                     viewModel.updateEffectGradient(effectGradient, for: device)
                     if isEffectEnabled {
                         scheduleAutoApply()
@@ -647,6 +626,7 @@ struct EffectsPane: View {
                     if phase == .ended {
                         hasPendingGradientChanges = true
                         selectedColorPresetId = nil
+                        selectedRecoveredColorPresetId = nil
                         viewModel.updateEffectGradient(effectGradient, for: device)
                         if isEffectEnabled {
                             scheduleAutoApply()
@@ -659,11 +639,14 @@ struct EffectsPane: View {
             if showColorPicker {
                 colorWheelOverlay
             }
-            if !colorPresets.isEmpty {
+            if !colorPresets.isEmpty || !recoveredColorPresets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(colorPresets) { preset in
                             presetChip(for: preset)
+                        }
+                        ForEach(recoveredColorPresets) { preset in
+                            recoveredPresetChip(for: preset)
                         }
                     }
                     .padding(.horizontal, 2)
@@ -810,11 +793,11 @@ struct EffectsPane: View {
                 if status == true {
                     Text("Enabled")
                         .font(AppTypography.style(.caption2, weight: .semibold))
-                        .foregroundColor(.green)
+                        .foregroundColor(.white)
                 } else if status == false {
                     Text("Disabled")
                         .font(AppTypography.style(.caption2, weight: .semibold))
-                        .foregroundColor(.orange)
+                        .foregroundColor(.white)
                 } else {
                     Text("Unknown")
                         .font(AppTypography.style(.caption2, weight: .semibold))
@@ -1002,10 +985,6 @@ private struct PalettePreviewCard: View {
 }
 
 private extension EffectsPane {
-    var backgroundFill: Color {
-        Color.white.opacity(colorSchemeContrast == .increased ? 0.12 : 0.06)
-    }
-    
     func toggleExpansion() {
         if isExpanded {
             isExpanded = false
@@ -1191,6 +1170,7 @@ private extension EffectsPane {
             #endif
         }
         selectedColorPresetId = nil
+        selectedRecoveredColorPresetId = nil
         
         // Map the selected stop ID to the new stop by position
         if let position = selectedPosition {
@@ -1307,7 +1287,7 @@ private extension EffectsPane {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(AppTypography.text(size: 9, weight: .bold, relativeTo: .caption2))
-                        .foregroundColor(.black.opacity(0.75))
+                        .foregroundColor(.white.opacity(0.75))
                         .frame(width: 14, height: 14)
                         .background(
                             Circle()
@@ -1328,6 +1308,57 @@ private extension EffectsPane {
         .accessibilityLabel("\(preset.name) color preset")
         .accessibilityHint("Applies the color preset to the animation gradient.")
     }
+
+    @ViewBuilder
+    private func recoveredPresetChip(for preset: WLEDRecoveredColorPreset) -> some View {
+        let isSelected = selectedRecoveredColorPresetId == preset.id
+        Button(action: {
+            applyRecoveredColorPreset(preset)
+        }) {
+            LinearGradient(
+                gradient: Gradient(stops: preset.gradient.stops.sorted { $0.position < $1.position }.map {
+                    .init(color: $0.color, location: $0.position)
+                }),
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: 48, height: 30)
+            .clipShape(Capsule(style: .continuous))
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(isSelected ? 0.82 : 0.28), lineWidth: isSelected ? 1.5 : 1)
+            )
+            .shadow(
+                color: .black.opacity(isSelected ? 0.24 : 0.12),
+                radius: isSelected ? 4 : 2,
+                x: 0,
+                y: isSelected ? 2 : 1
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(AppTypography.text(size: 9, weight: .bold, relativeTo: .caption2))
+                        .foregroundColor(.white.opacity(0.75))
+                        .frame(width: 14, height: 14)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.9))
+                        )
+                        .offset(x: 2, y: 2)
+                }
+            }
+            .contentShape(Capsule(style: .continuous))
+            .accessibilityHidden(true)
+            .padding(.vertical, 1)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(isSelected ? 0.12 : 0.04))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.displayName) on-device color")
+        .accessibilityHint("Applies the on-device color to the animation gradient.")
+    }
     
     private func applyColorPreset(_ preset: ColorPreset) {
         let sortedStops = preset.gradientStops.sorted { $0.position < $1.position }
@@ -1337,6 +1368,24 @@ private extension EffectsPane {
         effectGradient = newGradient
         selectedStopId = nil
         selectedColorPresetId = preset.id
+        selectedRecoveredColorPresetId = nil
+        stagedSolidColor = Color(hex: sortedStops.first?.hexColor ?? "FFFFFF")
+        hasPendingGradientChanges = true
+        viewModel.updateEffectGradient(newGradient, for: device)
+        if isEffectEnabled {
+            scheduleAutoApply(force: true)
+        }
+    }
+
+    private func applyRecoveredColorPreset(_ preset: WLEDRecoveredColorPreset) {
+        let sortedStops = preset.gradient.stops.sorted { $0.position < $1.position }
+        guard !sortedStops.isEmpty else { return }
+
+        let newGradient = LEDGradient(stops: sortedStops, interpolation: effectGradient.interpolation)
+        effectGradient = newGradient
+        selectedStopId = nil
+        selectedColorPresetId = nil
+        selectedRecoveredColorPresetId = preset.id
         stagedSolidColor = Color(hex: sortedStops.first?.hexColor ?? "FFFFFF")
         hasPendingGradientChanges = true
         viewModel.updateEffectGradient(newGradient, for: device)
@@ -1491,8 +1540,13 @@ private extension EffectsPane {
         guard !automationStore.hasAnyDeletionInProgress else { return }
         guard !effectOptions.isEmpty else { return }
         let preparedGradient = preparedGradientForSlotCount(effectGradient, slotCount: slotCount)
+        let presetName = await MainActor.run {
+            PresetDefaultNaming.animationName(
+                existingNames: PresetsStore.shared.effectPresets(for: device.id).map(\.name)
+            )
+        }
         let preset = WLEDEffectPreset(
-            name: "Effect \(Date().presetNameTimestamp())",
+            name: presetName,
             deviceId: device.id,
             effectId: effectSelectionId,
             speed: currentState.speed,

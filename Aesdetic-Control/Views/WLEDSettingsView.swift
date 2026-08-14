@@ -24,7 +24,7 @@ fileprivate struct LabeledSlider: View {
                 Spacer()
                 Text(String(format: format, value))
                     .font(AppTypography.style(.caption))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.72))
             }
             Slider(value: $value, in: range, step: step)
         }
@@ -42,7 +42,7 @@ fileprivate struct SliderRow: View {
                 Text(label)
                 Spacer()
                 Text("\(Int(value))")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.72))
             }
             Slider(
                 value: Binding<Double>(get: { value }, set: { value = $0 }),
@@ -436,20 +436,20 @@ struct WLEDSettingsView: View {
                 Button(action: { Task { await viewModel.forceReconnection(device) } }) {
                     Text("Reconnect")
                         .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(.black)
+                        .foregroundColor(.white)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(Color.white.opacity(0.18))
                         .cornerRadius(10)
                 }
                 .sensorySuccess(trigger: UUID())
                 Button(action: { Task { await WLEDAPIService.shared.clearCache() } }) {
                     Text("Clear Cache")
                         .font(AppTypography.style(.subheadline, weight: .semibold))
-                        .foregroundColor(.black)
+                        .foregroundColor(.white)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 14)
-                        .background(Color.white)
+                        .background(Color.white.opacity(0.18))
                         .cornerRadius(10)
                 }
                 .sensorySelection(trigger: UUID())
@@ -493,10 +493,10 @@ struct WLEDSettingsView: View {
             .sensorySelection(trigger: nightLightTargetBri)
             Button("Apply Night Light") { commitNightLight() }
                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(.black)
+                .foregroundColor(.white)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
-                .background(Color.white)
+                .background(Color.white.opacity(0.18))
                 .cornerRadius(10)
                 .sensorySuccess(trigger: UUID())
         }
@@ -539,10 +539,10 @@ struct WLEDSettingsView: View {
 
             Button("Apply Macro Triggers") { commitMacroBindings() }
                 .font(AppTypography.style(.subheadline, weight: .semibold))
-                .foregroundColor(.black)
+                .foregroundColor(.white)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
-                .background(Color.white)
+                .background(Color.white.opacity(0.18))
                 .cornerRadius(10)
                 .sensorySuccess(trigger: UUID())
         }

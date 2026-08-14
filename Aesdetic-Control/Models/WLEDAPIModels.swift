@@ -342,6 +342,36 @@ struct WLEDPreset: Codable, Identifiable {
     }
 }
 
+extension WLEDPreset {
+    var displayName: String {
+        AesdeticWLEDPresetNameMarker.displayName(from: name)
+    }
+
+    var isUserVisibleAutomationChoice: Bool {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return false }
+        guard !Self.isAesdeticAutomationManagedName(name) else { return false }
+        return quickLoad != nil || segment != nil || state != nil
+    }
+
+    static func isAesdeticAutomationManagedName(_ name: String) -> Bool {
+        if let marker = AesdeticWLEDPresetNameMarker.parse(name) {
+            return marker.kind.isInternalAsset
+        }
+        let normalized = name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let prefixes = [
+            "automation step ",
+            "automation transition ",
+            "automation ",
+            "auto step ",
+            "auto transition "
+        ]
+        return prefixes.contains { normalized.hasPrefix($0) }
+    }
+}
+
 struct WLEDPresetSaveRequest {
     let id: Int
     let name: String
@@ -397,7 +427,7 @@ struct WLEDPlaylist: Codable, Identifiable {
 /// Model for WLED timer/macro configuration
 /// WLED timers are stored in /json/cfg under "timers.ins"
 /// Each timer slot triggers a preset ID (WLED "macro") based on time
-struct WLEDTimer: Codable, Identifiable {
+struct WLEDTimer: Codable, Identifiable, Equatable {
     /// Timer slot ID (0-based index, typically 0-9)
     let id: Int
     /// Enable/disable timer
@@ -475,9 +505,15 @@ struct WLEDTimerUpdate: Codable {
 struct WLEDDeviceTimeSettings: Equatable {
     let ntpEnabled: Bool?
     let timeZone: TimeZone?
+    let timeZoneIndex: Int?
+    let utcOffsetSeconds: Int?
 
     var isTimerClockReady: Bool {
-        ntpEnabled == true && timeZone != nil
+        guard ntpEnabled == true, timeZone != nil else { return false }
+        if let timeZoneIndex, timeZoneIndex != 0, (utcOffsetSeconds ?? 0) != 0 {
+            return false
+        }
+        return true
     }
 }
 

@@ -23,7 +23,7 @@ struct SaveSceneDialog: View {
                         
                         Text("Save current device state as a scene")
                             .font(AppTypography.style(.body))
-                            .foregroundColor(.gray)
+                            .foregroundColor(.white.opacity(0.58))
                             .multilineTextAlignment(.center)
                     }
                     
@@ -155,7 +155,7 @@ struct SecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(AppTypography.style(.headline))
-            .foregroundColor(.blue)
+            .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
             .background(Color.blue.opacity(0.2))

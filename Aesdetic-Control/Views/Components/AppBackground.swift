@@ -4,6 +4,10 @@ import UIKit
 struct AppBackground: View {
     @AppStorage(AppBackgroundPreference.selectedChoiceKey) private var selectedBackground = AppBackgroundChoice.defaultChoice.rawValue
     @AppStorage(AppBackgroundPreference.customVersionKey) private var customBackgroundVersion: Double = 0
+    @AppStorage(AppBackgroundPreference.blurEnabledKey) private var backgroundBlurEnabled = AppBackgroundPreference.defaultBlurEnabled
+    @AppStorage(AppBackgroundPreference.blurIntensityKey) private var backgroundBlurIntensity = AppBackgroundPreference.defaultBlurIntensity
+    @State private var loadedPhotoID: String?
+    @State private var loadedPhotoImage: UIImage?
     var includePhoto: Bool = true
 
     var body: some View {
@@ -11,6 +15,7 @@ struct AppBackground: View {
             let width = proxy.size.width
             let height = proxy.size.height
             let backgroundChoice = resolvedBackgroundChoice
+            let photoID = photoLoadID(for: backgroundChoice)
 
             ZStack {
                 // Always render a full-canvas base first, so we never fall through to
@@ -19,12 +24,21 @@ struct AppBackground: View {
 
                 if includePhoto,
                    backgroundChoice.usesPhotoLayer,
-                   let backgroundImage = AppBackgroundPreference.image(for: backgroundChoice) {
-                    photoLayer(image: backgroundImage, width: width, height: height)
+                   loadedPhotoID == photoID,
+                   let backgroundImage = loadedPhotoImage {
+                    photoLayer(
+                        image: backgroundImage,
+                        width: width,
+                        height: height,
+                        usesMaterialOverlay: backgroundChoice != .custom
+                    )
                 }
             }
-            .ignoresSafeArea()
+            .task(id: photoID) {
+                await loadPhotoIfNeeded(for: backgroundChoice, photoID: photoID)
+            }
         }
+        .ignoresSafeArea()
         .allowsHitTesting(false)
     }
 
@@ -37,34 +51,62 @@ struct AppBackground: View {
         return choice
     }
 
-    private func photoLayer(image: UIImage, width: CGFloat, height: CGFloat) -> some View {
+    private func photoLoadID(for choice: AppBackgroundChoice) -> String {
+        guard includePhoto, choice.usesPhotoLayer else { return "none" }
+        if choice == .custom {
+            return "\(choice.rawValue)-\(customBackgroundVersion)"
+        }
+        return choice.rawValue
+    }
+
+    @MainActor
+    private func loadPhotoIfNeeded(for choice: AppBackgroundChoice, photoID: String) async {
+        guard includePhoto, choice.usesPhotoLayer else {
+            loadedPhotoID = photoID
+            loadedPhotoImage = nil
+            return
+        }
+        guard loadedPhotoID != photoID || loadedPhotoImage == nil else { return }
+
+        loadedPhotoImage = AppBackgroundPreference.image(for: choice)
+        loadedPhotoID = photoID
+    }
+
+    private func photoLayer(
+        image: UIImage,
+        width: CGFloat,
+        height: CGFloat,
+        usesMaterialOverlay: Bool
+    ) -> some View {
         let vignetteOuterRadius = max(width, height) * 0.96
+        let blurRadius = backgroundBlurEnabled
+            ? AppBackgroundPreference.blurRadius(for: backgroundBlurIntensity)
+            : 0
+        let minimumDimension = max(1, min(width, height))
+        let photoOverscanScale = 1 + ((2 * blurRadius) / minimumDimension)
 
         return ZStack {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: width, height: height)
                 .saturation(0.92)
                 .contrast(1.02)
+                .scaleEffect(photoOverscanScale)
+                .blur(radius: blurRadius, opaque: true)
+                .frame(width: width, height: height)
+                .clipped()
                 .ignoresSafeArea()
 
-            // Subtle global backdrop blur over the photo (less intense than setup overlay)
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .opacity(0.16)
-                .ignoresSafeArea()
+            if usesMaterialOverlay {
+                // Subtle global backdrop blur over bundled photos (less intense than setup overlay).
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.16)
+                    .ignoresSafeArea()
+            }
 
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.12),
-                    Color.black.opacity(0.03),
-                    Color.clear
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            photoLegibilityScrim
 
             RadialGradient(
                 gradient: Gradient(colors: [
@@ -77,6 +119,23 @@ struct AppBackground: View {
             )
             .ignoresSafeArea()
         }
+    }
+
+    private var photoLegibilityScrim: some View {
+        LinearGradient(
+            stops: [
+                .init(color: Color.black.opacity(0.20), location: 0.00),
+                .init(color: Color.black.opacity(0.12), location: 0.16),
+                .init(color: Color.black.opacity(0.04), location: 0.38),
+                .init(color: Color.black.opacity(0.03), location: 0.64),
+                .init(color: Color.black.opacity(0.12), location: 0.88),
+                .init(color: Color.black.opacity(0.18), location: 1.00)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .blendMode(.multiply)
+        .ignoresSafeArea()
     }
 
     private func neutralGlassLayer(width: CGFloat, height: CGFloat) -> some View {

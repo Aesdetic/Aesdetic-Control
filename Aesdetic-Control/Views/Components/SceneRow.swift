@@ -15,7 +15,7 @@ struct SceneRow: View {
                 if scene.transitionEnabled {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(AppTypography.style(.title3))
-                        .foregroundColor(.blue)
+                        .foregroundColor(.white)
                 } else if scene.effectsEnabled {
                     Image(systemName: "sparkles")
                         .font(AppTypography.style(.title3))
@@ -42,12 +42,12 @@ struct SceneRow: View {
                     // Scene Type
                     Text(sceneTypeText)
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.blue)
+                        .foregroundColor(.white)
                     
                     // Created Date
                     Text(createdDateText)
                         .font(AppTypography.style(.caption))
-                        .foregroundColor(.gray)
+                        .foregroundColor(.white.opacity(0.58))
                 }
             }
             

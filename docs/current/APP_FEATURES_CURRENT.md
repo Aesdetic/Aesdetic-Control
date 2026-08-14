@@ -1,6 +1,6 @@
 # Current App Features
 
-Last updated: 2026-06-04 (Asia/Hong_Kong)
+Last updated: 2026-06-27 (Asia/Hong_Kong)
 
 This is the current source-of-truth feature overview for Aesdetic Control. Historical docs in `docs/archive` may be stale.
 
@@ -121,12 +121,17 @@ What works:
 - Local automation persistence in `automations.json`.
 - On-device WLED timer sync is the production path.
 - WLED timers run without the app open after sync is complete.
+- Active native WLED timers are imported into the automation list when they point at existing preset/playlist targets.
+- Imported/native WLED timer rows are read-through and do not self-resync after the timer is deleted from WLED.
+- Orphan native WLED timers whose macro target is definitely missing from presets/playlists are auto-cleared.
 - Time-of-day automations use WLED logical slots `0...7`.
 - Sunrise uses WLED logical slot `8`.
 - Sunset uses WLED logical slot `9`.
 - Timer writes go through `/json/cfg`.
 - Timer delete is ownership-checked, written, and verified by readback.
 - Timer verification retries handle non-final transient mismatch/decode failures.
+- Specific-time, sunrise, and sunset on-device timers validate WLED clock/timezone readiness before being treated as ready.
+- WLED timezone table configs with a nonzero extra offset are treated as not ready and are auto-corrected through the clock sync path.
 
 Current caveats:
 
@@ -134,6 +139,7 @@ Current caveats:
 - A non-final timer verify error is acceptable only if followed by `timer.rows_delete.success`.
 - WLED timer rows can compact, so stored slot numbers are not trusted as permanent ownership IDs.
 - Sunrise and sunset each map to one WLED logical solar slot per device, so the app prevents conflicting solar automations on the same device.
+- Generated transition automation step presets use compact partial WLED JSON API records instead of snapshotting optional segment fields.
 
 ## Automation Delete And Cleanup
 

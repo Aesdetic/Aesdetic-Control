@@ -54,6 +54,20 @@ enum SmartHomeIntegrationState: String, Codable {
     }
 }
 
+enum SmartHomeVerificationSource: String, Codable {
+    case reportedByDevice
+    case savedInApp
+    case notVerified
+
+    var displayName: String {
+        switch self {
+        case .reportedByDevice: return "Reported by Device"
+        case .savedInApp: return "Saved in App"
+        case .notVerified: return "Not Verified"
+        }
+    }
+}
+
 struct HomeAssistantSetupState: Codable, Equatable {
     var deviceId: String
     var isWLEDAdded: Bool
@@ -137,18 +151,25 @@ struct SmartHomeIntegrationStatus: Codable, Equatable, Identifiable {
     var state: SmartHomeIntegrationState
     var message: String?
     var updatedAt: Date
+    var verificationSource: SmartHomeVerificationSource?
+
+    var resolvedVerificationSource: SmartHomeVerificationSource {
+        verificationSource ?? .savedInApp
+    }
 
     init(
         deviceId: String,
         kind: SmartHomeIntegrationKind,
         state: SmartHomeIntegrationState,
         message: String? = nil,
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        verificationSource: SmartHomeVerificationSource = .savedInApp
     ) {
         self.deviceId = deviceId
         self.kind = kind
         self.state = state
         self.message = message
         self.updatedAt = updatedAt
+        self.verificationSource = verificationSource
     }
 }

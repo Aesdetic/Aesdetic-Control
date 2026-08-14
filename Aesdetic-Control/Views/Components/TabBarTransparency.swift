@@ -3,20 +3,29 @@ import UIKit
 
 struct TabBarVisibilityController: UIViewControllerRepresentable {
     var isHidden: Bool = false
+    var animated: Bool = false
 
     func makeUIViewController(context: Context) -> Controller {
         let controller = Controller()
-        controller.isTabBarHidden = isHidden
+        controller.configure(isHidden: isHidden, animated: animated)
         return controller
     }
 
     func updateUIViewController(_ uiViewController: Controller, context: Context) {
-        uiViewController.isTabBarHidden = isHidden
+        uiViewController.configure(isHidden: isHidden, animated: animated)
         uiViewController.applyVisibility()
     }
 
     final class Controller: UIViewController {
         var isTabBarHidden: Bool = false
+        var animatesTabBarVisibility = false
+        private var appliedTabBarHidden: Bool?
+        private weak var appliedTabBarController: UITabBarController?
+
+        func configure(isHidden: Bool, animated: Bool) {
+            isTabBarHidden = isHidden
+            animatesTabBarVisibility = animated
+        }
 
         override func viewDidLoad() {
             super.viewDidLoad()
@@ -55,7 +64,21 @@ struct TabBarVisibilityController: UIViewControllerRepresentable {
                 return false
             }
 
-            tabBarController.tabBar.isHidden = isTabBarHidden
+            let needsApplication =
+                appliedTabBarController !== tabBarController ||
+                appliedTabBarHidden != isTabBarHidden ||
+                tabBarController.isTabBarHidden != isTabBarHidden
+            guard needsApplication else { return true }
+
+            tabBarController.setTabBarHidden(
+                isTabBarHidden,
+                animated:
+                    appliedTabBarController === tabBarController &&
+                    appliedTabBarHidden != nil &&
+                    animatesTabBarVisibility
+            )
+            appliedTabBarController = tabBarController
+            appliedTabBarHidden = isTabBarHidden
             return true
         }
     }

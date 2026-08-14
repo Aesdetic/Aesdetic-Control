@@ -368,7 +368,7 @@ struct SolarOffsetArcSlider: View {
         radius: CGFloat,
         offset: Double
     ) -> CGPoint {
-        // Map offset (-120 to +120) to arc angle (150° to 30°)
+        // Map the supported WLED solar offset range to arc angle (150° to 30°)
         let normalized = max(0, min(1, (offset - range.lowerBound) / (range.upperBound - range.lowerBound)))
         // Arc spans from 150° to 30° (120° total)
         let startAngle: Double = 150.0
@@ -418,7 +418,7 @@ struct SolarOffsetArcSlider: View {
             normalized = 1.0
         } else {
             // Angle is between 30° and 150° - this is ON the arc (including the top at 90°)
-            // Map: angle goes from 150° down to 30° (120° range)
+            // Map: angle goes from 150° down to 30° (120° visual range)
             // So: normalized = (150° - angle) / (150° - 30°) = (150° - angle) / 120°
             normalized = (startAngle - normalizedAngle) / (startAngle - endAngle)
         }
@@ -439,7 +439,7 @@ struct SolarOffsetArcSlider: View {
             #endif
             
             // Prefer WLED-configured if.ntp location/timezone, then fall back to iOS location.
-            if let reference = await store.currentSolarReference(for: device) {
+            if let reference = await store.currentSolarReference(for: device, requestAuthorization: true) {
                 #if DEBUG
                 print("✅ Using location: \(reference.coordinate.latitude), \(reference.coordinate.longitude) tz=\(reference.timeZone.identifier)")
                 #endif

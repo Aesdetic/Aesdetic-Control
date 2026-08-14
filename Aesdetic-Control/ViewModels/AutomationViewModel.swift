@@ -7,7 +7,6 @@
 
 import Foundation
 import Combine
-import UIKit
 
 @MainActor
 class AutomationViewModel: ObservableObject {
@@ -48,12 +47,6 @@ class AutomationViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                Task { await self.refreshAutomations() }
-            }
-            .store(in: &cancellables)
     }
     
     func refreshAutomations(force: Bool = false) async {
@@ -66,7 +59,7 @@ class AutomationViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
 
-        await AutomationStore.shared.importOnDeviceAutomationsFromDevices()
+        await AutomationStore.shared.refreshAllDeviceAutomationStates(reason: .periodic)
         lastDeviceImportAt = Date()
         isLoading = false
     }

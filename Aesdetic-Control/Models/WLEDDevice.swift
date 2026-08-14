@@ -135,6 +135,155 @@ struct WLEDDevice: Identifiable, Hashable {
     }
 }
 
+enum WLEDDeviceIdentity {
+    static func canonicalHardwareID(from rawID: String) -> String? {
+        let trimmed = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.lowercased().hasPrefix("ip:") else { return nil }
+
+        let separators = CharacterSet(charactersIn: ":-. ")
+        let hexadecimalDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        let compactScalars = trimmed.unicodeScalars.filter { !separators.contains($0) }
+        guard compactScalars.count == 12,
+              compactScalars.allSatisfy({ hexadecimalDigits.contains($0) }) else {
+            return nil
+        }
+        return String(String.UnicodeScalarView(compactScalars)).lowercased()
+    }
+
+    static func canonicalID(for rawID: String) -> String {
+        canonicalHardwareID(from: rawID)
+            ?? rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func matches(_ lhs: String, _ rhs: String) -> Bool {
+        if let lhsMAC = canonicalHardwareID(from: lhs),
+           let rhsMAC = canonicalHardwareID(from: rhs) {
+            return lhsMAC == rhsMAC
+        }
+        return lhs.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare(rhs.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+    }
+
+    static func deduplicationKey(for rawID: String) -> String {
+        if let mac = canonicalHardwareID(from: rawID) {
+            return "mac:\(mac)"
+        }
+        return "id:\(rawID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+    }
+
+    static func normalized(_ device: WLEDDevice) -> WLEDDevice {
+        let canonicalID = canonicalID(for: device.id)
+        guard canonicalID != device.id else { return device }
+        return replacingID(of: device, with: canonicalID)
+    }
+
+    static func reconciledDevices(_ devices: [WLEDDevice]) -> [WLEDDevice] {
+        var result: [WLEDDevice] = []
+        var indexesByIdentity: [String: Int] = [:]
+
+        for rawDevice in devices {
+            let device = normalized(rawDevice)
+            let key = deduplicationKey(for: device.id)
+            if let index = indexesByIdentity[key] {
+                result[index] = merged(result[index], device)
+            } else {
+                indexesByIdentity[key] = result.count
+                result.append(device)
+            }
+        }
+        return result
+    }
+
+    private static func merged(_ lhs: WLEDDevice, _ rhs: WLEDDevice) -> WLEDDevice {
+        let metadataDevice = metadataScore(lhs) >= metadataScore(rhs) ? lhs : rhs
+        let liveDevice: WLEDDevice
+        if lhs.isOnline != rhs.isOnline {
+            liveDevice = lhs.isOnline ? lhs : rhs
+        } else {
+            liveDevice = lhs.lastSeen >= rhs.lastSeen ? lhs : rhs
+        }
+
+        var resolvedName = metadataDevice.name
+        if isGenericName(resolvedName), !isGenericName(liveDevice.name) {
+            resolvedName = liveDevice.name
+        }
+
+        return WLEDDevice(
+            id: canonicalID(for: metadataDevice.id),
+            name: resolvedName,
+            ipAddress: liveDevice.ipAddress,
+            isOnline: liveDevice.isOnline,
+            brightness: liveDevice.brightness,
+            currentColor: liveDevice.currentColor,
+            temperature: liveDevice.temperature ?? metadataDevice.temperature,
+            autoWhiteMode: liveDevice.autoWhiteMode ?? metadataDevice.autoWhiteMode,
+            productType: metadataDevice.productType,
+            setupState: metadataDevice.setupState,
+            profileId: metadataDevice.profileId,
+            lookId: metadataDevice.lookId,
+            profileVersionApplied: metadataDevice.profileVersionApplied,
+            managedPresetIds: metadataDevice.managedPresetIds,
+            backupSnapshotId: metadataDevice.backupSnapshotId,
+            lastProfileAppliedAt: metadataDevice.lastProfileAppliedAt,
+            location: metadataDevice.location,
+            lastSeen: max(lhs.lastSeen, rhs.lastSeen),
+            state: liveDevice.state ?? metadataDevice.state,
+            presetNamesById: liveDevice.presetNamesById ?? metadataDevice.presetNamesById,
+            playlistNamesById: liveDevice.playlistNamesById ?? metadataDevice.playlistNamesById
+        )
+    }
+
+    private static func metadataScore(_ device: WLEDDevice) -> Int {
+        let setupScore: Int
+        switch device.setupState {
+        case .completed: setupScore = 400
+        case .genericManual: setupScore = 300
+        case .legacy: setupScore = 200
+        case .pendingSelection: setupScore = 100
+        }
+
+        let profileScore = device.profileId == nil ? 0 : 20
+        let customNameScore = isGenericName(device.name) ? 0 : 10
+        let locationScore = device.location == .all ? 0 : 1
+        return setupScore + profileScore + customNameScore + locationScore
+    }
+
+    private static func isGenericName(_ name: String) -> Bool {
+        switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "", "wled", "wled-ap", "new device", "aesdetic device", "aesdetic-led":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func replacingID(of device: WLEDDevice, with id: String) -> WLEDDevice {
+        WLEDDevice(
+            id: id,
+            name: device.name,
+            ipAddress: device.ipAddress,
+            isOnline: device.isOnline,
+            brightness: device.brightness,
+            currentColor: device.currentColor,
+            temperature: device.temperature,
+            autoWhiteMode: device.autoWhiteMode,
+            productType: device.productType,
+            setupState: device.setupState,
+            profileId: device.profileId,
+            lookId: device.lookId,
+            profileVersionApplied: device.profileVersionApplied,
+            managedPresetIds: device.managedPresetIds,
+            backupSnapshotId: device.backupSnapshotId,
+            lastProfileAppliedAt: device.lastProfileAppliedAt,
+            location: device.location,
+            lastSeen: device.lastSeen,
+            state: device.state,
+            presetNamesById: device.presetNamesById,
+            playlistNamesById: device.playlistNamesById
+        )
+    }
+}
+
 // MARK: - Codable Models for WLED JSON Response
 // Corrected based on official WLED JSON API documentation to prevent parsing crashes.
 

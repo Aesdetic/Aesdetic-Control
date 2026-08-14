@@ -47,7 +47,7 @@ struct DiagnosticsView: View {
                 Section("Devices") {
                     if viewModel.devices.isEmpty {
                         Text("No devices loaded.")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.white.opacity(0.72))
                     } else {
                         ForEach(viewModel.devices.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })) { device in
                             VStack(alignment: .leading, spacing: 6) {
@@ -62,33 +62,33 @@ struct DiagnosticsView: View {
 
                                 Text("IP: \(device.ipAddress)")
                                     .font(AppTypography.style(.caption))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.white.opacity(0.72))
 
                                 Text("ID: \(device.id)")
                                     .font(AppTypography.style(.caption2))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.white.opacity(0.72))
 
                                 if let source = viewModel.wledService.lastDiscoverySourceByDevice[device.id]
                                     ?? viewModel.wledService.lastDiscoverySourceByIP[device.ipAddress] {
                                     Text("Source: \(source)")
                                         .font(AppTypography.style(.caption2))
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(.white.opacity(0.72))
                                 }
 
                                 if viewModel.isRealTimeEnabled {
                                     let status = viewModel.getConnectionStatus(for: device)?.status
                                     Text("WebSocket: \(webSocketLabel(status))")
                                         .font(AppTypography.style(.caption2))
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(.white.opacity(0.72))
                                 } else if let status = viewModel.reconnectionStatus[device.id], !status.isEmpty {
                                     Text("Connection: \(status)")
                                         .font(AppTypography.style(.caption2))
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(.white.opacity(0.72))
                                 }
 
                                 Text("Last seen: \(dateFormatter.string(from: device.lastSeen))")
                                     .font(AppTypography.style(.caption2))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.white.opacity(0.72))
                             }
                             .padding(.vertical, 4)
                         }
@@ -99,13 +99,13 @@ struct DiagnosticsView: View {
                     let events = viewModel.diagnosticsLog.suffix(30).reversed()
                     if events.isEmpty {
                         Text("No diagnostic events yet.")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.white.opacity(0.72))
                     } else {
                         ForEach(Array(events)) { entry in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(timeFormatter.string(from: entry.timestamp))
                                     .font(AppTypography.style(.caption2))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.white.opacity(0.72))
                                 Text(entry.message)
                                     .font(AppTypography.style(.footnote))
                             }
@@ -128,7 +128,7 @@ struct DiagnosticsView: View {
     private func diagnosticRow(label: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label)
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.72))
             Spacer()
             Text(value)
                 .multilineTextAlignment(.trailing)

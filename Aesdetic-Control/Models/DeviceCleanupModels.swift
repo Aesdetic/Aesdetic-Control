@@ -22,6 +22,8 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
     var leaseId: UUID?
     var verificationRequired: Bool
     var deadLetteredAt: Date?
+    var targets: [CleanupDeleteTarget]?
+    var journalState: CleanupJournalEntryState
     let createdAt: Date
     var playlistIds: [Int]?
     var presetIds: [Int]?
@@ -46,6 +48,8 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         case leaseId
         case verificationRequired
         case deadLetteredAt
+        case targets
+        case journalState
         case createdAt
         case playlistIds
         case presetIds
@@ -64,6 +68,8 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         leaseId: UUID? = nil,
         verificationRequired: Bool = false,
         deadLetteredAt: Date? = nil,
+        targets: [CleanupDeleteTarget]? = nil,
+        journalState: CleanupJournalEntryState = .active,
         createdAt: Date = Date(),
         playlistIds: [Int]? = nil,
         presetIds: [Int]? = nil
@@ -80,6 +86,8 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         self.leaseId = leaseId
         self.verificationRequired = verificationRequired
         self.deadLetteredAt = deadLetteredAt
+        self.targets = targets
+        self.journalState = deadLetteredAt == nil ? journalState : .deadLetter
         self.createdAt = createdAt
         self.playlistIds = playlistIds
         self.presetIds = presetIds
@@ -99,6 +107,9 @@ struct PendingDeviceDelete: Codable, Identifiable, Equatable {
         self.leaseId = try container.decodeIfPresent(UUID.self, forKey: .leaseId)
         self.verificationRequired = try container.decodeIfPresent(Bool.self, forKey: .verificationRequired) ?? false
         self.deadLetteredAt = try container.decodeIfPresent(Date.self, forKey: .deadLetteredAt)
+        self.targets = try container.decodeIfPresent([CleanupDeleteTarget].self, forKey: .targets)
+        self.journalState = try container.decodeIfPresent(CleanupJournalEntryState.self, forKey: .journalState)
+            ?? (self.deadLetteredAt == nil ? .active : .deadLetter)
         self.createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         self.playlistIds = try container.decodeIfPresent([Int].self, forKey: .playlistIds)
         self.presetIds = try container.decodeIfPresent([Int].self, forKey: .presetIds)
@@ -130,41 +141,6 @@ enum PresetStoreHealthState: String, Codable {
     case healthy
     case degradedReadable
     case unsafeWritesPaused
-}
-
-struct PendingPresetStoreSyncItem: Codable, Identifiable, Equatable {
-    enum Kind: String, Codable {
-        case transitionPresetSave
-        case presetSave
-        case playlistSave
-        case rename
-    }
-
-    let id: UUID
-    let deviceId: String
-    var kind: Kind
-    var transitionPresetSnapshot: TransitionPreset?
-    let createdAt: Date
-    var retryCount: Int
-    var lastError: String?
-
-    init(
-        id: UUID = UUID(),
-        deviceId: String,
-        kind: Kind,
-        transitionPresetSnapshot: TransitionPreset? = nil,
-        createdAt: Date = Date(),
-        retryCount: Int = 0,
-        lastError: String? = nil
-    ) {
-        self.id = id
-        self.deviceId = deviceId
-        self.kind = kind
-        self.transitionPresetSnapshot = transitionPresetSnapshot
-        self.createdAt = createdAt
-        self.retryCount = retryCount
-        self.lastError = lastError
-    }
 }
 
 struct TemporaryTransitionLease: Codable, Identifiable, Equatable {

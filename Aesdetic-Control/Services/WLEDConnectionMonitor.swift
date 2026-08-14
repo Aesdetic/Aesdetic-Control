@@ -269,6 +269,10 @@ class WLEDConnectionMonitor: ObservableObject {
     
     /// Perform immediate health checks for all registered devices
     func performImmediateHealthChecks() async {
+        guard !monitoringPaused else {
+            logger.debug("Skipping immediate health checks while monitoring is paused")
+            return
+        }
         logger.info("Performing immediate health checks for all devices")
         
         let devices = await loadRegisteredDevices()
@@ -316,6 +320,10 @@ class WLEDConnectionMonitor: ObservableObject {
             task.cancel()
         }
         reconnectionTasks.removeAll()
+        for task in postConnectRecoveryTasks.values {
+            task.cancel()
+        }
+        postConnectRecoveryTasks.removeAll()
     }
     
     func resumeBackgroundOperations() {
@@ -328,6 +336,7 @@ class WLEDConnectionMonitor: ObservableObject {
     }
     
     private func performHealthChecks() async {
+        guard !monitoringPaused else { return }
         guard isNetworkAvailable else {
             logger.debug("Skipping health checks - network unavailable")
             return
@@ -359,6 +368,7 @@ class WLEDConnectionMonitor: ObservableObject {
     }
     
     private func performQuickChecks() async {
+        guard !monitoringPaused else { return }
         guard isNetworkAvailable else { return }
         
         let problemDevices = await loadRegisteredDevices().filter { device in
@@ -385,6 +395,7 @@ class WLEDConnectionMonitor: ObservableObject {
     }
     
     private func checkDeviceHealth(_ device: WLEDDevice) async {
+        guard !monitoringPaused else { return }
         if WLEDWebSocketManager.shared.isDeviceConnected(device.id) {
             markOnlineFromRealtime(device)
             return
@@ -395,8 +406,10 @@ class WLEDConnectionMonitor: ObservableObject {
         }
         do {
             let response = try await apiService.getState(for: device)
+            guard !monitoringPaused else { return }
             handleHealthCheckSuccess(device, response: response)
         } catch {
+            guard !monitoringPaused else { return }
             await handleHealthCheckFailure(device, error: error)
         }
     }
@@ -477,9 +490,12 @@ class WLEDConnectionMonitor: ObservableObject {
                 // on-device automations do not get re-imported during transient reconnect.
                 await DeviceCleanupManager.shared.processQueue(for: device.id)
                 if wasOffline {
-                    await AutomationStore.shared.resyncOnDeviceSchedules(for: device)
+                    _ = await self.apiService.resumePendingPresetStoreRecovery(for: device)
                 }
-                await AutomationStore.shared.importOnDeviceAutomations(for: device)
+                await AutomationStore.shared.refreshDeviceAutomationState(
+                    for: device,
+                    reason: .reconnect
+                )
             }
         }
     }
